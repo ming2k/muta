@@ -102,14 +102,6 @@ pub(crate) use providers::{
     CustomField, PROVIDER_PRESETS, preset_label_for, protocol_model_candidates,
 };
 
-use crossterm::{
-    event::{
-        DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-    },
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
 use muta_contracts::{
     AgentRequest, AgentResponse, HarnessSnapshot, LoopStatus, Message, ParentStatus,
     PermissionRequest, ProviderPickerSnapshot, Role, RoundEvent, SessionContextSnapshot,
@@ -233,21 +225,10 @@ pub async fn run_tui(
         startup_overlay,
     } = config;
     // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    // Request the Kitty enhanced-keyboard protocol so modifier-bearing keys
-    // that collide with legacy control bytes (notably Ctrl+M == Enter) are
-    // reported distinctly. crossterm only emits the request when the terminal
-    // advertises support, so this is a no-op elsewhere.
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-    )?;
+    terminal::enter_terminal()?;
+    let stdout = io::stdout();
     // The mutx-engine engine owns its grid + diff + crossterm I/O directly. No
-    // No ratatui, no WideHealBackend wrapper — the engine's retained grid writes
+    // ratatui, no WideHealBackend wrapper — the engine's retained grid writes
     // wide-glyph trailing cells with the glyph's own background at write time,
     // so ghost cells cannot occur regardless of terminal or multiplexer
     // (ADR-0038).
@@ -2474,14 +2455,7 @@ pub async fn run_tui(
     .await;
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.writer(),
-        PopKeyboardEnhancementFlags,
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    terminal::restore_terminal();
 
     if let Err(err) = res {
         return Err(err.into());

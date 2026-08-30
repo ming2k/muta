@@ -295,8 +295,11 @@ impl GoogleProvider {
                             let mut guard =
                                 thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
                             for event in &parsed.events {
-                                if let ProviderStreamEvent::ToolCallDelta { id: Some(id), name, .. } =
-                                    event
+                                if let ProviderStreamEvent::ToolCallDelta {
+                                    id: Some(id),
+                                    name,
+                                    ..
+                                } = event
                                 {
                                     guard
                                         .entry(id.clone())

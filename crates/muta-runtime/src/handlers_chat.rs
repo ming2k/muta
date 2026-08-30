@@ -43,7 +43,7 @@ pub(crate) async fn chat(
     // + idle `HarnessState`): the TUI has already optimistically painted
     // "queued" for this send, and a bare top-level `Error` would leave that
     // state stuck on the activity bar forever.
-    if refuse_if_no_provider(resp_tx, agent, &session.id().await) {
+    if refuse_if_no_provider(resp_tx, agent, session, &session.id().await).await {
         return;
     }
     start_active_turn(

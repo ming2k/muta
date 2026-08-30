@@ -821,14 +821,9 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
         user_agent: None,
         extra_headers: &[],
     };
-    let update = discover_models(
-        req,
-        ModelDiscoveryOptions {
-            etag: None,
-        },
-    )
-    .await
-    .expect("Codex discovery succeeds");
+    let update = discover_models(req, ModelDiscoveryOptions { etag: None })
+        .await
+        .expect("Codex discovery succeeds");
     let ModelDiscoveryUpdate::Modified { models, etag } = update else {
         panic!("expected a modified catalog");
     };

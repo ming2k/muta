@@ -134,9 +134,7 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             user_agent: user_agent.as_deref(),
             extra_headers: &[],
         };
-        let options = ModelDiscoveryOptions {
-            etag: cached_etag,
-        };
+        let options = ModelDiscoveryOptions { etag: cached_etag };
 
         match muta_providers::discover_models(discovery_req, options).await {
             Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {

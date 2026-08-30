@@ -54,6 +54,27 @@ pub struct TelemetryAttempt {
     pub e2e_duration_ms: u64,
 }
 
+impl TelemetryAttempt {
+    pub fn snapshot(&self) -> Option<muta_contracts::TurnPerformanceSnapshot> {
+        let perf = self.performance?;
+        Some(muta_contracts::TurnPerformanceSnapshot {
+            round: self.round,
+            turn: self.turn,
+            attempt: self.attempt,
+            completion_tokens: self.completion_tokens,
+            usage_source: muta_contracts::RequestUsageSource::Reported,
+            performance: perf,
+        })
+    }
+
+    /// Return a defensible token generation rate for this attempt.
+    /// Prefers client-observed stream TPS (if >= 20ms and <= 2000 tok/s),
+    /// falls back to provider native decode TPS, and finally falls back to end-to-end output rate.
+    pub fn preferred_tps(&self) -> Option<f64> {
+        self.snapshot().and_then(|s| s.preferred_tps())
+    }
+}
+
 /// A round containing terminal attempts.
 #[derive(Debug, Clone)]
 pub struct TelemetryRound {
@@ -63,8 +84,6 @@ pub struct TelemetryRound {
     pub cache_read_tokens: u64,
     pub total_tokens: u64,
     pub turns_count: usize,
-    pub streamed_tokens: u64,
-    pub stream_duration_us: u64,
     pub e2e_duration_ms: u64,
     pub attempts: Vec<TelemetryAttempt>,
 }
@@ -78,12 +97,34 @@ impl TelemetryRound {
         }
     }
 
-    pub fn observed_stream_tps(&self) -> Option<f64> {
-        if self.stream_duration_us == 0 || self.streamed_tokens == 0 {
-            None
-        } else {
-            Some(self.streamed_tokens as f64 / (self.stream_duration_us as f64 / 1_000_000.0))
+    /// Aggregate defensible rate for this round across all attempts.
+    pub fn preferred_tps(&self) -> Option<f64> {
+        let valid_attempts: Vec<_> = self
+            .attempts
+            .iter()
+            .filter_map(|a| a.preferred_tps().map(|tps| (a.completion_tokens, tps)))
+            .filter(|(toks, tps)| {
+                *toks > 0 && *tps > 0.0 && *tps <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS
+            })
+            .collect();
+
+        if valid_attempts.is_empty() {
+            return None;
         }
+
+        let total_tokens: u64 = valid_attempts.iter().map(|(toks, _)| *toks).sum();
+        let total_secs: f64 = valid_attempts
+            .iter()
+            .map(|(toks, tps)| *toks as f64 / *tps)
+            .sum();
+
+        if total_tokens > 0 && total_secs > 0.0 {
+            let tps = total_tokens as f64 / total_secs;
+            if tps.is_finite() && tps > 0.0 && tps <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS {
+                return Some(tps);
+            }
+        }
+        None
     }
 }
 
@@ -136,8 +177,6 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
         let mut prompt_tokens = 0u64;
         let mut completion_tokens = 0u64;
         let mut cache_read_tokens = 0u64;
-        let mut streamed_tokens = 0u64;
-        let mut stream_duration_us = 0u64;
         let mut e2e_duration_ms = 0u64;
 
         let mut distinct_turns = std::collections::BTreeSet::new();
@@ -148,15 +187,6 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
             cache_read_tokens += att.cache_read_tokens;
             distinct_turns.insert(att.turn);
             e2e_duration_ms += att.e2e_duration_ms;
-
-            if let Some(p) = att.performance
-                && let Some(dur_us) = p
-                    .stream_us
-                    .filter(|&d| d > 0 && p.streamed_output_tokens > 0)
-            {
-                streamed_tokens += p.streamed_output_tokens;
-                stream_duration_us += dur_us;
-            }
         }
 
         let total_tokens = prompt_tokens + completion_tokens;
@@ -169,8 +199,6 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
             cache_read_tokens,
             total_tokens,
             turns_count,
-            streamed_tokens,
-            stream_duration_us,
             e2e_duration_ms,
             attempts,
         });
@@ -240,8 +268,14 @@ fn fmt_duration_us(us: u64) -> String {
 
 fn fmt_tps(tps: Option<f64>) -> String {
     match tps {
-        Some(rate) if rate > 0.0 => format!("{rate:.1} tok/s"),
-        _ => "--".to_string(),
+        Some(rate)
+            if rate > 0.0
+                && rate.is_finite()
+                && rate <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS =>
+        {
+            format!("{rate:.1} tok/s")
+        }
+        _ => "–".to_string(),
     }
 }
 
@@ -391,12 +425,12 @@ pub fn draw_telemetry_modal(
             FooterHint::always(keyvocab::ESC, "rounds"),
         ];
 
-        let desired = (rows.len() + 2) as u16 + modal_chrome_rows(geometry.modal_spec());
+        let desired = (rows.len() + 1) as u16 + modal_chrome_rows(geometry.modal_spec());
         let area = content_modal_area(frame, geometry, desired);
         let modal = modal_frame(frame, area, theme.panel(), true, true);
         modal_header_parts(frame, modal.header, &header, theme);
 
-        let header_h = 2.min(modal.body.height);
+        let header_h = 1.min(modal.body.height);
         let header_rect = Rect {
             x: modal.body.x,
             y: modal.body.y,
@@ -438,10 +472,7 @@ pub fn draw_telemetry_modal(
 
         match tab {
             TelemetryTab::Overview => {
-                let tab_strip = vec![
-                    tab_strip_line(tab, rounds.len(), theme),
-                    tab_divider_line(body_width, theme),
-                ];
+                let tab_strip = vec![tab_strip_line(tab, rounds.len(), theme), Line::from("")];
                 let overview = build_overview_body(report, &rounds, context, body_width, theme);
                 let body_lines: Vec<Line<'static>> =
                     tab_strip.into_iter().chain(overview).collect();
@@ -471,10 +502,7 @@ pub fn draw_telemetry_modal(
                 area
             }
             TelemetryTab::Activity => {
-                let tab_strip = vec![
-                    tab_strip_line(tab, rounds.len(), theme),
-                    tab_divider_line(body_width, theme),
-                ];
+                let tab_strip = vec![tab_strip_line(tab, rounds.len(), theme), Line::from("")];
                 let (table_header, rows, follow) =
                     build_rounds_table(&rounds, selected, body_width, theme);
                 let footer = [
@@ -484,7 +512,7 @@ pub fn draw_telemetry_modal(
                     FooterHint::always(keyvocab::ESC, "close"),
                 ];
 
-                let desired = (rows.len() + 4) as u16 + modal_chrome_rows(geometry.modal_spec());
+                let desired = (rows.len() + 3) as u16 + modal_chrome_rows(geometry.modal_spec());
                 let area = content_modal_area(frame, geometry, desired);
                 let modal = modal_frame(frame, area, theme.panel(), true, true);
                 modal_header_parts(frame, modal.header, &header, theme);
@@ -508,7 +536,7 @@ pub fn draw_telemetry_modal(
                 );
 
                 // 2. Sticky table header (Fixed right below tab strip)
-                let header_h = 2.min(modal.body.height.saturating_sub(tab_h));
+                let header_h = 1.min(modal.body.height.saturating_sub(tab_h));
                 let header_rect = Rect {
                     x: modal.body.x,
                     y: modal.body.y.saturating_add(tab_h),
@@ -585,14 +613,6 @@ fn tab_strip_line(active_tab: TelemetryTab, rounds_count: usize, theme: &Theme) 
             Span::styled(format!("  2 Activity{rounds_suffix}  "), act_style)
         },
     ])
-}
-
-fn tab_divider_line(width: usize, theme: &Theme) -> Line<'static> {
-    let sep_len = width.saturating_sub(4).max(10);
-    Line::from(vec![Span::styled(
-        format!("  {}", "─".repeat(sep_len)),
-        Style::default().fg(theme.dim()),
-    )])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -756,16 +776,10 @@ fn build_overview_body(
         total_turns += r.turns_count;
         total_e2e_ms += r.e2e_duration_ms;
         for att in &r.attempts {
+            if let Some(tps) = att.preferred_tps() {
+                tps_values.push(tps);
+            }
             if let Some(perf) = &att.performance {
-                if let (Some(stream_us), true) = (perf.stream_us, perf.streamed_output_tokens > 0) {
-                    if stream_us > 0 {
-                        let tps =
-                            (perf.streamed_output_tokens as f64) / (stream_us as f64 / 1_000_000.0);
-                        if tps.is_finite() && tps > 0.0 {
-                            tps_values.push(tps);
-                        }
-                    }
-                }
                 if let Some(ttft_us) = perf.ttft_us {
                     ttft_values_ms.push(ttft_us as f64 / 1000.0);
                 }
@@ -860,7 +874,7 @@ fn build_rounds_table(
     let col_dur = 11;
     let col_turns = if show_turns { 10 } else { 0 };
 
-    // 1. Fixed Header (2 lines)
+    // 1. Fixed Header (1 line)
     let mut header_spans = vec![
         Span::styled(
             format!("  {:<w$}", "Round", w = col_round),
@@ -908,22 +922,7 @@ fn build_rounds_table(
         ));
     }
 
-    let mut total_w = col_round + col_tokens + col_tps + col_dur + 2;
-    if show_cache {
-        total_w += col_cache;
-    }
-    if show_turns {
-        total_w += col_turns;
-    }
-    let sep_len = total_w.min(width.saturating_sub(4)).max(20);
-
-    let header_lines = vec![
-        Line::from(header_spans),
-        Line::from(vec![Span::styled(
-            format!("  {}", "─".repeat(sep_len)),
-            Style::default().fg(theme.dim()),
-        )]),
-    ];
+    let header_lines = vec![Line::from(header_spans)];
 
     if rounds.is_empty() {
         let empty_rows = vec![Line::from(vec![Span::styled(
@@ -943,17 +942,8 @@ fn build_rounds_table(
             Style::default()
         };
 
-        let pointer = if is_selected { "› " } else { "  " };
-        let pointer_style = if is_selected {
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.dim())
-        };
-
         let mut row_spans = vec![
-            Span::styled(pointer, pointer_style),
+            Span::styled("  ", Style::default()),
             Span::styled(
                 format!("{:<w$}", format!("#{}", r.round_number), w = col_round),
                 if is_selected {
@@ -999,7 +989,7 @@ fn build_rounds_table(
             ));
         }
 
-        let tps_label = fmt_tps(r.observed_stream_tps());
+        let tps_label = fmt_tps(r.preferred_tps());
         row_spans.push(Span::styled(
             format!("{:<w$}", tps_label, w = col_tps),
             Style::default().fg(theme.fg()),
@@ -1103,16 +1093,7 @@ fn build_turns_table(
         ),
     ];
 
-    let total_w = col_turn + col_tokens + col_ttft + col_tps + col_dur + col_status + 2;
-    let sep_len = total_w.min(width.saturating_sub(4)).max(20);
-
-    let header_lines = vec![
-        Line::from(header_spans),
-        Line::from(vec![Span::styled(
-            format!("  {}", "─".repeat(sep_len)),
-            Style::default().fg(theme.dim()),
-        )]),
-    ];
+    let header_lines = vec![Line::from(header_spans)];
 
     if attempts.is_empty() {
         let empty_rows = vec![Line::from(vec![Span::styled(
@@ -1131,19 +1112,10 @@ fn build_turns_table(
             Style::default()
         };
 
-        let pointer = if is_selected { "› " } else { "  " };
-        let pointer_style = if is_selected {
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.dim())
-        };
-
         let turn_label = format!("Turn {}.{}", att.round, att.turn);
 
         let mut row_spans = vec![
-            Span::styled(pointer, pointer_style),
+            Span::styled("  ", Style::default()),
             Span::styled(
                 format!("{:<w$}", turn_label, w = col_turn),
                 if is_selected {
@@ -1187,22 +1159,7 @@ fn build_turns_table(
             Style::default().fg(theme.fg()),
         ));
 
-        let tps_label = att
-            .performance
-            .as_ref()
-            .and_then(|p| {
-                let stream_us = p.stream_us?;
-                if stream_us > 0 && p.streamed_output_tokens > 0 {
-                    let secs = stream_us as f64 / 1_000_000.0;
-                    Some(format!(
-                        "{:.1} tok/s",
-                        p.streamed_output_tokens as f64 / secs
-                    ))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "–".to_string());
+        let tps_label = fmt_tps(att.preferred_tps());
         row_spans.push(Span::styled(
             format!("{:<w$}", tps_label, w = col_tps),
             Style::default().fg(theme.fg()),
@@ -1286,10 +1243,7 @@ fn build_attempt_inspector_body(
         lines.push(Line::from(""));
 
         // Context Space Section
-        lines.push(Line::from(vec![Span::styled(
-            "── Context Space ────────────────────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
-        )]));
+        lines.push(overview_section_header("CONTEXT SPACE", theme));
 
         let cache_pct = if att.prompt_tokens > 0 {
             (att.cache_read_tokens as f64 / att.prompt_tokens as f64) * 100.0
@@ -1384,10 +1338,7 @@ fn build_attempt_inspector_body(
         lines.push(Line::from(""));
 
         // Latency Timeline Waterfall Section
-        lines.push(Line::from(vec![Span::styled(
-            "── Latency Timeline Waterfall ───────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
-        )]));
+        lines.push(overview_section_header("LATENCY TIMELINE WATERFALL", theme));
         lines.push(Line::from(""));
 
         let perf = att.performance;
@@ -1395,7 +1346,7 @@ fn build_attempt_inspector_body(
         // Node 0: Request Dispatched
         lines.push(Line::from(vec![
             Span::styled(
-                "  ● 0.00s  ",
+                "  ● 0.00s   ",
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
@@ -1412,24 +1363,20 @@ fn build_attempt_inspector_body(
 
         // Branch 1: Connect & Handshake
         let ready_us = perf.and_then(|p| p.stream_ready_us);
-        let ready_str = ready_us.map_or("--".to_string(), fmt_duration_us);
+        let ready_str = ready_us.map_or("–".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
             Span::styled(
-                "  │ ┌─ Connect & Handshake ",
-                Style::default().fg(theme.dim()),
+                "  ├─ Connect & Handshake",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("─── {ready_str}"),
+                format!(" ({ready_str})"),
                 Style::default().fg(theme.brand()),
             ),
         ]));
         lines.push(Line::from(vec![Span::styled(
-            "  │ │  DNS + TLS + Gateway + Send Request Payload",
+            "  │    DNS + TLS + Gateway + Send Request Payload",
             Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │ └────────────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "  │",
@@ -1437,12 +1384,12 @@ fn build_attempt_inspector_body(
         )]));
 
         // Node 1: Stream Ready
-        let ready_node_time = ready_us.map_or("+--".to_string(), |us| {
+        let ready_node_time = ready_us.map_or("+–".to_string(), |us| {
             format!("+{:.2}s", us as f64 / 1_000_000.0)
         });
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  ● {ready_node_time}  "),
+                format!("  ● {ready_node_time:<8}"),
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
@@ -1467,28 +1414,24 @@ fn build_attempt_inspector_body(
             (Some(ttft), Some(ready)) => Some(ttft.saturating_sub(ready)),
             _ => None,
         };
-        let prefill_str = prefill_us.map_or("--".to_string(), fmt_duration_us);
+        let prefill_str = prefill_us.map_or("–".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
             Span::styled(
-                "  │ ┌─ Prefill & Server Queue ",
-                Style::default().fg(theme.dim()),
+                "  ├─ Prefill & Server Queue",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("──── {prefill_str}"),
+                format!(" ({prefill_str})"),
                 Style::default().fg(theme.warning),
             ),
         ]));
         lines.push(Line::from(vec![Span::styled(
             format!(
-                "  │ │  Prompt Processing ({} cached / {} eval)",
+                "  │    Prompt Processing ({} cached / {} eval)",
                 fmt_tokens(att.cache_read_tokens),
                 fmt_tokens(fresh_input)
             ),
             Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │ └────────────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "  │",
@@ -1496,13 +1439,13 @@ fn build_attempt_inspector_body(
         )]));
 
         // Node 2: First Token Arrived (TTFT)
-        let ttft_node_time = ttft_us.map_or("+--".to_string(), |us| {
+        let ttft_node_time = ttft_us.map_or("+–".to_string(), |us| {
             format!("+{:.2}s", us as f64 / 1_000_000.0)
         });
-        let ttft_val_str = ttft_us.map_or("--".to_string(), fmt_duration_us);
+        let ttft_val_str = ttft_us.map_or("–".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  ● {ttft_node_time}  "),
+                format!("  ● {ttft_node_time:<8}"),
                 Style::default()
                     .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
@@ -1523,8 +1466,8 @@ fn build_attempt_inspector_body(
 
         // Branch 3: Stream Decode
         let stream_us = perf.and_then(|p| p.stream_us);
-        let stream_str = stream_us.map_or("--".to_string(), fmt_duration_us);
-        let stream_tps_str = fmt_tps(perf.and_then(|p| p.observed_stream_tps()));
+        let stream_str = stream_us.map_or("–".to_string(), fmt_duration_us);
+        let stream_tps_str = fmt_tps(att.preferred_tps());
         let streamed_tok_str = if let Some(p) = perf {
             if p.streamed_output_tokens > 0 {
                 p.streamed_output_tokens
@@ -1537,21 +1480,17 @@ fn build_attempt_inspector_body(
 
         lines.push(Line::from(vec![
             Span::styled(
-                "  │ ┌─ Stream Decode (Generating) ",
-                Style::default().fg(theme.dim()),
+                "  ├─ Stream Decode",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("─── {stream_str}"),
+                format!(" ({stream_str})"),
                 Style::default().fg(theme.success),
             ),
         ]));
         lines.push(Line::from(vec![Span::styled(
-            format!("  │ │  {streamed_tok_str} tokens generated @ {stream_tps_str}"),
+            format!("  │    {streamed_tok_str} tokens generated @ {stream_tps_str}"),
             Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │ └────────────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "  │",
@@ -1563,12 +1502,12 @@ fn build_attempt_inspector_body(
             (Some(ttft), Some(stream)) => Some(ttft + stream),
             _ => None,
         };
-        let last_node_time = last_token_us.map_or("+--".to_string(), |us| {
+        let last_node_time = last_token_us.map_or("+–".to_string(), |us| {
             format!("+{:.2}s", us as f64 / 1_000_000.0)
         });
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  ● {last_node_time}  "),
+                format!("  ● {last_node_time:<8}"),
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
@@ -1585,21 +1524,20 @@ fn build_attempt_inspector_body(
 
         // Branch 4: Tail & Commit
         let tail_us = perf.and_then(|p| p.tail_us);
-        let tail_str = tail_us.map_or("--".to_string(), fmt_duration_us);
+        let tail_str = tail_us.map_or("–".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
-            Span::styled("  │ ┌─ Tail & Commit ", Style::default().fg(theme.dim())),
             Span::styled(
-                format!("────────────── {tail_str}"),
+                "  ├─ Tail & Commit",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({tail_str})"),
                 Style::default().fg(theme.text_muted),
             ),
         ]));
         lines.push(Line::from(vec![Span::styled(
-            "  │ │  Stream EOF verification + schema parse",
+            "  │    Stream EOF verification + schema parse",
             Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │ └────────────────────────────────────────────────",
-            Style::default().fg(theme.dim()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "  │",
@@ -1715,7 +1653,7 @@ mod tests {
         assert_eq!(r1.completion_tokens, 200);
         assert_eq!(r1.cache_read_tokens, 800);
         assert_eq!(r1.cache_hit_rate(), 80.0);
-        assert!(r1.observed_stream_tps().is_some());
+        assert!(r1.preferred_tps().is_some());
     }
 
     #[test]
@@ -1795,8 +1733,6 @@ mod tests {
             cache_read_tokens: 3000,
             total_tokens: 4300,
             turns_count: 1,
-            streamed_tokens: 300,
-            stream_duration_us: 3_000_000,
             e2e_duration_ms: 3_500,
             attempts: vec![TelemetryAttempt {
                 round: 1,
@@ -1813,9 +1749,11 @@ mod tests {
                     stream_ready_us: Some(120_000),
                     ttft_us: Some(280_000),
                     stream_us: Some(3_000_000),
+                    output_events: 10,
                     tail_us: Some(25_000),
                     e2e_us: Some(3_425_000),
                     streamed_output_tokens: 300,
+                    first_output_tokens: 0,
                     ..Default::default()
                 }),
                 e2e_duration_ms: 3500,
@@ -1847,9 +1785,9 @@ mod tests {
             .join("\n");
 
         assert!(full_text.contains("Target:  claude-3-7-sonnet @ anthropic"));
-        assert!(full_text.contains("Context Space"));
+        assert!(full_text.contains("CONTEXT SPACE"));
         assert!(full_text.contains("75.0% Cache Hit"));
-        assert!(full_text.contains("Latency Timeline Waterfall"));
+        assert!(full_text.contains("LATENCY TIMELINE WATERFALL"));
         assert!(full_text.contains("Request Dispatched"));
         assert!(full_text.contains("Connect & Handshake"));
         assert!(full_text.contains("Stream Ready"));
@@ -1871,8 +1809,6 @@ mod tests {
             cache_read_tokens: 3000,
             total_tokens: 4300,
             turns_count: 1,
-            streamed_tokens: 300,
-            stream_duration_us: 3_000_000,
             e2e_duration_ms: 3_500,
             attempts: vec![TelemetryAttempt {
                 round: 1,
@@ -1889,9 +1825,11 @@ mod tests {
                     stream_ready_us: Some(120_000),
                     ttft_us: Some(280_000),
                     stream_us: Some(3_000_000),
+                    output_events: 10,
                     tail_us: Some(25_000),
                     e2e_us: Some(3_425_000),
                     streamed_output_tokens: 300,
+                    first_output_tokens: 0,
                     ..Default::default()
                 }),
                 e2e_duration_ms: 3500,
@@ -1952,11 +1890,7 @@ mod tests {
 
         // 2. Test Rounds Sticky Table (Header is separated from Rows)
         let (header, rows, follow) = build_rounds_table(&rounds, 0, 80, &theme);
-        assert_eq!(
-            header.len(),
-            2,
-            "header must be 2 fixed rows (title + rule)"
-        );
+        assert_eq!(header.len(), 1, "header must be 1 fixed row");
         assert_eq!(rows.len(), 1, "rows must contain only data lines");
         assert_eq!(follow, Some(0));
 
@@ -1972,7 +1906,7 @@ mod tests {
 
         // 3. Test Turns Sticky Table
         let (turns_header, turns_rows, turn_follow) = build_turns_table(&rounds, 0, 0, 80, &theme);
-        assert_eq!(turns_header.len(), 2);
+        assert_eq!(turns_header.len(), 1);
         assert_eq!(turns_rows.len(), 1);
         assert_eq!(turn_follow, Some(0));
 
@@ -2006,5 +1940,73 @@ mod tests {
             .join("");
         assert!(act_tab_str.contains("1 Overview"));
         assert!(act_tab_str.contains("[ 2 Activity (1) ]"));
+    }
+
+    #[test]
+    fn test_telemetry_burst_arrival_defensible_tps_fallback() {
+        let theme = Theme::from_color_scheme("dark", &Default::default());
+        // Simulates a provider (e.g. Gemini) returning 200 tokens in a sub-20ms burst (200µs).
+        // Naive division 200 / 0.0002s would give 1,000,000 tok/s.
+        // Defensible calculation should filter the burst and fall back to e2e rate (200 / 1.5s = 133.3 tok/s).
+        let burst_attempt = TelemetryAttempt {
+            round: 1,
+            turn: 1,
+            attempt: 1,
+            model: "gemini-2.5-pro".to_string(),
+            provider: "google".to_string(),
+            status: RequestUsageStatus::Completed,
+            prompt_tokens: 1000,
+            completion_tokens: 200,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            performance: Some(RequestPerformance {
+                stream_ready_us: Some(50_000),
+                ttft_us: Some(200_000),
+                stream_us: Some(200),    // sub-20ms burst!
+                output_events: 1,        // single event arrival
+                e2e_us: Some(1_500_000), // 1.5s total e2e
+                streamed_output_tokens: 200,
+                first_output_tokens: 200,
+                ..Default::default()
+            }),
+            e2e_duration_ms: 1500,
+        };
+
+        let preferred = burst_attempt.preferred_tps();
+        assert!(preferred.is_some());
+        let tps = preferred.unwrap();
+        assert!(tps < 2000.0, "TPS must not explode to 1,000,000: {tps}");
+        assert!(
+            (tps - 133.33).abs() < 1.0,
+            "Expected e2e fallback ~133.3 tok/s, got {tps}"
+        );
+
+        let rounds = vec![TelemetryRound {
+            round_number: 1,
+            prompt_tokens: 1000,
+            completion_tokens: 200,
+            cache_read_tokens: 0,
+            total_tokens: 1200,
+            turns_count: 1,
+            e2e_duration_ms: 1500,
+            attempts: vec![burst_attempt],
+        }];
+
+        let round_tps = rounds[0].preferred_tps().unwrap();
+        assert!(round_tps < 2000.0);
+        assert!((round_tps - 133.33).abs() < 1.0);
+
+        let report = TokenSourceReport::default();
+        let overview =
+            build_overview_body(&report, &rounds, ContextUsageView::default(), 80, &theme);
+        let ov_text = overview
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            ov_text.contains("133.3 tok/s"),
+            "Overview must show defensible TPS: {ov_text}"
+        );
     }
 }

@@ -197,7 +197,7 @@ async fn spill_middleware_offloads_massive_output() {
 
 #[tokio::test]
 async fn workspace_jail_middleware_blocks_sensitive_roots() {
-    let env = InMemoryExecutionEnvironment::new("/virtual/workspace");
+    let mut env = InMemoryExecutionEnvironment::new("/virtual/workspace");
     let jail = WorkspaceJailMiddleware;
 
     let ok_args = serde_json::json!({ "path": "src/main.rs" });
@@ -210,4 +210,23 @@ async fn workspace_jail_middleware_blocks_sensitive_roots() {
     let res = jail.pre_execute("read_text", &jail_args, &env).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("Security Denial"));
+
+    // Tilde path outside workspace is also blocked when confined
+    let tilde_args = serde_json::json!({ "path": "~/.local/state/muta/auth.toml" });
+    let res_tilde = jail.pre_execute("search_text", &tilde_args, &env).await;
+    assert!(res_tilde.is_err());
+    assert!(res_tilde.unwrap_err().contains("Security Denial"));
+
+    // When unconfined, both are allowed
+    env.set_unconfined(true);
+    assert!(
+        jail.pre_execute("read_text", &jail_args, &env)
+            .await
+            .is_ok()
+    );
+    assert!(
+        jail.pre_execute("search_text", &tilde_args, &env)
+            .await
+            .is_ok()
+    );
 }

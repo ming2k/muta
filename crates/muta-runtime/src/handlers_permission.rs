@@ -6,7 +6,7 @@
 //! `lifecycle`, `side`, `runner_registry`, …) so the body reads exactly as
 //! it did inline.
 
-use muta_agent::orchestration::send_harness_state;
+use muta_agent::orchestration::send_harness_state_for_session;
 use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
 use muta_contracts::{AgentResponse, LoopStatus, PermissionDecision};
 use muta_persistence::session::SessionStore;
@@ -52,7 +52,14 @@ pub async fn interrupt(
     // generation itself and its "running" snapshot supersedes, while the
     // stale task's generation-guarded idle send is skipped
     // (`orchestration.rs` start_pursuit / start_interactive_round).
-    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+    send_harness_state_for_session(
+        resp_tx,
+        &session.id().await,
+        agent,
+        session,
+        LoopStatus::Idle,
+    )
+    .await;
 
     lifecycle.cancel_current().await;
 }

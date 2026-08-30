@@ -6,7 +6,7 @@
 //! so the body reads exactly as it did inline.
 
 use muta_agent::Agent;
-use muta_agent::orchestration::send_harness_state;
+use muta_agent::orchestration::send_harness_state_for_session;
 use muta_contracts::{AgentResponse, LoopStatus, SessionOverview};
 use muta_mcp::McpRuntime;
 use muta_persistence::{config::Config, embedding, session::SessionStore};
@@ -408,7 +408,7 @@ pub async fn interrupt_side(
     // the primary's `interrupt` — but scoped to the aside's session id so the
     // primary chrome is untouched.
     let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-    send_harness_state(resp_tx, &s.id, &s.agent, LoopStatus::Idle);
+    send_harness_state_for_session(resp_tx, &s.id, &s.agent, &s.store, LoopStatus::Idle).await;
     s.lifecycle.cancel_current().await;
 }
 

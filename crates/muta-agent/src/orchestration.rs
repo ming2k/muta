@@ -534,30 +534,25 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
 }
 
 /// Emit the current harness snapshot (mode, round counter, loop
-/// status, delegated flag, retry affordance) to the UI.
+/// status, delegated flag, retry affordance) to the UI for a running round.
 ///
-/// `retry_pending` mirrors the session's durable `/retry` resume point when
-/// the harness is idle (the only state in which `/retry` is answerable). For
-/// a *running* snapshot the affordance is definitionally off — the parked
-/// round is executing — so the flag is forced `false` regardless of what a
-/// racing store read says, keeping the contract "running ⇒ no retry hint".
-pub fn send_harness_state(
+/// Running snapshots are emitted after lifecycle admission but
+/// immediately before `execute_round` performs the counter bump. Project
+/// that admitted round here so frontends receive the authoritative display
+/// value without locally guessing from transcript length.
+///
+/// For a *running* snapshot the `/retry` affordance is definitionally off — the
+/// round is executing — so `retry_pending` is forced `false`.
+pub fn send_harness_state_running(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
     agent: &Agent,
-    loop_status: LoopStatus,
 ) {
-    // Running snapshots are emitted after lifecycle admission but
-    // immediately before `execute_round` performs the counter bump. Project
-    // that admitted round here so frontends receive the authoritative display
-    // value without locally guessing from transcript length.
-    let round_counter = agent
-        .round_count()
-        .saturating_add(u64::from(!loop_status.is_idle()));
+    let round_counter = agent.round_count().saturating_add(1);
     let _ = tx.send(round_response(
         session_id,
         RoundEvent::HarnessState(HarnessSnapshot {
-            loop_status,
+            loop_status: LoopStatus::Running,
             round_counter,
             delegated: agent.delegated(),
             unconfined: agent.is_unconfined(),
@@ -567,11 +562,11 @@ pub fn send_harness_state(
     ));
 }
 
-/// [`send_harness_state`] with the session in hand, so an idle snapshot can
-/// carry the authoritative `/retry` affordance (`retry_pending`) straight
-/// from the durable resume point. Called on the round-task tail and the
-/// session-switch reconciles — the two sites that know both the agent and
-/// the store it is currently bound to.
+/// Publish the authoritative [`HarnessSnapshot`] for a session.
+///
+/// Queries the durable store for the `/retry` affordance (`retry_pending`)
+/// when idle, ensuring the projection stays strictly consistent with the
+/// underlying session state.
 pub async fn send_harness_state_for_session(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
@@ -772,12 +767,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         // requests were never resolved. The panic is converted into an
         // ordinary `HarnessError::Other` so the existing error mapping emits
         // a visible `RoundEvent::Error` instead of silence.
-        send_harness_state(
-            &context.tx,
-            &context.session_id,
-            &context.agent,
-            LoopStatus::Running,
-        );
+        send_harness_state_running(&context.tx, &context.session_id, &context.agent);
         let result = {
             let round_fut = execute_round(
                 RoundContext {

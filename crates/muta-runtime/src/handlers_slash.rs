@@ -25,7 +25,7 @@ use muta_agent::Agent;
 use muta_agent::RoundLifecycle;
 use muta_agent::orchestration::{
     ContextProjectionSettings, RoundInput, compact_round_history, round_response, send_compaction,
-    send_harness_state,
+    send_harness_state_for_session,
 };
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, CommandRecord, CommandResult, CronExpr, LoopStatus,
@@ -355,7 +355,14 @@ async fn fork_current_session(
                 CommandResult::Text(format!("Forked session {} from {}.", id, parent_id)),
             )
             .await;
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+            send_harness_state_for_session(
+                resp_tx,
+                &session.id().await,
+                agent,
+                session,
+                LoopStatus::Idle,
+            )
+            .await;
         }
         Err(error) => {
             record_error(session, resp_tx, name, args, error).await;
@@ -453,6 +460,15 @@ async fn restore_session_runtime(
     if let Err(err) = session.replace_messages(messages).await {
         tracing::warn!(error = %err, "failed to persist SessionStart hook context");
     }
+
+    send_harness_state_for_session(
+        resp_tx,
+        &session.id().await,
+        agent,
+        session,
+        LoopStatus::Idle,
+    )
+    .await;
 }
 
 // ── Command-ledger helpers (ADR-0091) ──────────────────────────────────────
@@ -874,7 +890,14 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 Some(start_instant.elapsed().as_millis() as u64),
             )
             .await;
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+            send_harness_state_for_session(
+                resp_tx,
+                &session.id().await,
+                agent,
+                session,
+                LoopStatus::Idle,
+            )
+            .await;
         }
         Some(BuiltinCmd::Tools) => {
             // Handled in TUI (`/tools` opens the tools manager modal
@@ -1249,12 +1272,14 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     )),
                                 )
                                 .await;
-                                send_harness_state(
+                                send_harness_state_for_session(
                                     resp_tx,
                                     &session.id().await,
                                     agent,
+                                    session,
                                     LoopStatus::Idle,
-                                );
+                                )
+                                .await;
                             }
                             Err(error) => {
                                 record_error(session, resp_tx, name, args, error).await;
@@ -2025,7 +2050,14 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         .await;
                 }
             }
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+            send_harness_state_for_session(
+                resp_tx,
+                &session.id().await,
+                agent,
+                session,
+                LoopStatus::Idle,
+            )
+            .await;
         }
         Some(BuiltinCmd::Skills) => {
             let sub = parts.get(1).copied().unwrap_or("list");
@@ -2415,7 +2447,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 .await;
                 return;
             }
-            if refuse_if_no_provider(resp_tx, agent, &session.id().await) {
+            if refuse_if_no_provider(resp_tx, agent, session, &session.id().await).await {
                 return;
             }
             record_invocation(session, name, args).await;

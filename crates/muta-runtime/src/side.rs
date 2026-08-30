@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use muta_agent::orchestration::{
     ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput, round_response,
-    send_harness_state, start_interactive_round,
+    send_harness_state_for_session, start_interactive_round,
 };
 use muta_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
 use muta_contracts::{AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool};
@@ -430,7 +430,7 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
     // (drives the `OutboxSignal` that removes the session from
     // running_sessions) so the chrome collapses cleanly. Symmetric with
     // `start_session_turn`'s refusal path.
-    if refuse_if_no_provider(tx, &target.agent, &target.session_id) {
+    if refuse_if_no_provider(tx, &target.agent, &target.session, &target.session_id).await {
         return;
     }
 
@@ -507,7 +507,7 @@ pub(crate) async fn start_session_turn(
     // `false` routes the caller through `RoundEvent::UserInputUnavailable`,
     // which promotes the dispatch item back to `Waiting` so the user can
     // recall or replay it once a real provider is configured.
-    if refuse_if_no_provider(tx, &target.agent, &target.session_id) {
+    if refuse_if_no_provider(tx, &target.agent, &target.session, &target.session_id).await {
         return false;
     }
 
@@ -552,7 +552,8 @@ async fn start_resolved_turn(
                     "Nothing to retry — the last round already completed.".to_string(),
                 ),
             ));
-            send_harness_state(tx, &session_id, &agent, LoopStatus::Idle);
+            send_harness_state_for_session(tx, &session_id, &agent, &session, LoopStatus::Idle)
+                .await;
             return;
         };
         // Re-bind the checkpoint to the resolved session's own point: the
@@ -598,9 +599,10 @@ async fn start_resolved_turn(
 ///
 /// Returns `true` when the refusal fired (caller returns early without
 /// starting a round); `false` when the round should proceed normally.
-pub(super) fn refuse_if_no_provider(
+pub(super) async fn refuse_if_no_provider(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     agent: &Agent,
+    session: &SessionStore,
     session_id: &str,
 ) -> bool {
     if !NoProvider::is(agent.provider.as_ref()) {
@@ -613,7 +615,7 @@ pub(super) fn refuse_if_no_provider(
                 .to_string(),
         ),
     ));
-    send_harness_state(tx, session_id, agent, LoopStatus::Idle);
+    send_harness_state_for_session(tx, session_id, agent, session, LoopStatus::Idle).await;
     true
 }
 

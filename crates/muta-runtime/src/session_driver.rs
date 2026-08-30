@@ -15,7 +15,7 @@ use crate::commands::CustomCommand;
 use crate::handlers_slash::SlashEnv;
 use crate::side::SideEnv;
 use muta_agent::catalog;
-use muta_agent::orchestration::{round_response, send_harness_state};
+use muta_agent::orchestration::{round_response, send_harness_state_for_session};
 use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
@@ -849,7 +849,14 @@ impl SessionDriver {
             // arms anything for control-plane dispatches — ADR-0110 — so for
             // it this reconcile is a no-op safety net).
             if reconcile_activity {
-                send_harness_state(&resp_tx, &session.id().await, &agent, LoopStatus::Idle);
+                send_harness_state_for_session(
+                    &resp_tx,
+                    &session.id().await,
+                    &agent,
+                    &session,
+                    LoopStatus::Idle,
+                )
+                .await;
             }
 
             // Compare against the post-dispatch projection and only re-publish

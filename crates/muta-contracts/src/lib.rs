@@ -103,10 +103,11 @@ pub mod pressure;
 pub mod token_ledger;
 pub mod tokenizer;
 pub use token_ledger::{
-    BeginRequestParams, PerformanceTimingSource, RequestPerformance, RequestUsageKey,
-    RequestUsageRecord, RequestUsageSource, RequestUsageStatus, StreamTokenSource,
-    TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn,
-    TurnPerformanceSnapshot, UsageStatSink, latest_turn_performance,
+    BeginRequestParams, MAX_PLAUSIBLE_STREAM_TPS, MIN_DEFENSIBLE_STREAM_SPAN_US,
+    PerformanceTimingSource, RequestPerformance, RequestUsageKey, RequestUsageRecord,
+    RequestUsageSource, RequestUsageStatus, StreamTokenSource, TokenSourceLedger,
+    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TurnPerformanceSnapshot,
+    UsageStatSink, latest_turn_performance,
 };
 pub mod usage_stats;
 pub use usage_stats::{
