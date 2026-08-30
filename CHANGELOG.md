@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.37.18] - 2026-08-30
+## [0.37.19] - 2026-08-30
+
+### Fixed
+
+- Ignore `KeyEventKind::Release` events in mutx input processing to resolve double keystroke typing and immediate Ctrl+C exits on Windows PowerShell / ConPTY.
+- Gate Linux clipboard copy helper with `target_os` cfg and scope Tokio `AsyncWriteExt` imports for platform compatibility.
 
 ### Added
 
@@ -5724,7 +5729,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.18...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.19...HEAD
+[0.37.19]: https://github.com/ming2k/muta/compare/v0.37.18...v0.37.19
 [0.37.18]: https://github.com/ming2k/muta/compare/v0.37.17...v0.37.18
 [0.37.17]: https://github.com/ming2k/muta/compare/v0.37.16...v0.37.17
 [0.37.16]: https://github.com/ming2k/muta/compare/v0.37.15...v0.37.16
