@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.13] - 2026-08-30
+
+### Added
+
+- **Platform Abstraction and Shim Layer (ADR 0160).**
+  - **Unified Platform Crate**: Consolidated cross-platform clipboard, filesystem, system opener, and path utilities inside `muta-platform`.
+  - **Mutx TUI Integration**: Streamlined TUI clipboard operations, URL opening, and added telemetry overlay and modal improvements.
+  - **Clean Platform Boundaries**: Centralized platform-specific OS interactions across the agent runtime, contracts, and skills.
+
 ## [0.37.12] - 2026-08-30
 
 ### Refactored
@@ -5674,7 +5683,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.12...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.13...HEAD
+[0.37.13]: https://github.com/ming2k/muta/compare/v0.37.12...v0.37.13
 [0.37.12]: https://github.com/ming2k/muta/compare/v0.37.11...v0.37.12
 [0.37.11]: https://github.com/ming2k/muta/compare/v0.37.10...v0.37.11
 [0.37.10]: https://github.com/ming2k/muta/compare/v0.37.9...v0.37.10
