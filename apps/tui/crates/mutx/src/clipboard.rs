@@ -636,9 +636,15 @@ mod tests {
 
     #[test]
     fn uri_list_parses_comments_blank_lines_and_skips_missing_files() {
-        let payload = "# comment line\n\nfile:///etc/hostname\nfile:///nonexistent/missing.png\n";
-        let parsed = parse_uri_list(payload).expect("at least one resolvable path");
-        assert_eq!(parsed, vec![PathBuf::from("/etc/hostname")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("real.txt");
+        std::fs::write(&file, b"test").expect("write");
+        let payload = format!(
+            "# comment line\n\nfile://{}\nfile:///nonexistent/missing.png\n",
+            file.display()
+        );
+        let parsed = parse_uri_list(&payload).expect("at least one resolvable path");
+        assert_eq!(parsed, vec![file]);
         // No resolvable local file at all → None so callers fall through.
         assert_eq!(parse_uri_list("file:///nonexistent/missing.png\n"), None);
         assert_eq!(parse_uri_list("# only a comment\n"), None);
@@ -646,9 +652,12 @@ mod tests {
 
     #[test]
     fn gnome_copied_files_strips_operation_verb() {
-        let payload = "copy\nfile:///etc/hostname\n";
-        let parsed = parse_gnome_copied_files(payload).expect("verb + one path");
-        assert_eq!(parsed, vec![PathBuf::from("/etc/hostname")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("real.txt");
+        std::fs::write(&file, b"test").expect("write");
+        let payload = format!("copy\nfile://{}\n", file.display());
+        let parsed = parse_gnome_copied_files(&payload).expect("verb + one path");
+        assert_eq!(parsed, vec![file]);
         let cut = parse_gnome_copied_files("cut\nfile:///nonexistent/x.png\n");
         assert_eq!(cut, None, "unresolvable-only payload falls through");
     }
