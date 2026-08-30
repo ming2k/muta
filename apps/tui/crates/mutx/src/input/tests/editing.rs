@@ -1979,3 +1979,65 @@ fn emacs_meta_x_opens_view_switcher() {
     );
     assert_eq!(action, InputAction::ViewSwitcherToggle);
 }
+
+#[test]
+fn key_release_events_are_ignored() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    // Key release for typing char
+    let char_release = KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    );
+    let action = process_event(
+        Event::Key(char_release),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
+
+    // Key release for Ctrl+C
+    let ctrl_c_release = KeyEvent::new_with_kind(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+        KeyEventKind::Release,
+    );
+    let action = process_event(
+        Event::Key(ctrl_c_release),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+}
+
+#[test]
+fn key_repeat_events_are_processed() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    let char_repeat = KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    );
+    let action = process_event(
+        Event::Key(char_repeat),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::InsertChar('a'));
+    assert_eq!(input, "a");
+    assert_eq!(cursor, 1);
+}

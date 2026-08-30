@@ -1,6 +1,8 @@
 //! Input handling: keyboard and mouse events mapped to semantic actions.
 
-use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 
 use crate::model::layout::{LayoutMap, SemanticCursor};
 use crate::model::selection::SelectionDrag;
@@ -1279,6 +1281,14 @@ pub fn process_event(
             }
         }
         Event::Key(key) => {
+            // Ignore key release events: Windows Console / ConPTY and enhanced
+            // keyboard protocols send both Press and Release events. Treating
+            // Release as an input action causes double typing, immediate Ctrl-C
+            // quits, and duplicate hotkey triggers.
+            if key.kind == KeyEventKind::Release {
+                return InputAction::None;
+            }
+
             // While the Ctrl+R clear-history confirmation is armed, the modal
             // owns EVERY key — `y` / Enter confirm the wipe, anything else —
             // Esc and even global shortcuts like Ctrl+C included — cancels it.

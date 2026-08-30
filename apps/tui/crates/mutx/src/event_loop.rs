@@ -1071,6 +1071,13 @@ impl InputReader {
                         Ok(true) => match event::read() {
                             // Receiver gone → the loop has exited; stop reading.
                             Ok(ev) => {
+                                // Drop key release events directly at source to prevent
+                                // duplicate processing on platforms like Windows.
+                                if let Event::Key(k) = &ev {
+                                    if k.kind == crossterm::event::KeyEventKind::Release {
+                                        continue;
+                                    }
+                                }
                                 if !sink.handle(ev) {
                                     break;
                                 }
