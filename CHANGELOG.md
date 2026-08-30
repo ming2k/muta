@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.12] - 2026-08-30
+
+### Refactored
+
+- **Workspace-wide Dead Code Sweep and Strict Conditional Compilation Guards.**
+  - **Pruned Abandoned View & Sub-Props**: Removed unused modular sub-props structs (`TranscriptStreamProps`, `TranscriptChromeProps`, `TranscriptInputProps`, `TranscriptInteractionProps`) and methods in `mutx`.
+  - **Cleaned Legacy Tooling Artifacts**: Removed legacy atomic file saving helper `save_file_atomic` in favor of virtual filesystem operations; eliminated obsolete `steering` flag on `QueueItemView`.
+  - **Strict Target & Test CFG Gating**: Replaced blanket `#[allow(dead_code)]` with strict `#[cfg(any(target_os = "linux", test))]` on platform clipboard handlers, and `#[cfg(test)]` on test fixtures across `mutx`, `muta-agent`, `muta-persistence`, and `muta-llm-client`.
+
 ## [0.37.11] - 2026-08-30
 
 ### Added
@@ -5665,7 +5674,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.11...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.12...HEAD
+[0.37.12]: https://github.com/ming2k/muta/compare/v0.37.11...v0.37.12
 [0.37.11]: https://github.com/ming2k/muta/compare/v0.37.10...v0.37.11
 [0.37.10]: https://github.com/ming2k/muta/compare/v0.37.9...v0.37.10
 [0.37.9]: https://github.com/ming2k/muta/compare/v0.37.8...v0.37.9
