@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.14] - 2026-08-30
+
+### Added
+
+- Support unconfined workspace mode with `/jail [on|off]` steering command and UI status indicator.
+- Dynamic terminal path truncation and breadcrumb component in TUI header.
+
+### Fixed
+
+- Refine custom LLM endpoint protocol handling, auth headers, and wire test validation across OpenAI, Anthropic, and Google providers.
+
 ## [0.37.13] - 2026-08-30
 
 ### Added
@@ -5683,7 +5694,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.13...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.14...HEAD
+[0.37.14]: https://github.com/ming2k/muta/compare/v0.37.13...v0.37.14
 [0.37.13]: https://github.com/ming2k/muta/compare/v0.37.12...v0.37.13
 [0.37.12]: https://github.com/ming2k/muta/compare/v0.37.11...v0.37.12
 [0.37.11]: https://github.com/ming2k/muta/compare/v0.37.10...v0.37.11
