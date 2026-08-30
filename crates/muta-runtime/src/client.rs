@@ -1309,6 +1309,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn daemon_image_match_accepts_the_explicit_process_exe() {
         let current = std::env::current_exe().unwrap();

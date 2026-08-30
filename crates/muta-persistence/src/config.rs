@@ -1987,6 +1987,7 @@ name = "DeepSeek"
         .unwrap();
 
         let hooks = Config::load_project_hooks(&root);
+        let canonical = root.0.path().canonicalize().unwrap();
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].event, HookEventKind::PostToolUse);
         assert_eq!(hooks[0].command, ".muta/hooks/lint.sh");
@@ -1994,7 +1995,7 @@ name = "DeepSeek"
         assert!(
             hooks
                 .iter()
-                .all(|hook| hook.sandbox_root.as_deref() == Some(root.0.path()))
+                .all(|hook| hook.sandbox_root.as_deref() == Some(canonical.as_path()))
         );
     }
 

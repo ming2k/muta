@@ -2018,12 +2018,11 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
             continue;
         };
         match event {
-            RoundEvent::HarnessState(snapshot) => {
+            RoundEvent::HarnessState(snapshot)
                 if snapshot.workspace_security.rules
-                    == muta_contracts::WorkspaceTrustState::Quarantined
-                {
-                    saw_quarantined_snapshot = true;
-                }
+                    == muta_contracts::WorkspaceTrustState::Quarantined =>
+            {
+                saw_quarantined_snapshot = true;
             }
             RoundEvent::Notice(n)
                 if n.body
