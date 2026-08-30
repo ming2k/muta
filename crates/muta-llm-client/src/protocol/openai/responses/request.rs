@@ -214,7 +214,7 @@ fn message_item(role: &str, m: &Message, text_part: &str) -> Value {
         for image in images {
             parts.push(json!({
                 "type": "input_image",
-                "image_url": { "url": format!("data:{};base64,{}", image.mime, image.data) }
+                "image_url": format!("data:{};base64,{}", image.mime, image.data)
             }));
         }
     }
@@ -480,5 +480,44 @@ mod tests {
         // Defensive: a missing or non-array input is no image.
         assert!(!has_input_image(&json!({"model": "x"})));
         assert!(!has_input_image(&json!({"input": "not-an-array"})));
+    }
+
+    #[test]
+    fn user_message_with_image_serializes_as_input_image_string_url() {
+        let mut msg = Message::new(Role::User, "look at this");
+        msg.images = Some(vec![muta_contracts::message::ImagePart {
+            mime: "image/png".to_string(),
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_string(),
+        }]);
+
+        let remote = muta_contracts::RemoteModelMetadata {
+            vision: Some(true),
+            ..Default::default()
+        };
+        let caps = muta_contracts::ModelCapabilities::for_channel("gpt-4o", Some(&remote));
+
+        let payload = body_with_capabilities(
+            vec![msg],
+            BodyInput {
+                model: "gpt-4o",
+                stream: false,
+                tool_specs: None,
+                reasoning_effort: None,
+            },
+            &caps,
+        );
+
+        let input = payload["input"].as_array().expect("input array");
+        assert_eq!(input.len(), 1);
+        let content = input[0]["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "look at this");
+
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(
+            content[1]["image_url"],
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        );
     }
 }
