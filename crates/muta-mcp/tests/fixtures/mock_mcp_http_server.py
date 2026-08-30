@@ -68,6 +68,11 @@ def handle(request):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok\n")
+
     def do_POST(self):
         global SESSION_COUNTER
         length = int(self.headers.get("Content-Length", "0"))

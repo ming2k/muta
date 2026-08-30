@@ -27,3 +27,8 @@ threads-required = 2
 retries = 1
 failure-output = "immediate-final"
 
+[[profile.ci.overrides]]
+filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration) | test(mcp_http)'
+slow-timeout = { period = "45s", terminate-after = 1 }
+threads-required = 2
+

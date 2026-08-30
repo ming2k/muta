@@ -352,8 +352,7 @@ async fn run_daemon_action(
         DaemonAction::Token => {
             let project_root = project_override
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-            let info = client::discover(&project_root)
-                .ok_or("no local muta daemon is running")?;
+            let info = client::discover(&project_root).ok_or("no local muta daemon is running")?;
             match info.token {
                 Some(token) => println!("{token}"),
                 None => eprintln!("muta: daemon authentication is disabled."),
