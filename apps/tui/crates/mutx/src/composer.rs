@@ -98,6 +98,30 @@ fn top_chrome_row(
             ]);
         }
     }
+    if focused && target == crate::components::composer_hints::ComposeTarget::HistorySearch {
+        let label = if full_w >= 36 {
+            "[history search · draft saved]"
+        } else if full_w >= 20 {
+            "[history search]"
+        } else {
+            "[history]"
+        };
+        let label_len = label.chars().count();
+        if full_w > label_len + 2 {
+            let gap_cols = full_w.saturating_sub(label_len + 1);
+            return Line::from(vec![
+                Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .bg(bg)
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(" ".to_string(), Style::default().bg(bg)),
+            ]);
+        }
+    }
     chrome_row(full_w, bg, theme, '↑', 0)
 }
 

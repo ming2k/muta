@@ -223,14 +223,15 @@ pub(crate) fn hint_row_spans(
 
     match target {
         ComposeTarget::HistorySearch => {
-            let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
+            let mut spans = vec![
+                Span::styled(Key::TAB.display(), key_style),
+                Span::styled(" / ", hint_style),
+                Span::styled(Key::ENTER.display(), key_style),
+            ];
             spans.push(Span::styled(
                 " insert",
                 verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled("  ", hint_style));
-            spans.push(Span::styled(Key::TAB.display(), key_style));
-            spans.push(Span::styled(" preview", hint_style));
             if !compact {
                 spans.push(Span::styled("  ", hint_style));
                 spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
@@ -410,7 +411,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(search, "Enter insert  Tab preview  ↑↓ select  Esc close");
+        assert_eq!(search, "Tab / Enter insert  ↑↓ select  Esc close");
     }
 
     #[test]

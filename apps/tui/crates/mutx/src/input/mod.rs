@@ -1753,10 +1753,9 @@ pub fn process_event(
                         // Tab advances through the editor's visible fields.
                         InputAction::CustomProviderNextField
                     } else if context.active_modal == super::Modal::HistorySearch {
-                        // Tab toggles the full-prompt preview of the selected
-                        // entry. The fuzzy filter is a free-text field, so an
-                        // alpha key would clash; Tab is the unambiguous gesture.
-                        InputAction::HistoryTogglePreview
+                        // Tab confirms and inserts the selected history entry
+                        // into the composer, mirroring Enter.
+                        InputAction::HistoryInsert
                     } else if context.active_modal == super::Modal::Host {
                         // The dashboard has two panes: Tab moves focus between
                         // the session list and the detail read-out.

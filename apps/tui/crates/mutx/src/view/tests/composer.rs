@@ -1938,3 +1938,32 @@ fn composer_panel_degrades_gracefully_on_narrow_widths() {
         }
     }
 }
+
+#[test]
+fn composer_top_row_renders_history_mode_badges() {
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
+
+    // HistorySearch mode badge on row 0 right side
+    let search_hints = ComposerHints {
+        compose_target: ComposeTarget::HistorySearch,
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("query", true, search_hints);
+    let row0 = frame_row_text(&mut terminal, 0);
+    assert!(
+        row0.contains("[history search · draft saved]"),
+        "top row has history search badge: {row0:?}"
+    );
+
+    // HistoryRecall mode badge on row 0 right side
+    let recall_hints = ComposerHints {
+        compose_target: ComposeTarget::HistoryRecall { index: 2, total: 5 },
+        ..Default::default()
+    };
+    let mut recall_terminal = draw_frame_composer("recalled", true, recall_hints);
+    let recall_row0 = frame_row_text(&mut recall_terminal, 0);
+    assert!(
+        recall_row0.contains("[history 2/5 · draft saved]"),
+        "top row has history recall badge: {recall_row0:?}"
+    );
+}

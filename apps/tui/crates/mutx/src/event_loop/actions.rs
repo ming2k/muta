@@ -629,7 +629,7 @@ pub(super) async fn dispatch_action(
             );
         }
         input::InputAction::HistoryInsert => {
-            // Enter inside the Ctrl+R panel: pull the focused entry out
+            // Enter / Tab inside the Ctrl+R panel: pull the focused entry out
             // of `history_rows` (the filtered matches) and drop it into
             // the input box for further editing / sending. The message
             // is not shipped here — the user hits Enter again to send.
@@ -655,15 +655,15 @@ pub(super) async fn dispatch_action(
                 app.pending_text_pastes.clone(),
                 crate::app::DraftAdoption::Replace,
             );
-            // The selection replaces the in-progress draft, so the
-            // view's parked chat draft is dropped (not restored). Its search
-            // query/index were saved before the composer replacement, so the
-            // view still resumes where it was on the next Ctrl+R.
+            // The selection replaces the in-progress draft, and the search
+            // filter query buffer's task is completed, so query and draft are cleared.
             if let Some(state) = app
                 .panels
                 .states_mut(&crate::surfaces::PanelId::HistorySearch)
             {
                 state.draft = None;
+                state.query.clear();
+                state.index = 0;
             }
             app.panels.hide(crate::surfaces::PanelId::HistorySearch);
             app.history_search = false;

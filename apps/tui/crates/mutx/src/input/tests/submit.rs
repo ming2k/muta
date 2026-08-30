@@ -359,6 +359,18 @@ fn enter_in_history_modal_emits_history_insert() {
 }
 
 #[test]
+fn tab_in_history_modal_emits_history_insert() {
+    // Tab mirrors Enter inside the history modal: it confirms and inserts
+    // the highlighted match into the composer.
+    let mut input = "go".to_string();
+    let mut cursor = 2;
+    let action = run_history_key(&mut input, &mut cursor, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(action, InputAction::HistoryInsert);
+    assert_eq!(input, "go", "Tab must not consume the query");
+    assert_eq!(cursor, 2);
+}
+
+#[test]
 fn tab_does_not_cycle_completions_on_exact_command() {
     // A fully-typed command is resolved: its popup is hidden, so Tab must
     // not invisibly commit sibling candidates (e.g. `/session` →

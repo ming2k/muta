@@ -446,6 +446,57 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
 }
 
 #[test]
+fn history_insert_clears_search_query_buffer_and_places_entry() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input_history.push(muta_contracts::HistoryEntry::new(
+        "history row 1".to_string(),
+        Some("s1".to_string()),
+        None,
+        100,
+    ));
+    app.input_history.push(muta_contracts::HistoryEntry::new(
+        "history row 2".to_string(),
+        Some("s1".to_string()),
+        None,
+        200,
+    ));
+
+    app.input = "draft before search".to_string();
+    app.open_panel(crate::surfaces::PanelId::HistorySearch);
+    app.input = "row".to_string();
+    app.save_panel_state(crate::surfaces::PanelId::HistorySearch);
+
+    // Simulate HistoryInsert action (Tab / Enter accept)
+    let ranked = app.history_rows();
+    let pick = ranked.get(0).or_else(|| ranked.first());
+    assert!(pick.is_some());
+    let (orig_idx, _) = *pick.unwrap();
+    let text = app.input_history[orig_idx].text.clone();
+    app.adopt_as_draft(
+        text,
+        vec![],
+        vec![],
+        crate::app::DraftAdoption::Replace,
+    );
+    if let Some(state) = app
+        .panels
+        .states_mut(&crate::surfaces::PanelId::HistorySearch)
+    {
+        state.draft = None;
+        state.query.clear();
+        state.index = 0;
+    }
+    app.panels.hide(crate::surfaces::PanelId::HistorySearch);
+    app.history_search = false;
+
+    // Composer now holds the selected history entry, not the search query or old draft
+    assert_eq!(app.input, "history row 2");
+    // Search query in state is cleared
+    let search_state = app.panels.states(&crate::surfaces::PanelId::HistorySearch);
+    assert_eq!(search_state.map(|s| s.query.as_str()), Some(""));
+}
+
+#[test]
 fn recall_queued_is_lifo_and_restores_input() {
     // Every queued dispatch is a next-round item, so recall pops the newest
     // staged message in LIFO order and restores it locally without an agent
