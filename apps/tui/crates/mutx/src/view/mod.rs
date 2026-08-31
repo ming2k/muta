@@ -41,10 +41,11 @@ pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::*;
-use crate::page_header;
-pub(crate) use crate::page_header::{
-    AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_page_header,
-    draw_page_header_hints, draw_runner_footer,
+use crate::view_header;
+#[allow(unused_imports)]
+pub(crate) use crate::view_header::{
+    AsidesChip, BtwHead, SessionHead, SettingsHead, ViewHeader, ViewHints, ViewKind, draw_runner_footer,
+    draw_view_header, draw_view_header_hints,
 };
 pub use crate::primitives::recess_backdrop;
 use crate::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};
@@ -52,6 +53,7 @@ use crate::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};
 use crate::text_layout::WrappedLine;
 #[cfg(test)]
 use crate::text_layout::{block_selection_range, line_selection};
+#[allow(unused_imports)]
 pub use crate::theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, Theme};
 #[cfg(test)]
 use mutx_engine::text::{prohibited_line_end, prohibited_line_start};
@@ -81,9 +83,9 @@ use muta_contracts::{PermissionRequest, UserQuestionRequest};
 /// point** where the horizontal inset is applied for the content stream (the
 /// `band` every downstream component receives). Individual components no
 /// longer clip or hand-pad their own gutter; they trust the rect they
-/// receive. The page header is *not* inset here — it spans the terminal's
+/// receive. The view header is *not* inset here — it spans the terminal's
 /// full width and re-applies the inset as text padding inside
-/// `draw_page_header`.
+/// `draw_view_header`.
 pub(crate) fn transcript_band_rect(area: Rect) -> Rect {
     Rect::new(
         area.x + TRANSCRIPT_H_INSET,
@@ -184,13 +186,13 @@ pub struct TranscriptView<'a> {
     /// header is rendered and `messages` is the focused task's child stream.
     pub runner_bar: Option<RunnerBarInfo>,
     /// When set, the view is inside a `/btw` aside (ADR-0017/0103): the
-    /// contextual page header carries the coarse primary-session status on
+    /// contextual view header carries the coarse primary-session status on
     /// row 1 and the aside's affordance legend on row 2.
-    pub side_banner: Option<page_header::BtwHead>,
+    pub side_banner: Option<view_header::BtwHead>,
     /// Live-asides chip + interruptibility for the header band's row-2
     /// legend (ADR-0103 §3). `None` suppresses the legend entirely (non-app
     /// contexts).
-    pub page_hints: Option<page_header::PageHints<'a>>,
+    pub page_hints: Option<view_header::ViewHints<'a>>,
     /// Session identity for the Main view's head row: the persistent-id tail
     /// plus the tilde-shortened workspace on the left, and the session mode
     /// (`DELEGATED`) on the right. `None` only in non-session contexts
@@ -487,11 +489,11 @@ pub fn draw_transcript(
     // mutually exclusive in the app; preferring Runner here is a defensive
     // fallback that keeps rendering deterministic if a malformed caller
     // supplies both.
-    let page_header = runner_bar
+    let view_header = runner_bar
         .as_ref()
-        .map(PageHeader::Runner)
-        .or_else(|| side_banner.map(PageHeader::Btw))
-        .or_else(|| session_head.as_ref().map(PageHeader::Session));
+        .map(ViewHeader::Runner)
+        .or_else(|| side_banner.map(ViewHeader::Btw))
+        .or_else(|| session_head.as_ref().map(ViewHeader::Session));
     // The row-2 affordance legend (ADR-0103 §3, demand-gated by ADR-0104).
     // The destructured `page_hints` is pre-resolved by the caller (it needs
     // app-level state — the aside chip and interruptibility — that the view
@@ -499,20 +501,20 @@ pub fn draw_transcript(
     // reserved only while the view has page-specific affordances that no
     // other surface already carries; otherwise the band collapses to the
     // single identity row and the transcript reclaims the line.
-    let page_hints_view = page_hints.filter(|hints: &PageHints<'_>| hints.has_content());
+    let page_hints_view = page_hints.filter(|hints: &ViewHints<'_>| hints.has_content());
 
     // When a head band is present it occupies the top rows of the terminal
     // directly — the head is a sibling of the transcript, not content inside
     // it, so it replaces the viewport's top margin rather than nesting under
     // it. The band is identity/status on row 1 plus — only while the view
     // has page-specific affordances to announce (ADR-0104; see
-    // `PageHints::has_content`) — the view-affordance legend on row 2, both
+    // `ViewHints::has_content`) — the view-affordance legend on row 2, both
     // carved off with one layout split. Without a head, the standard
     // viewport margins apply. The Runner page additionally owns the terminal's
     // last rows for its permanent key-legend footer (three background-painted
     // rows whose middle row carries the shortcuts), so the transcript ends
     // above that band.
-    let (head_rect, hints_rect, runner_footer_rect, viewport) = if page_header.is_some() {
+    let (head_rect, hints_rect, runner_footer_rect, viewport) = if view_header.is_some() {
         let full = frame.area();
         let footer_rows = if runner_bar.is_some() {
             ENVOY_FOOTER_ROWS
@@ -537,7 +539,7 @@ pub fn draw_transcript(
             // chrome pinned to the top edge, the counterpart of the Runner
             // key-legend band at the bottom edge, not a transcript-area
             // component. Its *text* keeps the shared horizontal inset (applied
-            // inside `draw_page_header` as pad spans) so it stays aligned with
+            // inside `draw_view_header` as pad spans) so it stays aligned with
             // the transcript band below.
             Some(sub[0]),
             (band_rows > 1).then_some(sub[1]),
@@ -692,11 +694,11 @@ pub fn draw_transcript(
     // transcript. The band is a sibling of the transcript, not content inside
     // it, so it was already split from `full` above; just paint it here.
     // Row 1 carries identity/status; row 2 the view-affordance legend.
-    if let (Some(header), Some(rect)) = (page_header.as_ref(), head_rect) {
-        draw_page_header(frame, rect, header, theme);
+    if let (Some(header), Some(rect)) = (view_header.as_ref(), head_rect) {
+        draw_view_header(frame, rect, header, theme);
     }
     if let (Some(hints), Some(rect)) = (page_hints_view.as_ref(), hints_rect) {
-        draw_page_header_hints(frame, rect, hints, theme);
+        draw_view_header_hints(frame, rect, hints, theme);
     }
 
     // 1b. Runner key-legend footer — pinned to the terminal's last rows (its

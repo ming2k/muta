@@ -6,4 +6,5 @@
 | [Reference](reference/) | Lookup-oriented specs: TUI, tools, providers, colors, measurements |
 | [Explanation](explanation/) | Architecture, capability model, and design rationale |
 | [Architecture Decision Records](adr/) | Durable records of significant technical decisions and their context |
-| [Contributor docs](dev/) | Setup, testing, documentation governance |
+| [Governance](governance/) | Repository charters, review gates, and documentation governance |
+| [Contributor docs](dev/) | Setup, testing, build, and release workflows |

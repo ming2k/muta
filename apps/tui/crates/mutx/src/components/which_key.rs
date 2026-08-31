@@ -46,12 +46,13 @@ pub(crate) fn draw_which_key_overlay(
         LeaderChord::None => return,
     };
 
-    let card_width: u16 = 36;
-    let card_height: u16 = (items.len() as u16) + 3; // title + items + padding
+    let card_width: u16 = 38;
+    // 2 border rows + 1 top blank line + 1 title line + items + 1 bottom blank line
+    let card_height: u16 = (items.len() as u16) + 5;
 
-    // Position at bottom-right, 3 rows above the terminal bottom (above composer)
+    // Position at bottom-right, 1 row above the terminal bottom
     let x = viewport.width.saturating_sub(card_width + 2).max(1);
-    let y = viewport.height.saturating_sub(card_height + 3).max(1);
+    let y = viewport.height.saturating_sub(card_height + 1).max(1);
 
     let area = Rect::new(
         x,
@@ -70,8 +71,9 @@ pub(crate) fn draw_which_key_overlay(
         .border_style(Style::default().fg(theme.brand()))
         .style(Style::default().bg(theme.panel()));
 
-    // 3. Build action lines
-    let mut lines = Vec::with_capacity(items.len() + 2);
+    // 3. Build action lines with top and bottom spacing
+    let mut lines = Vec::with_capacity(items.len() + 4);
+    lines.push(Line::default()); // Top empty line
     lines.push(Line::from(vec![
         Span::raw(" "),
         Span::styled(
@@ -101,6 +103,7 @@ pub(crate) fn draw_which_key_overlay(
             Span::styled(desc, desc_style),
         ]));
     }
+    lines.push(Line::default()); // Bottom empty line
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
@@ -126,6 +129,13 @@ mod tests {
         assert!(content.contains("C-x (View / Window)"));
         assert!(content.contains("switch view"));
         assert!(content.contains("cancel"));
+
+        // Bottom-most row (row 23) should be empty (1 row margin from bottom)
+        let row_23: String = terminal.buffer().content[23 * 80..24 * 80]
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(row_23.trim().is_empty());
     }
 
     #[test]

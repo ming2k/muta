@@ -53,7 +53,8 @@ pub(crate) use actions::host_test_shims;
 /// CtrlC / CloseModal arms directly (they are plain functions, but only the
 /// event loop can reach them otherwise).
 #[cfg(test)]
-pub(crate) use actions::{handle_close_modal, handle_ctrl_c};
+#[allow(unused_imports)]
+pub(crate) use actions::{handle_close_modal, handle_ctrl_c, handle_modal_down, handle_modal_up};
 
 /// Shared runtime state crossing the response-listener / event-loop boundary.
 /// Each field is the single source of truth for one piece of live harness

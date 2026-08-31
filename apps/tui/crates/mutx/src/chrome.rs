@@ -111,7 +111,7 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
 /// active and is hidden while idle, so the row returns to the transcript.
 /// Session-state flags such as `DELEGATED` deliberately do not live here:
 /// they live on the head row at the top of the view
-/// ([`crate::page_header::draw_page_header`]) so this row stays a pure activity surface. The
+/// ([`crate::view_header::draw_view_header`]) so this row stays a pure activity surface. The
 /// persistent task-list summary lives on its own [`draw_todo_bar`], floated
 /// above this row as ambient meta-info.
 ///

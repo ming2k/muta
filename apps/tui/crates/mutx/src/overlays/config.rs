@@ -1,22 +1,5 @@
 //! Settings View (`/settings`, formerly `/config`): a first-class, full-screen configuration center
 //! providing dual-pane (Master-Detail) navigation over all system settings.
-//!
-//! Layout:
-//! ┌─ ⚙ SETTINGS · ~/workspace ────────────────────── Appearance › Themes, palette swatches & custom colors ────┐
-//! │                                                                                                            │
-//! │ ┌──────────────────────┐ ┌───────────────────────────────────────────────────────────────────────────────┐ │
-//! │ │ › ◐ Appearance       │ │ Choose a palette. Presets apply instantly; Custom allows full hex editing.   │ │
-//! │ │   ≡ Transcript       │ │                                                                               │ │
-//! │ │   ⚙ Behavior         │ │ › ● zen         Dark slate baseline (default)   ■ ■ ■ ■ ■                     │ │
-//! │ │   ℹ System & Info    │ │   ○ midnight    Deep obsidian dark              ■ ■ ■ ■ ■                     │ │
-//! │ │                      │ │   ○ nord        Arctic blue-gray palette        ■ ■ ■ ■ ■                     │ │
-//! │ │                      │ │   ○ catppuccin  Warm pastel mocha palette       ■ ■ ■ ■ ■                     │ │
-//! │ │                      │ │   ○ paper       High-contrast warm light        ■ ■ ■ ■ ■                     │ │
-//! │ │                      │ │   ○ custom      User-defined palette            ■ ■ ■ ■ ■                     │ │
-//! │ └──────────────────────┘ └───────────────────────────────────────────────────────────────────────────────┘ │
-//! ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-//! │              \[↑/↓\] select   \[Tab\] switch pane   \[Enter\] apply   \[Esc\] close                                │
-//! └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 use muta_contracts::ColorSchemeConfig;
 use mutx_engine::{
@@ -26,7 +9,11 @@ use mutx_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
+use crate::theme::mix;
 use crate::view::{CUSTOM_COLOR_FIELDS, Theme};
+use crate::view_header::{
+    SettingsHead, ViewHeader, ViewHints, ViewKind, draw_view_header, draw_view_header_hints,
+};
 
 /// Which pane of the Settings View currently owns the keyboard.
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
@@ -79,21 +66,11 @@ impl ConfigCategory {
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            ConfigCategory::Appearance => "Themes, palette swatches & custom colors",
+            ConfigCategory::Appearance => "Themes & palette swatches",
             ConfigCategory::Transcript => "Turn bands, auto-scroll & disclosures",
             ConfigCategory::Behavior => "Click-outside dismiss & interaction rules",
             ConfigCategory::WebSearch => "Search providers, page reader & API keys",
             ConfigCategory::System => "Config file paths, runtime & daemon info",
-        }
-    }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            ConfigCategory::Appearance => "◐",
-            ConfigCategory::Transcript => "≡",
-            ConfigCategory::Behavior => "⚙",
-            ConfigCategory::WebSearch => "⌕",
-            ConfigCategory::System => "ℹ",
         }
     }
 }
@@ -125,12 +102,13 @@ pub struct ConfigViewProps<'a> {
     /// query is still in flight — the pane renders a placeholder).
     pub websearch: Option<&'a muta_contracts::WebSearchConfigView>,
     /// Web-search pane text-editing mode: which field index borrows the
-    /// composer input row (`Some(4)` = SearXNG URL, `Some(5..=9)` = API
+    /// composer input row (`Some(2)` = SearXNG URL, `Some(3..=6 | 8)` = API
     /// keys). `None` = browse mode.
     pub websearch_editing: Option<usize>,
     pub workspace: &'a str,
     pub category_scroll: &'a mut usize,
     pub detail_scroll: &'a mut usize,
+    pub breadcrumbs: Option<&'a str>,
     pub theme: &'a Theme,
 }
 
@@ -154,7 +132,7 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
         area,
     );
 
-    // 4 vertical zones: Top Header (1 row), Blank Line (1 row), Center Body (flexible), Bottom Footer (3 rows).
+    // 4 vertical zones: Top Header (1 row), Breadcrumbs Subhead (1 row), Center Body (flexible), Bottom Footer (3 rows).
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -166,16 +144,32 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
         .split(area);
 
     let header_rect = vertical_chunks[0];
+    let subhead_rect = vertical_chunks[1];
     let body_rect = vertical_chunks[2];
     let footer_rect = vertical_chunks[3];
 
     let category = ConfigCategory::from_index(props.category_index);
 
-    // 1. Top Header Row (Line 1)
-    draw_header(frame, header_rect, props.workspace, category, props.theme);
+    // 1. Top Header Row (Line 1 - Standard View ViewHeader)
+    let header = ViewHeader::Settings(&SettingsHead {
+        workspace: props.workspace,
+        category: category.title(),
+        subtitle: category.subtitle(),
+    });
+    draw_view_header(frame, header_rect, &header, props.theme);
 
-    // 2. Center Two-Pane Master-Detail Area (starting after blank spacer row)
-    let category_width = (body_rect.width / 4).clamp(20, 26);
+    // 2. View Stack Breadcrumbs & Affordance (Line 2 - Standard ViewHints)
+    let view_hints = ViewHints {
+        kind: ViewKind::Settings,
+        asides: None,
+        interruptible: false,
+        parent_note: "",
+        breadcrumbs: props.breadcrumbs,
+    };
+    draw_view_header_hints(frame, subhead_rect, &view_hints, props.theme);
+
+    // 3. Center Two-Pane Master-Detail Area (with subtle background contrast)
+    let category_width = (body_rect.width / 4).clamp(18, 24);
     let horizontal_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -191,12 +185,13 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
     let (category_body, detail_body) =
         draw_panels(frame, category_area, detail_area, &mut props, category);
 
-    // 3. Bottom Runner-Style 3-Row Footer
+    // 4. Bottom Keycap Footer
     draw_footer(
         frame,
         footer_rect,
         props.focus,
         props.custom_editing,
+        props.websearch_editing,
         props.theme,
     );
 
@@ -207,64 +202,7 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
     }
 }
 
-// ── Header ─────────────────────────────────────────────────────────────────
-
-fn draw_header(
-    frame: &mut Frame,
-    rect: Rect,
-    workspace: &str,
-    category: ConfigCategory,
-    theme: &Theme,
-) {
-    let bg = theme.body();
-    let fill = Style::default().bg(bg);
-    let brand_style = fill.fg(theme.brand()).add_modifier(Modifier::BOLD);
-    let muted_style = fill.fg(theme.muted());
-
-    let left_title = " ⚙ SETTINGS";
-    let ws_text = if workspace.is_empty() {
-        String::new()
-    } else {
-        format!("  {workspace}")
-    };
-
-    let cat_title = category.title();
-    let cat_sub = category.subtitle();
-    let right_len = cat_title.width() + 3 + cat_sub.width() + 1; // "Title › Subtitle "
-    let left_len = left_title.width() + ws_text.width();
-    let total_w = rect.width as usize;
-
-    let mut spans = vec![
-        Span::styled(left_title, brand_style),
-        Span::styled(ws_text, muted_style),
-    ];
-
-    if total_w > left_len + right_len + 2 {
-        let gap = total_w - left_len - right_len;
-        spans.push(Span::styled(" ".repeat(gap), fill));
-        spans.push(Span::styled(
-            cat_title,
-            fill.fg(theme.fg()).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(" › ", fill.fg(theme.dim())));
-        spans.push(Span::styled(format!("{cat_sub} "), fill.fg(theme.muted())));
-    } else if total_w > left_len + cat_title.width() + 3 {
-        let short_len = cat_title.width() + 1;
-        let gap = total_w - left_len - short_len;
-        spans.push(Span::styled(" ".repeat(gap), fill));
-        spans.push(Span::styled(
-            format!("{cat_title} "),
-            fill.fg(theme.fg()).add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        let gap = total_w.saturating_sub(left_len);
-        spans.push(Span::styled(" ".repeat(gap), fill));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-}
-
-// ── Panels (Left Categories & Right Detail) ────────────────────────────────
+// ── Panels (Left Nav Sidebar & Right Detail) ───────────────────────────────
 
 fn draw_panels(
     frame: &mut Frame,
@@ -276,8 +214,9 @@ fn draw_panels(
     let is_cat_focused = props.focus == ConfigFocus::Categories;
     let is_det_focused = props.focus == ConfigFocus::Detail;
 
-    // Left Panel: Categories
-    let cat_body = inset_panel(frame, category_area, props.theme);
+    // Left Panel: Sidebar tone
+    let cat_bg = props.theme.panel();
+    let cat_body = inset_panel(frame, category_area, cat_bg);
     draw_category_list(
         frame,
         cat_body,
@@ -287,16 +226,17 @@ fn draw_panels(
         props.theme,
     );
 
-    // Right Panel: Detail
-    let det_body = inset_panel(frame, detail_area, props.theme);
+    // Right Panel: Subtle elevated contrast tone
+    let det_bg = mix(props.theme.panel(), props.theme.raised(), 0.35);
+    let det_body = inset_panel(frame, detail_area, det_bg);
     draw_category_detail(frame, det_body, props, category, is_det_focused);
 
     (cat_body, det_body)
 }
 
-fn inset_panel(frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {
+fn inset_panel(frame: &mut Frame, area: Rect, bg: mutx_engine::Color) -> Rect {
     frame.render_widget(
-        RtBlock::default().style(Style::default().bg(theme.panel())),
+        RtBlock::default().style(Style::default().bg(bg)),
         area,
     );
 
@@ -329,7 +269,6 @@ fn draw_category_list(
         }
 
         let cursor = if is_sel { "›" } else { " " };
-        let icon = cat.icon();
         let name = cat.title();
 
         let name_style = if is_sel && focused {
@@ -344,11 +283,9 @@ fn draw_category_list(
 
         let cursor_style = Style::default().fg(if is_sel { theme.brand() } else { theme.dim() });
 
-        let icon_style = Style::default().fg(if is_sel { theme.brand() } else { theme.muted() });
-
+        // Clean text-only category row without icons
         lines.push(Line::from(vec![
             Span::styled(format!(" {cursor} "), cursor_style),
-            Span::styled(format!("{icon} "), icon_style),
             Span::styled(name.to_string(), name_style),
         ]));
     }
@@ -396,7 +333,7 @@ fn draw_appearance_detail(
     let mut selected_line = None;
 
     lines.push(Line::from(Span::styled(
-        "Choose a palette. Presets apply instantly; Custom allows full hex editing.",
+        "Choose a palette. Up/Down previews instantly; Enter applies.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));
@@ -426,14 +363,22 @@ fn draw_appearance_detail(
             Style::default().fg(props.theme.fg())
         };
 
-        let label_w = 12usize;
+        let label_w = 14usize;
         let desc_w = (body.width as usize)
-            .saturating_sub(6 + label_w + 10 + 4)
+            .saturating_sub(6 + label_w + 14 + 10)
             .max(10);
         let desc = if scheme.description.width() > desc_w {
             format!("{}…", &scheme.description[..desc_w.saturating_sub(1)])
         } else {
             scheme.description.to_string()
+        };
+
+        let tag = if is_active {
+            " [active]"
+        } else if scheme.is_file {
+            " [file]"
+        } else {
+            ""
         };
 
         lines.push(Line::from(vec![
@@ -459,16 +404,25 @@ fn draw_appearance_detail(
                 Style::default().fg(props.theme.muted()),
             ),
             Span::raw("  "),
-            Span::styled("■", Style::default().fg(colors[0])),
-            Span::styled("■", Style::default().fg(colors[1])),
-            Span::styled("■", Style::default().fg(colors[2])),
-            Span::styled("■", Style::default().fg(colors[3])),
+            Span::styled("■ ", Style::default().fg(colors[0])),
+            Span::styled("■ ", Style::default().fg(colors[1])),
+            Span::styled("■ ", Style::default().fg(colors[2])),
+            Span::styled("■ ", Style::default().fg(colors[3])),
             Span::styled("■", Style::default().fg(colors[4])),
+            Span::styled(
+                tag,
+                Style::default().fg(if is_active {
+                    props.theme.ok()
+                } else {
+                    props.theme.dim()
+                }),
+            ),
         ]));
     }
 
     // Custom Scheme Hex Editor (if custom is selected or active)
-    let is_custom_sel = (props.detail_index % num_schemes) == (num_schemes - 1);
+    let is_custom_sel = (props.detail_index % num_schemes) == (num_schemes - 1)
+        && schemes.last().map(|s| s.id == "custom").unwrap_or(false);
     if is_custom_sel || current_norm == "custom" {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -546,7 +500,7 @@ fn draw_appearance_detail(
     // Live Preview Box at the bottom
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "── Live Transcript & Components Preview ───────────────────────",
+        "── Live Components Preview ─────────────────────────────────────",
         Style::default().fg(props.theme.dim()),
     )));
 
@@ -735,27 +689,20 @@ fn draw_behavior_detail(
     let mut selected_line = None;
 
     lines.push(Line::from(Span::styled(
-        "Modal backdrop click and interaction defaults.",
+        "Control modal auto-dismissal, interaction rules & focus handling.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));
 
-    let items = [
-        (
-            "Click Outside Dismiss",
-            if props.click_outside_dismiss {
-                "enabled [●]"
-            } else {
-                "disabled [○]"
-            },
-            "Click outside a modal backdrop to close it (mirrors Esc)",
-        ),
-        (
-            "Confirmation Mode",
-            "always confirm",
-            "Ask for confirmation on high-impact external actions",
-        ),
-    ];
+    let items = [(
+        "Click Outside Dismiss",
+        if props.click_outside_dismiss {
+            "enabled [●]"
+        } else {
+            "disabled [○]"
+        },
+        "Clicking terminal backdrop closes the active modal layer",
+    )];
 
     for (i, (label, val, desc)) in items.iter().enumerate() {
         let is_sel = i == props.detail_index;
@@ -785,7 +732,7 @@ fn draw_behavior_detail(
                     props.theme.dim()
                 }),
             ),
-            Span::styled(format!("{:<26}", label), row_style),
+            Span::styled(format!("{:<28}", label), row_style),
             Span::styled(
                 format!("{:<15}", val),
                 Style::default().fg(props.theme.brand()),
@@ -822,7 +769,7 @@ fn draw_behavior_detail(
 //   7 Page Reader       — Enter cycles builtin→jina→none
 //   8 Jina Reader Key   — Enter starts/stops inline editing; empty submit clears
 //   9 Timeout           — Enter +5s (min 5s)
-const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
+pub const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
     ("exa", "hosted MCP, anonymous by default (default)"),
     ("parallel", "hosted MCP, anonymous by default"),
     ("duckduckgo", "keyless scraping, frequently blocked"),
@@ -858,7 +805,6 @@ fn draw_websearch_detail(
     props: &mut ConfigViewProps<'_>,
     focused: bool,
 ) {
-    let _ = frame;
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
@@ -872,219 +818,318 @@ fn draw_websearch_detail(
     };
 
     lines.push(Line::from(Span::styled(
-        "websearch & webfetch backends. Changes apply live and persist to config.toml.",
+        "websearch & webfetch backends. Changes apply live and persist to config.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));
 
-    let backend_desc = |id: &str| -> &str {
-        WEBSEARCH_BACKENDS
-            .iter()
-            .find(|(bid, _)| *bid == id)
-            .map(|(_, d)| *d)
-            .unwrap_or("unknown backend")
-    };
-
-    let searxng_note = if ws.provider == "searxng" || ws.fallback == "searxng" {
-        ws.searxng_url
-            .as_deref()
-            .map(|u| format!("JSON endpoint: {u}"))
-            .unwrap_or_else(|| "JSON endpoint not set — searxng will be inactive".to_string())
-    } else {
-        "only used when a backend is searxng".to_string()
-    };
-
-    let key_row = |set: bool| -> String {
-        if set {
-            "set [●]".to_string()
-        } else {
-            "not set [○]".to_string()
+    let backend_badge = |id: &str| -> (&'static str, &'static str) {
+        match id {
+            "exa" => ("exa", "● Hosted MCP · Anonymous quota default"),
+            "parallel" => ("parallel", "● Hosted MCP · Anonymous quota default"),
+            "duckduckgo" => ("duckduckgo", "● Keyless Direct · Scraping"),
+            "searxng" => ("searxng", "● Self-Hosted · JSON endpoint required"),
+            "tavily" => ("tavily", "● Hosted · API Key required"),
+            "bocha" => ("bocha", "● Hosted · China-direct AI search"),
+            "none" => ("none", "○ Disabled · Excluded from model tools"),
+            _ => ("unknown", "○ Unknown backend"),
         }
     };
 
-    let primary_desc = if ws.provider == "none" || ws.provider == "disabled" {
-        "disabled — websearch is excluded from model requests".to_string()
-    } else if ws.provider == "tavily" && !ws.tavily_api_key_set {
-        "inactive — Tavily API key required to enable tool".to_string()
-    } else if ws.provider == "bocha" && !ws.bocha_api_key_set {
-        "inactive — Bocha API key required to enable tool".to_string()
-    } else if ws.provider == "searxng" && ws.searxng_url.as_deref().unwrap_or("").is_empty() {
-        "inactive — SearXNG JSON endpoint required to enable tool".to_string()
-    } else {
-        backend_desc(&ws.provider).to_string()
+    let key_status_badge = |set: bool, required: bool| -> (&'static str, mutx_engine::Color) {
+        if set {
+            ("● Configured", props.theme.ok())
+        } else if required {
+            ("⚠ Key Required", props.theme.warn())
+        } else {
+            ("○ Not set (optional)", props.theme.dim())
+        }
     };
-
-    let reader_desc = if ws.reader == "none" || ws.reader == "disabled" {
-        "disabled — webfetch is excluded from model requests".to_string()
-    } else if ws.reader == "jina" {
-        "r.jina.ai: JS rendering + readability extraction".to_string()
-    } else {
-        "direct fetch + local HTML stripping (no JS)".to_string()
-    };
-
-    let items: Vec<(String, String, String)> = vec![
-        // ── 1. Web Search (Breadth) ──
-        (
-            "Primary Backend".to_string(),
-            ws.provider.clone(),
-            primary_desc,
-        ),
-        (
-            "Fallback Backend".to_string(),
-            if ws.fallback.trim().is_empty() || ws.fallback == "none" {
-                "(none)".to_string()
-            } else {
-                ws.fallback.clone()
-            },
-            "tried automatically when the primary fails".to_string(),
-        ),
-        (
-            "SearXNG URL".to_string(),
-            ws.searxng_url.clone().unwrap_or_default(),
-            searxng_note,
-        ),
-        (
-            "Exa API Key".to_string(),
-            key_row(ws.exa_api_key_set),
-            "optional — raises the anonymous quota".to_string(),
-        ),
-        (
-            "Parallel API Key".to_string(),
-            key_row(ws.parallel_api_key_set),
-            "optional — raises the anonymous quota".to_string(),
-        ),
-        (
-            "Tavily API Key".to_string(),
-            key_row(ws.tavily_api_key_set),
-            "required when the backend is tavily".to_string(),
-        ),
-        (
-            "Bocha API Key".to_string(),
-            key_row(ws.bocha_api_key_set),
-            "required when the backend is bocha".to_string(),
-        ),
-        // ── 2. Web Fetch (Depth) ──
-        ("Page Reader".to_string(), ws.reader.clone(), reader_desc),
-        (
-            "Jina Reader Key".to_string(),
-            key_row(ws.jina_api_key_set),
-            "optional — raises the reader rate limit".to_string(),
-        ),
-        // ── 3. Shared Network & Timeout ──
-        (
-            "Timeout".to_string(),
-            format!("{} s", ws.timeout_secs),
-            "per-request timeout for both tools".to_string(),
-        ),
-    ];
 
     let editing_field = props.websearch_editing_field();
-    for (i, (label, val, desc)) in items.iter().enumerate() {
-        if i == 0 {
-            lines.push(Line::from(Span::styled(
-                "── 1. Web Search (Breadth) ───────────────────────────",
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-        } else if i == 7 {
-            lines.push(Line::from(Span::styled(
-                "── 2. Web Fetch (Depth) ───────────────────────────────",
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-        } else if i == 9 {
-            lines.push(Line::from(Span::styled(
-                "── 3. Shared Network & Timeout ───────────────────────",
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-        }
 
+    // Section 1: Web Search (Breadth)
+    lines.push(Line::from(Span::styled(
+        "── 1. Web Search (Breadth) ───────────────────────────",
+        Style::default()
+            .fg(props.theme.brand())
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Item 0: Primary Backend
+    {
+        let i = 0;
         let is_sel = i == props.detail_index;
         if is_sel {
             selected_line = Some(lines.len());
         }
-        let editing_this = editing_field == Some(i);
-
         let cursor = if is_sel { "›" } else { " " };
+        let (val, desc) = backend_badge(&ws.provider);
         let row_style = if is_sel && focused {
-            Style::default()
-                .fg(props.theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else if is_sel {
-            Style::default()
-                .fg(props.theme.fg())
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(props.theme.fg())
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
         };
 
-        let shown: String = if editing_this {
-            props.input.to_string()
-        } else if i == 2 && val.is_empty() {
-            "(not set)".to_string()
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("Primary Backend   ", row_style),
+            Span::styled(format!("[ {:<10} ]", val), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(desc, Style::default().fg(if ws.provider == "none" { props.theme.dim() } else { props.theme.ok() })),
+        ]));
+        if is_sel && focused {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("Options: exa · parallel · duckduckgo · searxng · tavily · bocha · none", Style::default().fg(props.theme.dim())),
+                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Item 1: Fallback Backend
+    {
+        let i = 1;
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let cursor = if is_sel { "›" } else { " " };
+        let fallback_val = if ws.fallback.trim().is_empty() || ws.fallback == "none" { "(none)" } else { ws.fallback.as_str() };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
         } else {
-            val.clone()
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("Fallback Backend  ", row_style),
+            Span::styled(format!("[ {:<10} ]", fallback_val), Style::default().fg(props.theme.brand())),
+            Span::raw("  "),
+            Span::styled("Automatic fallback when primary query fails", Style::default().fg(props.theme.muted())),
+        ]));
+        if is_sel && focused {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("Options: (none) · exa · parallel · duckduckgo · searxng · tavily · bocha", Style::default().fg(props.theme.dim())),
+                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Item 2: SearXNG URL
+    {
+        let i = 2;
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let is_editing = editing_field == Some(i);
+        let cursor = if is_sel { "›" } else { " " };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        let url_display = if is_editing {
+            props.input.to_string()
+        } else {
+            ws.searxng_url.clone().unwrap_or_else(|| "(not configured)".to_string())
         };
 
         let mut row_spans = vec![
-            Span::styled(
-                format!(" {cursor} "),
-                Style::default().fg(if is_sel {
-                    props.theme.brand()
-                } else {
-                    props.theme.dim()
-                }),
-            ),
-            Span::styled(format!("{:<18}", label), row_style),
-            Span::styled("  ", Style::default()),
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("SearXNG URL       ", row_style),
         ];
-        if editing_this {
-            // Composer-style cursor rendering inside the settings row.
-            let cursor_pos = props.cursor_position.min(shown.len());
-            let (left, right) = shown.split_at(cursor_pos);
-            let (mid, right) = if !right.is_empty() {
-                right.split_at(1)
-            } else {
-                (" ", "")
-            };
-            row_spans.push(Span::styled(
-                left.to_string(),
-                Style::default().fg(props.theme.brand()),
-            ));
-            row_spans.push(Span::styled(
-                mid.to_string(),
-                Style::default()
-                    .bg(props.theme.brand())
-                    .fg(props.theme.body()),
-            ));
-            row_spans.push(Span::styled(
-                right.to_string(),
-                Style::default().fg(props.theme.brand()),
-            ));
+
+        if is_editing {
+            render_inline_input(&mut row_spans, &url_display, props.cursor_position, props.theme);
         } else {
-            row_spans.push(Span::styled(
-                format!("{:<16}", shown),
-                Style::default().fg(props.theme.brand()),
-            ));
+            row_spans.push(Span::styled(format!("[ {url_display} ]"), Style::default().fg(if ws.searxng_url.is_some() { props.theme.fg() } else { props.theme.dim() })));
         }
+
         lines.push(Line::from(row_spans));
         lines.push(Line::from(vec![
             Span::raw("     "),
-            Span::styled(desc.clone(), Style::default().fg(props.theme.muted())),
+            Span::styled("Self-hosted JSON endpoint (e.g. http://localhost:8080)", Style::default().fg(props.theme.muted())),
+            Span::styled(if is_editing { "  [Enter save · Esc cancel]" } else { "  [Enter to edit]" }, Style::default().fg(props.theme.dim())),
         ]));
         lines.push(Line::from(""));
     }
 
+    // Items 3..=6: API Keys (Exa, Parallel, Tavily, Bocha)
+    let key_items = [
+        (3, "Exa API Key", ws.exa_api_key_set, ws.provider == "exa" || ws.fallback == "exa", "Optional key to raise anonymous rate quota"),
+        (4, "Parallel API Key", ws.parallel_api_key_set, ws.provider == "parallel" || ws.fallback == "parallel", "Optional key to raise anonymous rate quota"),
+        (5, "Tavily API Key", ws.tavily_api_key_set, ws.provider == "tavily" || ws.fallback == "tavily", "Required when using Tavily search backend"),
+        (6, "Bocha API Key", ws.bocha_api_key_set, ws.provider == "bocha" || ws.fallback == "bocha", "Required when using Bocha search backend"),
+    ];
+
+    for (i, label, is_set, is_active_provider, hint) in key_items {
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let is_editing = editing_field == Some(i);
+        let cursor = if is_sel { "›" } else { " " };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        let (status_text, status_color) = key_status_badge(is_set, is_active_provider);
+
+        let mut row_spans = vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled(format!("{:<18}", label), row_style),
+        ];
+
+        if is_editing {
+            render_inline_input(&mut row_spans, props.input, props.cursor_position, props.theme);
+        } else {
+            row_spans.push(Span::styled(format!("{:<22}", status_text), Style::default().fg(status_color)));
+        }
+
+        lines.push(Line::from(row_spans));
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(hint.to_string(), Style::default().fg(props.theme.muted())),
+            Span::styled(if is_editing { "  [Enter save · Empty Enter clear · Esc cancel]" } else { "  [Enter to configure]" }, Style::default().fg(props.theme.dim())),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    // Section 2: Web Fetch (Depth)
     lines.push(Line::from(Span::styled(
-        "Keys persist to credentials.toml (never config.toml); submitting an \
-         empty value clears a key. Proxy: set [websearch] proxy in config.toml.",
+        "── 2. Web Fetch (Depth) ───────────────────────────────",
+        Style::default()
+            .fg(props.theme.brand())
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Item 7: Page Reader
+    {
+        let i = 7;
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let cursor = if is_sel { "›" } else { " " };
+        let reader_val = ws.reader.as_str();
+        let reader_desc = match reader_val {
+            "jina" => "● r.jina.ai: Readability & Markdown extraction",
+            "builtin" => "● Direct fetch + HTML stripping (no JS)",
+            "none" => "○ Disabled · Excluded from model tools",
+            _ => "● Custom page reader",
+        };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("Page Reader       ", row_style),
+            Span::styled(format!("[ {:<10} ]", reader_val), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(reader_desc, Style::default().fg(if reader_val == "none" { props.theme.dim() } else { props.theme.ok() })),
+        ]));
+        if is_sel && focused {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("Options: jina · builtin · none", Style::default().fg(props.theme.dim())),
+                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Item 8: Jina Reader Key
+    {
+        let i = 8;
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let is_editing = editing_field == Some(i);
+        let cursor = if is_sel { "›" } else { " " };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        let (status_text, status_color) = key_status_badge(ws.jina_api_key_set, false);
+
+        let mut row_spans = vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("Jina Reader Key   ", row_style),
+        ];
+
+        if is_editing {
+            render_inline_input(&mut row_spans, props.input, props.cursor_position, props.theme);
+        } else {
+            row_spans.push(Span::styled(format!("{:<22}", status_text), Style::default().fg(status_color)));
+        }
+
+        lines.push(Line::from(row_spans));
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled("Optional key to raise rate limits on r.jina.ai", Style::default().fg(props.theme.muted())),
+            Span::styled(if is_editing { "  [Enter save · Empty Enter clear · Esc cancel]" } else { "  [Enter to configure]" }, Style::default().fg(props.theme.dim())),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    // Section 3: Shared Network & Timeout
+    lines.push(Line::from(Span::styled(
+        "── 3. Shared Network & Timeout ───────────────────────",
+        Style::default()
+            .fg(props.theme.brand())
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Item 9: Timeout
+    {
+        let i = 9;
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let cursor = if is_sel { "›" } else { " " };
+        let row_style = if is_sel && focused {
+            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
+            Span::styled("Request Timeout   ", row_style),
+            Span::styled(format!("[ {:>2} s ]", ws.timeout_secs), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("Per-request timeout for search and fetch operations", Style::default().fg(props.theme.muted())),
+        ]));
+        if is_sel && focused {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("[Enter to +5s (min 5s, max 120s)]", Style::default().fg(props.theme.dim())),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "Keys persist to credentials.toml (never config.toml); empty submit clears a key.",
         Style::default().fg(props.theme.dim()),
     )));
 
@@ -1096,6 +1141,35 @@ fn draw_websearch_detail(
         selected_line,
         props.theme,
     );
+}
+
+fn render_inline_input(
+    spans: &mut Vec<Span<'static>>,
+    shown: &str,
+    cursor_position: usize,
+    theme: &Theme,
+) {
+    let cursor_pos = cursor_position.min(shown.len());
+    let (left, right) = shown.split_at(cursor_pos);
+    let (mid, right) = if !right.is_empty() {
+        right.split_at(1)
+    } else {
+        (" ", "")
+    };
+    spans.push(Span::styled(
+        format!("[ {left}"),
+        Style::default().fg(theme.brand()),
+    ));
+    spans.push(Span::styled(
+        mid.to_string(),
+        Style::default()
+            .bg(theme.brand())
+            .fg(theme.body()),
+    ));
+    spans.push(Span::styled(
+        format!("{right} ]"),
+        Style::default().fg(theme.brand()),
+    ));
 }
 
 // 5. System Detail Pane
@@ -1154,6 +1228,7 @@ fn draw_footer(
     rect: Rect,
     focus: ConfigFocus,
     custom_editing: bool,
+    websearch_editing: Option<usize>,
     theme: &Theme,
 ) {
     if rect.height == 0 {
@@ -1166,7 +1241,13 @@ fn draw_footer(
     let hint_style = fill.fg(theme.muted());
 
     // Context-sensitive keycap pairs.
-    let pairs: Vec<(&'static str, &'static str)> = if custom_editing {
+    let pairs: Vec<(&'static str, &'static str)> = if websearch_editing.is_some() {
+        vec![
+            ("Enter", "save"),
+            ("Empty + Enter", "clear"),
+            ("Esc", "cancel"),
+        ]
+    } else if custom_editing {
         vec![
             ("↑/↓", "field"),
             ("Enter", "save palette"),
@@ -1176,15 +1257,13 @@ fn draw_footer(
         match focus {
             ConfigFocus::Categories => vec![
                 ("↑/↓", "select"),
-                ("Tab", "edit section"),
-                ("Enter", "open"),
+                ("Enter", "enter panel"),
                 ("Esc", "close"),
             ],
             ConfigFocus::Detail => vec![
                 ("↑/↓", "navigate"),
-                ("Tab", "categories"),
-                ("Enter/Space", "apply/toggle"),
-                ("Esc", "back"),
+                ("Enter/Space", "apply/toggle/edit"),
+                ("Esc", "back to nav"),
             ],
         }
     };
@@ -1228,54 +1307,48 @@ fn draw_footer(
     let pad_left = (width.saturating_sub(content_len)) / 2;
     let pad_right = width.saturating_sub(pad_left + content_len);
 
-    let mut row_spans = vec![Span::styled(" ".repeat(pad_left), fill)];
-    row_spans.extend(spans);
-    row_spans.push(Span::styled(" ".repeat(pad_right), fill));
+    let mut line_spans = Vec::new();
+    if pad_left > 0 {
+        line_spans.push(Span::styled(" ".repeat(pad_left), fill));
+    }
+    line_spans.extend(spans);
+    if pad_right > 0 {
+        line_spans.push(Span::styled(" ".repeat(pad_right), fill));
+    }
 
-    // Paint 3 rows: blank row 1, content row 2, blank row 3.
-    let r1 = Rect {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: 1,
-    };
-    let r2 = Rect {
-        x: rect.x,
-        y: rect.y + 1,
-        width: rect.width,
-        height: 1,
-    };
-    let r3 = Rect {
-        x: rect.x,
-        y: rect.y + 2,
-        width: rect.width,
-        height: 1,
-    };
+    // Centered 1-line legend padded with top/bottom empty rows for 3-row footer.
+    let footer_lines = vec![
+        Line::from(Span::styled(" ".repeat(width), fill)),
+        Line::from(line_spans),
+        Line::from(Span::styled(" ".repeat(width), fill)),
+    ];
 
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))),
-        r1,
-    );
-    frame.render_widget(Paragraph::new(Line::from(row_spans)), r2);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))),
-        r3,
-    );
+    frame.render_widget(Paragraph::new(footer_lines), rect);
 }
 
-// ── Shared Helpers ─────────────────────────────────────────────────────────
+// ── Shared Scroll Helper ───────────────────────────────────────────────────
 
 fn render_scrollable(
     frame: &mut Frame,
-    body: Rect,
+    area: Rect,
     lines: Vec<Line<'static>>,
     scroll: &mut usize,
-    follow: Option<usize>,
+    selected_line: Option<usize>,
     theme: &Theme,
 ) {
-    let visible = body.height as usize;
-    let (_, max_scroll) = resolve_scroll(scroll, visible, lines.len(), follow, SCROLL_EDGE_MARGIN);
-    let para = Paragraph::new(lines).scroll(*scroll as u16, 0);
-    frame.render_widget(para, body);
-    draw_scrollbar(frame, body, *scroll, max_scroll, theme);
+    let total = lines.len();
+    let viewport = area.height as usize;
+    let (start, max_scroll) = resolve_scroll(scroll, viewport, total, selected_line, SCROLL_EDGE_MARGIN);
+
+    let visible: Vec<Line<'static>> = lines
+        .into_iter()
+        .skip(start)
+        .take(viewport)
+        .collect();
+
+    frame.render_widget(Paragraph::new(visible), area);
+
+    if max_scroll > 0 && area.width > 1 {
+        draw_scrollbar(frame, area, start, max_scroll, theme);
+    }
 }

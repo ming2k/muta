@@ -190,13 +190,13 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     } else {
         None
     };
-    let page_hints = view::PageHints {
+    let page_hints = view::ViewHints {
         kind: if side_banner.is_some() {
-            view::PageKind::Btw
+            view::ViewKind::Btw
         } else if app.in_runner_view() {
-            view::PageKind::Runner
+            view::ViewKind::Runner
         } else {
-            view::PageKind::Main
+            view::ViewKind::Main
         },
         asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(view::AsidesChip {
             total: app.btw_list.len(),
@@ -1099,6 +1099,13 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &app.theme,
         )),
         Modal::Config => {
+            let breadcrumbs_str = if app.in_side_view {
+                "Main › Aside › Settings"
+            } else if app.in_runner_view() {
+                "Main › Runner › Settings"
+            } else {
+                "Main › Settings"
+            };
             let rects = view::draw_config_view(
                 f,
                 view::ConfigViewProps {
@@ -1119,6 +1126,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     workspace: &app.current_workspace,
                     category_scroll: &mut app.config_scroll,
                     detail_scroll: &mut app.config_detail_scroll,
+                    breadcrumbs: Some(breadcrumbs_str),
                     theme: &app.theme,
                 },
             );

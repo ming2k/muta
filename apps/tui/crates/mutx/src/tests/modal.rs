@@ -1414,6 +1414,46 @@ fn config_view_reopen_keeps_pane_and_category() {
 }
 
 #[test]
+fn config_view_navigation_and_theme_preview() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.show_view_surface(crate::surfaces::View::Settings);
+    assert_eq!(app.active_modal(), Modal::Config);
+    assert_eq!(app.config_focus, crate::overlays::ConfigFocus::Categories);
+    assert_eq!(app.config_category, 0);
+
+    // Cycling down through all 5 categories
+    for expected_cat in [1, 2, 3, 4, 0] {
+        crate::event_loop::handle_modal_down(&mut app, "s1");
+        assert_eq!(app.config_category, expected_cat);
+    }
+
+    // Switch focus to Detail pane
+    app.config_focus = crate::overlays::ConfigFocus::Detail;
+    app.config_detail_index = 0;
+
+    // Up/down in detail pane previews themes
+    crate::event_loop::handle_modal_down(&mut app, "s1");
+    let schemes = crate::view::Theme::available_color_schemes();
+    let previewed_scheme = &schemes[app.config_detail_index % schemes.len()];
+    assert_eq!(
+        app.theme.surface(),
+        crate::view::Theme::from_color_scheme(&previewed_scheme.id, &app.custom_color_scheme).surface()
+    );
+
+    // Revert preview on exit to categories
+    app.theme = crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
+    app.config_focus = crate::overlays::ConfigFocus::Categories;
+    assert_eq!(
+        app.theme.surface(),
+        crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme).surface()
+    );
+
+    // Dismissing surface from Categories closes the settings view
+    assert!(app.dismiss_surface());
+    assert_eq!(app.active_modal(), Modal::None);
+}
+
+#[test]
 fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "unsent chat".to_string();

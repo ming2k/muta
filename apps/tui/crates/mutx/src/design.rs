@@ -194,7 +194,7 @@ pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 0;
 /// identity + status; row 2 is the view-level affordance legend (ADR-0103
 /// §3), reserved only while the view has page-specific affordances that no
 /// other surface already carries — demand-driven per ADR-0104 (see
-/// `PageHints::has_content`), so the common cases render a single-row band
+/// `ViewHints::has_content`), so the common cases render a single-row band
 /// and the transcript reclaims the line.
 pub(crate) const PAGE_HEADER_ROWS: u16 = 2;
 

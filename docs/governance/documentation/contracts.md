@@ -9,14 +9,15 @@ see [Adoption](adoption.md).
 
 ## Required layout
 
-This guide routes documentation through three gates plus a root-file
+This guide routes documentation through four gates plus a root-file
 exception (see [Routing](routing.md)). Each gate maps to a location:
 
 | Gate | Path | Required | Purpose |
 |------|------|----------|---------|
 | Time | `docs/adr/` | Optional | Architecture Decision Records (immutable) |
+| Governance | `docs/governance/` | Yes | Repository & Architecture Governance (Top-Level) |
+| Governance | `docs/governance/documentation/` | Yes | Documentation governance (this directory) |
 | Audience | `docs/dev/` | Yes | Contributor-only documentation (the firewall) |
-| Audience | `docs/dev/documentation/` | Yes | Documentation governance (this directory) |
 | Cognitive mode | `docs/tutorials/` | Optional | Learning-oriented walkthroughs |
 | Cognitive mode | `docs/how-to/` | Recommended | Task-oriented user guides |
 | Cognitive mode | `docs/reference/` | Recommended | API, CLI, configuration, and schema lookup |

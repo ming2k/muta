@@ -42,7 +42,7 @@ pub(crate) use commands::handle_ctrl_c;
 #[cfg(test)]
 pub(crate) use commands::handle_send_slash;
 #[cfg(test)]
-pub(crate) use modals::handle_close_modal;
+pub(crate) use modals::{handle_close_modal, handle_modal_down, handle_modal_up};
 
 /// How the event loop proceeds after a dispatched action. Arms that ended in
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
@@ -205,7 +205,13 @@ pub(super) async fn dispatch_action(
         host::cancel_kill_confirm(app);
     }
 
-    if !matches!(action, input::InputAction::SetLeaderChord(_)) {
+    if !matches!(
+        action,
+        input::InputAction::SetLeaderChord(_)
+            | input::InputAction::Hover { .. }
+            | input::InputAction::None
+            | input::InputAction::TerminalResized
+    ) {
         app.leader_chord = crate::app::LeaderChord::None;
     }
     match action {
@@ -804,29 +810,37 @@ pub(super) async fn dispatch_action(
                 match app.config_focus {
                     crate::overlays::ConfigFocus::Categories => {
                         app.config_focus = crate::overlays::ConfigFocus::Detail;
+                        if app.config_category == 0 {
+                            app.config_detail_index =
+                                Theme::color_scheme_index(&app.color_scheme);
+                        } else {
+                            app.config_detail_index = 0;
+                        }
                     }
                     crate::overlays::ConfigFocus::Detail => {
                         match app.config_category {
                             0 => {
                                 // Appearance category:
-                                let num_schemes = crate::view::COLOR_SCHEMES.len();
-                                let sel_idx = app.config_detail_index % num_schemes;
-                                let is_custom = sel_idx == num_schemes - 1;
-                                if is_custom {
-                                    if !app.config_custom_editing {
-                                        app.config_custom_editing = true;
-                                        app.custom_color_draft = app.custom_color_scheme.clone();
-                                        app.input =
-                                            Theme::custom_color_value(&app.custom_color_draft, 0)
-                                                .unwrap_or("#000000")
-                                                .to_string();
-                                        app.set_cursor_end();
-                                    } else {
-                                        // Save custom palette
-                                        if Theme::set_custom_color_value(
+                                let schemes = Theme::available_color_schemes();
+                                let sel_idx = app.config_detail_index % schemes.len();
+                                if let Some(scheme) = schemes.get(sel_idx) {
+                                    let is_custom = scheme.id == "custom";
+                                    if is_custom {
+                                        if !app.config_custom_editing {
+                                            app.config_custom_editing = true;
+                                            app.custom_color_draft =
+                                                app.custom_color_scheme.clone();
+                                            app.input = Theme::custom_color_value(
+                                                &app.custom_color_draft,
+                                                0,
+                                            )
+                                            .unwrap_or("#000000")
+                                            .to_string();
+                                            app.set_cursor_end();
+                                        } else if Theme::set_custom_color_value(
                                             &mut app.custom_color_draft,
                                             app.config_detail_index
-                                                .saturating_sub(num_schemes)
+                                                .saturating_sub(schemes.len())
                                                 .min(7),
                                             &app.input,
                                         ) {
@@ -837,30 +851,30 @@ pub(super) async fn dispatch_action(
                                                 "custom",
                                                 &app.custom_color_scheme,
                                             );
-                                            let _ =
-                                                app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateTuiColorScheme {
                                                     name: app.color_scheme.clone(),
                                                     custom: app.custom_color_scheme.clone(),
-                                                });
+                                                },
+                                            );
                                             app.config_custom_editing = false;
                                             app.save_tui_config();
                                             app.input.clear();
                                             app.set_cursor(0);
                                         }
-                                    }
-                                } else {
-                                    let schemes = Theme::available_color_schemes();
-                                    if let Some(scheme) = schemes.get(sel_idx) {
+                                    } else {
                                         let name = &scheme.id;
                                         app.color_scheme = name.to_string();
                                         app.theme = Theme::from_color_scheme(
                                             name.as_ref(),
                                             &app.custom_color_scheme,
                                         );
-                                        let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
-                                            name: app.color_scheme.clone(),
-                                            custom: app.custom_color_scheme.clone(),
-                                        });
+                                        let _ = app.tx.send(
+                                            AgentRequest::UpdateTuiColorScheme {
+                                                name: app.color_scheme.clone(),
+                                                custom: app.custom_color_scheme.clone(),
+                                            },
+                                        );
                                         app.save_tui_config();
                                     }
                                 }
@@ -1002,17 +1016,22 @@ pub(super) async fn dispatch_action(
                                                 )),
                                             );
                                         }
-                                        // 9: Timeout +5s per press (min 5).
+                                        // 9: Timeout +5s per press (min 5, max 120).
                                         9 => {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
                                                 .map(|ws| ws.timeout_secs)
                                                 .unwrap_or(20);
+                                            let next = if current >= 120 {
+                                                5
+                                            } else {
+                                                (current + 5).max(5)
+                                            };
                                             let _ = app.tx.send(
                                                 AgentRequest::UpdateWebSearchConfig(Box::new(
                                                     muta_contracts::WebSearchConfigUpdate {
-                                                        timeout_secs: Some((current + 5).max(5)),
+                                                        timeout_secs: Some(next),
                                                         ..Default::default()
                                                     },
                                                 )),
@@ -1044,6 +1063,15 @@ pub(super) async fn dispatch_action(
                     app.input.clear();
                     app.set_cursor(0);
                 } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
+                    if app.config_category == 0 {
+                        // Revert preview theme to persisted color scheme
+                        app.theme = Theme::from_color_scheme(
+                            &app.color_scheme,
+                            &app.custom_color_scheme,
+                        );
+                        app.config_detail_index =
+                            Theme::color_scheme_index(&app.color_scheme);
+                    }
                     app.config_focus = crate::overlays::ConfigFocus::Categories;
                 } else {
                     // Leaving the Settings view (its innermost back step):

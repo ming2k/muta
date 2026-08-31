@@ -804,7 +804,7 @@ fn rgb(color: Color) -> (u8, u8, u8) {
     }
 }
 
-fn mix(a: Color, b: Color, amount: f32) -> Color {
+pub fn mix(a: Color, b: Color, amount: f32) -> Color {
     let amount = amount.clamp(0.0, 1.0);
     let (ar, ag, ab) = rgb(a);
     let (br, bg, bb) = rgb(b);

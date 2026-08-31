@@ -348,20 +348,24 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 workspace: "~/workspace",
                 category_scroll: &mut 0,
                 detail_scroll: &mut 0,
+                breadcrumbs: Some("Main › Settings"),
                 theme: &theme,
             },
         );
     });
     assert!(grid_row(&terminal, 0).contains("SETTINGS"));
+    assert!(!grid_row(&terminal, 0).contains("⚙"));
     assert!(grid_row(&terminal, 0).contains("Appearance"));
     assert!(
-        grid_row(&terminal, 1).trim().is_empty(),
-        "Row 1 must be an empty spacer line"
+        grid_row(&terminal, 1).contains("Main › Settings"),
+        "Row 1 must show the view stack breadcrumbs"
     );
     assert!(
         !grid_row(&terminal, 2).contains("CATEGORIES"),
         "Panel title row must be removed"
     );
+    // Categories should not contain icons
+    assert!(!grid_row(&terminal, 3).contains("◐"));
 
     terminal.draw(|frame| {
         draw_config_view(
@@ -384,6 +388,7 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 workspace: "~/workspace",
                 category_scroll: &mut 0,
                 detail_scroll: &mut 0,
+                breadcrumbs: Some("Main › Settings"),
                 theme: &theme,
             },
         );
@@ -736,8 +741,8 @@ fn main_view_without_asides_renders_a_single_row_head_band() {
         80,
         24,
         &[],
-        Some(PageHints {
-            kind: PageKind::Main,
+        Some(ViewHints {
+            kind: ViewKind::Main,
             asides: None,
             interruptible: true,
             parent_note: "",
@@ -761,8 +766,8 @@ fn main_view_with_asides_shows_the_legend_row() {
         80,
         24,
         &[],
-        Some(PageHints {
-            kind: PageKind::Main,
+        Some(ViewHints {
+            kind: ViewKind::Main,
             asides: Some(AsidesChip {
                 total: 2,
                 running: 1,

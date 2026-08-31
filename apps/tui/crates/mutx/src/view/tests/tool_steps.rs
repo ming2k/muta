@@ -251,7 +251,7 @@ fn runner_step_and_view_render_without_panicking() {
     let head_row = row_text(0);
     // The symbol row is unchanged by the full-width band (the pads and the
     // old inset columns were all spaces); only the background differs —
-    // the whole row now paints `body`, asserted in page_header's tests.
+    // the whole row now paints `body`, asserted in view_header's tests.
     assert_eq!(
         head_row,
         "   ENVOY [EXPLORE] the codebase                                         (1/2)   ",
@@ -640,8 +640,8 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
 /// would be pure duplication.
 #[test]
 fn runner_view_omits_row2_entirely() {
-    let hints = PageHints {
-        kind: PageKind::Runner,
+    let hints = ViewHints {
+        kind: ViewKind::Runner,
         asides: None,
         interruptible: true,
         parent_note: "",

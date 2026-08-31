@@ -5,7 +5,7 @@ is a short Markdown file numbered `NNNN-<slug>.md`. Once a decision is final its
 status is `Accepted`; a later ADR supersedes an earlier one rather than editing
 it in place.
 
-See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
+See [ADR Workflow](../governance/documentation/adr-workflow.md) for the process.
 
 ## Index
 

@@ -392,7 +392,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
 }
 
 /// Loop stage (input dispatch): the `ModalUp` arm (per-modal ↑ navigation).
-pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
+pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
     match app.active_modal() {
         Modal::Connections | Modal::Models => {
             // Walk the fuzzy-filtered rows of the *active picker*
@@ -485,14 +485,14 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         }
         Modal::Config => match app.config_focus {
             crate::overlays::ConfigFocus::Categories => {
-                let count = 4usize;
+                let count = crate::overlays::ConfigCategory::ALL.len();
                 app.config_category = (app.config_category + count - 1) % count;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }
             crate::overlays::ConfigFocus::Detail => {
                 if app.config_category == 0 && app.config_custom_editing {
-                    let num_schemes = crate::view::COLOR_SCHEMES.len();
+                    let num_schemes = crate::view::Theme::available_color_schemes().len();
                     let custom_field_idx =
                         app.config_detail_index.saturating_sub(num_schemes).min(7);
                     let _ = crate::view::Theme::set_custom_color_value(
@@ -509,12 +509,24 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     app.set_cursor_end();
                 } else {
                     let count = match app.config_category {
-                        0 => crate::view::COLOR_SCHEMES.len(),
-                        1 => 2usize,
+                        0 => crate::view::Theme::available_color_schemes().len(),
+                        1 => 5usize,
                         2 => 1usize,
+                        3 => 10usize,
                         _ => 4usize,
                     };
-                    app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                    if count > 0 {
+                        app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                    }
+                    if app.config_category == 0 {
+                        let schemes = crate::view::Theme::available_color_schemes();
+                        if let Some(scheme) = schemes.get(app.config_detail_index % schemes.len().max(1)) {
+                            app.theme = crate::view::Theme::from_color_scheme(
+                                &scheme.id,
+                                &app.custom_color_scheme,
+                            );
+                        }
+                    }
                 }
             }
         },
@@ -594,7 +606,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
 }
 
 /// Loop stage (input dispatch): the `ModalDown` arm (per-modal ↓ navigation).
-pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
+pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
     match app.active_modal() {
         Modal::Connections | Modal::Models => {
             let count = app.picker_row_count().max(1);
@@ -642,14 +654,14 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         }
         Modal::Config => match app.config_focus {
             crate::overlays::ConfigFocus::Categories => {
-                let count = 4usize;
+                let count = crate::overlays::ConfigCategory::ALL.len();
                 app.config_category = (app.config_category + 1) % count;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }
             crate::overlays::ConfigFocus::Detail => {
                 if app.config_category == 0 && app.config_custom_editing {
-                    let num_schemes = crate::view::COLOR_SCHEMES.len();
+                    let num_schemes = crate::view::Theme::available_color_schemes().len();
                     let custom_field_idx =
                         app.config_detail_index.saturating_sub(num_schemes).min(7);
                     let _ = crate::view::Theme::set_custom_color_value(
@@ -666,12 +678,24 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     app.set_cursor_end();
                 } else {
                     let count = match app.config_category {
-                        0 => crate::view::COLOR_SCHEMES.len(),
-                        1 => 2usize,
+                        0 => crate::view::Theme::available_color_schemes().len(),
+                        1 => 5usize,
                         2 => 1usize,
+                        3 => 10usize,
                         _ => 4usize,
                     };
-                    app.config_detail_index = (app.config_detail_index + 1) % count;
+                    if count > 0 {
+                        app.config_detail_index = (app.config_detail_index + 1) % count;
+                    }
+                    if app.config_category == 0 {
+                        let schemes = crate::view::Theme::available_color_schemes();
+                        if let Some(scheme) = schemes.get(app.config_detail_index % schemes.len().max(1)) {
+                            app.theme = crate::view::Theme::from_color_scheme(
+                                &scheme.id,
+                                &app.custom_color_scheme,
+                            );
+                        }
+                    }
                 }
             }
         },

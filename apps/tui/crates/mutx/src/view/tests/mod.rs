@@ -11,7 +11,7 @@ fn render_full_view(
     width: u16,
     height: u16,
     messages: &[TranscriptMessage],
-    page_hints: Option<PageHints<'_>>,
+    page_hints: Option<ViewHints<'_>>,
 ) -> mutx_engine::TestTerminal {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(width, height);

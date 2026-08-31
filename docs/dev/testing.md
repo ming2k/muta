@@ -157,14 +157,13 @@ to CI without a maintainer decision.
 
 ## Manual or example verification
 
-The TUI component playground (`mutx showcase <component>`) renders
-individual modals and frames in isolation for eyeball checks;
-see [TUI component showcase](showcase.md). For daemon behavior that is
-easier to observe live than to assert, `daemon status --watch` against an
-isolated instance (`--home /tmp/…`) is the fastest manual loop.
+For interactive runs, UI smoke testing, and acceptance checks during development, see [Manual verification](manual-verification.md).
+The TUI component playground (`mutx showcase <component>`) renders individual modals and frames in isolation for eyeball checks;
+see [TUI component showcase](showcase.md).
 
 ## See Also
 
+- [Manual verification](manual-verification.md) — Interactive verification, acceptance runs, and CLI/TUI smoke testing
 - [Dev and test isolation](dev-and-test-isolation.md) — why `MUTA_HOME`/`--home` is mandatory and how the daemon sandbox is inherited
 - [Workspace layout](workspace-layout.md) — crate boundaries that test boundaries follow, and package-scoped Cargo commands
 - [ADR-0121: Instance isolation for development and testing](../adr/0121-instance-isolation-for-development-and-testing.md)
