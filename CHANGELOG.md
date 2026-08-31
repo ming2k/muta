@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.23] - 2026-08-31
+
+### Added
+
+- Added embedded SQLite database initialization and schema migration support (`muta-persistence`).
+- Added Protocol Buffers definitions for `MutaService` covering round execution and session lifecycle management (`proto/muta/v1/muta.proto`).
+
+### Changed
+
+- Enhanced provider error contracts with structured diagnostics and retry dispositions (`muta-contracts`).
+
 ### Removed
 
-- Removed the never-functional HTTP stubs for sessions (`GET /api/v1/sessions`) and prompt execution (`POST /api/v1/prompt`) from the daemon's side port.
+- Removed the unused HTTP session and prompt execution stubs from the daemon's side health port (`muta-runtime`).
 
 
 ## [0.37.22] - 2026-08-31
@@ -5767,7 +5778,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.22...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.23...HEAD
+[0.37.23]: https://github.com/ming2k/muta/compare/v0.37.22...v0.37.23
 [0.37.22]: https://github.com/ming2k/muta/compare/v0.37.21...v0.37.22
 [0.37.21]: https://github.com/ming2k/muta/compare/v0.37.20...v0.37.21
 [0.37.20]: https://github.com/ming2k/muta/compare/v0.37.19...v0.37.20
