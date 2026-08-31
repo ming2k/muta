@@ -8,25 +8,10 @@
 //! `AsyncRead + AsyncWrite`, supports `/healthz`, `/api/v1/*`, CORS, and
 //! token authorization.
 
-use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 /// Request-head size cap; a peer that never finishes its headers is cut off.
 const HEAD_CAP: usize = 16 * 1024;
-/// Request-body size cap (1MB) to prevent buffer exhaustion.
-const BODY_CAP: usize = 1024 * 1024;
-
-/// Constant-time string comparison to prevent timing attacks on tokens.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        result |= x ^ y;
-    }
-    result == 0
-}
 
 /// Serve one plain-HTTP connection, then close it.
 pub async fn serve<S>(
@@ -62,28 +47,7 @@ where
     let path = target.split(['?', '#']).next().unwrap_or("/");
 
     // Parse headers
-    let mut headers = HashMap::new();
-    for line in lines {
-        if let Some((k, v)) = line.split_once(':') {
-            headers.insert(k.trim().to_ascii_lowercase(), v.trim());
-        }
-    }
-
     let auth_required = expected_token.is_some();
-    let is_authenticated = match expected_token {
-        None => true,
-        Some(token) => {
-            if let Some(auth_header) = headers.get("authorization") {
-                if let Some(bearer) = auth_header.strip_prefix("Bearer ") {
-                    constant_time_eq(bearer.trim().as_bytes(), token.as_bytes())
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-    };
 
     let response = match (method, path) {
         ("OPTIONS", _) => build_response(
@@ -93,7 +57,7 @@ where
             false,
             &[
                 ("Access-Control-Allow-Origin", "*"),
-                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD"),
+                ("Access-Control-Allow-Methods", "GET, OPTIONS, HEAD"),
                 (
                     "Access-Control-Allow-Headers",
                     "Authorization, Content-Type",
@@ -110,70 +74,6 @@ where
                 &[("Access-Control-Allow-Origin", "*")],
             )
         }
-        ("GET" | "HEAD", "/api/v1/sessions") => {
-            if !is_authenticated {
-                build_response(
-                    "401 Unauthorized",
-                    "application/json",
-                    b"{\"error\":\"unauthorized: valid Bearer token required\"}",
-                    method == "HEAD",
-                    &[("WWW-Authenticate", "Bearer")],
-                )
-            } else {
-                let body = format!("{{\"version\":\"{daemon_version}\",\"sessions\":[]}}");
-                build_response(
-                    "200 OK",
-                    "application/json",
-                    body.as_bytes(),
-                    method == "HEAD",
-                    &[("Access-Control-Allow-Origin", "*")],
-                )
-            }
-        }
-        ("POST", "/api/v1/prompt") => {
-            if !is_authenticated {
-                build_response(
-                    "401 Unauthorized",
-                    "application/json",
-                    b"{\"error\":\"unauthorized: valid Bearer token required\"}",
-                    false,
-                    &[("WWW-Authenticate", "Bearer")],
-                )
-            } else {
-                let content_len: usize = headers
-                    .get("content-length")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0);
-                if content_len > BODY_CAP {
-                    build_response(
-                        "413 Payload Too Large",
-                        "application/json",
-                        b"{\"error\":\"request body exceeds 1MB limit\"}",
-                        false,
-                        &[],
-                    )
-                } else {
-                    let mut body = vec![0u8; content_len];
-                    if reader.read_exact(&mut body).await.is_err() {
-                        build_response(
-                            "400 Bad Request",
-                            "application/json",
-                            b"{\"error\":\"failed to read request body\"}",
-                            false,
-                            &[],
-                        )
-                    } else {
-                        build_response(
-                            "200 OK",
-                            "application/json",
-                            b"{\"status\":\"accepted\"}",
-                            false,
-                            &[("Access-Control-Allow-Origin", "*")],
-                        )
-                    }
-                }
-            }
-        }
         ("GET" | "HEAD", _) => build_response(
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -186,7 +86,7 @@ where
             "text/plain",
             b"method not allowed",
             false,
-            &[("Allow", "GET, HEAD, POST, OPTIONS")],
+            &[("Allow", "GET, HEAD, OPTIONS")],
         ),
     };
     writer.write_all(&response).await?;
@@ -218,6 +118,7 @@ fn build_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     async fn roundtrip_with_token(request: &str, token: Option<&str>) -> String {
         let (client, server) = tokio::io::duplex(64 * 1024);
@@ -258,30 +159,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sessions_api_requires_auth() {
-        let unauth = roundtrip("GET /api/v1/sessions HTTP/1.1\r\n\r\n").await;
-        assert!(unauth.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
-
-        let authed =
-            roundtrip("GET /api/v1/sessions HTTP/1.1\r\nAuthorization: Bearer secret123\r\n\r\n")
-                .await;
-        assert!(authed.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(authed.contains("\"sessions\":[]"));
-    }
-
-    #[tokio::test]
-    async fn prompt_api_accepts_post_body() {
-        let authed = roundtrip(
-            "POST /api/v1/prompt HTTP/1.1\r\nAuthorization: Bearer secret123\r\nContent-Length: 18\r\n\r\n{\"prompt\":\"hello\"}",
-        )
-        .await;
-        assert!(authed.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(authed.contains("\"status\":\"accepted\""));
-    }
-
-    #[tokio::test]
     async fn cors_options_returns_no_content() {
-        let response = roundtrip("OPTIONS /api/v1/sessions HTTP/1.1\r\n\r\n").await;
+        let response = roundtrip("OPTIONS /healthz HTTP/1.1\r\n\r\n").await;
         assert!(response.starts_with("HTTP/1.1 204 No Content\r\n"));
         assert!(response.contains("Access-Control-Allow-Origin: *"));
     }

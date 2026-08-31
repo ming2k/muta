@@ -33,7 +33,8 @@ gateway, a subscription bundle exposing `/v1/chat/completions` — open
 Name, Base URL (the full chat-completions URL), Token, and **Model**: the
 model field offers the registry-known OpenAI ids as fuzzy suggestions plus
 the raw typed id as a custom value, so the exact id the endpoint expects
-becomes the seeded channel.
+becomes the seeded channel. You can specify multiple models by entering them
+as a comma-separated list (e.g., `gpt-4o, gpt-4o-mini`).
 
 Two properties worth knowing:
 

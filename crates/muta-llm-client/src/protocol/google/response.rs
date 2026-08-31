@@ -314,19 +314,17 @@ pub fn rejects_thinking_config(error: &str) -> bool {
 /// retryable classification downstream, so the guidance is folded **into**
 /// the envelope's message and any `RetryInfo` delay Google embedded in the
 /// body is promoted to `retry_after_ms` when the envelope has none.
-pub fn clarify_error(err: String, model: &str, base_url: &str) -> String {
-    if let Some(mut retry) = muta_contracts::parse_retryable_error(&err) {
-        // Extract the delay from the *raw* provider message before any
-        // guidance text is appended — afterwards the JSON body is no longer
-        // the tail of the string and brace-matching gets fragile.
-        let server_delay = google_retry_after_ms(&retry.message);
-        retry.message = clarify_message(retry.message, model, base_url);
-        if retry.retry_after_ms.is_none() {
-            retry.retry_after_ms = server_delay;
-        }
-        return muta_contracts::retryable_error(retry.message, retry.retry_after_ms);
+pub fn clarify_error(
+    err: muta_contracts::ProviderError,
+    model: &str,
+    base_url: &str,
+) -> muta_contracts::ProviderError {
+    let server_delay = google_retry_after_ms(err.message());
+    let mut err = err.map_message(|msg| clarify_message(msg, model, base_url));
+    if server_delay.is_some() {
+        err = err.with_retry_after_if_absent(server_delay);
     }
-    clarify_message(err, model, base_url)
+    err
 }
 
 /// The plain-message half of [`clarify_error`]: append guidance only, never
@@ -702,78 +700,98 @@ mod tests {
     }
 
     #[test]
-    fn clarify_error_appends_guidance_inside_the_retryable_envelope() {
-        // A 429 arrives enveloped by `ensure_success`. The guidance must fold
-        // into the envelope's message — never appended after the JSON, which
-        // would corrupt the encoding and strip the error of its retryable
-        // classification downstream.
-        let raw = muta_contracts::retryable_error(
+    fn clarify_error_appends_guidance_to_retryable_error() {
+        let raw = muta_contracts::ProviderError::new(
+            "Google",
+            muta_contracts::ProviderErrorKind::RateLimited,
             "Google HTTP 429 Too Many Requests: {\"error\":{\"code\":429,\"status\":\"RESOURCE_EXHAUSTED\"}}",
-            None,
-        );
+        )
+        .with_status(429)
+        .retryable(None);
         let clarified = super::clarify_error(
             raw,
             "gemini-3.7-flash",
             "https://cloudcode-pa.googleapis.com",
         );
 
-        let retry = muta_contracts::parse_retryable_error(&clarified)
-            .expect("the envelope must still parse after clarification");
-        assert!(
-            retry.message.contains("RESOURCE_EXHAUSTED"),
-            "the provider body survives: {}",
-            retry.message
+        assert_eq!(clarified.status(), Some(429));
+        assert_eq!(
+            clarified.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry {
+                retry_after_ms: None
+            }
         );
         assert!(
-            retry
-                .message
+            clarified.message().contains("RESOURCE_EXHAUSTED"),
+            "the provider body survives: {}",
+            clarified.message()
+        );
+        assert!(
+            clarified
+                .message()
                 .contains("Google rate limit / quota exhausted"),
             "the guidance is attached: {}",
-            retry.message
+            clarified.message()
         );
     }
 
     #[test]
     fn clarify_error_promotes_google_retryinfo_delay_into_retry_after_ms() {
-        // Google embeds `details[]: [{@type: RetryInfo, retryDelay: "45s"}]`
-        // in a 429 body. That delay is authoritative and must surface as the
-        // envelope's `retry_after_ms` so the backoff loop honors it.
         let body = r#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3620s"}]}}"#;
-        let raw = muta_contracts::retryable_error(
+        let raw = muta_contracts::ProviderError::new(
+            "Google",
+            muta_contracts::ProviderErrorKind::RateLimited,
             format!("Google HTTP 429 Too Many Requests: {body}"),
-            None,
-        );
+        )
+        .with_status(429)
+        .retryable(None);
         let clarified = super::clarify_error(raw, "gemini-3.7-flash", "https://x");
-        let retry = muta_contracts::parse_retryable_error(&clarified).unwrap();
-        assert_eq!(retry.retry_after_ms, Some(3_620_000));
+        assert_eq!(
+            clarified.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry {
+                retry_after_ms: Some(3_620_000)
+            }
+        );
         assert!(
-            retry.message.contains("~1h 00m"),
+            clarified.message().contains("~1h 00m"),
             "the reset hint is humanized from Google's own delay: {}",
-            retry.message
+            clarified.message()
         );
     }
 
     #[test]
-    fn clarify_error_preserves_an_envelope_retry_after() {
-        // A `Retry-After` header captured by `ensure_success` wins over a
-        // body-embedded `RetryInfo` delay; the guidance must not clobber it.
-        let raw = muta_contracts::retryable_error(
+    fn clarify_error_preserves_an_existing_retry_after() {
+        let raw = muta_contracts::ProviderError::new(
+            "Google",
+            muta_contracts::ProviderErrorKind::RateLimited,
             "Google HTTP 429: {\"error\":{\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"retryDelay\":\"45s\"}]}}",
-            Some(120_000),
-        );
+        )
+        .with_status(429)
+        .retryable(Some(120_000));
         let clarified = super::clarify_error(raw, "m", "https://x");
-        let retry = muta_contracts::parse_retryable_error(&clarified).unwrap();
-        assert_eq!(retry.retry_after_ms, Some(120_000));
+        assert_eq!(
+            clarified.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry {
+                retry_after_ms: Some(120_000)
+            }
+        );
     }
 
     #[test]
-    fn clarify_error_passes_non_enveloped_errors_through_with_guidance() {
-        // A 404 is terminal (never enveloped); its guidance stays plain text.
-        let clarified =
-            super::clarify_error("Google HTTP 404 Not Found".to_string(), "m", "https://x");
-        assert!(clarified.starts_with("Google HTTP 404"));
-        assert!(clarified.contains("does not serve this model"));
-        assert!(muta_contracts::parse_retryable_error(&clarified).is_none());
+    fn clarify_error_passes_non_retryable_errors_through_with_guidance() {
+        let raw = muta_contracts::ProviderError::new(
+            "Google",
+            muta_contracts::ProviderErrorKind::InvalidRequest,
+            "Google HTTP 404 Not Found",
+        )
+        .with_status(404);
+        let clarified = super::clarify_error(raw, "m", "https://x");
+        assert!(clarified.message().starts_with("Google HTTP 404"));
+        assert!(clarified.message().contains("does not serve this model"));
+        assert_eq!(
+            clarified.retry_disposition(),
+            muta_contracts::RetryDisposition::Never
+        );
     }
 
     #[test]

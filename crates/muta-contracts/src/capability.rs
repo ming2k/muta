@@ -242,17 +242,24 @@ pub enum ProviderStreamEvent {
     Completed(crate::ProviderCompletionMeta),
 }
 
+pub type ProviderTextStream = BoxStream<'static, Result<String, crate::ProviderError>>;
+pub type ProviderEventStream =
+    BoxStream<'static, Result<ProviderStreamEvent, crate::ProviderError>>;
+
 #[async_trait]
 pub trait Provider: Send + Sync {
-    async fn chat(&self, request: ModelRequest) -> Result<crate::ProviderCompletion, String>;
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<crate::ProviderCompletion, crate::ProviderError>;
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String>;
+    ) -> Result<ProviderTextStream, crate::ProviderError>;
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<ProviderEventStream, crate::ProviderError> {
         let events = self
             .stream_chat(request)
             .await?

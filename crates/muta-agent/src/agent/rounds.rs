@@ -400,10 +400,7 @@ impl Agent {
                             STREAM_IDLE_TIMEOUT.as_secs()
                         );
                         request_accounting.record_error(&err_msg);
-                        return Err(HarnessError::Retryable {
-                            message: err_msg,
-                            retry_after_ms: None,
-                        });
+                        return Err(HarnessError::Provider(muta_contracts::ProviderError::new("harness", muta_contracts::ProviderErrorKind::Timeout, err_msg).retryable(None)));
                     }
                 },
             };
@@ -556,10 +553,7 @@ impl Agent {
                                     STREAM_IDLE_TIMEOUT.as_secs()
                                 );
                                 request_accounting.record_error(&err_msg);
-                                return Err(HarnessError::Retryable {
-                                    message: err_msg,
-                                    retry_after_ms: None,
-                                });
+                                return Err(HarnessError::Provider(muta_contracts::ProviderError::new("harness", muta_contracts::ProviderErrorKind::Timeout, err_msg).retryable(None)));
                             }
                         };
                         // Any chunk — text, reasoning, tool-call bytes, or the
@@ -570,7 +564,7 @@ impl Agent {
                         let event = match event {
                             Ok(event) => event,
                             Err(error) => {
-                                request_accounting.record_error(error.clone());
+                                request_accounting.record_error(error.to_string());
                                 return Err(HarnessError::from(error));
                             }
                         };
@@ -578,10 +572,7 @@ impl Agent {
                             let err_msg = "Provider emitted data after the terminal completion event."
                                 .to_string();
                             request_accounting.record_error(&err_msg);
-                            return Err(HarnessError::Retryable {
-                                message: err_msg,
-                                retry_after_ms: None,
-                            });
+                            return Err(HarnessError::Provider(muta_contracts::ProviderError::new("harness", muta_contracts::ProviderErrorKind::Protocol, err_msg).retryable(None)));
                         }
                         request_accounting.observe_stream_event(
                             &event,
@@ -687,10 +678,14 @@ impl Agent {
                         "Provider stream ended mid-tool-call; the response was likely truncated."
                             .to_string();
                     request_accounting.record_error(&err_msg);
-                    return Err(HarnessError::Retryable {
-                        message: err_msg,
-                        retry_after_ms: None,
-                    });
+                    return Err(HarnessError::Provider(
+                        muta_contracts::ProviderError::new(
+                            "harness",
+                            muta_contracts::ProviderErrorKind::Transport,
+                            err_msg,
+                        )
+                        .retryable(None),
+                    ));
                 }
                 if !call.arguments.is_empty()
                     && serde_json::from_str::<serde_json::Value>(&call.arguments).is_err()
@@ -701,10 +696,14 @@ impl Agent {
                         call.name
                     );
                     request_accounting.record_error(&err_msg);
-                    return Err(HarnessError::Retryable {
-                        message: err_msg,
-                        retry_after_ms: None,
-                    });
+                    return Err(HarnessError::Provider(
+                        muta_contracts::ProviderError::new(
+                            "harness",
+                            muta_contracts::ProviderErrorKind::Transport,
+                            err_msg,
+                        )
+                        .retryable(None),
+                    ));
                 }
             }
 
@@ -746,10 +745,14 @@ impl Agent {
                 let err_msg = "Provider stream ended without a terminal completion event; response state was not committed."
                     .to_string();
                 request_accounting.record_error(&err_msg);
-                return Err(HarnessError::Retryable {
-                    message: err_msg,
-                    retry_after_ms: None,
-                });
+                return Err(HarnessError::Provider(
+                    muta_contracts::ProviderError::new(
+                        "harness",
+                        muta_contracts::ProviderErrorKind::Transport,
+                        err_msg,
+                    )
+                    .retryable(None),
+                ));
             }
 
             // A detected loop cuts this provider stream, but it does not
@@ -842,10 +845,14 @@ impl Agent {
                         call.name
                     );
                     request_accounting.record_error(&err_msg);
-                    return Err(HarnessError::Retryable {
-                        message: err_msg,
-                        retry_after_ms: None,
-                    });
+                    return Err(HarnessError::Provider(
+                        muta_contracts::ProviderError::new(
+                            "harness",
+                            muta_contracts::ProviderErrorKind::Transport,
+                            err_msg,
+                        )
+                        .retryable(None),
+                    ));
                 }
                 if call.id.is_empty() {
                     call.id = format!("call_{}", uuid::Uuid::new_v4());

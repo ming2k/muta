@@ -119,7 +119,7 @@ impl Client {
         &self,
         request: reqwest::RequestBuilder,
         label: &str,
-    ) -> Result<reqwest::Response, String> {
+    ) -> Result<reqwest::Response, muta_contracts::ProviderError> {
         let response = request
             .send()
             .await
@@ -139,7 +139,7 @@ impl Client {
         &self,
         request: reqwest::RequestBuilder,
         label: &str,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, muta_contracts::ProviderError> {
         let response = self
             .send(request.timeout(self.request_timeout), label)
             .await?;
@@ -222,12 +222,15 @@ mod tests {
             "the error must be the 300ms request timeout, not an instant failure: \
              {elapsed:?} / {error}"
         );
-        let retryable = muta_contracts::parse_retryable_error(&error)
-            .unwrap_or_else(|| panic!("a timeout must classify as retryable: {error}"));
+        let retryable = error.retry_disposition();
         assert!(
-            retryable.message.contains("transport error"),
+            matches!(retryable, muta_contracts::RetryDisposition::Retry { .. }),
+            "a timeout must classify as retryable: {error}"
+        );
+        assert!(
+            error.message().contains("transport error"),
             "transport error framing expected: {}",
-            retryable.message
+            error.message()
         );
     }
 
@@ -251,7 +254,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            muta_contracts::parse_retryable_error(&error).is_some(),
+            matches!(
+                error.retry_disposition(),
+                muta_contracts::RetryDisposition::Retry { .. }
+            ),
             "connect-phase errors must be retryable: {error}"
         );
     }

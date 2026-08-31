@@ -1767,7 +1767,7 @@ pub async fn run_tui(
                             // retryable-envelope encoding (e.g. a 429 that
                             // exhausted its retry budget): strip it so the
                             // user sees the message, never the wire framing.
-                            let raw_msg = muta_contracts::public_error_message(&e);
+                            let raw_msg = e;
                             let message = if let Some(retry) = last_retry
                                 && retry.attempt > 1
                             {

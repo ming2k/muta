@@ -4,7 +4,7 @@
 //! in [`crate::client`]; endpoint configuration in [`crate::endpoint`]; SSE
 //! byte reassembly in [`crate::sse`].
 
-use muta_contracts::retryable_error;
+use muta_contracts::{ProviderError, ProviderErrorKind};
 use std::time::SystemTime;
 
 pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
@@ -33,7 +33,7 @@ pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 pub async fn ensure_success(
     response: reqwest::Response,
     provider: &str,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, ProviderError> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -49,10 +49,19 @@ pub async fn ensure_success(
         Some(detail) => format!("{provider} HTTP {status}: {detail}"),
         None => format!("{provider} HTTP {status}"),
     };
+    let kind = match status.as_u16() {
+        401 | 403 => ProviderErrorKind::Authentication,
+        408 => ProviderErrorKind::Timeout,
+        429 => ProviderErrorKind::RateLimited,
+        400 | 404 | 405 | 409 | 410 | 413 | 415 | 422 => ProviderErrorKind::InvalidRequest,
+        _ if status.is_server_error() => ProviderErrorKind::Upstream,
+        _ => ProviderErrorKind::Protocol,
+    };
+    let error = ProviderError::new(provider, kind, message).with_status(status.as_u16());
     if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
-        Err(retryable_error(message, retry_after))
+        Err(error.retryable(retry_after))
     } else {
-        Err(message)
+        Err(error)
     }
 }
 
@@ -193,7 +202,8 @@ fn error_source_chain(error: &(dyn std::error::Error + 'static)) -> String {
     chain
 }
 
-pub fn transport_error(provider: &str, error: reqwest::Error) -> String {
+pub fn transport_error(provider: &str, error: reqwest::Error) -> ProviderError {
+    let retryable = is_transient_transport_error(&error);
     let sources = error_source_chain(&error);
     let detail = if sources.is_empty() {
         format!("{provider} transport error: {error}")
@@ -201,10 +211,16 @@ pub fn transport_error(provider: &str, error: reqwest::Error) -> String {
         format!("{provider} transport error: {error} ({sources})")
     };
     let message = redact_url_credentials(&detail);
-    if is_transient_transport_error(&error) {
-        retryable_error(message, None)
+    let kind = if error.is_timeout() {
+        ProviderErrorKind::Timeout
     } else {
-        message
+        ProviderErrorKind::Transport
+    };
+    let error = ProviderError::new(provider, kind, message);
+    if retryable {
+        error.retryable(None)
+    } else {
+        error
     }
 }
 
@@ -213,7 +229,7 @@ const DECODE_ERROR_BODY_PREVIEW: usize = 2048;
 pub async fn decode_response_json(
     response: reqwest::Response,
     provider: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ProviderError> {
     let bytes = response
         .bytes()
         .await
@@ -232,8 +248,12 @@ pub async fn decode_response_json(
                 "{} response was not valid JSON",
                 provider,
             );
-            Err(format!(
-                "{provider} error decoding response body: {error} (raw body preview: {preview})"
+            Err(ProviderError::new(
+                provider,
+                ProviderErrorKind::Decode,
+                format!(
+                    "{provider} error decoding response body: {error} (raw body preview: {preview})"
+                ),
             ))
         }
     }
@@ -372,21 +392,25 @@ mod tests {
             is_transient_transport_error(&error),
             "a Decode error from a cut-off stream must classify as transient"
         );
-        let message = transport_error("OpenAI", error);
-        let chain_was_captured = !message.is_empty();
-        let retryable = muta_contracts::parse_retryable_error(&message)
-            .unwrap_or_else(|| panic!("decode-kind transport errors must be retryable: {message}"));
-        assert!(chain_was_captured);
+        let provider_err = transport_error("OpenAI", error);
+        assert!(!provider_err.message().is_empty());
+        assert!(matches!(
+            provider_err.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry { .. }
+        ));
         assert!(
-            retryable.message.contains("error decoding response body"),
+            provider_err
+                .message()
+                .contains("error decoding response body"),
             "reqwest kind text expected: {}",
-            retryable.message
+            provider_err.message()
         );
         // The source chain (hyper/io detail like "connection closed before
         // message completed") must have been folded into the message; the
         // bare reqwest Display never includes it.
         assert_ne!(
-            retryable.message, "OpenAI transport error: error decoding response body",
+            provider_err.message(),
+            "OpenAI transport error: error decoding response body",
             "the underlying cause must be included for diagnosis"
         );
     }

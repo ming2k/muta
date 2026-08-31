@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the never-functional HTTP stubs for sessions (`GET /api/v1/sessions`) and prompt execution (`POST /api/v1/prompt`) from the daemon's side port.
+
+
 ## [0.37.22] - 2026-08-31
 
 ### Added

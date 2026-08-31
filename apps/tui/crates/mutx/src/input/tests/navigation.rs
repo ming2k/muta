@@ -103,6 +103,36 @@ fn home_and_end_scroll_in_permission_modal() {
 }
 
 #[test]
+fn ctrl_home_and_end_scroll_regardless_of_focus() {
+    let mut input = "hello".to_string();
+    let mut cursor = 3;
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Home,
+            KeyModifiers::CONTROL,
+            crate::Modal::None,
+            false
+        ),
+        InputAction::ScrollTop
+    );
+    assert_eq!(cursor, 3, "Ctrl+Home must not move the caret");
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::End,
+            KeyModifiers::CONTROL,
+            crate::Modal::None,
+            false
+        ),
+        InputAction::ScrollBottom
+    );
+    assert_eq!(cursor, 3, "Ctrl+End must not move the caret");
+}
+
+#[test]
 fn page_keys_scroll_question_modal_body() {
     let mut input = String::new();
     let mut cursor = 0;

@@ -25,7 +25,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 
 use crate::transport_error;
-use muta_contracts::retryable_error;
+use muta_contracts::{ProviderError, ProviderErrorKind};
 
 /// Decode a streaming SSE response into a flat stream of `data:` payload
 /// strings (the `data:` prefix and surrounding whitespace stripped; the
@@ -38,7 +38,7 @@ use muta_contracts::retryable_error;
 pub fn data_payloads(
     response: reqwest::Response,
     provider: &'static str,
-) -> BoxStream<'static, Result<String, String>> {
+) -> BoxStream<'static, Result<String, ProviderError>> {
     payloads_from_chunks(response.bytes_stream(), provider)
 }
 
@@ -48,7 +48,7 @@ pub fn data_payloads(
 fn payloads_from_chunks<C, S>(
     chunks: S,
     provider: &'static str,
-) -> BoxStream<'static, Result<String, String>>
+) -> BoxStream<'static, Result<String, ProviderError>>
 where
     S: futures::Stream<Item = Result<C, reqwest::Error>> + Send + 'static,
     C: AsRef<[u8]>,
@@ -62,7 +62,7 @@ where
         };
         let mut buffer = buffer.lock().unwrap_or_else(|error| error.into_inner());
         buffer.extend_from_slice(chunk.as_ref());
-        let mut payloads: Vec<Result<String, String>> = Vec::new();
+        let mut payloads: Vec<Result<String, ProviderError>> = Vec::new();
         for line in drain_complete_lines(&mut buffer, provider) {
             match line {
                 Ok(line) => {
@@ -86,14 +86,16 @@ where
         if buffer.is_empty() {
             Vec::new()
         } else {
-            vec![Err(retryable_error(
+            vec![Err(ProviderError::new(
+                provider,
+                ProviderErrorKind::Transport,
                 format!(
                     "{provider} stream ended with an incomplete SSE event \
                      ({} trailing byte(s)); the response was likely truncated.",
                     buffer.len()
                 ),
-                None,
-            ))]
+            )
+            .retryable(None))]
         }
     });
     decoded.chain(tail).flat_map(futures::stream::iter).boxed()
@@ -121,15 +123,17 @@ fn data_payload_from_line(line: &str) -> Option<&str> {
 fn drain_complete_lines(
     buffer: &mut Vec<u8>,
     provider: &'static str,
-) -> Vec<Result<String, String>> {
+) -> Vec<Result<String, ProviderError>> {
     let mut lines = Vec::new();
     while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
         let line = match std::str::from_utf8(&buffer[..pos]) {
             Ok(line) => Ok(line.trim().to_string()),
-            Err(error) => Err(retryable_error(
+            Err(error) => Err(ProviderError::new(
+                provider,
+                ProviderErrorKind::Decode,
                 format!("{provider} stream carried invalid UTF-8: {error}"),
-                None,
-            )),
+            )
+            .retryable(None)),
         };
         buffer.drain(..pos + 1);
         lines.push(line);
@@ -143,7 +147,7 @@ mod tests {
 
     /// Drive the chunk decoder over scripted network chunks, collecting every
     /// item the same way a provider stream consumer would.
-    fn collect_payloads(chunks: &[&[u8]]) -> Vec<Result<String, String>> {
+    fn collect_payloads(chunks: &[&[u8]]) -> Vec<Result<String, ProviderError>> {
         let chunks: Vec<Result<Vec<u8>, reqwest::Error>> =
             chunks.iter().map(|chunk| Ok(chunk.to_vec())).collect();
         futures::executor::block_on(
@@ -211,11 +215,11 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], Ok("data: ok".to_string()));
         let error = lines[1].as_ref().unwrap_err();
-        assert!(error.contains("invalid UTF-8"), "{error}");
-        assert!(
-            muta_contracts::parse_retryable_error(error).is_some(),
-            "corruption is transient transport damage -> retryable: {error}"
-        );
+        assert!(error.message().contains("invalid UTF-8"), "{error}");
+        assert!(matches!(
+            error.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry { .. }
+        ));
         assert_eq!(lines[2], Ok("data: after".to_string()));
         assert!(buffer.is_empty(), "corrupt line must not wedge the stream");
     }
@@ -241,10 +245,10 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0], Ok("one".to_string()));
         let error = items[1].as_ref().unwrap_err();
-        assert!(error.contains("incomplete SSE event"), "{error}");
-        assert!(
-            muta_contracts::parse_retryable_error(error).is_some(),
-            "a truncated stream is transient -> retryable: {error}"
-        );
+        assert!(error.message().contains("incomplete SSE event"), "{error}");
+        assert!(matches!(
+            error.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry { .. }
+        ));
     }
 }

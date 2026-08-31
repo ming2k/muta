@@ -222,9 +222,33 @@ impl App {
             .focused_target
             .and_then(|target| targets.iter().position(|candidate| *candidate == target));
         let next = match (current, direction < 0) {
-            (Some(0), true) => targets.len() - 1,
+            (Some(0), true) => {
+                if self.scroll > 0 {
+                    self.scroll = self.scroll.saturating_sub(4);
+                    self.follow_bottom = false;
+                    self.pin_summary_line = None;
+                    return;
+                } else {
+                    targets.len() - 1
+                }
+            }
             (Some(idx), true) => idx - 1,
-            (Some(idx), false) => (idx + 1) % targets.len(),
+            (Some(idx), false) => {
+                if idx == targets.len() - 1 {
+                    if self.scroll < self.max_scroll {
+                        self.scroll = self.scroll.saturating_add(4).min(self.max_scroll);
+                        if self.scroll >= self.max_scroll {
+                            self.follow_bottom = true;
+                        }
+                        self.pin_summary_line = None;
+                        return;
+                    } else {
+                        0
+                    }
+                } else {
+                    idx + 1
+                }
+            }
             (None, true) => targets.len() - 1,
             (None, false) => 0,
         };

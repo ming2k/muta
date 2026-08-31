@@ -15,7 +15,7 @@ use super::ActionFlow;
 
 /// Loop stage (input dispatch): the `SubmitCustomProvider` arm.
 #[allow(clippy::expect_used)] // The editor only exposes registered protocol choices.
-pub(super) fn handle_submit_custom_provider(app: &mut App) {
+pub(crate) fn handle_submit_custom_provider(app: &mut App) {
     if app.active_modal() == Modal::CustomProvider {
         // Commit the focused text field's live value first.
         app.stash_custom_field();
@@ -57,7 +57,11 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
             // reasoning is opted in per model from the Models
             // picker.
             let models: Vec<String> = if app.custom_fields.contains(&crate::CustomField::Model) {
-                vec![app.custom_model.trim().to_string()]
+                app.custom_model
+                    .split(',')
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect()
             } else {
                 app.custom_models
                     .iter()

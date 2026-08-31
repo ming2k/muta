@@ -688,3 +688,30 @@ fn model_editor_esc_pops_back_to_its_picker() {
         "pops to Connections"
     );
 }
+
+#[test]
+fn custom_connection_submits_with_multiple_comma_separated_models() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let preset = &crate::providers::CUSTOM_CONNECTION;
+    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_custom_provider_editor(preset);
+    assert_eq!(app.active_modal(), Modal::CustomProvider);
+    app.custom_name = "WeChat Multi".to_string();
+    app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
+    app.custom_token = "tok".to_string();
+    app.custom_field = 3;
+    app.input = "gpt-4o, gpt-4o-mini, claudy".to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+
+    crate::event_loop::actions::handle_submit_custom_provider(&mut app);
+
+    let req = rx.try_recv().expect("should send a request");
+    match req {
+        muta_contracts::AgentRequest::AddProvider { models, .. } => {
+            assert_eq!(models, vec!["gpt-4o", "gpt-4o-mini", "claudy"]);
+        }
+        _ => panic!("Expected AddProvider request"),
+    }
+}

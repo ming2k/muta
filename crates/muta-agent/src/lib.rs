@@ -70,13 +70,11 @@ pub use muta_contracts::{
     InjectionOrigin, InputReply, InputRequest, McpConnectionStatus, McpServerConfig, Message,
     ModelRequest, PatchOp, PermissionDecision, PermissionRequest, ProcessOutput, ProcessRunner,
     Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot, ProviderStreamEvent,
-    PruneOutcome, RUNNER_EXPLORE, RUNNER_TITLE, RetryableError, Role, RunnerEvent, RunnerPreset,
-    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TodoId, TodoItem, TodoList,
-    TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy, ToolResult,
-    ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
-    UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
-    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
-    truncate_utf8,
+    PruneOutcome, RUNNER_EXPLORE, RUNNER_TITLE, Role, RunnerEvent, RunnerPreset, SessionOverview,
+    ShellTermination, SkillsConfig, StdinPolicy, TodoId, TodoItem, TodoList, TodoStatus,
+    TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy, ToolResult, ToolStream,
+    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    WebSearchConfig, estimate_bytes, estimate_tokens, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from

@@ -105,8 +105,9 @@ preset id, identity, and credential reference; its model routes are derived at
 runtime from the preset and live discovery cache.
 
 A pure-custom connection stores an exact `protocol`, endpoint, and model list.
-The default add-custom flow creates an OpenAI Chat Completions route, while the
-state schema can represent any of the four canonical protocols. Custom routes
+The default add-custom flow creates an OpenAI Chat Completions route, supporting
+one or more comma-separated models in the Model input field, while the state
+schema can represent any of the four canonical protocols. Custom routes
 do not inherit a preset's prompt-cache capabilities.
 
 Credential resolution is `api_key_env` first, then the connection entry in

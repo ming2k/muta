@@ -313,7 +313,47 @@ impl SessionDriver {
                 build_sessions_overview(&session).await,
             ));
         }
-        while let Some(req) = req_rx.recv().await {
+        #[derive(Debug)]
+        enum OAuthResult {
+            Authorize,
+            Connect { provider_id: String, success: bool },
+        }
+        let mut active_oauth_task: Option<tokio::task::JoinHandle<OAuthResult>> = None;
+        loop {
+            let req = tokio::select! {
+                res_opt = req_rx.recv() => {
+                    let Some(req) = res_opt else { break; };
+                    req
+                }
+                oauth_res = async {
+                    if let Some(ref mut task) = active_oauth_task {
+                        task.await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    active_oauth_task = None;
+                    if let Ok(res) = oauth_res {
+                        match res {
+                            OAuthResult::Authorize => {}
+                            OAuthResult::Connect { provider_id, success } => {
+                                if success {
+                                    crate::handlers_provider::connect_post_oauth(
+                                        &mut config,
+                                        &agent,
+                                        &provider_for_task,
+                                        &resp_tx,
+                                        &mut provider_usage,
+                                        provider_id,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
             let pre_session_id = session.id().await;
             let pre_projection = agent
                 .estimate_next_request_tokens(&session.model_window().await)
@@ -445,19 +485,44 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::ConnectProvider { id, method } => {
-                    crate::handlers_provider::connect(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
-                        id,
-                        method,
-                    )
-                    .await;
+                    if let Some(task) = active_oauth_task.take() {
+                        task.abort();
+                    }
+                    let resp_tx_clone = resp_tx.clone();
+                    let provider_id = id.clone();
+                    active_oauth_task = Some(tokio::spawn(async move {
+                        let success = crate::handlers_provider::run_oauth_for_connect(
+                            &resp_tx_clone,
+                            provider_id.clone(),
+                            method,
+                        )
+                        .await;
+                        OAuthResult::Connect {
+                            provider_id,
+                            success,
+                        }
+                    }));
                 }
                 AgentRequest::AuthorizeOAuth { method, auth } => {
-                    crate::handlers_provider::authorize(&resp_tx, method, auth).await;
+                    if let Some(task) = active_oauth_task.take() {
+                        task.abort();
+                    }
+                    let resp_tx_clone = resp_tx.clone();
+                    active_oauth_task = Some(tokio::spawn(async move {
+                        crate::handlers_provider::authorize(&resp_tx_clone, method, auth).await;
+                        OAuthResult::Authorize
+                    }));
+                }
+                AgentRequest::CancelAuthorizeOAuth => {
+                    if let Some(task) = active_oauth_task.take() {
+                        task.abort();
+                    }
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        muta_contracts::ConnectStatus::Failed {
+                            provider: "oauth".to_string(),
+                            message: "cancelled".to_string(),
+                        },
+                    ));
                 }
                 AgentRequest::EditProvider {
                     id,

@@ -1444,13 +1444,16 @@ mod tests {
         async fn chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("decide_command_stdin must not call the provider")
         }
         async fn stream_chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             unreachable!("decide_command_stdin must not call the provider")
         }
     }

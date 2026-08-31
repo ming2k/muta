@@ -144,7 +144,7 @@ mod tests {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             Ok(muta_contracts::ProviderCompletion::message(
                 muta_contracts::Message::new(muta_contracts::Role::Assistant, "ok"),
             ))
@@ -152,7 +152,10 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             use futures::stream;
             Ok(Box::pin(stream::once(async { Ok("ok".to_string()) })))
         }

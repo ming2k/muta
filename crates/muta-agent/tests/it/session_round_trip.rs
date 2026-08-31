@@ -40,7 +40,7 @@ impl Provider for TestStreamProvider {
     async fn chat(
         &self,
         _request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             MOCK_REPLY,
@@ -50,7 +50,10 @@ impl Provider for TestStreamProvider {
     async fn stream_chat(
         &self,
         _request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let chunks = [
             "This ",
             "is ",

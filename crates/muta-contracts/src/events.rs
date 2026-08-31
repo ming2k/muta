@@ -144,6 +144,8 @@ pub enum AgentRequest {
         method: crate::LoginMethod,
         auth: crate::ConnectionAuth,
     },
+    /// Cancel any in-flight OAuth authorization.
+    CancelAuthorizeOAuth,
     /// Edit a user-defined connection's metadata in place (display name, protocol,
     /// base URL, API key, client identity) without touching its model list.
     EditProvider {

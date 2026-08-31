@@ -1800,7 +1800,13 @@ pub fn draw_custom_provider_editor(
             CustomField::Name => text_row(focused, "Name", name_buf, "e.g. My Relay", false),
             CustomField::BaseUrl => text_row(focused, "Base URL", base_url_buf, url_hint, false),
             CustomField::Token => text_row(focused, "Token", token_buf, token_hint, true),
-            CustomField::Model => text_row(focused, "Model", model_buf, "e.g. gpt-5", false),
+            CustomField::Model => text_row(
+                focused,
+                "Model",
+                model_buf,
+                "e.g. gpt-5, gpt-5-mini (comma-separated)",
+                false,
+            ),
             CustomField::Protocol => choice_row(focused, "API", protocol_display),
             CustomField::ClientIdentity => choice_row(focused, "Identity", identity_display),
         });

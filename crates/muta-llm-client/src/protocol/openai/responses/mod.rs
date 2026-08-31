@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ResolvedAuth,
+    CredentialSource, Effort, ModelRequest, Provider, ProviderError, ProviderErrorKind,
+    ProviderPromptHints, ProviderStreamEvent, ResolvedAuth,
 };
 use std::sync::{Arc, Mutex};
 
@@ -170,8 +170,12 @@ impl OpenAiResponsesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, String> {
-        let auth = self.endpoint.resolve_auth().await?;
+    ) -> Result<reqwest::Response, ProviderError> {
+        let auth = self
+            .endpoint
+            .resolve_auth()
+            .await
+            .map_err(|e| ProviderError::authentication(self.label(), e))?;
         let mut req = self.build_request_for_auth(body, &auth);
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
@@ -202,8 +206,15 @@ impl OpenAiResponsesProvider {
         ensure_success(response, self.label()).await
     }
 
-    fn build_body(&self, request: ModelRequest, stream: bool) -> Result<serde_json::Value, String> {
-        let cache_plan = self.prompt_cache.resolve(&request)?;
+    fn build_body(
+        &self,
+        request: ModelRequest,
+        stream: bool,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let cache_plan = self
+            .prompt_cache
+            .resolve(&request)
+            .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
             messages,
             tool_specs,
@@ -274,13 +285,17 @@ impl Provider for OpenAiResponsesProvider {
     async fn chat(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         let label = self.label();
         let body = self.build_body(request, false)?;
         let resp = self.send_request(&body, false).await?;
         let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
-            return Err(format!("{label} Error: {}", err));
+            return Err(ProviderError::new(
+                label,
+                ProviderErrorKind::Protocol,
+                format!("{label} Error: {}", err),
+            ));
         }
         let mut artifacts = serde_json::Map::new();
         artifacts.insert(
@@ -308,7 +323,10 @@ impl Provider for OpenAiResponsesProvider {
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let label = self.label();
         let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
@@ -329,7 +347,10 @@ impl Provider for OpenAiResponsesProvider {
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let label = self.label();
         let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
@@ -343,6 +364,13 @@ impl Provider for OpenAiResponsesProvider {
         let route = self.route_fingerprint();
         let stream = crate::sse::data_payloads(resp, label).map(move |item| {
             let data = item?;
+            if serde_json::from_str::<serde_json::Value>(&data).is_err() {
+                return Err(ProviderError::new(
+                    label,
+                    ProviderErrorKind::Decode,
+                    "Invalid JSON in stream payload",
+                ));
+            }
             let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
             let mut events = p.parse(&data);
             for event in &mut events {
@@ -359,7 +387,7 @@ impl Provider for OpenAiResponsesProvider {
                     });
                 }
             }
-            Ok::<_, String>(events)
+            Ok::<_, ProviderError>(events)
         });
         Ok(stream
             .flat_map(|result| match result {

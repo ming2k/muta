@@ -28,6 +28,7 @@ pub mod config;
 pub mod config_check;
 pub mod connection_usage;
 pub mod connections;
+pub mod db;
 pub mod embedding;
 pub mod events;
 pub mod fsutil;

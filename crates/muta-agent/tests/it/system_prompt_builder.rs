@@ -17,7 +17,7 @@ impl Provider for IdleProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "done",
@@ -27,7 +27,10 @@ impl Provider for IdleProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::once(async { Ok("done".to_owned()) })))
     }
 }

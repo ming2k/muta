@@ -15,7 +15,10 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use muta_contracts::{ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use muta_contracts::{
+    ModelRequest, Provider, ProviderError, ProviderErrorKind, ProviderPromptHints,
+    ProviderStreamEvent,
+};
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
@@ -30,9 +33,12 @@ pub mod response;
 /// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
 pub const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
-fn google_completion(response_json: &Value) -> Result<muta_contracts::ProviderCompletion, String> {
+fn google_completion(
+    response_json: &Value,
+) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
     let root = response_json.get("response").unwrap_or(response_json);
-    let mut message = response::message(response_json)?;
+    let mut message =
+        response::message(response_json).map_err(|e| ProviderError::protocol("Google", e))?;
     let artifacts = message.provider_meta.take();
     Ok(muta_contracts::ProviderCompletion {
         message,
@@ -198,7 +204,10 @@ impl GoogleProvider {
     async fn stream_chat_events_without_thinking(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let response = self.send_google_request(&request, true, true, None).await?;
         let response = ensure_success(response, "Google").await.map_err(|e| {
             response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
@@ -212,10 +221,17 @@ impl GoogleProvider {
         is_stream: bool,
         omit_thinking: bool,
         timeout: Option<std::time::Duration>,
-    ) -> Result<reqwest::Response, String> {
-        let _cache_plan = self.prompt_cache.resolve(request)?;
+    ) -> Result<reqwest::Response, ProviderError> {
+        let _cache_plan = self
+            .prompt_cache
+            .resolve(request)
+            .map_err(|e| ProviderError::invalid_request("Google", e))?;
         let client = self.client.http();
-        let auth = self.endpoint.resolve_auth().await?;
+        let auth = self
+            .endpoint
+            .resolve_auth()
+            .await
+            .map_err(|e| ProviderError::authentication("Google", e))?;
         let (url, headers, body) =
             self.prepare_request_for_auth(request.clone(), is_stream, omit_thinking, &auth);
 
@@ -256,14 +272,10 @@ impl GoogleProvider {
         Ok(response)
     }
 
-    /// Wrap a successful SSE response into the event stream the harness
-    /// consumes: Google thought-signature stashing plus per-call index
-    /// assignment. Extracted from `stream_chat_events` so the downgrade path
-    /// shares it exactly.
     fn wrap_event_stream(
         &self,
         response: reqwest::Response,
-    ) -> BoxStream<'static, Result<ProviderStreamEvent, String>> {
+    ) -> BoxStream<'static, Result<ProviderStreamEvent, ProviderError>> {
         let next_tool_index = std::sync::Arc::new(std::sync::Mutex::new(0usize));
         let thought_signatures = Arc::new(Mutex::new(Map::new()));
         let text_thought_signature = Arc::new(Mutex::new(None::<String>));
@@ -272,81 +284,90 @@ impl GoogleProvider {
         let stream = crate::sse::data_payloads(response, "Google").flat_map({
             let next_tool_index = next_tool_index.clone();
             move |item| {
-                let events: Vec<Result<ProviderStreamEvent, String>> = match item {
+                let events: Vec<Result<ProviderStreamEvent, ProviderError>> = match item {
                     Ok(payload) => {
-                        let parsed = response::stream_payload(&payload);
-                        if !parsed.thought_signatures.is_empty() {
-                            let mut guard =
-                                thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
-                            for (id, signature) in &parsed.thought_signatures {
-                                guard.insert(id.clone(), Value::String(signature.clone()));
-                            }
-                            for event in &parsed.events {
-                                if let ProviderStreamEvent::ToolCallDelta {
-                                    id: Some(id),
-                                    name: Some(name),
-                                    ..
-                                } = event
-                                    && let Some(sig) = guard.get(id).cloned()
-                                {
-                                    guard.insert(name.clone(), sig);
+                        if serde_json::from_str::<serde_json::Value>(&payload).is_err() {
+                            vec![Err(ProviderError::new(
+                                "Google",
+                                ProviderErrorKind::Decode,
+                                "Invalid JSON in stream payload",
+                            ))]
+                        } else {
+                            let parsed = response::stream_payload(&payload);
+                            if !parsed.thought_signatures.is_empty() {
+                                let mut guard =
+                                    thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
+                                for (id, signature) in &parsed.thought_signatures {
+                                    guard.insert(id.clone(), Value::String(signature.clone()));
                                 }
-                            }
-                        }
-                        if let Some(signature) = parsed.text_thought_signature {
-                            *text_thought_signature
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner()) = Some(signature.clone());
-                        }
-                        let stored_text_sig = text_thought_signature
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone();
-                        if let Some(signature) = stored_text_sig {
-                            let mut guard =
-                                thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
-                            for event in &parsed.events {
-                                if let ProviderStreamEvent::ToolCallDelta {
-                                    id: Some(id),
-                                    name,
-                                    ..
-                                } = event
-                                {
-                                    guard
-                                        .entry(id.clone())
-                                        .or_insert_with(|| Value::String(signature.clone()));
-                                    if let Some(name) = name {
-                                        guard
-                                            .entry(name.clone())
-                                            .or_insert_with(|| Value::String(signature.clone()));
+                                for event in &parsed.events {
+                                    if let ProviderStreamEvent::ToolCallDelta {
+                                        id: Some(id),
+                                        name: Some(name),
+                                        ..
+                                    } = event
+                                        && let Some(sig) = guard.get(id).cloned()
+                                    {
+                                        guard.insert(name.clone(), sig);
                                     }
                                 }
                             }
-                        }
-                        parsed
-                            .events
-                            .into_iter()
-                            .map(|event| match event {
-                                ProviderStreamEvent::ToolCallDelta {
-                                    id,
-                                    name,
-                                    arguments,
-                                    ..
-                                } => {
-                                    let mut guard =
-                                        next_tool_index.lock().unwrap_or_else(|e| e.into_inner());
-                                    let index = *guard;
-                                    *guard += 1;
-                                    Ok(ProviderStreamEvent::ToolCallDelta {
-                                        index,
+                            if let Some(signature) = parsed.text_thought_signature {
+                                *text_thought_signature
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) = Some(signature.clone());
+                            }
+                            let stored_text_sig = text_thought_signature
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .clone();
+                            if let Some(signature) = stored_text_sig {
+                                let mut guard =
+                                    thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
+                                for event in &parsed.events {
+                                    if let ProviderStreamEvent::ToolCallDelta {
+                                        id: Some(id),
+                                        name,
+                                        ..
+                                    } = event
+                                    {
+                                        guard
+                                            .entry(id.clone())
+                                            .or_insert_with(|| Value::String(signature.clone()));
+                                        if let Some(name) = name {
+                                            guard.entry(name.clone()).or_insert_with(|| {
+                                                Value::String(signature.clone())
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            parsed
+                                .events
+                                .into_iter()
+                                .map(|event| match event {
+                                    ProviderStreamEvent::ToolCallDelta {
                                         id,
                                         name,
                                         arguments,
-                                    })
-                                }
-                                event => Ok(event),
-                            })
-                            .collect()
+                                        ..
+                                    } => {
+                                        let mut guard = next_tool_index
+                                            .lock()
+                                            .unwrap_or_else(|e| e.into_inner());
+                                        let index = *guard;
+                                        *guard += 1;
+                                        Ok(ProviderStreamEvent::ToolCallDelta {
+                                            index,
+                                            id,
+                                            name,
+                                            arguments,
+                                        })
+                                    }
+                                    event => Ok(event),
+                                })
+                                .collect()
+                        }
                     }
                     Err(error) => vec![Err(error)],
                 };
@@ -423,7 +444,7 @@ impl GoogleProvider {
     async fn chat_without_thinking(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         tracing::warn!(
             model = %self.endpoint.model,
             "upstream rejected thinkingConfig; retrying without disclosed thinking (chain withheld by upstream)"
@@ -439,8 +460,13 @@ impl GoogleProvider {
         let root = response_json.get("response").unwrap_or(&response_json);
 
         if let Some(err) = response_json.get("error").or_else(|| root.get("error")) {
-            return Err(response::clarify_error(
+            let provider_err = ProviderError::new(
+                "Google",
+                ProviderErrorKind::Protocol,
                 format!("Google Error: {}", err),
+            );
+            return Err(response::clarify_error(
+                provider_err,
                 &self.endpoint.model,
                 &self.endpoint.base_url,
             ));
@@ -609,7 +635,7 @@ impl Provider for GoogleProvider {
     async fn chat(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         let omit = self.thinking_was_rejected();
         let response = self
             .send_google_request(&request, false, omit, Some(self.client.request_timeout()))
@@ -621,7 +647,7 @@ impl Provider for GoogleProvider {
                 // upstream rejects our `thinkingConfig`, retry the identical
                 // turn with thinking omitted rather than failing it.
                 let e = response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url);
-                if response::rejects_thinking_config(&e) && self.note_thinking_rejected() {
+                if response::rejects_thinking_config(e.message()) && self.note_thinking_rejected() {
                     return Box::pin(self.chat_without_thinking(request)).await;
                 }
                 return Err(e);
@@ -632,8 +658,13 @@ impl Provider for GoogleProvider {
         let root = response_json.get("response").unwrap_or(&response_json);
 
         if let Some(err) = response_json.get("error").or_else(|| root.get("error")) {
-            return Err(response::clarify_error(
+            let provider_err = ProviderError::new(
+                "Google",
+                ProviderErrorKind::Protocol,
                 format!("Google Error: {}", err),
+            );
+            return Err(response::clarify_error(
+                provider_err,
                 &self.endpoint.model,
                 &self.endpoint.base_url,
             ));
@@ -645,7 +676,10 @@ impl Provider for GoogleProvider {
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let omit = self.thinking_was_rejected();
         let response = self.send_google_request(&request, true, omit, None).await?;
         let response = match ensure_success(response, "Google").await {
@@ -660,7 +694,7 @@ impl Provider for GoogleProvider {
                 // *next* text stream skips the doomed stamp instead of paying
                 // a failed request.
                 let e = response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url);
-                if response::rejects_thinking_config(&e) {
+                if response::rejects_thinking_config(e.message()) {
                     self.note_thinking_rejected();
                 }
                 return Err(e);
@@ -679,7 +713,10 @@ impl Provider for GoogleProvider {
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let omit = self.thinking_was_rejected();
         let response = self.send_google_request(&request, true, omit, None).await?;
         let response = match ensure_success(response, "Google").await {
@@ -692,7 +729,7 @@ impl Provider for GoogleProvider {
                 // streams; the sticky flag (`note_thinking_rejected`) makes
                 // this at most one extra request per channel per process.
                 let e = response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url);
-                if response::rejects_thinking_config(&e) && self.note_thinking_rejected() {
+                if response::rejects_thinking_config(e.message()) && self.note_thinking_rejected() {
                     tracing::warn!(
                         model = %self.endpoint.model,
                         "upstream rejected thinkingConfig; streaming without disclosed thinking (chain withheld by upstream)"

@@ -163,10 +163,7 @@ impl MonitorTracker {
             }
             RoundEvent::Error(message) => {
                 self.finish_round(SessionStatus::Failed);
-                self.note = Some(truncate(
-                    &muta_contracts::public_error_message(message),
-                    120,
-                ));
+                self.note = Some(truncate(message, 120));
             }
             RoundEvent::UnsentInput { .. } => {
                 self.finish_round(SessionStatus::Interrupted);

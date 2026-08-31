@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package muta.v1;
+
+// Service defining stateless client to Muta daemon orchestration
+service MutaService {
+  // Bi-directional stream for executing a chat/tool round interactively
+  rpc ExecuteRound(stream ExecuteRoundRequest) returns (stream ExecuteRoundResponse);
+
+  // Management endpoints for session lifecycles
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSessionDetail(GetSessionDetailRequest) returns (GetSessionDetailResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+
+  // Global full-text search across historical prompts
+  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse);
+}
+
+message ImagePart {
+  string mime_type = 1;
+  bytes data = 2;
+}
+
+message ExecuteRoundRequest {
+  string session_id = 1;
+  oneof payload {
+    string prompt = 2;
+    ImagePart image = 3;
+    bool interrupt = 4;
+  }
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;
+}
+
+message ExecuteRoundResponse {
+  oneof event {
+    string text_delta = 1;
+    string reasoning_delta = 2;
+    ToolCall tool_call = 3;
+    string error = 4;
+    bool completed = 5;
+  }
+}
+
+message ListSessionsRequest {
+  string project_root = 1;
+}
+
+message SessionOverview {
+  string id = 1;
+  string title = 2;
+  int64 created_at_ms = 3;
+  int64 updated_at_ms = 4;
+}
+
+message ListSessionsResponse {
+  repeated SessionOverview sessions = 1;
+}
+
+message GetSessionDetailRequest {
+  string session_id = 1;
+}
+
+message Message {
+  string role = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  string provider = 4;
+  string model = 5;
+  int64 created_at_ms = 6;
+  repeated ToolCall tool_calls = 7;
+}
+
+message GetSessionDetailResponse {
+  string id = 1;
+  string parent_id = 2;
+  string fork_kind = 3;
+  string title = 4;
+  repeated Message messages = 5;
+}
+
+message CreateSessionRequest {
+  string project_root = 1;
+  string parent_session_id = 2;
+  string fork_kind = 3; // 'trunk', 'fork', 'aside'
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+}
+
+message DeleteSessionRequest {
+  string session_id = 1;
+}
+
+message DeleteSessionResponse {
+  bool success = 1;
+}
+
+message SearchHistoryRequest {
+  string query = 1;
+  string workspace = 2;
+}
+
+message SearchResult {
+  string prompt_text = 1;
+  string session_id = 2;
+  string workspace = 3;
+}
+
+message SearchHistoryResponse {
+  repeated SearchResult results = 1;
+}

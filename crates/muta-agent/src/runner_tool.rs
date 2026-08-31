@@ -870,10 +870,21 @@ impl RunnerTool {
                 .await;
             match run {
                 Ok(outcome) => break Ok(outcome),
-                Err(muta_contracts::HarnessError::Retryable {
-                    message,
-                    retry_after_ms,
-                }) if attempt < retry_limit => {
+                Err(muta_contracts::HarnessError::Provider(provider_err))
+                    if {
+                        matches!(
+                            provider_err.retry_disposition(),
+                            muta_contracts::RetryDisposition::Retry { .. }
+                        )
+                    } && attempt < retry_limit =>
+                {
+                    let retry_after_ms = match provider_err.retry_disposition() {
+                        muta_contracts::RetryDisposition::Retry { retry_after_ms } => {
+                            retry_after_ms
+                        }
+                        _ => unreachable!(),
+                    };
+                    let message = provider_err.message();
                     let base_ms = crate::orchestration::retry_delay_ms(
                         attempt,
                         retry_after_ms,
@@ -903,7 +914,7 @@ impl RunnerTool {
                         .with_body(format!(
                             "Waiting {}s before retrying: {}",
                             delay_ms.div_ceil(1_000),
-                            crate::orchestration::public_retry_reason(&message),
+                            crate::orchestration::public_retry_reason(message),
                         )),
                     ));
                     on_event(muta_contracts::RunnerEvent::Activity(format!(
@@ -1144,7 +1155,7 @@ mod tests {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
                 "found 3 relevant files",
@@ -1153,7 +1164,10 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::once(async {
                 Ok("found 3 relevant files".to_string())
             })))
@@ -1186,7 +1200,7 @@ mod tests {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
                 "recovered",
@@ -1196,7 +1210,10 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::once(async {
                 Ok("recovered".to_string())
             })))
@@ -1205,16 +1222,17 @@ mod tests {
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             let seen = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if seen == 0 {
-                // Retryable mid-stream failure (what `transport_error` now
-                // produces for `Kind::Decode` stream truncation).
-                return Err(muta_contracts::retryable_error(
-                    "OpenAI transport error: error decoding response body \
-                     (connection closed before message completed)",
-                    None,
-                ));
+                return Err(muta_contracts::ProviderError::new(
+                    "OpenAI",
+                    muta_contracts::ProviderErrorKind::Transport,
+                    "OpenAI transport error: error decoding response body (connection closed before message completed)",
+                ).retryable(None));
             }
             Ok(Box::pin(stream::iter(vec![
                 Ok(ProviderStreamEvent::TextDelta("recovered".to_string())),
@@ -1229,7 +1247,7 @@ mod tests {
         async fn chat(
             &self,
             request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             *self.request.lock().unwrap() = Some(request);
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
@@ -1240,7 +1258,10 @@ mod tests {
         async fn stream_chat(
             &self,
             request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             *self.request.lock().unwrap() = Some(request);
             Ok(Box::pin(stream::once(async {
                 Ok("found 3 relevant files".to_string())
@@ -1413,7 +1434,7 @@ mod tests {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
                 "gated",
@@ -1422,13 +1443,19 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             if self
                 .requests
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -1651,7 +1678,8 @@ mod tests {
             async fn chat(
                 &self,
                 request: muta_contracts::ModelRequest,
-            ) -> Result<muta_contracts::ProviderCompletion, String> {
+            ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError>
+            {
                 self.record(&request);
                 Ok(muta_contracts::ProviderCompletion::message(Message::new(
                     Role::Assistant,
@@ -1661,7 +1689,10 @@ mod tests {
             async fn stream_chat(
                 &self,
                 request: muta_contracts::ModelRequest,
-            ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            ) -> Result<
+                BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+                muta_contracts::ProviderError,
+            > {
                 self.record(&request);
                 Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
             }

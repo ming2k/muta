@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ResolvedAuth,
+    CredentialSource, ModelRequest, Provider, ProviderError, ProviderPromptHints,
+    ProviderStreamEvent, ResolvedAuth,
 };
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
@@ -146,8 +146,10 @@ impl AnthropicMessagesProvider {
     fn resolve_cache_plan(
         &self,
         request: &ModelRequest,
-    ) -> Result<muta_contracts::ResolvedCachePlan, String> {
-        self.prompt_cache.resolve(request)
+    ) -> Result<muta_contracts::ResolvedCachePlan, ProviderError> {
+        self.prompt_cache
+            .resolve(request)
+            .map_err(|e| ProviderError::invalid_request("Anthropic", e))
     }
 
     pub fn with_dialect(mut self, dialect: muta_contracts::AnthropicMessagesDialect) -> Self {
@@ -199,8 +201,12 @@ impl AnthropicMessagesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, String> {
-        let auth = self.endpoint.resolve_auth().await?;
+    ) -> Result<reqwest::Response, ProviderError> {
+        let auth = self
+            .endpoint
+            .resolve_auth()
+            .await
+            .map_err(|e| ProviderError::authentication("Anthropic", e))?;
         let mut req = self.build_request_for_auth(body, &auth);
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
@@ -272,7 +278,7 @@ impl Provider for AnthropicMessagesProvider {
     async fn chat(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -291,7 +297,8 @@ impl Provider for AnthropicMessagesProvider {
         let resp = self.send_request(&body, false).await?;
         let response_json: serde_json::Value = decode_response_json(resp, "Anthropic").await?;
 
-        let assembled = response::assemble_message(&response_json)?;
+        let assembled = response::assemble_message(&response_json)
+            .map_err(|e| ProviderError::protocol("Anthropic", e))?;
 
         let usage = response::usage(&response_json["usage"]);
         let artifacts = assembled.thinking_signature.as_ref().map(|signature| {
@@ -315,7 +322,10 @@ impl Provider for AnthropicMessagesProvider {
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -343,7 +353,10 @@ impl Provider for AnthropicMessagesProvider {
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -368,12 +381,13 @@ impl Provider for AnthropicMessagesProvider {
         // emitted Usage events carry the full counts.
         let mut usage_state = response::StreamUsage::default();
         let stream = crate::sse::data_payloads(response, "Anthropic").flat_map(move |item| {
-            let events: Vec<Result<ProviderStreamEvent, String>> = match item {
+            let events: Vec<Result<ProviderStreamEvent, muta_contracts::ProviderError>> = match item
+            {
                 Ok(payload) => {
                     sig_stash.capture(&payload);
                     match response::stream_events(&payload, &mut usage_state) {
                         Ok(parsed) => parsed.into_iter().map(Ok).collect(),
-                        Err(e) => vec![Err(e)],
+                        Err(e) => vec![Err(ProviderError::protocol("Anthropic", e))],
                     }
                 }
                 Err(e) => vec![Err(e)],

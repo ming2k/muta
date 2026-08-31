@@ -32,7 +32,7 @@ impl Provider for CompactionProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "mock AI summary",
@@ -42,7 +42,10 @@ impl Provider for CompactionProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(futures::stream::empty()))
     }
 }
@@ -2609,14 +2612,25 @@ async fn run_compaction_falls_back_when_provider_errors() {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
-            Err("boom".to_string())
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+            Err(muta_contracts::ProviderError::new(
+                "mock",
+                muta_contracts::ProviderErrorKind::Other,
+                "boom",
+            ))
         }
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
-            Err("boom".to_string())
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
+            Err(muta_contracts::ProviderError::new(
+                "mock",
+                muta_contracts::ProviderErrorKind::Other,
+                "boom",
+            ))
         }
     }
 

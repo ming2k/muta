@@ -43,7 +43,9 @@ pub(crate) use commands::handle_ctrl_c;
 #[cfg(test)]
 pub(crate) use commands::handle_send_slash;
 #[cfg(test)]
-pub(crate) use modals::{handle_close_modal, handle_modal_down, handle_modal_up};
+pub(crate) use modals::{
+    handle_close_modal, handle_modal_down, handle_modal_up, handle_submit_custom_provider,
+};
 
 /// How the event loop proceeds after a dispatched action. Arms that ended in
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
@@ -322,6 +324,7 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::CancelOauthPending => {
             if app.active_modal() == Modal::OauthPending {
+                let _ = app.tx.send(AgentRequest::CancelAuthorizeOAuth);
                 app.awaiting_oauth_add = false;
                 app.oauth_pending_url.clear();
                 app.oauth_pending_user_code.clear();

@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ResolvedAuth,
+    CredentialSource, Effort, ModelRequest, Provider, ProviderError, ProviderErrorKind,
+    ProviderPromptHints, ProviderStreamEvent, ResolvedAuth,
 };
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -178,8 +178,12 @@ impl OpenAiChatCompletionsProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, String> {
-        let auth = self.endpoint.resolve_auth().await?;
+    ) -> Result<reqwest::Response, ProviderError> {
+        let auth = self
+            .endpoint
+            .resolve_auth()
+            .await
+            .map_err(|e| ProviderError::authentication(self.label(), e))?;
         let mut req = self.build_request_for_auth(body, &auth);
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
@@ -247,8 +251,11 @@ impl Provider for OpenAiChatCompletionsProvider {
     async fn chat(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
-        let cache_plan = self.prompt_cache.resolve(&request)?;
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        let cache_plan = self
+            .prompt_cache
+            .resolve(&request)
+            .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -267,7 +274,11 @@ impl Provider for OpenAiChatCompletionsProvider {
         let response_json: serde_json::Value = decode_response_json(resp, label).await?;
 
         if let Some(err) = response_json.get("error") {
-            return Err(format!("{label} Error: {}", err));
+            return Err(ProviderError::new(
+                label,
+                ProviderErrorKind::Protocol,
+                format!("{label} Error: {}", err),
+            ));
         }
 
         let usage = response::usage(&response_json["usage"]);
@@ -299,8 +310,14 @@ impl Provider for OpenAiChatCompletionsProvider {
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        let cache_plan = self.prompt_cache.resolve(&request)?;
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        let cache_plan = self
+            .prompt_cache
+            .resolve(&request)
+            .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -327,8 +344,14 @@ impl Provider for OpenAiChatCompletionsProvider {
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        let cache_plan = self.prompt_cache.resolve(&request)?;
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        let cache_plan = self
+            .prompt_cache
+            .resolve(&request)
+            .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -352,19 +375,27 @@ impl Provider for OpenAiChatCompletionsProvider {
         // event shape and fed through the echo filter.
         let echo_filter = Arc::new(Mutex::new(echo::ToolCallEchoFilter::new()));
         let filter_for_body = Arc::clone(&echo_filter);
-        let body = crate::sse::data_payloads(response, self.label()).map(move |item| {
+        let label = self.label();
+        let body = crate::sse::data_payloads(response, label).map(move |item| {
             let data = item?;
+            if serde_json::from_str::<serde_json::Value>(&data).is_err() {
+                return Err(ProviderError::new(
+                    label,
+                    ProviderErrorKind::Decode,
+                    "Invalid JSON in stream payload",
+                ));
+            }
             let parsed = response::stream_events(&data);
             // Recover from a poisoned mutex: a prior panic in this critical
             // section must not take down subsequent stream chunks.
             let mut filter = filter_for_body
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            let mut events: Vec<Result<ProviderStreamEvent, String>> = Vec::new();
+            let mut events: Vec<Result<ProviderStreamEvent, ProviderError>> = Vec::new();
             for event in parsed {
                 events.extend(filter.observe(event).into_iter().map(Ok));
             }
-            Ok::<_, String>(events)
+            Ok::<_, ProviderError>(events)
         });
         // Flush any buffered non-echo text once the byte stream ends, and log a
         // per-turn stream summary so empty responses are diagnosable.
@@ -386,14 +417,14 @@ impl Provider for OpenAiChatCompletionsProvider {
                 tool_call_deltas = filter.tool_call_deltas,
                 "openai stream summary",
             );
-            let mut events: Vec<Result<ProviderStreamEvent, String>> = Vec::new();
+            let mut events: Vec<Result<ProviderStreamEvent, ProviderError>> = Vec::new();
             if !emitted.is_empty() {
                 events.push(Ok(ProviderStreamEvent::TextDelta(emitted)));
             }
             events.push(Ok(ProviderStreamEvent::Completed(
                 muta_contracts::ProviderCompletionMeta::default(),
             )));
-            Ok::<_, String>(events)
+            Ok::<_, ProviderError>(events)
         });
         Ok(body
             .chain(tail)

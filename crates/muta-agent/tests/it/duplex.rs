@@ -47,7 +47,7 @@ impl Provider for IdleProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "done",
@@ -56,7 +56,10 @@ impl Provider for IdleProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
     }
 }
@@ -210,19 +213,29 @@ impl Provider for StreamWriteCallProvider {
     async fn chat(
         &self,
         _: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
-        Err("non-streaming path should not be used".to_string())
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "non-streaming path should not be used",
+        ))
     }
     async fn stream_chat(
         &self,
         _: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::empty()))
     }
     async fn stream_chat_events(
         &self,
         _: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let round = self.0.fetch_add(1, Ordering::SeqCst);
         let events = if round == 0 {
             vec![Ok(ProviderStreamEvent::ToolCallDelta {

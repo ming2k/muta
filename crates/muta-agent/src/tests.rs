@@ -15,7 +15,7 @@ impl Provider for TestProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "done",
@@ -25,7 +25,10 @@ impl Provider for TestProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         // The default `stream_chat_events` wraps this into a single
         // `TextDelta("done")`, so the streaming ReAct loop sees the same
         // terminal answer as `chat()`.
@@ -38,7 +41,7 @@ impl Provider for HintProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "done",
@@ -48,7 +51,10 @@ impl Provider for HintProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::empty()))
     }
 
@@ -64,21 +70,27 @@ impl Provider for PermissionTestProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         unreachable!("streaming path should be used")
     }
 
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         unreachable!("stream_chat_events should be called directly")
     }
 
     async fn stream_chat_events(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             vec![
                 Ok(ProviderStreamEvent::ToolCallDelta {
@@ -108,21 +120,31 @@ impl Provider for StreamingToolProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
-        Err("non-streaming path should not be used".to_string())
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "non-streaming path should not be used",
+        ))
     }
 
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             vec![
                 Ok(ProviderStreamEvent::ToolCallDelta {
@@ -487,10 +509,20 @@ fn apply_master_profile_switches_identity_into_the_system_prompt() {
 }
 
 #[test]
-fn retry_metadata_is_not_exposed_as_public_error_text() {
-    let encoded = retryable_error("rate limited", Some(500));
-    assert_eq!(public_error_message(&encoded), "rate limited");
-    assert_eq!(public_error_message("plain"), "plain");
+fn retry_metadata_is_data_on_provider_error() {
+    let err = muta_contracts::ProviderError::new(
+        "test",
+        muta_contracts::ProviderErrorKind::RateLimited,
+        "rate limited",
+    )
+    .retryable(Some(500));
+    assert_eq!(err.message(), "rate limited");
+    assert_eq!(
+        err.retry_disposition(),
+        muta_contracts::RetryDisposition::Retry {
+            retry_after_ms: Some(500)
+        }
+    );
 }
 
 #[tokio::test]
@@ -595,19 +627,25 @@ async fn stalled_provider_stream_times_out_as_retryable() {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::pending()))
         }
     }
@@ -624,7 +662,7 @@ async fn stalled_provider_stream_times_out_as_retryable() {
         .await;
 
     assert!(
-        matches!(result, Err(HarnessError::Retryable { .. })),
+        matches!(result, Err(muta_contracts::HarnessError::Provider(ref err)) if matches!(err.retry_disposition(), muta_contracts::RetryDisposition::Retry { .. })),
         "a stalled stream should surface as a retryable error, not hang forever; got: {result:?}"
     );
 }
@@ -642,19 +680,25 @@ async fn stream_ending_mid_tool_call_is_retryable() {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ToolCallDelta {
                     index: 0,
@@ -678,7 +722,13 @@ async fn stream_ending_mid_tool_call_is_retryable() {
         .await;
 
     match result {
-        Err(HarnessError::Retryable { message, .. }) => {
+        Err(muta_contracts::HarnessError::Provider(err))
+            if matches!(
+                err.retry_disposition(),
+                muta_contracts::RetryDisposition::Retry { .. }
+            ) =>
+        {
+            let message = err.message();
             assert!(
                 message.contains("mid-tool-call"),
                 "message should name the mid-tool-call truncation: {message}"
@@ -705,19 +755,25 @@ async fn stream_with_truncated_tool_arguments_is_retryable() {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ToolCallDelta {
                     index: 0,
@@ -741,7 +797,13 @@ async fn stream_with_truncated_tool_arguments_is_retryable() {
         .await;
 
     match result {
-        Err(HarnessError::Retryable { message, .. }) => {
+        Err(muta_contracts::HarnessError::Provider(err))
+            if matches!(
+                err.retry_disposition(),
+                muta_contracts::RetryDisposition::Retry { .. }
+            ) =>
+        {
+            let message = err.message();
             assert!(
                 message.contains("truncated arguments") && message.contains("read"),
                 "message should name the call whose arguments were cut off: {message}"
@@ -794,19 +856,25 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
         async fn chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::pending()))
         }
         async fn stream_chat_events(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::pending()))
         }
     }
@@ -874,19 +942,25 @@ async fn interrupted_stream_books_exact_not_cumulative_completion_tokens() {
         async fn chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::pending()))
         }
         async fn stream_chat_events(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             let n = self.deltas;
             // Pace the stream like a real model (~9 600 tokens over ≈1.2 s of
             // wall clock ⇒ ≈8 000 tok/s, under the ledger's 10 000 tok/s
@@ -902,7 +976,9 @@ async fn interrupted_stream_books_exact_not_cumulative_completion_tokens() {
                 tokio::time::sleep(per_delta).await;
                 Ok(delta)
             });
-            let parked = futures::stream::pending::<Result<ProviderStreamEvent, String>>();
+            let parked = futures::stream::pending::<
+                Result<ProviderStreamEvent, muta_contracts::ProviderError>,
+            >();
             Ok(Box::pin(deltas.chain(parked)))
         }
     }
@@ -990,19 +1066,25 @@ async fn stream_request_that_never_resolves_times_out() {
         async fn chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             unreachable!("stream_chat_events should be called directly")
         }
         async fn stream_chat_events(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             // Never resolves.
             pending().await
         }
@@ -1020,7 +1102,7 @@ async fn stream_request_that_never_resolves_times_out() {
         .await;
 
     assert!(
-        matches!(result, Err(HarnessError::Retryable { .. })),
+        matches!(result, Err(muta_contracts::HarnessError::Provider(ref err)) if matches!(err.retry_disposition(), muta_contracts::RetryDisposition::Retry { .. })),
         "a stream request that never resolves should time out as retryable; got: {result:?}"
     );
 }
@@ -1039,19 +1121,25 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(stream::iter(vec![
                 Ok(ProviderStreamEvent::ReasoningDelta(
                     "let me think...".to_string(),
@@ -1306,7 +1394,7 @@ impl Provider for GatedRunnerProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "gated",
@@ -1315,14 +1403,22 @@ impl Provider for GatedRunnerProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::empty()))
     }
     async fn stream_chat_events(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<muta_contracts::ProviderStreamEvent, String>>, String>
-    {
+    ) -> Result<
+        BoxStream<
+            'static,
+            Result<muta_contracts::ProviderStreamEvent, muta_contracts::ProviderError>,
+        >,
+        muta_contracts::ProviderError,
+    > {
         if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
             Ok(Box::pin(stream::iter(vec![
                 Ok(muta_contracts::ProviderStreamEvent::ToolCallDelta {
@@ -1621,7 +1717,7 @@ impl Provider for ScriptedProvider {
     async fn chat(
         &self,
         request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         self.steward_requests
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -1641,14 +1737,20 @@ impl Provider for ScriptedProvider {
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         // A turn that runs past its script gets a terminal "done" so the
         // loop exits rather than hanging on a missing turn.
         let mut turn = self
@@ -2660,19 +2762,33 @@ impl Provider for TwoEventProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
-        Err("chat path not used by this test".to_string())
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "chat path not used by this test",
+        ))
     }
     async fn stream_chat(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        Err("stream_chat path not used by this test".to_string())
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "stream_chat path not used by this test",
+        ))
     }
     async fn stream_chat_events(
         &self,
         _request: muta_contracts::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         Ok(Box::pin(futures::stream::iter([
             Ok(ProviderStreamEvent::TextDelta("hel".to_string())),
             Ok(ProviderStreamEvent::TextDelta("lo".to_string())),

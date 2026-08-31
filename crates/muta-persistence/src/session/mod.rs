@@ -1755,7 +1755,7 @@ pub async fn summarize_with_provider(
     )
     .await
     {
-        Ok(result) => result?,
+        Ok(result) => result.map_err(|e| e.to_string())?,
         Err(_elapsed) => {
             return Err(format!(
                 "Summarization timed out after {} seconds; using excerpt fallback.",

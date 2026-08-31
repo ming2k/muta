@@ -759,6 +759,25 @@ pub async fn connect(
     provider_id: String,
     method: muta_contracts::LoginMethod,
 ) {
+    if run_oauth_for_connect(resp_tx, provider_id.clone(), method).await {
+        connect_post_oauth(
+            config,
+            agent,
+            provider_for_task,
+            resp_tx,
+            provider_usage,
+            provider_id,
+        )
+        .await;
+    }
+}
+
+/// Run the OAuth portion of connect in a non-blocking way.
+pub async fn run_oauth_for_connect(
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_id: String,
+    method: muta_contracts::LoginMethod,
+) -> bool {
     let connections = Connections::load();
     let auth_mode = connections
         .get(&provider_id)
@@ -774,17 +793,29 @@ pub async fn connect(
                 message: "not an OAuth provider".to_string(),
             },
         ));
-        return;
+        return false;
     };
     cfg.provider_id = std::borrow::Cow::Owned(provider_id.clone());
     if !run_oauth(resp_tx, &provider_id, method, cfg).await {
-        return;
+        return false;
     }
     let _ = resp_tx.send(AgentResponse::ConnectStatus(
         muta_contracts::ConnectStatus::Done {
             provider: provider_id.clone(),
         },
     ));
+    true
+}
+
+/// Run the post-OAuth discovery and activation logic for connect.
+pub async fn connect_post_oauth(
+    config: &mut Config,
+    agent: &Agent,
+    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    provider_id: String,
+) {
     // Live model discovery: fetch the provider's actual model list with the
     // fresh token so the picker shows the account's real entitlements right
     // away. A failure keeps the previous subset; each failure is reported back

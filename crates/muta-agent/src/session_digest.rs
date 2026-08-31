@@ -197,7 +197,7 @@ mod tests {
         async fn chat(
             &self,
             request: ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             *self.last_messages.lock().unwrap() = request.messages;
             *self.last_tool_specs.lock().unwrap() = request.tool_specs;
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
@@ -209,7 +209,10 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(futures::stream::empty()))
         }
     }

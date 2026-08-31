@@ -33,7 +33,10 @@ fn sse_body(events: &[&str]) -> String {
 /// Collect a stream of provider events into a flat `Vec`, failing if any item
 /// is itself an `Err`. Mirrors how the harness drains a turn's event stream.
 async fn collect_events(
-    stream: futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>,
+    stream: futures::stream::BoxStream<
+        'static,
+        Result<ProviderStreamEvent, muta_contracts::ProviderError>,
+    >,
 ) -> Vec<ProviderStreamEvent> {
     let mut out = Vec::new();
     for item in stream.collect::<Vec<_>>().await {
@@ -208,10 +211,13 @@ async fn openai_chat_completions_classifies_server_error_as_retryable() {
 
     // ensure_success tags 5xx as retryable so the harness backs off and retries.
     assert!(
-        muta_contracts::parse_retryable_error(&error).is_some(),
+        matches!(
+            error.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry { .. }
+        ),
         "5xx must be classified retryable: {error}"
     );
-    assert!(error.contains("HTTP 500"));
+    assert!(error.message().contains("HTTP 500"));
 }
 
 #[tokio::test]
@@ -267,11 +273,11 @@ async fn openai_chat_completions_decode_failure_embeds_raw_body() {
         .expect_err("non-JSON 200 must surface as a decode error");
 
     assert!(
-        error.contains("error decoding response body"),
+        error.message().contains("error decoding response body"),
         "should name the decode failure: {error}"
     );
     assert!(
-        error.contains("502 Bad Gateway"),
+        error.message().contains("502 Bad Gateway"),
         "should embed the raw body preview so the cause is diagnosable: {error}"
     );
 }
@@ -500,7 +506,7 @@ async fn anthropic_stream_surfaces_in_band_error_event() {
     let items = stream.collect::<Vec<_>>().await;
     let errored = items.iter().any(|item| {
         item.as_ref()
-            .is_err_and(|error| error.contains("Overloaded"))
+            .is_err_and(|error| error.message().contains("Overloaded"))
     });
     assert!(
         errored,

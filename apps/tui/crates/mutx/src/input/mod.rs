@@ -2721,6 +2721,22 @@ pub fn process_event(
                 {
                     InputAction::ScrollPageDown
                 }
+                KeyCode::Home
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && (context.active_modal == super::Modal::None
+                            || context.active_modal == super::Modal::Permission
+                            || scrolls_own_body(context.active_modal)) =>
+                {
+                    InputAction::ScrollTop
+                }
+                KeyCode::End
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && (context.active_modal == super::Modal::None
+                            || context.active_modal == super::Modal::Permission
+                            || scrolls_own_body(context.active_modal)) =>
+                {
+                    InputAction::ScrollBottom
+                }
                 KeyCode::Home => {
                     // A focused step disambiguates Home from caret motion, so it
                     // no longer clashes with conversation scrolling:

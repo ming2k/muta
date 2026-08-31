@@ -37,8 +37,7 @@ pub use usage::TokenUsage;
 
 pub mod error;
 pub use error::{
-    HarnessError, RetryableError, is_context_overflow, parse_retryable_error, public_error_message,
-    retryable_error,
+    HarnessError, ProviderError, ProviderErrorKind, RetryDisposition, ToolError, ToolErrorKind,
 };
 
 pub mod message;
@@ -143,8 +142,9 @@ pub use shared_roots::{SharedAdditionalRoots, SharedUnconfined};
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{
-    CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
+    CommandScope, ModelRequest, OperationScope, Provider, ProviderEventStream, ProviderPromptHints,
+    ProviderStreamEvent, ProviderTextStream, ScopeTarget, Tool, ToolSpec, VariantSelection,
+    empty_variant_selection,
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGenerateContentDialect, OpenAiChatDialect,

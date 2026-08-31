@@ -182,7 +182,7 @@ impl Provider for ProxyProvider {
     async fn chat(
         &self,
         request: ModelRequest,
-    ) -> Result<muta_contracts::ProviderCompletion, String> {
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         let p = self
             .holder
             .read()
@@ -213,7 +213,10 @@ impl Provider for ProxyProvider {
     async fn stream_chat(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let p = self
             .holder
             .read()
@@ -244,7 +247,10 @@ impl Provider for ProxyProvider {
     async fn stream_chat_events(
         &self,
         request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+    ) -> Result<
+        BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
         let p = self
             .holder
             .read()
@@ -1262,9 +1268,8 @@ pub async fn execute_round(
         if let Err(error) = persist_request_usage(&agent, &session, &session_id).await {
             tracing::warn!(%error, "could not persist request usage after failed attempt");
         }
-        if matches!(error, HarnessError::ContextOverflow(_))
-            && !compacted_after_overflow
-            && !tool_activity.load(Ordering::SeqCst)
+        let is_context_overflow = matches!(&error, HarnessError::Provider(err) if err.kind() == muta_contracts::ProviderErrorKind::ContextOverflow);
+        if is_context_overflow && !compacted_after_overflow && !tool_activity.load(Ordering::SeqCst)
         {
             let overflow_settings = ContextProjectionSettings {
                 preserve_rounds: projection.preserve_rounds.max(1),
@@ -1293,12 +1298,14 @@ pub async fn execute_round(
             }
         }
 
-        let HarnessError::Retryable {
-            message,
-            retry_after_ms,
-        } = error
-        else {
-            break Err(error);
+        let (message, retry_after_ms) = match &error {
+            HarnessError::Provider(err) => match err.retry_disposition() {
+                muta_contracts::RetryDisposition::Retry { retry_after_ms } => {
+                    (err.message().to_string(), retry_after_ms)
+                }
+                _ => break Err(error),
+            },
+            _ => break Err(error),
         };
         if attempt >= retry_limit {
             break Err(HarnessError::Other(message));
@@ -2355,7 +2362,7 @@ mod digest_tests {
         async fn chat(
             &self,
             _request: ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             self.consults.fetch_add(1, Ordering::SeqCst);
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
@@ -2365,14 +2372,22 @@ mod digest_tests {
         async fn stream_chat(
             &self,
             _request: ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(futures::stream::empty()))
         }
         async fn stream_chat_events(
             &self,
             _request: ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
-        {
+        ) -> Result<
+            futures::stream::BoxStream<
+                'static,
+                Result<ProviderStreamEvent, muta_contracts::ProviderError>,
+            >,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(futures::stream::empty()))
         }
     }
@@ -2568,10 +2583,14 @@ mod phase1_guard_tests {
         assert!(!is_phase1_unsend(&OK, false, false));
         let other: Result<(), HarnessError> = Err(HarnessError::Other("boom".into()));
         assert!(!is_phase1_unsend(&other, false, false));
-        let retryable: Result<(), HarnessError> = Err(HarnessError::Retryable {
-            message: "overload".into(),
-            retry_after_ms: None,
-        });
+        let retryable: Result<(), HarnessError> = Err(HarnessError::Provider(
+            muta_contracts::ProviderError::new(
+                "test",
+                muta_contracts::ProviderErrorKind::RateLimited,
+                "overload",
+            )
+            .retryable(None),
+        ));
         assert!(!is_phase1_unsend(&retryable, false, false));
     }
 

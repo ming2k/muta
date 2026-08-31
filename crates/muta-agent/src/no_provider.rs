@@ -42,15 +42,29 @@ impl NoProvider {
 
 #[async_trait]
 impl Provider for NoProvider {
-    async fn chat(&self, _request: ModelRequest) -> Result<ProviderCompletion, String> {
-        Err(no_provider_message())
+    async fn chat(
+        &self,
+        _request: ModelRequest,
+    ) -> Result<ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "none",
+            muta_contracts::ProviderErrorKind::Unavailable,
+            no_provider_message(),
+        ))
     }
 
     async fn stream_chat(
         &self,
         _request: ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        Err(no_provider_message())
+    ) -> Result<
+        BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        Err(muta_contracts::ProviderError::new(
+            "none",
+            muta_contracts::ProviderErrorKind::Unavailable,
+            no_provider_message(),
+        ))
     }
 
     fn provider_id(&self) -> String {
@@ -86,13 +100,17 @@ mod tests {
             async fn chat(
                 &self,
                 _request: ModelRequest,
-            ) -> Result<muta_contracts::ProviderCompletion, String> {
+            ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError>
+            {
                 unreachable!()
             }
             async fn stream_chat(
                 &self,
                 _request: ModelRequest,
-            ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            ) -> Result<
+                BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+                muta_contracts::ProviderError,
+            > {
                 unreachable!()
             }
             fn provider_id(&self) -> String {

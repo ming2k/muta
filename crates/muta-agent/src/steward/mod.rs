@@ -104,7 +104,7 @@ impl Steward {
         )
         .await
         .map_err(|_| StewardError::Timeout(timeout))?
-        .map_err(StewardError::ProviderError)?;
+        .map_err(|e| StewardError::ProviderError(e.to_string()))?;
 
         // Steward completions own their metadata. Because nothing is stashed
         // on the provider, concurrent primary requests cannot observe it.
@@ -190,20 +190,27 @@ mod tests {
         async fn chat(
             &self,
             _req: ModelRequest,
-        ) -> Result<muta_contracts::ProviderCompletion, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             match &self.response {
                 Ok(content) => Ok(muta_contracts::ProviderCompletion::message(Message::new(
                     Role::Assistant,
                     content,
                 ))),
-                Err(err) => Err(err.clone()),
+                Err(err) => Err(muta_contracts::ProviderError::new(
+                    "mock",
+                    muta_contracts::ProviderErrorKind::Other,
+                    err.clone(),
+                )),
             }
         }
 
         async fn stream_chat(
             &self,
             _req: ModelRequest,
-        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
             Ok(Box::pin(futures::stream::empty()))
         }
     }
@@ -293,7 +300,8 @@ mod tests {
             async fn chat(
                 &self,
                 request: ModelRequest,
-            ) -> Result<muta_contracts::ProviderCompletion, String> {
+            ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError>
+            {
                 if let Some(last) = request.messages.last() {
                     *self.last_user_prompt.lock().unwrap() = last.content.clone();
                 }
@@ -305,8 +313,10 @@ mod tests {
             async fn stream_chat(
                 &self,
                 _request: ModelRequest,
-            ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String>
-            {
+            ) -> Result<
+                futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+                muta_contracts::ProviderError,
+            > {
                 Ok(Box::pin(futures::stream::empty()))
             }
         }
