@@ -90,32 +90,19 @@ fn inline_corpus_matches_reference_exactly() {
 }
 
 #[test]
-fn file_corpus_stays_within_two_percent() {
-    // (path relative to this crate, reference count of the first 40 KB)
+fn fixture_corpus_matches_reference() {
     let cases: &[(&str, usize)] = &[
-        ("../../crates/muta-agent/src/agent/mod.rs", 10_478),
-        ("../../crates/muta-contracts/src/pressure.rs", 10_855),
-        ("../../crates/muta-agent/src/orchestration.rs", 10_411),
-        ("../../README.zh-CN.md", 1_098),
-        ("../../CHANGELOG.md", 10_289),
-        ("../../docs/adr/0044-layered-token-accounting.md", 1_742),
-        (
-            "../../docs/explanation/agent-design/token-accounting.md",
-            5_553,
-        ),
+        ("tests/fixtures/corpus/chinese_doc.md", 538),
+        ("tests/fixtures/corpus/english_doc.md", 262),
+        ("tests/fixtures/corpus/code_sample.rs", 316),
+        ("tests/fixtures/corpus/json_spec.json", 247),
     ];
     let t = Tokenizer::new();
     for (path, expected) in cases {
-        // A missing corpus file must FAIL (see the in-crate twin of this
-        // test): a silently-skipped corpus is a test that asserts nothing.
         let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("corpus file {path} unreadable: {e}"));
-        // Pin the corpus to the LF form used to obtain the reference counts;
-        // a Windows checkout's CRLF materialization is not tokenizer drift.
+            .unwrap_or_else(|e| panic!("fixture file {path} unreadable: {e}"));
         let text = text.replace("\r\n", "\n");
-        let text = &text[..text.len().min(40_000)];
-        let got = t.count(text);
-        let drift = (got as f64 - *expected as f64).abs() / *expected as f64;
-        assert!(drift < 0.02, "{path}: {got} vs {expected} ({drift:.3})");
+        let got = t.count(&text);
+        assert_eq!(&got, expected, "fixture {path}");
     }
 }

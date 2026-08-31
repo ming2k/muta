@@ -38,6 +38,7 @@ pub mod provider_usage;
 pub mod route_settings;
 pub mod session;
 pub mod usage_stats;
+pub mod web_connections;
 pub mod workspace_security;
 
 pub use session::CommitTurn;

@@ -58,7 +58,7 @@ fn chrome_row(full_w: usize, bg: Color, theme: &Theme, dir: char, hidden: usize)
 }
 
 /// Build the top breathing row: overflow count when clipped above, or contextual
-/// mode declaration badge (e.g. `[history 1/12 · draft saved]`) when idle at top.
+/// mode declaration badge (e.g. `[edit: follow-up #1 · draft saved]` or `[history search · draft saved]`) when idle at top.
 fn top_chrome_row(
     full_w: usize,
     bg: Color,
@@ -70,56 +70,60 @@ fn top_chrome_row(
     if hidden_above > 0 {
         return chrome_row(full_w, bg, theme, '↑', hidden_above);
     }
-    if let (
-        true,
-        crate::components::composer_hints::ComposeTarget::HistoryRecall { index, total },
-    ) = (focused, target)
-    {
-        let label = if full_w >= 36 {
-            format!("[history {index}/{total} · draft saved]")
-        } else if full_w >= 20 {
-            format!("[history {index}/{total}]")
-        } else {
-            format!("[{index}/{total}]")
-        };
-        let label_len = label.chars().count();
-        if full_w > label_len + 2 {
-            let gap_cols = full_w.saturating_sub(label_len + 1);
-            return Line::from(vec![
-                Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .bg(bg)
-                        .fg(theme.info())
-                        .add_modifier(Modifier::DIM),
-                ),
-                Span::styled(" ".to_string(), Style::default().bg(bg)),
-            ]);
+    if focused {
+        if let crate::components::composer_hints::ComposeTarget::QueueEdit { kind, number, .. } =
+            target
+        {
+            let noun = match kind {
+                crate::components::composer_hints::QueueEditKind::Steer => "steer",
+                crate::components::composer_hints::QueueEditKind::FollowUp => "follow-up",
+            };
+            let label = if full_w >= 36 {
+                format!("[edit: {noun} #{number} · draft saved]")
+            } else if full_w >= 20 {
+                format!("[edit: {noun} #{number}]")
+            } else {
+                format!("[edit #{number}]")
+            };
+            let label_len = label.chars().count();
+            if full_w > label_len + 2 {
+                let gap_cols = full_w.saturating_sub(label_len + 1);
+                return Line::from(vec![
+                    Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .bg(bg)
+                            .fg(kind.consequence_color(theme))
+                            .add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(" ".to_string(), Style::default().bg(bg)),
+                ]);
+            }
         }
-    }
-    if focused && target == crate::components::composer_hints::ComposeTarget::HistorySearch {
-        let label = if full_w >= 36 {
-            "[history search · draft saved]"
-        } else if full_w >= 20 {
-            "[history search]"
-        } else {
-            "[history]"
-        };
-        let label_len = label.chars().count();
-        if full_w > label_len + 2 {
-            let gap_cols = full_w.saturating_sub(label_len + 1);
-            return Line::from(vec![
-                Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .bg(bg)
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::DIM),
-                ),
-                Span::styled(" ".to_string(), Style::default().bg(bg)),
-            ]);
+        if target == crate::components::composer_hints::ComposeTarget::HistorySearch {
+            let label = if full_w >= 36 {
+                "[history search · draft saved]"
+            } else if full_w >= 20 {
+                "[history search]"
+            } else {
+                "[history]"
+            };
+            let label_len = label.chars().count();
+            if full_w > label_len + 2 {
+                let gap_cols = full_w.saturating_sub(label_len + 1);
+                return Line::from(vec![
+                    Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .bg(bg)
+                            .fg(theme.brand())
+                            .add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(" ".to_string(), Style::default().bg(bg)),
+                ]);
+            }
         }
     }
     chrome_row(full_w, bg, theme, '↑', 0)
@@ -471,7 +475,7 @@ fn draw_composer_impl(
     let mut lines: Vec<Line> =
         Vec::with_capacity(visible_rows + COMPOSER_VERTICAL_CHROME_ROWS as usize);
 
-    // ── Row 1: blank breathing row ──────────────────────────────────────────
+    // Row 1: blank breathing row
     // A full panel-bg padding row giving the text a line of air above. When
     // rows hide above the viewport it moonlights as the `↑ N lines`
     // indicator (see [`chrome_row`]); otherwise it presents the active mode tag.
@@ -606,14 +610,14 @@ fn draw_composer_impl(
         }
     }
 
-    // ── Row 3: blank gap row ────────────────────────────────────────────────
+    // Row 3: blank gap row
     // A second breathing row between the text and the meta row, so the hint
     // sentence reads as the box's own footnote rather than another text line.
     // When rows hide below the viewport it carries the `↓ N lines`
     // indicator (see [`chrome_row`]).
     lines.push(chrome_row(full_w, panel_bg, theme, '↓', hidden_below));
 
-    // ── Row 4: the hint row ─────────────────────────────────────────────────
+    // Row 4: the hint row
     // `Enter send prompt` leads (left) and, only while the box clips rows,
     // a right-aligned position readout closes the row. Keycaps and verbs
     // tint with `panel_bg` so they blend into the box; the row degrades by

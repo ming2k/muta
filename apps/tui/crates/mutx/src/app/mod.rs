@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
 use muta_contracts::{
-    AgentRequest, ChannelAuth, ImagePart, LoopStatus, ParentStatus, PermissionRequest,
+    AgentRequest, ConnectionAuth, ImagePart, LoopStatus, ParentStatus, PermissionRequest,
     ProviderPickerSnapshot, SessionOverview, TodoList,
 };
 
@@ -534,6 +534,16 @@ pub struct App {
     /// Body scroll offset of the session-info sub-view. Reset to 0 on open and
     /// when the detail changes; reused (not the list's `session_scroll`).
     pub session_info_scroll: usize,
+    /// `true` while the connections modal is drilled into the connection detail
+    /// sub-view (Enter). The detail body renders from [`Self::connection_detail`];
+    /// Esc backs out to the list.
+    pub connection_info_detail: bool,
+    /// Full detail and usage for the connection under the detail sub-view. Populated by
+    /// an on-demand `QueryConnectionDetail` round-trip when the sub-view opens (Enter).
+    /// `None` while the round-trip is in flight.
+    pub connection_detail: Option<muta_contracts::ConnectionDetail>,
+    /// Body scroll offset of the connection detail sub-view.
+    pub connection_info_scroll: usize,
     /// Body scroll offset of the permissions manager modal. Reset to 0 each
     /// time the modal opens; clamped and auto-followed to the selection by the
     /// renderer each frame.
@@ -546,10 +556,10 @@ pub struct App {
     pub config_category: usize,
     /// Selected item/field index in the active category's detail pane.
     pub config_detail_index: usize,
+    /// Selected segment in the Web settings tab (0 = Search, 1 = Fetch).
+    pub config_web_segment: usize,
     /// Scroll offset for the `/config` detail pane body.
     pub config_detail_scroll: usize,
-    /// Whether the custom theme hex editor is actively focused for text entry.
-    pub config_custom_editing: bool,
     /// Latest `[websearch]` snapshot (presence-only view) from the harness.
     /// Refreshed when the Settings view opens (`QueryWebSearchConfig`) and
     /// on every `WebSearchConfigUpdated` ack.
@@ -911,9 +921,7 @@ pub struct App {
     /// Last persisted custom semantic palette. Retained while a preset is
     /// active so switching schemes never discards the user's colors.
     pub custom_color_scheme: muta_contracts::ColorSchemeConfig,
-    /// Transactional working copy used by the custom palette editor. Esc
-    /// discards it; Enter promotes it to `custom_color_scheme` and persists it.
-    pub custom_color_draft: muta_contracts::ColorSchemeConfig,
+
     /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
     /// From `[tui] click_outside_dismiss` (default `true`): when true, an
     /// outside click dismisses a dismissable modal like Esc (the draft is
@@ -1058,7 +1066,7 @@ pub struct App {
     /// Template-specific user agent carried into newly-created channels.
     pub custom_user_agent: Option<String>,
     /// How newly-created connections authenticate (from the selected preset).
-    pub custom_auth: muta_contracts::ChannelAuth,
+    pub custom_auth: muta_contracts::ConnectionAuth,
     /// Stable preset id the active create flow was seeded from, or `None` in
     /// edit mode / when no preset is active. Sent as `AddProvider::preset_id`
     /// (the wire field) so the catalog can re-seed the connection from the

@@ -408,7 +408,7 @@ async fn console_kill_arm_cancels_on_selection_move() {
 fn websearch_provider_dropdown_builds_and_selects() {
     let ws = muta_contracts::WebSearchConfigView {
         provider: "exa".to_string(),
-        reader: "jina".to_string(),
+        reader: "none".to_string(),
         proxy: None,
         timeout_secs: 20,
         searxng_url: None,
@@ -417,18 +417,20 @@ fn websearch_provider_dropdown_builds_and_selects() {
         tavily_api_key_set: true,
         bocha_api_key_set: false,
         jina_api_key_set: false,
+        search_connections: Vec::new(),
+        reader_connections: Vec::new(),
     };
     let dropdown = crate::overlays::build_websearch_provider_dropdown("tavily", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_provider"));
     assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("tavily"));
-    assert_eq!(dropdown.items.len(), 7);
+    assert_eq!(dropdown.items.len(), 8);
 }
 
 #[test]
 fn websearch_reader_dropdown_builds_and_selects() {
-    let ws = muta_contracts::WebSearchConfigView {
+    let mut ws = muta_contracts::WebSearchConfigView {
         provider: "exa".to_string(),
-        reader: "builtin".to_string(),
+        reader: "my-jina".to_string(),
         proxy: None,
         timeout_secs: 20,
         searxng_url: None,
@@ -437,9 +439,23 @@ fn websearch_reader_dropdown_builds_and_selects() {
         tavily_api_key_set: false,
         bocha_api_key_set: false,
         jina_api_key_set: false,
+        search_connections: Vec::new(),
+        reader_connections: vec![muta_contracts::WebReaderConnection {
+            id: "my-jina".to_string(),
+            name: Some("Custom Jina".to_string()),
+            preset_id: Some("jina".to_string()),
+            api_key_env: None,
+            base_url: None,
+            custom_headers: None,
+            enabled: true,
+        }],
     };
-    let dropdown = crate::overlays::build_websearch_reader_dropdown("builtin", Some(&ws));
+    let dropdown = crate::overlays::build_websearch_reader_dropdown("my-jina", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_reader"));
-    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("builtin"));
-    assert_eq!(dropdown.items.len(), 3);
+    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("my-jina"));
+    assert_eq!(dropdown.items.len(), 3); // my-jina + disabled + add_new
+
+    ws.reader_connections.clear();
+    let empty_dropdown = crate::overlays::build_websearch_reader_dropdown("none", Some(&ws));
+    assert_eq!(empty_dropdown.items.len(), 2); // disabled + add_new
 }

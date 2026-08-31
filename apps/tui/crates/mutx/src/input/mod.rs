@@ -14,6 +14,10 @@ pub struct InputContext {
     /// list-only keys (delete `d`, new `n`, info `i`) are inert — the sub-view
     /// is a read-only read-out.
     pub session_info_detail: bool,
+    /// While the connections picker is drilled into its detail sub-view (Enter),
+    /// the list-only keys (delete `D`, preset `a`, custom `c`) are inert — the sub-view
+    /// is a read-only read-out.
+    pub connection_info_detail: bool,
     pub is_responding: bool,
     /// Which completion menu (slash command vs `@path` mention) is active, or
     /// `None` when no menu is shown. Drives Tab/↑/↓ cycling and the
@@ -61,9 +65,6 @@ pub struct InputContext {
     /// true, `↓` steps the pointer back toward the newest item (and past it
     /// dissolves the pointer, restoring the draft) before any history role.
     pub queue_pointer_armed: bool,
-    /// Whether inline history recall is actively browsing a recalled entry
-    /// (`App::history_index.is_some()`). When true, Esc restores the stashed draft.
-    pub history_recall_active: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -107,8 +108,9 @@ pub struct InputContext {
     /// `n` new session). While true, printable keys edit the prompt text and
     /// Enter submits it. Mirrors `App::host_prompting`.
     pub host_prompting: bool,
-    /// Whether the custom color scheme hex editor in Settings is actively editing.
-    pub config_custom_editing: bool,
+
+    /// Which pane of the Settings View currently owns focus. Mirrors `App::config_focus`.
+    pub config_focus: crate::overlays::ConfigFocus,
     /// Active Emacs-style two-stroke leader chord state. Mirrors `App::leader_chord`.
     pub leader_chord: crate::app::LeaderChord,
 }
@@ -132,7 +134,6 @@ impl InputContext {
 fn edits_input_field(context: &InputContext) -> bool {
     match context.active_modal {
         super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
-        super::Modal::Config => context.config_custom_editing,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
         // The provider editor edits the composer line on every visible field
@@ -246,6 +247,8 @@ pub enum InputAction {
     /// it only manages instances (`a`/`e`/`D`), leaving provider switching to
     /// this picker.
     ProviderPickerActivate,
+    /// Drill into the connection detail sub-view for the highlighted connection row in Connections modal.
+    OpenConnectionDetail,
     /// Toggle the favorite flag on the highlighted Models row (model-level,
     /// ADR-0046). The Connections list has no favorite concept.
     ProviderPickerToggleFavorite,
@@ -402,6 +405,12 @@ pub enum InputAction {
     PermissionsClearAll,
     /// Activate or toggle the selected item in the Settings View. Bound to `Enter` / `Space`.
     ConfigActivate,
+    /// Delete the selected custom connection instance in Settings View. Bound to `d` / `D`.
+    ConfigDeleteConnection,
+    /// Switch to previous tab segment in Settings View (e.g. Web Search tab). Bound to `←` / `1` / `h`.
+    ConfigSegmentPrev,
+    /// Switch to next tab segment in Settings View (e.g. Web Fetch tab). Bound to `→` / `2` / `l`.
+    ConfigSegmentNext,
     /// Toggle focus between Categories and Detail in the Settings View. Bound to `Tab`.
     ConfigFocusToggle,
     /// Return focus to Categories or close the Settings View. Bound to `Esc`.
@@ -567,8 +576,6 @@ pub enum InputAction {
     HistoryPrev,
     /// Navigate history down.
     HistoryNext,
-    /// Cancel inline history recall and restore the stashed draft (Esc).
-    HistoryCancel,
     /// Cancel queue pointer editing and restore the stashed draft (Esc).
     QueuePointerCancel,
     /// Legacy destructive recall (pop the newest queue item into the
@@ -1519,10 +1526,6 @@ pub fn process_event(
                         // Queue pointer edit armed: Esc dissolves the pointer
                         // and restores the stashed draft.
                         InputAction::QueuePointerCancel
-                    } else if context.history_recall_active {
-                        // Inline history recall active: Esc cancels recall
-                        // and restores the stashed draft.
-                        InputAction::HistoryCancel
                     } else if context.is_responding {
                         InputAction::Interrupt
                     } else {
@@ -1615,12 +1618,8 @@ pub fn process_event(
                     }
                     match context.active_modal {
                         super::Modal::Models => InputAction::ProviderPickerActivate,
-                        // Connections is a pure management surface: Enter is
-                        // inert here (no activate concept — switching the
-                        // active provider is the Models picker's job). `a`/`e`/
-                        // `D` are the management shortcuts, handled as printable
-                        // chars below.
-                        super::Modal::Connections => InputAction::None,
+                        super::Modal::Connections if context.connection_info_detail => InputAction::None,
+                        super::Modal::Connections => InputAction::OpenConnectionDetail,
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                         super::Modal::ProviderPreset => InputAction::SelectPreset,
                         super::Modal::OauthPending => InputAction::CopyOauthContent {
@@ -1742,6 +1741,7 @@ pub fn process_event(
                         && context.completion_kind != super::CompletionKind::None
                         && context.completion_dismissed
                         && context.has_trigger_text
+                        && !context.is_responding
                     {
                         // Esc closed the popup but the composer still holds a
                         // completion trigger (a partial `/command` or an
@@ -2093,11 +2093,18 @@ pub fn process_event(
                             _ => {}
                         }
                     }
-                    if context.active_modal == super::Modal::Config
-                        && !context.config_custom_editing
-                        && c == ' '
-                    {
-                        return InputAction::ConfigActivate;
+                    if context.active_modal == super::Modal::Config {
+                        if c == ' ' {
+                            return InputAction::ConfigActivate;
+                        }
+                        if context.config_focus == crate::overlays::ConfigFocus::Detail {
+                            if c == '1' || c == 'h' {
+                                return InputAction::ConfigSegmentPrev;
+                            }
+                            if c == '2' || c == 'l' {
+                                return InputAction::ConfigSegmentNext;
+                            }
+                        }
                     }
                     if context.active_modal == super::Modal::Question
                         && let Some(d) = c.to_digit(10)
@@ -2110,10 +2117,10 @@ pub fn process_event(
                     // through to the input box below (the focus highlight stays
                     // until Esc / Enter). `Enter` activates the focused step;
                     // `Space` just inserts a space.
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::Models | super::Modal::Connections
-                    ) && !context.model_searching
+                    if (context.active_modal == super::Modal::Models
+                        || (context.active_modal == super::Modal::Connections
+                            && !context.connection_info_detail))
+                        && !context.model_searching
                         && c == '/'
                     {
                         // Browse mode: `/` opens the search sub-layer rather than
@@ -2129,6 +2136,7 @@ pub fn process_event(
                         // list has no favorite concept.
                         InputAction::ProviderPickerToggleFavorite
                     } else if context.active_modal == super::Modal::Connections
+                        && !context.connection_info_detail
                         && !context.model_searching
                         && c == 'a'
                     {
@@ -2137,6 +2145,7 @@ pub fn process_event(
                         // query character.
                         InputAction::OpenPresetChooser
                     } else if context.active_modal == super::Modal::Connections
+                        && !context.connection_info_detail
                         && !context.model_searching
                         && c == 'c'
                     {
@@ -2161,6 +2170,7 @@ pub fn process_event(
                         // Refresh / rediscover models from upstream.
                         InputAction::RefreshProviderModels
                     } else if context.active_modal == super::Modal::Connections
+                        && !context.connection_info_detail
                         && !context.model_searching
                         && c == 'D'
                     {
@@ -2258,6 +2268,10 @@ pub fn process_event(
                         InputAction::QueueMoveItem { delta: 1 }
                     } else if context.active_modal == super::Modal::Permissions && c == 'c' {
                         InputAction::PermissionsClearAll
+                    } else if context.active_modal == super::Modal::Config
+                        && (c == 'd' || c == 'D')
+                    {
+                        InputAction::ConfigDeleteConnection
                     } else if c == ' '
                         && context.active_modal == super::Modal::ModelEditor
                         && matches!(context.editor_field, Some(2..=4))
@@ -2285,15 +2299,6 @@ pub fn process_event(
                         InputAction::ModelEditorEffortJump { index }
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionInsertChar(c)
-                    } else if context.active_modal == super::Modal::Config
-                        && context.config_custom_editing
-                        && c != '#'
-                        && !c.is_ascii_hexdigit()
-                    {
-                        // Custom colors are strict hex fields. Ignore other
-                        // printable input instead of letting the user build an
-                        // impossible value that can never be saved.
-                        InputAction::None
                     } else if edits_input_field(&context)
                         && !(context.active_modal == super::Modal::ModelEditor
                             && matches!(context.editor_field, Some(2..=4)))
@@ -2420,6 +2425,11 @@ pub fn process_event(
                     if context.active_modal == super::Modal::Telemetry {
                         return InputAction::TelemetryPrevTab;
                     }
+                    if context.active_modal == super::Modal::Config
+                        && context.config_focus == crate::overlays::ConfigFocus::Detail
+                    {
+                        return InputAction::ConfigSegmentPrev;
+                    }
                     // In the model editor's effort field, ← cycles the effort
                     // level down (wrapping). Only when field 1 is focused.
                     if context.active_modal == super::Modal::ModelEditor
@@ -2454,6 +2464,11 @@ pub fn process_event(
                     }
                     if context.active_modal == super::Modal::Telemetry {
                         return InputAction::TelemetryNextTab;
+                    }
+                    if context.active_modal == super::Modal::Config
+                        && context.config_focus == crate::overlays::ConfigFocus::Detail
+                    {
+                        return InputAction::ConfigSegmentNext;
                     }
                     // Effort field: → cycles the level up (wrapping).
                     if context.active_modal == super::Modal::ModelEditor

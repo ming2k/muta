@@ -59,6 +59,7 @@ pub(crate) mod components;
 pub(crate) mod disclosure;
 pub(crate) mod layout;
 pub(crate) mod overlays;
+pub(crate) mod views;
 pub(crate) mod tools;
 
 // Drawing leaves + shared tokens.
@@ -370,6 +371,10 @@ pub async fn run_tui(
         None::<muta_contracts::SessionDetail>,
     ));
     let session_detail_clone = session_detail.clone();
+    let connection_detail = Arc::new(tokio::sync::Mutex::new(
+        None::<muta_contracts::ConnectionDetail>,
+    ));
+    let connection_detail_clone = connection_detail.clone();
     let session_tree = Arc::new(tokio::sync::Mutex::new(None::<muta_contracts::SessionTree>));
     let session_tree_clone = session_tree.clone();
     // Token-source report fetched on demand from the harness when the
@@ -1980,6 +1985,9 @@ pub async fn run_tui(
                 AgentResponse::SessionDetail(detail) => {
                     *session_detail_clone.lock().await = Some(detail);
                 }
+                AgentResponse::ConnectionDetail(detail) => {
+                    *connection_detail_clone.lock().await = Some(detail);
+                }
                 AgentResponse::TokenUsageReport { session_id, report } => {
                     // Install the daemon-side report only when it still
                     // belongs to the session the frontend is viewing — a
@@ -2216,13 +2224,17 @@ pub async fn run_tui(
         session_info_detail: false,
         session_detail: None,
         session_info_scroll: 0,
+        connection_info_detail: false,
+        connection_detail: None,
+        connection_info_scroll: 0,
         permissions_scroll: 0,
         config_scroll: 0,
         config_focus: crate::overlays::ConfigFocus::Categories,
         config_category: 0,
         config_detail_index: 0,
+        config_web_segment: 0,
+
         config_detail_scroll: 0,
-        config_custom_editing: false,
         websearch_config: None,
         config_dropdown: None,
         skills_expanded: None,
@@ -2327,7 +2339,7 @@ pub async fn run_tui(
         ),
         color_scheme: Theme::normalize_color_scheme(&tui_config.color_scheme).to_string(),
         custom_color_scheme: tui_config.custom_color_scheme.clone(),
-        custom_color_draft: tui_config.custom_color_scheme.clone(),
+
         click_outside_dismiss: tui_config.click_outside_dismiss,
         expand_auto_scroll: tui_config.expand_auto_scroll,
         focused_target: None,
@@ -2360,7 +2372,7 @@ pub async fn run_tui(
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
         custom_user_agent: None,
-        custom_auth: muta_contracts::ChannelAuth::ApiKey,
+        custom_auth: muta_contracts::ConnectionAuth::ApiKey,
         custom_preset_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
@@ -2430,6 +2442,7 @@ pub async fn run_tui(
             sessions_overview,
             sessions_overview_rev,
             session_detail,
+            connection_detail,
             session_tree,
             token_report,
             usage_stats,

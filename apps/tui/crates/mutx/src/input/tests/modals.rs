@@ -17,6 +17,7 @@ fn star_in_models_modal_toggles_model_favorite() {
         InputContext {
             active_modal: crate::Modal::Models,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -31,7 +32,6 @@ fn star_in_models_modal_toggles_model_favorite() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -40,7 +40,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -63,6 +63,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
         InputContext {
             active_modal: crate::Modal::Connections,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -77,7 +78,6 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -86,7 +86,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -109,6 +109,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
         InputContext {
             active_modal: crate::Modal::Models,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -123,7 +124,6 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: true,
             modal_keymap_open: false,
@@ -132,7 +132,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -151,6 +151,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
     let ctx = || InputContext {
         active_modal: crate::Modal::Models,
         session_info_detail: false,
+        connection_info_detail: false,
         is_responding: false,
         completion_kind: crate::CompletionKind::None,
         suggestion_count: 0,
@@ -165,7 +166,6 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         has_focused_target: false,
         has_queued: false,
         queue_pointer_armed: false,
-        history_recall_active: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -174,7 +174,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         question_other_highlighted: false,
         history_clear_confirm: false,
         host_prompting: false,
-        config_custom_editing: false,
+        config_focus: Default::default(),
         leader_chord: crate::app::LeaderChord::None,
     };
     let letter = process_event(
@@ -233,6 +233,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
             InputContext {
                 active_modal: crate::Modal::Question,
                 session_info_detail: false,
+                connection_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::CompletionKind::None,
                 suggestion_count: 0,
@@ -247,7 +248,6 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 has_focused_target: false,
                 has_queued: false,
                 queue_pointer_armed: false,
-                history_recall_active: false,
                 history_searching: false,
                 model_searching: false,
                 modal_keymap_open: false,
@@ -256,8 +256,8 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 question_other_highlighted: false,
                 history_clear_confirm: false,
                 host_prompting: false,
-                config_custom_editing: false,
-                    leader_chord: crate::app::LeaderChord::None,
+                config_focus: Default::default(),
+                leader_chord: crate::app::LeaderChord::None,
             },
             &mut drag,
         )
@@ -298,6 +298,7 @@ fn shift_tab_returns_to_the_previous_question() {
         InputContext {
             active_modal: crate::Modal::Question,
             session_info_detail: false,
+            connection_info_detail: false,
             ..Default::default()
         },
         &mut drag,
@@ -324,6 +325,7 @@ fn question_space_toggles_when_other_row_not_highlighted() {
         InputContext {
             active_modal: crate::Modal::Question,
             session_info_detail: false,
+            connection_info_detail: false,
             question_other_highlighted: false,
             history_clear_confirm: false,
             ..Default::default()
@@ -352,6 +354,7 @@ fn question_space_inserts_into_other_free_text_row() {
         InputContext {
             active_modal: crate::Modal::Question,
             session_info_detail: false,
+            connection_info_detail: false,
             question_other_highlighted: true,
             ..Default::default()
         },

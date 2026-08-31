@@ -17,7 +17,6 @@
 pub mod activity;
 pub mod btw;
 pub mod common;
-pub mod config;
 pub mod dashboard;
 pub mod help;
 pub mod history;
@@ -37,9 +36,10 @@ pub mod usage_stats;
 pub mod view_switcher;
 
 pub use activity::{ActivityModalView, draw_activity_modal};
-pub use config::{
+#[allow(unused_imports)]
+pub use crate::views::settings::{
     ConfigCategory, ConfigFocus, ConfigViewProps, build_websearch_provider_dropdown,
-    build_websearch_reader_dropdown, draw_config_view,
+    build_websearch_reader_dropdown, draw_settings_view,
 };
 pub use dashboard::{
     ConsoleCommand, ConsoleLine, ConsoleVerb, DashboardFocus, creation_order, draw_dashboard,

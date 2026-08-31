@@ -121,10 +121,10 @@ pub enum AgentRequest {
         api_key: crate::SecretString,
         user_agent: Option<String>,
         models: Vec<String>,
-        /// How the seeded channels authenticate. Default (`ApiKey`) keeps the
-        /// historical behavior; `XaiOAuth` marks SuperGrok channels whose live
+        /// How the connection authenticates. Default (`ApiKey`) keeps the
+        /// historical behavior; `XaiOAuth` marks SuperGrok connections whose live
         /// access token is resolved from `auth.toml`.
-        auth: crate::ChannelAuth,
+        auth: crate::ConnectionAuth,
         /// The stable preset id this connection is created from.
         #[serde(default)]
         preset_id: Option<String>,
@@ -142,7 +142,7 @@ pub enum AgentRequest {
     /// Run an OAuth login **before** a connection instance exists.
     AuthorizeOAuth {
         method: crate::LoginMethod,
-        auth: crate::ChannelAuth,
+        auth: crate::ConnectionAuth,
     },
     /// Edit a user-defined connection's metadata in place (display name, protocol,
     /// base URL, API key, client identity) without touching its model list.
@@ -233,6 +233,11 @@ pub enum AgentRequest {
     /// Request full detail for one session (the `i` session-info sub-view).
     /// The harness replies with [`AgentResponse::SessionDetail`].
     QuerySessionDetail {
+        id: String,
+    },
+    /// Request connection inspection details and live provider usage.
+    /// The reply is [`AgentResponse::ConnectionDetail`].
+    QueryConnectionDetail {
         id: String,
     },
     /// Request the current sessions-picker rows without changing frontend
@@ -426,6 +431,22 @@ pub struct WebSearchConfigUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub jina_api_key: Option<String>,
+    /// Optional search connection to upsert into `search_connections` in `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upsert_search_connection: Option<crate::WebSearchConnection>,
+    /// Optional search connection ID to delete from `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delete_search_connection: Option<String>,
+    /// Optional reader connection to upsert into `reader_connections` in `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upsert_reader_connection: Option<crate::WebReaderConnection>,
+    /// Optional reader connection ID to delete from `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delete_reader_connection: Option<String>,
 }
 
 /// The frontend-facing view of the effective `[websearch]` configuration.
@@ -455,6 +476,24 @@ pub struct WebSearchConfigView {
     pub bocha_api_key_set: bool,
     #[serde(default)]
     pub jina_api_key_set: bool,
+    /// Configured search connection instances from `search_connections` in `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_connections: Vec<crate::WebSearchConnection>,
+    /// Configured reader connection instances from `reader_connections` in `web_connections.toml`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reader_connections: Vec<crate::WebReaderConnection>,
+}
+
+impl WebSearchConfigView {
+    pub fn with_connections(
+        mut self,
+        search: Vec<crate::WebSearchConnection>,
+        reader: Vec<crate::WebReaderConnection>,
+    ) -> Self {
+        self.search_connections = search;
+        self.reader_connections = reader;
+        self
+    }
 }
 
 impl From<&crate::WebSearchConfig> for WebSearchConfigView {
@@ -475,6 +514,8 @@ impl From<&crate::WebSearchConfig> for WebSearchConfigView {
             tavily_api_key_set: is_set(&cfg.tavily_api_key),
             bocha_api_key_set: is_set(&cfg.bocha_api_key),
             jina_api_key_set: is_set(&cfg.jina_api_key),
+            search_connections: Vec::new(),
+            reader_connections: Vec::new(),
         }
     }
 }
@@ -640,6 +681,9 @@ pub enum AgentResponse {
     /// session (complete last prompt, title, timestamps). Consumed by the
     /// session-info sub-view.
     SessionDetail(SessionDetail),
+    /// Reply to [`AgentRequest::QueryConnectionDetail`]: full detail and usage
+    /// for one connection (identity, endpoint, auth, models, usage/balance).
+    ConnectionDetail(crate::ConnectionDetail),
     /// Reply to [`AgentRequest::QueryTokenUsage`]: the daemon-side token-source
     /// report for one session (per-round request usage, reported vs.
     /// estimated). Attached frontends hold no local ledger, so the
@@ -1501,9 +1545,9 @@ pub struct ProviderPickerRow {
     pub client_identity: crate::ClientIdentity,
     /// Unix epoch milliseconds of the last activation. `None` if never activated.
     pub last_used_ms: Option<u64>,
-    /// How the default channel authenticates.
+    /// How the connection authenticates.
     #[serde(default)]
-    pub auth: crate::ChannelAuth,
+    pub auth: crate::ConnectionAuth,
 }
 
 pub type ConnectionPickerRow = ProviderPickerRow;

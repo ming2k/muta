@@ -44,13 +44,10 @@ capability is expressed as **two orthogonal config axes**, not one pipeline:
    abstraction (`crates/neenee-agent/src/tools/reader/`), mirroring
    `SearchProvider`: one module + one match arm in `build_reader`, selected
    by a new `[websearch] reader` key.
-   - `reader = "builtin"` (default): the previous direct-fetch behaviour,
-     zero third-party dependency.
-   - `reader = "jina"`: delegate to `https://r.jina.ai/<url>` (optional
+   - `reader = "jina"` (default): delegate to `https://r.jina.ai/<url>` (optional
      `jina_api_key`), which renders JavaScript and extracts the main content
-     as Markdown. On Jina failure, `webfetch` falls back to the builtin path
-     and annotates the output, so a third-party outage degrades quality
-     instead of killing the tool.
+     as Markdown.
+   - `reader = "disabled"` / `"none"`: disable webfetch tool.
 
    So "Tavily + Jina" is expressed as `provider = "tavily"` **plus**
    `reader = "jina"` — the two axes compose freely with all six search

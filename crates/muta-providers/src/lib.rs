@@ -12,6 +12,7 @@
 mod list_models;
 pub mod oauth;
 mod registry;
+pub mod usage;
 
 pub use list_models::{
     DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
@@ -31,4 +32,8 @@ pub use registry::{
     OpenAiProviderSpec, PROVIDER_PRESET_SPECS, ProviderPresetSpec, XAI_BUILTIN_MODELS,
     ZAI_CODE_MODELS, build_provider_for_channel, openai_provider_spec, provider_preset_spec,
     route_for_model,
+};
+pub use usage::{
+    DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher, ProviderUsageFetcher,
+    SiliconFlowUsageFetcher, fetch_provider_usage,
 };

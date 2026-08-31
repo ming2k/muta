@@ -1,86 +1,287 @@
-//! Shared configuration schema for the web tools.
+//! Shared configuration and connection schema for the web tools.
 //!
-//! Lives in `muta-contracts` (not with the tool implementations) because both the
-//! app-layer
-//! `Config` (which owns the `[websearch]` table) and the tool implementations
-//! need the type, and we do not want `muta-persistence` to depend on
-//! `muta-agent`. It is plain serialisable data; the tool implementations
-//! live in `muta-agent::tools::web` and read this struct as input.
+//! Web search (breadth) and web fetch (depth) are decoupled into two orthogonal
+//! sets of connections and presets:
+//! - Search connections: declarations for search backends (Exa, Tavily, Bocha, SearXNG, DuckDuckGo, custom)
+//! - Reader connections: declarations for page reader / scraper backends (Jina, Firecrawl, custom)
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// User-tunable web-tool configuration, deserialized from the `[websearch]`
-/// table of `config.toml`. All fields default sensibly, so a `config.toml`
-/// with no `[websearch]` table (or a partially specified one) is valid.
-///
-/// # Where the keys live
-///
-/// `config.toml` is behavior-only and shareable; the six API keys are
-/// secrets and are **not** serialized here. They persist in
-/// `credentials.toml` under `[websearch]` (`muta-persistence::config`
-/// performs the load-time merge and the one-shot migration from the
-/// historical in-`[websearch]` spelling). The fields remain plain
-/// `Option<SecretString>` members so the in-memory shape every consumer
-/// reads is unchanged.
+/// A persisted Web Search Connection record (`search_connections` in `web_connections.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebSearchConnection {
+    /// Stable, unique connection identifier (e.g. "exa-default", "corp-searxng").
+    pub id: String,
+    /// Human-readable display name shown in pickers and UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "duckduckgo").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub preset_id: Option<String>,
+    /// Optional environment variable name supplying the API key (12-factor override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub api_key_env: Option<String>,
+    /// Custom search base URL / endpoint (e.g. SearXNG endpoint or private search cluster).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_url: Option<String>,
+    /// Optional custom HTTP headers sent with requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub custom_headers: Option<HashMap<String, String>>,
+    /// Whether this connection is active and enabled for search routing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// A persisted Web Reader Connection record (`reader_connections` in `web_connections.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebReaderConnection {
+    /// Stable, unique connection identifier (e.g. "my-jina", "corp-firecrawl").
+    pub id: String,
+    /// Human-readable display name shown in pickers and UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// Builtin preset identifier (e.g. "jina", "firecrawl").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub preset_id: Option<String>,
+    /// Optional environment variable name supplying the API key (12-factor override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub api_key_env: Option<String>,
+    /// Custom reader base URL / endpoint (e.g. self-hosted Firecrawl or Crawl4AI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_url: Option<String>,
+    /// Optional custom HTTP headers sent with requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub custom_headers: Option<HashMap<String, String>>,
+    /// Whether this connection is active and enabled for fetch routing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WebSearchConnection {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: None,
+            preset_id: None,
+            api_key_env: None,
+            base_url: None,
+            custom_headers: None,
+            enabled: true,
+        }
+    }
+}
+
+impl WebSearchConnection {
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    pub fn is_preset(&self) -> bool {
+        self.preset_id.is_some()
+    }
+}
+
+impl Default for WebReaderConnection {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: None,
+            preset_id: None,
+            api_key_env: None,
+            base_url: None,
+            custom_headers: None,
+            enabled: true,
+        }
+    }
+}
+
+impl WebReaderConnection {
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    pub fn is_preset(&self) -> bool {
+        self.preset_id.is_some()
+    }
+}
+
+/// Static template definition for a known builtin web search preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSearchPreset {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub default_endpoint: Option<&'static str>,
+    pub requires_credential: bool,
+    pub supports_anonymous: bool,
+    pub default_env_var: Option<&'static str>,
+    pub description: &'static str,
+}
+
+/// Registry of known builtin web search presets.
+pub struct WebSearchPresets;
+
+impl WebSearchPresets {
+    pub const ALL: &'static [WebSearchPreset] = &[
+        WebSearchPreset {
+            id: "exa",
+            display_name: "Exa Search",
+            default_endpoint: Some("https://mcp.exa.ai"),
+            requires_credential: false,
+            supports_anonymous: true,
+            default_env_var: Some("EXA_API_KEY"),
+            description: "Hosted MCP AI Search · Keyless anonymous default or with Exa API key",
+        },
+        WebSearchPreset {
+            id: "parallel",
+            display_name: "Parallel Search",
+            default_endpoint: Some("https://parallel-search.mcp.ai"),
+            requires_credential: false,
+            supports_anonymous: true,
+            default_env_var: Some("PARALLEL_API_KEY"),
+            description: "Hosted MCP Search · Keyless anonymous default or with Parallel API key",
+        },
+        WebSearchPreset {
+            id: "tavily",
+            display_name: "Tavily Search",
+            default_endpoint: Some("https://api.tavily.com/search"),
+            requires_credential: true,
+            supports_anonymous: false,
+            default_env_var: Some("TAVILY_API_KEY"),
+            description: "Hosted AI search API tailored for LLM agents · Requires Tavily API key",
+        },
+        WebSearchPreset {
+            id: "bocha",
+            display_name: "Bocha AI Search",
+            default_endpoint: Some("https://api.bochaai.com/v1/ai-search"),
+            requires_credential: true,
+            supports_anonymous: false,
+            default_env_var: Some("BOCHA_API_KEY"),
+            description: "Hosted AI search API · Directly reachable in mainland China without proxy",
+        },
+        WebSearchPreset {
+            id: "searxng",
+            display_name: "SearXNG",
+            default_endpoint: None,
+            requires_credential: false,
+            supports_anonymous: true,
+            default_env_var: None,
+            description: "Self-hosted privacy meta-search engine · Requires JSON endpoint URL",
+        },
+        WebSearchPreset {
+            id: "duckduckgo",
+            display_name: "DuckDuckGo",
+            default_endpoint: Some("https://html.duckduckgo.com/html"),
+            requires_credential: false,
+            supports_anonymous: true,
+            default_env_var: None,
+            description: "Keyless direct web scraping fallback",
+        },
+    ];
+
+    pub fn find(id: &str) -> Option<&'static WebSearchPreset> {
+        let norm = id.trim().to_ascii_lowercase();
+        Self::ALL
+            .iter()
+            .find(|p| p.id.eq_ignore_ascii_case(&norm) || (norm == "ddg" && p.id == "duckduckgo"))
+    }
+}
+
+/// Static template definition for a known builtin web reader preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebReaderPreset {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub default_endpoint: Option<&'static str>,
+    pub requires_credential: bool,
+    pub supports_anonymous: bool,
+    pub default_env_var: Option<&'static str>,
+    pub description: &'static str,
+}
+
+/// Registry of known builtin web reader presets.
+pub struct WebReaderPresets;
+
+impl WebReaderPresets {
+    pub const ALL: &'static [WebReaderPreset] = &[
+        WebReaderPreset {
+            id: "jina",
+            display_name: "Jina Reader",
+            default_endpoint: Some("https://r.jina.ai"),
+            requires_credential: false,
+            supports_anonymous: true,
+            default_env_var: Some("JINA_API_KEY"),
+            description: "Server-side JavaScript rendering, readability extraction, and Markdown conversion",
+        },
+        WebReaderPreset {
+            id: "firecrawl",
+            display_name: "Firecrawl",
+            default_endpoint: Some("https://api.firecrawl.dev/v1/scrape"),
+            requires_credential: true,
+            supports_anonymous: false,
+            default_env_var: Some("FIRECRAWL_API_KEY"),
+            description: "Hosted or self-hosted web scraping engine for LLMs",
+        },
+    ];
+
+    pub fn find(id: &str) -> Option<&'static WebReaderPreset> {
+        let norm = id.trim().to_ascii_lowercase();
+        Self::ALL.iter().find(|p| p.id.eq_ignore_ascii_case(&norm))
+    }
+}
+
+/// User-tunable web-tool configuration, deserialized from `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebSearchConfig {
-    /// Primary search backend. One of: `"exa"` (default; hosted MCP, anonymous
-    /// or an Exa key in `credentials.toml`), `"parallel"` (hosted MCP), `"duckduckgo"`
-    /// (best-effort scraping, frequently blocked), `"searxng"` (self-hosted,
-    /// keyless), or `"tavily"` (hosted API, requires a Tavily key), or `"bocha"`
-    /// (hosted AI search API, requires a Bocha key; directly reachable from
-    /// mainland China without a proxy).
+    /// Primary search backend or connection id. Default is `"exa"`.
     pub provider: String,
-    /// Optional proxy URL applied to both `webfetch` and `websearch`.
-    /// Supports `http://`, `https://`, `socks5://`, and `socks5h://`. Takes
-    /// precedence over the `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars.
+    /// Optional proxy URL applied to both `fetch_url` and `search_web`.
     pub proxy: Option<String>,
     /// Per-request timeout in seconds (default 20).
     pub timeout_secs: u64,
-    /// Exa API key (optional; anonymous use works without it).
-    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    /// Exa API key (optional). Persisted in `credentials.toml [websearch]`.
     #[serde(skip_serializing)]
     pub exa_api_key: Option<crate::SecretString>,
-    /// Parallel Search API key (optional; anonymous use works without it).
-    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    /// Parallel Search API key (optional). Persisted in `credentials.toml [websearch]`.
     #[serde(skip_serializing)]
     pub parallel_api_key: Option<crate::SecretString>,
-    /// SearXNG JSON search endpoint, e.g. `http://localhost:8080/search`.
-    /// Required when `provider = "searxng"`.
+    /// SearXNG JSON search endpoint. Required when `provider = "searxng"`.
     pub searxng_url: Option<String>,
     /// Tavily API key. Required when `provider = "tavily"`.
-    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
     #[serde(skip_serializing)]
     pub tavily_api_key: Option<crate::SecretString>,
-    /// Bocha AI Search API key (api.bochaai.com). Required when
-    /// `provider = "bocha"`. Directly reachable from mainland China networks,
-    /// so it works without a proxy. Persisted in `credentials.toml
-    /// [websearch]`, never in `config.toml`.
+    /// Bocha AI Search API key. Required when `provider = "bocha"`.
     #[serde(skip_serializing)]
     pub bocha_api_key: Option<crate::SecretString>,
-    /// Jina Reader API key (r.jina.ai). Optional — the reader works
-    /// anonymously with a lower rate limit; a key raises the quota.
-    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    /// Jina Reader API key (r.jina.ai). Optional.
     #[serde(skip_serializing)]
     pub jina_api_key: Option<crate::SecretString>,
-    /// Page-content backend used by `webfetch` for HTML pages. Default is
-    /// `"jina"` (r.jina.ai Reader: server-side rendering including
-    /// JavaScript, readability-style extraction, Markdown output; anonymous
-    /// access works with generous rate limits, or configured via `jina_api_key`),
-    /// or `"disabled"` / `"none"` to disable webfetch.
-    ///
-    /// This is the "depth" half of the two-stage research pipeline
-    /// (websearch = breadth, webfetch = depth); see ADR-0117.
+    /// Page-content backend used by `fetch_url`. Default is `"none"` (disabled).
     pub reader: String,
 }
 
 impl WebSearchConfig {
-    /// Extract the six secret keys from this table, leaving every field at
-    /// its default. Used by the persistence layer to move keys found in the
-    /// historical in-`config.toml` location into `credentials.toml`.
     pub fn secret_keys_only(&self) -> Self {
         Self {
             exa_api_key: self.exa_api_key.clone(),
@@ -105,36 +306,20 @@ impl Default for WebSearchConfig {
             tavily_api_key: None,
             bocha_api_key: None,
             jina_api_key: None,
-            reader: "jina".to_string(),
+            reader: "none".to_string(),
         }
     }
 }
 
-/// A process-wide, shared, hot-reloadable handle to the effective
-/// `[websearch]` configuration.
-///
-/// The web tools snapshot [`WebSearchConfig`] at construction time
-/// (bootstrap), but the runtime can now mutate the configuration live
-/// (`AgentRequest::UpdateWebSearchConfig`, and `/settings reload`). Rather
-/// than rebuilding the toolset, the tools hold this shared handle and
-/// re-derive their provider chain / HTTP client whenever the config's
-/// *signature* ([`WebSearchConfig::signature`]) changes — a cheap string
-/// comparison on the call path instead of a toolset rebuild.
-///
-/// The handle is intentionally tiny (`Arc<RwLock<...>>`) and lives in
-/// `muta-contracts` so both `muta-persistence` (config load) and
-/// `muta-agent` (tool construction) can share it without new crate edges.
+/// A process-wide, shared, hot-reloadable handle to the effective web configuration.
 #[derive(Debug, Clone, Default)]
 pub struct SharedWebSearchConfig(Arc<std::sync::RwLock<WebSearchConfig>>);
 
 impl SharedWebSearchConfig {
-    /// Wrap an initial effective configuration.
     pub fn new(initial: WebSearchConfig) -> Self {
         Self(Arc::new(std::sync::RwLock::new(initial)))
     }
 
-    /// Replace the effective configuration. Wakes every holders; the web
-    /// tools notice on their next call via the signature check.
     pub fn set(&self, config: WebSearchConfig) {
         *self
             .0
@@ -142,7 +327,6 @@ impl SharedWebSearchConfig {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
     }
 
-    /// Clone the effective configuration out.
     pub fn get(&self) -> WebSearchConfig {
         self.0
             .read()
@@ -152,20 +336,9 @@ impl SharedWebSearchConfig {
 }
 
 impl WebSearchConfig {
-    /// A canonical fingerprint of every field that changes how the web tools
-    /// behave (backends, keys presence, proxy, timeout, reader). Two configs
-    /// with equal signatures are interchangeable for tool construction, so
-    /// the tools compare signatures instead of whole structs and rebuild
-    /// their cached provider chain / HTTP client only when something actually
-    /// moved.
-    ///
-    /// Key material enters the signature only through its **presence** (and a
-    /// content hash, so changing a key is picked up) — the plaintext is
-    /// never part of the string.
     pub fn signature(&self) -> String {
         fn key(sig: Option<&crate::SecretString>) -> String {
             sig.map(|k| {
-                // Fingerprint, not the value: enough to detect a change.
                 let hash = std::collections::hash_map::DefaultHasher::new();
                 let mut hasher = hash;
                 std::hash::Hash::hash_slice(k.expose_secret().as_bytes(), &mut hasher);

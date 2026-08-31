@@ -20,7 +20,7 @@
 //!   row indices onto the body's line geometry for the renderer.
 
 use muta_contracts::{
-    ChannelAuth, ProviderModelInfo, ProviderPickerSnapshot, WireProtocol, baseline_models,
+    ConnectionAuth, ProviderModelInfo, ProviderPickerSnapshot, WireProtocol, baseline_models,
 };
 
 use crate::fuzzy;
@@ -84,9 +84,9 @@ pub struct ProviderPreset {
     /// Preset-specific user agent. Most providers use the default agent, but
     /// the coding-plan endpoints validate this header.
     pub user_agent: Option<&'static str>,
-    /// How seeded channels authenticate. `XaiOAuth` starts browser OAuth
+    /// How seeded connections authenticate. `XaiOAuth` starts browser OAuth
     /// before the name editor (OAuth-first add flow).
-    pub auth: muta_contracts::ChannelAuth,
+    pub auth: muta_contracts::ConnectionAuth,
 }
 
 impl ProviderPreset {
@@ -139,7 +139,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.anthropic.com/v1/messages"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "chatgpt-oauth",
@@ -152,7 +152,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://chatgpt.com/backend-api/codex/responses"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ChatGptOAuth,
+        auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
     },
     ProviderPreset {
         id: "deepseek",
@@ -165,7 +165,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.deepseek.com/v1/responses"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "copilot-oauth",
@@ -178,7 +178,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.githubcopilot.com/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::CopilotOAuth,
+        auth: muta_contracts::ConnectionAuth::CopilotOAuth,
     },
     ProviderPreset {
         id: "google",
@@ -191,7 +191,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "antigravity-oauth",
@@ -204,7 +204,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://daily-cloudcode-pa.googleapis.com"),
         user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
-        auth: muta_contracts::ChannelAuth::AntigravityOAuth,
+        auth: muta_contracts::ConnectionAuth::AntigravityOAuth,
     },
     ProviderPreset {
         id: "kimi-code",
@@ -217,7 +217,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
         user_agent: Some(muta_providers::OPENCODE_USER_AGENT),
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "openai",
@@ -230,7 +230,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.openai.com/v1/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "opencode-go",
@@ -243,7 +243,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "zai-code",
@@ -256,7 +256,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"),
         user_agent: Some(muta_providers::ZCODE_USER_AGENT),
-        auth: muta_contracts::ChannelAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
         id: "xai-oauth",
@@ -269,7 +269,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         needs_model: false,
         default_url: Some("https://api.x.ai/v1/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ChannelAuth::XaiOAuth,
+        auth: muta_contracts::ConnectionAuth::XaiOAuth,
     },
 ];
 
@@ -291,7 +291,7 @@ pub const CUSTOM_CONNECTION: ProviderPreset = ProviderPreset {
     needs_model: true,
     default_url: None,
     user_agent: None,
-    auth: muta_contracts::ChannelAuth::ApiKey,
+    auth: muta_contracts::ConnectionAuth::ApiKey,
 };
 
 /// Resolve either a curated preset or the standalone custom-connection
@@ -332,10 +332,10 @@ pub fn provider_type_label(preset_id: &str) -> Option<&'static str> {
 /// field is omitted — models, and their per-model reasoning, ADR-0046, are
 /// managed in the Models picker). For a preset provider (where endpoint and models
 /// are derived from the hardcoded preset spec), Base URL is fixed by the preset,
-/// so only Name and Token are offered. For an OAuth channel (ChatGPT/Codex, xAI,
+/// so only Name and Token are offered. For an OAuth connection (ChatGPT/Codex, xAI,
 /// Copilot, Antigravity) only Name is editable: the Base URL and Token are fixed by
 /// the auth flow and must not be hand-edited, so a rename is the only safe operation.
-pub fn edit_fields(is_preset: bool, auth: ChannelAuth) -> Vec<CustomField> {
+pub fn edit_fields(is_preset: bool, auth: ConnectionAuth) -> Vec<CustomField> {
     if auth.is_oauth() {
         vec![CustomField::Name]
     } else if is_preset {
@@ -1420,7 +1420,7 @@ mod tests {
     #[test]
     fn edit_fields_api_key_shows_name_url_token_for_custom_only() {
         // A pure-custom API-key provider exposes Name, Base URL, and Token.
-        let custom_fields = edit_fields(false, ChannelAuth::ApiKey);
+        let custom_fields = edit_fields(false, ConnectionAuth::ApiKey);
         assert_eq!(
             custom_fields,
             vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
@@ -1428,21 +1428,21 @@ mod tests {
 
         // A preset API-key provider derives its Base URL from the preset spec,
         // so it only exposes Name and Token.
-        let preset_fields = edit_fields(true, ChannelAuth::ApiKey);
+        let preset_fields = edit_fields(true, ConnectionAuth::ApiKey);
         assert_eq!(preset_fields, vec![CustomField::Name, CustomField::Token]);
     }
 
     #[test]
     fn edit_fields_oauth_shows_name_only() {
-        // An OAuth channel's endpoint and bearer are owned by the auth flow
+        // An OAuth connection's endpoint and bearer are owned by the auth flow
         // (xAI `https://api.x.ai/...`, ChatGPT
         // `https://chatgpt.com/backend-api/codex/...`). The editor must expose
         // only a rename, so the server-side guard is never the lone defense
         // against wiping them.
-        let xai = edit_fields(true, ChannelAuth::XaiOAuth);
+        let xai = edit_fields(true, ConnectionAuth::XaiOAuth);
         assert_eq!(xai, vec![CustomField::Name]);
 
-        let chatgpt = edit_fields(true, ChannelAuth::ChatGptOAuth);
+        let chatgpt = edit_fields(true, ConnectionAuth::ChatGptOAuth);
         assert_eq!(chatgpt, vec![CustomField::Name]);
     }
 

@@ -1591,6 +1591,7 @@ dependencies = [
  "muta-platform",
  "muta-providers",
  "muta-skills",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",

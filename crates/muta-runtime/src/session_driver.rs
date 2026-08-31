@@ -610,6 +610,12 @@ impl SessionDriver {
                         crate::handlers_session::detail(&session, &resp_tx, id).await;
                     });
                 }
+                AgentRequest::QueryConnectionDetail { id } => {
+                    let resp_tx = resp_tx.clone();
+                    tokio::spawn(async move {
+                        crate::handlers_provider::query_connection_detail(&resp_tx, id).await;
+                    });
+                }
                 AgentRequest::QuerySessionsOverview => {
                     let session = session.clone();
                     let resp_tx = resp_tx.clone();

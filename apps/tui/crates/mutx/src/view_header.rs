@@ -347,13 +347,11 @@ pub(crate) fn draw_view_header_hints(
 
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
-        let right_key = crate::components::keycap::keycap_span(theme, "C-x b");
-        let right_desc = Span::styled(" view  ", Style::default().fg(theme.muted()));
-        let back_key = crate::components::keycap::keycap_span(theme, "Esc");
-        let back_desc = Span::styled(" close", Style::default().fg(theme.muted()));
+        let right_key = crate::components::keycap::keycap_span(theme, "C-x");
+        let right_pad = Span::styled("   ", fill);
 
         let left_len = crumbs.width() + 3;
-        let right_len = 22;
+        let right_len = 3 + 3;
         let pad_len = (rect.width as usize).saturating_sub(left_len + right_len);
         let pad = " ".repeat(pad_len);
 
@@ -361,9 +359,7 @@ pub(crate) fn draw_view_header_hints(
             left,
             Span::raw(pad),
             right_key,
-            right_desc,
-            back_key,
-            back_desc,
+            right_pad,
         ]);
         frame.render_widget(Paragraph::new(line).style(fill), rect);
         return;
@@ -402,7 +398,7 @@ pub(crate) fn draw_view_header_hints(
             pairs
         }
         ViewKind::Runner => Vec::new(),
-        ViewKind::Settings => vec![("Esc", "close")],
+        ViewKind::Settings => vec![("C-x", "")],
     };
 
     let width = rect.width as usize;
@@ -412,7 +408,7 @@ pub(crate) fn draw_view_header_hints(
             let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
             let pairs_width: usize = chosen
                 .iter()
-                .map(|(key, label)| key.width() + 1 + label.width())
+                .map(|(key, label)| key.width() + if label.is_empty() { 0 } else { 1 + label.width() })
                 .sum();
             let needed =
                 note_width + pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
@@ -427,7 +423,7 @@ pub(crate) fn draw_view_header_hints(
     let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
     let pairs_width: usize = chosen
         .iter()
-        .map(|(key, label)| key.width() + 1 + label.width())
+        .map(|(key, label)| key.width() + if label.is_empty() { 0 } else { 1 + label.width() })
         .sum();
     let gaps =
         ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };
@@ -443,7 +439,9 @@ pub(crate) fn draw_view_header_hints(
             spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
         }
         spans.push(Span::styled(*key, key_style));
-        spans.push(Span::styled(format!(" {label}"), hint_style));
+        if !label.is_empty() {
+            spans.push(Span::styled(format!(" {label}"), hint_style));
+        }
     }
     spans.push(Span::styled(
         " ".repeat(width.saturating_sub(margin + content_width)),
@@ -768,8 +766,9 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(row.contains("Main › Runner[explore]"));
-        assert!(row.contains("C-x b"));
-        assert!(row.contains("Esc"));
+        assert!(row.contains("C-x"));
+        assert!(!row.contains("Esc"));
+        assert!(!row.contains("C-x b"));
     }
 
     #[test]

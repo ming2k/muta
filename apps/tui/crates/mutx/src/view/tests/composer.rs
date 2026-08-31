@@ -1941,7 +1941,7 @@ fn composer_panel_degrades_gracefully_on_narrow_widths() {
 
 #[test]
 fn composer_top_row_renders_history_mode_badges() {
-    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints, QueueEditKind};
 
     // HistorySearch mode badge on row 0 right side
     let search_hints = ComposerHints {
@@ -1955,15 +1955,19 @@ fn composer_top_row_renders_history_mode_badges() {
         "top row has history search badge: {row0:?}"
     );
 
-    // HistoryRecall mode badge on row 0 right side
-    let recall_hints = ComposerHints {
-        compose_target: ComposeTarget::HistoryRecall { index: 2, total: 5 },
+    // QueueEdit mode badge on row 0 right side
+    let edit_hints = ComposerHints {
+        compose_target: ComposeTarget::QueueEdit {
+            kind: QueueEditKind::FollowUp,
+            number: 1,
+            dirty: false,
+        },
         ..Default::default()
     };
-    let mut recall_terminal = draw_frame_composer("recalled", true, recall_hints);
-    let recall_row0 = frame_row_text(&mut recall_terminal, 0);
+    let mut edit_terminal = draw_frame_composer("follow up text", true, edit_hints);
+    let edit_row0 = frame_row_text(&mut edit_terminal, 0);
     assert!(
-        recall_row0.contains("[history 2/5 · draft saved]"),
-        "top row has history recall badge: {recall_row0:?}"
+        edit_row0.contains("[edit: follow-up #1 · draft saved]"),
+        "top row has queue edit badge: {edit_row0:?}"
     );
 }

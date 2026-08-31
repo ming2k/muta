@@ -94,8 +94,7 @@ impl App {
             && !(active_panel == Some(crate::surfaces::PanelId::Telemetry)
                 && (self.telemetry_detail || self.telemetry_turn.is_some()))
             && !(view == View::Settings
-                && (self.config_custom_editing
-                    || self.config_dropdown.is_some()
+                && (self.config_dropdown.is_some()
                     || self.config_focus == crate::overlays::ConfigFocus::Detail))
     }
 
@@ -392,12 +391,6 @@ impl App {
             }
             crate::surfaces::View::Settings => {
                 self.config_dropdown = None;
-                if self.config_custom_editing {
-                    self.theme =
-                        Theme::from_color_scheme(&self.color_scheme, &self.custom_color_scheme);
-                    self.custom_color_draft = self.custom_color_scheme.clone();
-                    self.config_custom_editing = false;
-                }
             }
             crate::surfaces::View::Session
             | crate::surfaces::View::Runner
@@ -423,6 +416,11 @@ impl App {
             self.session_info_detail = false;
             self.session_detail = None;
             self.session_info_scroll = 0;
+        }
+        if id == crate::surfaces::PanelId::Connections {
+            self.connection_info_detail = false;
+            self.connection_detail = None;
+            self.connection_info_scroll = 0;
         }
         if id == crate::surfaces::PanelId::Telemetry {
             self.telemetry_tab = crate::modal::TelemetryTab::Overview;
@@ -560,15 +558,6 @@ impl App {
                 self.config_dropdown = None;
                 true
             }
-            Modal::Config if self.config_custom_editing => {
-                self.config_custom_editing = false;
-                self.theme =
-                    Theme::from_color_scheme(&self.color_scheme, &self.custom_color_scheme);
-                self.custom_color_draft = self.custom_color_scheme.clone();
-                self.input.clear();
-                self.set_cursor(0);
-                true
-            }
             Modal::Config if self.config_focus == crate::overlays::ConfigFocus::Detail => {
                 self.config_focus = crate::overlays::ConfigFocus::Categories;
                 true
@@ -606,6 +595,12 @@ impl App {
                 self.session_info_detail = false;
                 self.session_detail = None;
                 self.session_info_scroll = 0;
+                true
+            }
+            Modal::Connections if self.connection_info_detail => {
+                self.connection_info_detail = false;
+                self.connection_detail = None;
+                self.connection_info_scroll = 0;
                 true
             }
             _ => false,

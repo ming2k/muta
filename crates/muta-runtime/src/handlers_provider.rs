@@ -56,7 +56,7 @@ pub(crate) struct AddProviderParams {
     pub api_key: SecretString,
     pub user_agent: Option<String>,
     pub models: Vec<String>,
-    pub auth: muta_contracts::ChannelAuth,
+    pub auth: muta_contracts::ConnectionAuth,
     pub preset_id: Option<String>,
     pub client_identity: Option<ClientIdentity>,
 }
@@ -188,7 +188,7 @@ pub(crate) async fn add(
     let trimmed_key = api_key.expose_secret().trim();
     // Pasted API key on an OAuth preset → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
-        (a, true) if a.is_oauth() => muta_contracts::ChannelAuth::ApiKey,
+        (a, true) if a.is_oauth() => muta_contracts::ConnectionAuth::ApiKey,
         (other, _) => other,
     };
     let base_url = {
@@ -249,7 +249,7 @@ pub(crate) async fn add(
         tracing::warn!("add: could not persist connection");
     }
     // The connection's credential, if the user supplied one.
-    if auth == muta_contracts::ChannelAuth::ApiKey && !trimmed_key.is_empty() {
+    if auth == muta_contracts::ConnectionAuth::ApiKey && !trimmed_key.is_empty() {
         let mut creds = Credentials::load();
         creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
         if creds.save().is_err() {
@@ -277,7 +277,7 @@ pub(crate) async fn add(
     // shows the account's real entitlements immediately rather than the seed
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
-    if auth.is_oauth() && auth != muta_contracts::ChannelAuth::AntigravityOAuth {
+    if auth.is_oauth() && auth != muta_contracts::ConnectionAuth::AntigravityOAuth {
         let outcome = catalog::discover_provider_models(true).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
@@ -721,7 +721,7 @@ pub async fn reapply_session_selection(
 pub async fn authorize(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     method: muta_contracts::LoginMethod,
-    auth: muta_contracts::ChannelAuth,
+    auth: muta_contracts::ConnectionAuth,
 ) {
     let Some(cfg) = auth
         .oauth_provider_id()
@@ -1192,6 +1192,116 @@ pub async fn refresh_models(
         config,
         provider_usage,
     )));
+}
+
+/// Mask an API key for safe display (e.g. `sk-12...abcd`).
+fn mask_api_key(key: &str) -> Option<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= 8 {
+        Some("********".to_string())
+    } else {
+        Some(format!("{}...{}", &trimmed[..4], &trimmed[trimmed.len() - 4..]))
+    }
+}
+
+/// `AgentRequest::QueryConnectionDetail` — return connection details and query live provider usage.
+pub(crate) async fn query_connection_detail(
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    id: String,
+) {
+    let stores = catalog::Stores::load();
+    let Some(connection) = stores.connections.get(&id) else {
+        return;
+    };
+
+    let entry = catalog::derive_entry(connection, &stores.cache, &stores.routes, &stores.creds);
+    let (protocol, base_url) = entry
+        .default_channel()
+        .map(|c| match &c.transport {
+            muta_agent::Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
+            muta_agent::Transport::OpenAiResponses { base_url, .. } => {
+                ("openai_responses".to_string(), base_url.clone())
+            }
+            muta_agent::Transport::Anthropic { base_url, .. } => {
+                ("anthropic".to_string(), base_url.clone())
+            }
+            muta_agent::Transport::Google { base_url, .. } => {
+                ("google".to_string(), base_url.clone())
+            }
+        })
+        .unwrap_or_else(|| {
+            let p = connection.protocol.unwrap_or(WireProtocol::OpenAiChatCompletions);
+            (p.to_string(), connection.base_url.clone().unwrap_or_default())
+        });
+
+    let preset_label = connection
+        .preset_id
+        .as_deref()
+        .and_then(muta_providers::provider_preset_spec)
+        .map(|spec| spec.id.to_string());
+
+    let raw_key = catalog::resolve_credential(connection, &stores.creds);
+    let api_key_masked = mask_api_key(raw_key.expose_secret());
+
+    let api_key_source = if connection.auth.is_oauth() {
+        "OAuth".to_string()
+    } else if let Some(env) = connection.api_key_env.as_deref() {
+        if std::env::var(env).is_ok() {
+            format!("Environment (${env})")
+        } else {
+            format!("Missing (${env} not set)")
+        }
+    } else if stores.creds.api_key(&connection.id).is_some() {
+        "credentials.toml".to_string()
+    } else {
+        "Not configured".to_string()
+    };
+
+    let user_agent = entry
+        .default_channel()
+        .map(|c| c.transport.user_agent().to_string())
+        .filter(|ua| !ua.is_empty())
+        .unwrap_or_else(|| connection.client_identity.user_agent().to_string());
+
+    let models = entry.channels.iter().map(|c| c.model.clone()).collect::<Vec<_>>();
+    let active_model = entry.default_channel().map(|c| c.model.clone());
+
+    let usage = muta_providers::fetch_provider_usage(
+        connection.preset_id.as_deref(),
+        &base_url,
+        raw_key.expose_secret(),
+    )
+    .await;
+
+    let auth_type = if connection.auth.is_oauth() {
+        format!("OAuth ({:?})", connection.auth)
+    } else if connection.api_key_env.is_some() {
+        "API Key (Environment)".to_string()
+    } else {
+        "API Key".to_string()
+    };
+
+    let detail = muta_contracts::ConnectionDetail {
+        id: connection.id.clone(),
+        name: connection.display_name().to_string(),
+        preset_id: connection.preset_id.clone(),
+        preset_label,
+        protocol,
+        base_url,
+        auth_type,
+        api_key_masked,
+        api_key_source,
+        client_identity: connection.client_identity.clone(),
+        user_agent,
+        models,
+        active_model,
+        usage,
+    };
+
+    let _ = resp_tx.send(AgentResponse::ConnectionDetail(detail));
 }
 
 #[cfg(test)]

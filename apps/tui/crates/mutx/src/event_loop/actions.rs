@@ -20,18 +20,19 @@ use crate::view;
 use crate::view::Theme;
 use crate::{App, Modal};
 
-use super::{
-    UiRuntime, activate_picked_model, extract_selection_text, handle_permission_submit,
-    modal_page_step, question_effects, resolve_focused_mut, show_local_toast,
-};
+use super::runtime::UiRuntime;
+use super::sync::show_local_toast;
+use super::transcript::{extract_selection_text, resolve_focused_mut};
 
 mod commands;
 mod host;
 mod modals;
 mod mouse;
 
-#[cfg(test)]
-pub(crate) use mouse::handle_selection_end_for_test;
+pub(crate) use modals::{
+    activate_picked_model, effective_reasoning_effort, handle_permission_submit, modal_page_step,
+    question_effects,
+};
 
 pub(crate) use commands::handle_esc_interrupt;
 pub(super) use commands::split_command_word;
@@ -620,7 +621,15 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::RefreshProviderModels => {
-            if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
+            if app.active_modal() == Modal::Connections && app.connection_info_detail {
+                let providers = app.providers_filtered();
+                if let Some(ranked) = providers.get(app.modal_index.min(providers.len().saturating_sub(1))) {
+                    app.connection_detail = None;
+                    let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
+                        id: ranked.id.clone(),
+                    });
+                }
+            } else if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
                 let _ = app.tx.send(AgentRequest::RefreshProviderModels {
                     user_initiated: true,
                 });
@@ -807,12 +816,17 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::ConfigActivate => {
             if app.active_modal() == Modal::Config {
+                let ws_path = if app.current_workspace.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&app.current_workspace))
+                };
                 match app.config_focus {
                     crate::overlays::ConfigFocus::Categories => {
                         app.config_focus = crate::overlays::ConfigFocus::Detail;
                         if app.config_category == 0 {
                             app.config_detail_index =
-                                Theme::color_scheme_index(&app.color_scheme);
+                                Theme::color_scheme_index_with_workspace(&app.color_scheme, ws_path);
                         } else {
                             app.config_detail_index = 0;
                         }
@@ -821,62 +835,23 @@ pub(super) async fn dispatch_action(
                         match app.config_category {
                             0 => {
                                 // Appearance category:
-                                let schemes = Theme::available_color_schemes();
-                                let sel_idx = app.config_detail_index % schemes.len();
+                                let schemes = Theme::available_color_schemes_with_workspace(ws_path);
+                                let sel_idx = app.config_detail_index % schemes.len().max(1);
                                 if let Some(scheme) = schemes.get(sel_idx) {
-                                    let is_custom = scheme.id == "custom";
-                                    if is_custom {
-                                        if !app.config_custom_editing {
-                                            app.config_custom_editing = true;
-                                            app.custom_color_draft =
-                                                app.custom_color_scheme.clone();
-                                            app.input = Theme::custom_color_value(
-                                                &app.custom_color_draft,
-                                                0,
-                                            )
-                                            .unwrap_or("#000000")
-                                            .to_string();
-                                            app.set_cursor_end();
-                                        } else if Theme::set_custom_color_value(
-                                            &mut app.custom_color_draft,
-                                            app.config_detail_index
-                                                .saturating_sub(schemes.len())
-                                                .min(7),
-                                            &app.input,
-                                        ) {
-                                            app.custom_color_scheme =
-                                                app.custom_color_draft.clone();
-                                            app.color_scheme = "custom".to_string();
-                                            app.theme = Theme::from_color_scheme(
-                                                "custom",
-                                                &app.custom_color_scheme,
-                                            );
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateTuiColorScheme {
-                                                    name: app.color_scheme.clone(),
-                                                    custom: app.custom_color_scheme.clone(),
-                                                },
-                                            );
-                                            app.config_custom_editing = false;
-                                            app.save_tui_config();
-                                            app.input.clear();
-                                            app.set_cursor(0);
-                                        }
-                                    } else {
-                                        let name = &scheme.id;
-                                        app.color_scheme = name.to_string();
-                                        app.theme = Theme::from_color_scheme(
-                                            name.as_ref(),
-                                            &app.custom_color_scheme,
-                                        );
-                                        let _ = app.tx.send(
-                                            AgentRequest::UpdateTuiColorScheme {
-                                                name: app.color_scheme.clone(),
-                                                custom: app.custom_color_scheme.clone(),
-                                            },
-                                        );
-                                        app.save_tui_config();
-                                    }
+                                    let name = &scheme.id;
+                                    app.color_scheme = name.to_string();
+                                    app.theme = Theme::from_color_scheme_with_workspace(
+                                        name.as_ref(),
+                                        &app.custom_color_scheme,
+                                        ws_path,
+                                    );
+                                    let _ = app.tx.send(
+                                        AgentRequest::UpdateTuiColorScheme {
+                                            name: app.color_scheme.clone(),
+                                            custom: app.custom_color_scheme.clone(),
+                                        },
+                                    );
+                                    app.save_tui_config();
                                 }
                             }
                             1 if app.config_detail_index == 1 => {
@@ -890,60 +865,124 @@ pub(super) async fn dispatch_action(
                                 app.save_tui_config();
                             }
                             3 => {
-                                // Web Tools category:
-                                // 0: Web Search Backend Dropdown
-                                // 1: Web Fetch Reader Dropdown
-                                // 2: Timeout (+5s cycle)
-                                match app.config_detail_index {
-                                    0 => {
-                                        let current = app
-                                            .websearch_config
-                                            .as_ref()
-                                            .map(|ws| ws.provider.as_str())
-                                            .unwrap_or("exa");
-                                        let dropdown =
-                                            crate::overlays::build_websearch_provider_dropdown(
-                                                current,
-                                                app.websearch_config.as_ref(),
-                                            );
-                                        let anchor =
-                                            crate::components::dropdown::DropdownAnchor::center_screen();
-                                        app.config_dropdown = Some((dropdown, anchor));
+                                // Web category (Category 3):
+                                // Segment 0 = Search, Segment 1 = Fetch
+                                if app.config_web_segment == 0 {
+                                    // ── Search Segment ─────────────────────────
+                                    match app.config_detail_index {
+                                        0 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.provider.as_str())
+                                                .unwrap_or("exa");
+                                            let dropdown =
+                                                crate::views::settings::build_websearch_provider_dropdown(
+                                                    current,
+                                                    app.websearch_config.as_ref(),
+                                                );
+                                            let anchor =
+                                                crate::components::dropdown::DropdownAnchor::center_screen();
+                                            app.config_dropdown = Some((dropdown, anchor));
+                                        }
+                                        1 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.timeout_secs)
+                                                .unwrap_or(20);
+                                            let next = if current >= 120 { 5 } else { (current + 5).max(5) };
+                                            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                                Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                    timeout_secs: Some(next),
+                                                    ..Default::default()
+                                                }),
+                                            ));
+                                        }
+                                        2 => {
+                                            let dropdown =
+                                                crate::views::settings::build_add_web_connection_dropdown(0);
+                                            let anchor =
+                                                crate::components::dropdown::DropdownAnchor::center_screen();
+                                            app.config_dropdown = Some((dropdown, anchor));
+                                        }
+                                        idx if idx >= 3 => {
+                                            let conn_idx = idx - 3;
+                                            if let Some(conn) = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .and_then(|ws| ws.search_connections.get(conn_idx))
+                                            {
+                                                let _ = app.tx.send(
+                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                        muta_contracts::WebSearchConfigUpdate {
+                                                            provider: Some(conn.id.clone()),
+                                                            ..Default::default()
+                                                        },
+                                                    )),
+                                                );
+                                            }
+                                        }
+                                        _ => {}
                                     }
-                                    1 => {
-                                        let current = app
-                                            .websearch_config
-                                            .as_ref()
-                                            .map(|ws| ws.reader.as_str())
-                                            .unwrap_or("jina");
-                                        let dropdown =
-                                            crate::overlays::build_websearch_reader_dropdown(
-                                                current,
-                                                app.websearch_config.as_ref(),
-                                            );
-                                        let anchor =
-                                            crate::components::dropdown::DropdownAnchor::center_screen();
-                                        app.config_dropdown = Some((dropdown, anchor));
+                                } else {
+                                    // ── Fetch Segment ──────────────────────────
+                                    match app.config_detail_index {
+                                        0 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.reader.as_str())
+                                                .unwrap_or("none");
+                                            let dropdown =
+                                                crate::views::settings::build_websearch_reader_dropdown(
+                                                    current,
+                                                    app.websearch_config.as_ref(),
+                                                );
+                                            let anchor =
+                                                crate::components::dropdown::DropdownAnchor::center_screen();
+                                            app.config_dropdown = Some((dropdown, anchor));
+                                        }
+                                        1 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.timeout_secs)
+                                                .unwrap_or(20);
+                                            let next = if current >= 120 { 5 } else { (current + 5).max(5) };
+                                            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                                Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                    timeout_secs: Some(next),
+                                                    ..Default::default()
+                                                }),
+                                            ));
+                                        }
+                                        2 => {
+                                            let dropdown =
+                                                crate::views::settings::build_add_web_connection_dropdown(1);
+                                            let anchor =
+                                                crate::components::dropdown::DropdownAnchor::center_screen();
+                                            app.config_dropdown = Some((dropdown, anchor));
+                                        }
+                                        idx if idx >= 3 => {
+                                            let conn_idx = idx - 3;
+                                            if let Some(conn) = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .and_then(|ws| ws.reader_connections.get(conn_idx))
+                                            {
+                                                let _ = app.tx.send(
+                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                        muta_contracts::WebSearchConfigUpdate {
+                                                            reader: Some(conn.id.clone()),
+                                                            ..Default::default()
+                                                        },
+                                                    )),
+                                                );
+                                            }
+                                        }
+                                        _ => {}
                                     }
-                                    2 => {
-                                        let current = app
-                                            .websearch_config
-                                            .as_ref()
-                                            .map(|ws| ws.timeout_secs)
-                                            .unwrap_or(20);
-                                        let next = if current >= 120 {
-                                            5
-                                        } else {
-                                            (current + 5).max(5)
-                                        };
-                                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
-                                            Box::new(muta_contracts::WebSearchConfigUpdate {
-                                                timeout_secs: Some(next),
-                                                ..Default::default()
-                                            }),
-                                        ));
-                                    }
-                                    _ => {}
                                 }
                             }
                             _ => {}
@@ -952,34 +991,75 @@ pub(super) async fn dispatch_action(
                 }
             }
         }
+        input::InputAction::ConfigDeleteConnection => {
+            if app.active_modal() == Modal::Config
+                && app.config_category == 3
+                && app.config_detail_index >= 3
+            {
+                let conn_idx = app.config_detail_index - 3;
+                if app.config_web_segment == 0 {
+                    if let Some(conn) = app
+                        .websearch_config
+                        .as_ref()
+                        .and_then(|ws| ws.search_connections.get(conn_idx))
+                    {
+                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(
+                            muta_contracts::WebSearchConfigUpdate {
+                                delete_search_connection: Some(conn.id.clone()),
+                                ..Default::default()
+                            },
+                        )));
+                    }
+                } else if let Some(conn) = app
+                    .websearch_config
+                    .as_ref()
+                    .and_then(|ws| ws.reader_connections.get(conn_idx))
+                {
+                    let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(
+                        muta_contracts::WebSearchConfigUpdate {
+                            delete_reader_connection: Some(conn.id.clone()),
+                            ..Default::default()
+                        },
+                    )));
+                }
+            }
+        }
+        input::InputAction::ConfigSegmentPrev => {
+            if app.active_modal() == Modal::Config && app.config_category == 3 {
+                app.config_web_segment = 0;
+                app.config_detail_index = 0;
+                app.config_detail_scroll = 0;
+            }
+        }
+        input::InputAction::ConfigSegmentNext => {
+            if app.active_modal() == Modal::Config && app.config_category == 3 {
+                app.config_web_segment = 1;
+                app.config_detail_index = 0;
+                app.config_detail_scroll = 0;
+            }
+        }
         input::InputAction::ConfigBack => {
             if app.active_modal() == Modal::Config {
                 if app.config_dropdown.is_some() {
                     app.config_dropdown = None;
-                } else if app.config_custom_editing {
-                    app.config_custom_editing = false;
-                    app.theme =
-                        Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
-                    app.custom_color_draft = app.custom_color_scheme.clone();
-                    app.input.clear();
-                    app.set_cursor(0);
                 } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
                     if app.config_category == 0 {
                         // Revert preview theme to persisted color scheme
-                        app.theme = Theme::from_color_scheme(
+                        let ws_path = if app.current_workspace.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::Path::new(&app.current_workspace))
+                        };
+                        app.theme = Theme::from_color_scheme_with_workspace(
                             &app.color_scheme,
                             &app.custom_color_scheme,
+                            ws_path,
                         );
                         app.config_detail_index =
-                            Theme::color_scheme_index(&app.color_scheme);
+                            Theme::color_scheme_index_with_workspace(&app.color_scheme, ws_path);
                     }
                     app.config_focus = crate::overlays::ConfigFocus::Categories;
                 } else {
-                    // Leaving the Settings view (its innermost back step):
-                    // the shared dismiss verb (ADR-0133) — hide with the
-                    // pane/category state retained for the next open. The
-                    // custom-colour transaction (if any) was already
-                    // discarded by the first branch on the way out.
                     app.dismiss_surface();
                 }
             }
@@ -1239,6 +1319,17 @@ pub(super) async fn dispatch_action(
                 app.session_info_scroll = 0;
                 let _ = app.tx.send(AgentRequest::QuerySessionDetail {
                     id: session.id.clone(),
+                });
+            }
+        }
+        input::InputAction::OpenConnectionDetail => {
+            let providers = app.providers_filtered();
+            if let Some(ranked) = providers.get(app.modal_index.min(providers.len().saturating_sub(1))) {
+                app.connection_info_detail = true;
+                app.connection_detail = None;
+                app.connection_info_scroll = 0;
+                let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
+                    id: ranked.id.clone(),
                 });
             }
         }
@@ -1756,17 +1847,6 @@ pub(super) async fn dispatch_action(
             // list as the query changes.
             if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal() == Modal::Config
-                && app.config_custom_editing
-                && Theme::set_custom_color_value(
-                    &mut app.custom_color_draft,
-                    app.config_detail_index
-                        .saturating_sub(Theme::available_color_schemes().len())
-                        .min(7),
-                    &app.input,
-                )
-            {
-                app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
             }
             app.suggestion_index = None;
             // The user is editing again, so live completions are
@@ -1785,17 +1865,6 @@ pub(super) async fn dispatch_action(
         input::InputAction::Backspace => {
             if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal() == Modal::Config
-                && app.config_custom_editing
-                && Theme::set_custom_color_value(
-                    &mut app.custom_color_draft,
-                    app.config_detail_index
-                        .saturating_sub(Theme::available_color_schemes().len())
-                        .min(7),
-                    &app.input,
-                )
-            {
-                app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
             }
             app.suggestion_index = None;
             app.completion_dismissed = false;
@@ -1816,17 +1885,6 @@ pub(super) async fn dispatch_action(
             // forward delete may have orphaned a staged entry).
             if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal() == Modal::Config
-                && app.config_custom_editing
-                && Theme::set_custom_color_value(
-                    &mut app.custom_color_draft,
-                    app.config_detail_index
-                        .saturating_sub(Theme::available_color_schemes().len())
-                        .min(7),
-                    &app.input,
-                )
-            {
-                app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
             }
             app.suggestion_index = None;
             app.completion_dismissed = false;
@@ -1912,10 +1970,6 @@ pub(super) async fn dispatch_action(
             // press (so ↓ can restore it).
             let session_rows = app.current_session_history();
             app.history_prev(&session_rows);
-        }
-        input::InputAction::HistoryCancel => {
-            // Esc during inline history recall: immediately cancel recall and restore draft.
-            app.cancel_history_recall();
         }
         input::InputAction::QueuePointerCancel => {
             // Esc during queue pointer edit: immediately dissolve pointer and restore draft.
@@ -2363,8 +2417,14 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
         View::Settings => {
             app.config_focus = crate::overlays::ConfigFocus::Categories;
             app.config_category = 0;
-            app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
-            app.config_custom_editing = false;
+            app.config_detail_index = Theme::color_scheme_index_with_workspace(
+                &app.color_scheme,
+                if app.current_workspace.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&app.current_workspace))
+                },
+            );
             app.config_scroll = 0;
             app.config_detail_scroll = 0;
             app.config_dropdown = None;

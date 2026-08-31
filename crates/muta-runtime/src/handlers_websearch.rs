@@ -40,19 +40,25 @@ use tokio::sync::mpsc;
 /// falling back to Exa at call time.
 const KNOWN_BACKENDS: &[&str] = &[
     "exa",
+    "exa-default",
     "parallel",
+    "parallel-default",
     "duckduckgo",
+    "duckduckgo-builtin",
     "ddg",
     "searxng",
+    "searxng-default",
     "tavily",
+    "tavily-default",
     "bocha",
+    "bocha-default",
     "none",
     "(none)",
     "disabled",
 ];
 
 /// Known reader names accepted by `[websearch] reader`.
-const KNOWN_READERS: &[&str] = &["jina", "none", "(none)", "disabled"];
+const KNOWN_READERS: &[&str] = &["jina", "jina-default", "none", "(none)", "disabled"];
 
 fn validate_backend(label: &str, name: &str) -> Result<(), String> {
     if KNOWN_BACKENDS.contains(&name) {
@@ -67,7 +73,9 @@ fn validate_backend(label: &str, name: &str) -> Result<(), String> {
 
 /// `AgentRequest::QueryWebSearchConfig`.
 pub fn query(config: &Config, resp_tx: &mpsc::UnboundedSender<AgentResponse>) {
-    let view = WebSearchConfigView::from(&config.websearch);
+    let conns = muta_persistence::web_connections::WebConnections::load();
+    let view = WebSearchConfigView::from(&config.websearch)
+        .with_connections(conns.search_connections, conns.reader_connections);
     let _ = resp_tx.send(AgentResponse::WebSearchConfigSnapshot(view));
 }
 
@@ -84,7 +92,7 @@ pub async fn update(
     update: WebSearchConfigUpdate,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
 ) {
-    // ── 1. Validate against the *current* effective config ──────────────
+    // 1. Validate against current effective config
     let mut next: WebSearchConfig = config.websearch.clone();
     if let Some(provider) = update
         .provider
@@ -163,7 +171,7 @@ pub async fn update(
         next.jina_api_key = jina;
     }
 
-    // ── 2. Persist: behavior fields → config.toml, keys → credentials ──
+    // 2. Persist behavior fields to config.toml and keys to credentials.toml
     // The key fields are `#[serde(skip_serializing)]` on `WebSearchConfig`,
     // so writing `config.websearch = next` and saving cannot leak them into
     // config.toml; they are persisted explicitly below.
@@ -212,12 +220,38 @@ pub async fn update(
         return;
     }
 
-    // ── 3. Hot-apply through the shared handle ──────────────────────────
+    // 2b. Web connections update
+    let mut conns = muta_persistence::web_connections::WebConnections::load();
+    let mut conns_modified = false;
+    if let Some(conn) = update.upsert_search_connection {
+        conns.upsert_search(conn);
+        conns_modified = true;
+    }
+    if let Some(del_id) = update.delete_search_connection {
+        conns.remove_search(&del_id);
+        conns_modified = true;
+    }
+    if let Some(conn) = update.upsert_reader_connection {
+        conns.upsert_reader(conn);
+        conns_modified = true;
+    }
+    if let Some(del_id) = update.delete_reader_connection {
+        conns.remove_reader(&del_id);
+        conns_modified = true;
+    }
+    if conns_modified {
+        if let Err(e) = conns.save() {
+            tracing::warn!("Could not save web_connections.toml: {e}");
+        }
+    }
+
+    // 3. Hot-apply through the shared handle
     // `next` still carries the key values (they were folded into the
     // credentials table above), which is exactly what the tools need at
     // call time.
     shared.set(next);
-    let view = WebSearchConfigView::from(&config.websearch);
+    let view = WebSearchConfigView::from(&config.websearch)
+        .with_connections(conns.search_connections, conns.reader_connections);
     let _ = resp_tx.send(AgentResponse::WebSearchConfigUpdated(view));
 }
 
@@ -266,6 +300,7 @@ mod tests {
             tavily_api_key: Some("tvly-test".to_string()),
             bocha_api_key: None,
             jina_api_key: None,
+            ..Default::default()
         }
     }
 

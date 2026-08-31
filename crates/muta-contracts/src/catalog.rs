@@ -136,6 +136,36 @@ pub enum Transport {
 }
 
 impl Transport {
+    /// The wire-protocol name for this transport.
+    pub fn protocol_label(&self) -> &'static str {
+        match self {
+            Transport::OpenAi { .. } => "openai",
+            Transport::Anthropic { .. } => "anthropic",
+            Transport::Google { .. } => "google",
+            Transport::OpenAiResponses { .. } => "openai-responses",
+        }
+    }
+
+    /// The base URL endpoint for this transport.
+    pub fn base_url(&self) -> &str {
+        match self {
+            Transport::OpenAi { base_url, .. }
+            | Transport::Anthropic { base_url, .. }
+            | Transport::Google { base_url, .. }
+            | Transport::OpenAiResponses { base_url, .. } => base_url,
+        }
+    }
+
+    /// The User-Agent header string for this transport.
+    pub fn user_agent(&self) -> &str {
+        match self {
+            Transport::OpenAi { user_agent, .. }
+            | Transport::Anthropic { user_agent, .. }
+            | Transport::OpenAiResponses { user_agent, .. } => user_agent,
+            Transport::Google { .. } => "",
+        }
+    }
+
     /// Whether this transport needs an API key at all. Every remaining transport
     /// is a cloud transport, so all require a key. (A keyless OpenAI-compatible
     /// relay still constructs fine — an empty `api_key` simply suppresses the

@@ -68,6 +68,8 @@ pub mod tool_validation;
 pub mod capability;
 pub mod catalog;
 pub mod channel_auth;
+pub mod connection_auth;
+pub mod connection_detail;
 pub mod client_identity;
 pub mod provider_state;
 pub use client_identity::ClientIdentity;
@@ -148,7 +150,10 @@ pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGenerateContentDialect, OpenAiChatDialect,
     OpenAiResponsesDialect, ProviderEntry, Transport,
 };
-pub use channel_auth::{ChannelAuth, LoginMethod};
+pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};
+pub use connection_detail::{
+    ConnectionDetail, ConnectionUsageState, ProviderUsage, UsageMetric,
+};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink, DynamicToolSource};
 pub use events::{
@@ -218,7 +223,10 @@ pub use tool_registry::{
     collect_toolset,
 };
 pub mod wire;
-pub use web_config::{SharedWebSearchConfig, WebSearchConfig};
+pub use web_config::{
+    SharedWebSearchConfig, WebReaderConnection, WebReaderPreset, WebReaderPresets,
+    WebSearchConfig, WebSearchConnection, WebSearchPreset, WebSearchPresets,
+};
 pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,
     MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Wire, protocol_accepts,

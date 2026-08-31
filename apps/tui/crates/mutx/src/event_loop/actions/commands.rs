@@ -18,9 +18,9 @@ use crate::model::document::TranscriptMessage;
 use crate::model::selection::SelectionState;
 use crate::{App, Modal};
 
-use super::super::{
-    UiRuntime, extract_selection_text, now_epoch_ms, resolve_focused_mut, show_local_toast,
-};
+use super::super::runtime::{UiRuntime, now_epoch_ms};
+use super::super::sync::show_local_toast;
+use super::super::transcript::{extract_selection_text, resolve_focused_mut};
 use super::ActionFlow;
 
 /// Split a raw composer command into the ledger identity (`name`, `args`)
@@ -51,6 +51,9 @@ pub(super) async fn handle_send_chat(
     app.suggestion_index = None;
     app.input_scroll = 0;
 
+    let images = std::mem::take(&mut app.pending_images);
+    let text_pastes = std::mem::take(&mut app.pending_text_pastes);
+
     // Queue pointer is armed: Enter is an **in-place edit commit**, not a
     // send. The composer holds a projection of the pointed-at queue item;
     // the edit writes back into that item (same id, same slot), so the
@@ -60,13 +63,16 @@ pub(super) async fn handle_send_chat(
     // falls through to the ordinary send path below, exactly as if the user
     // had typed a fresh message (queued if the session is busy).
     if app.queue_pointer.is_some()
-        && let Some(()) = app.commit_queue_pointer(viewed_session_id)
+        && let Some(()) = app.commit_queue_pointer(
+            viewed_session_id,
+            text.clone(),
+            images.clone(),
+            text_pastes.clone(),
+        )
     {
         // The edit landed (and the commit already dissolved the pointer and
         // dropped its stash). Clear the composer — the content now lives in
         // the queue item — and record the edited text in history.
-        let images = std::mem::take(&mut app.pending_images);
-        let text_pastes = std::mem::take(&mut app.pending_text_pastes);
         app.input.clear();
         app.cursor_position = 0;
         app.record_input_history(text, images, text_pastes);
@@ -81,8 +87,6 @@ pub(super) async fn handle_send_chat(
     // send). For queue recall, the raw chip text and the
     // staged vectors are restored verbatim so the user can
     // keep editing the placeholder.
-    let images = std::mem::take(&mut app.pending_images);
-    let text_pastes = std::mem::take(&mut app.pending_text_pastes);
     let has_images = !images.is_empty();
 
     if !text.is_empty() || has_images {
@@ -375,6 +379,10 @@ pub(crate) fn handle_ctrl_c(
         app.input.clear();
         app.set_cursor(0);
         app.input_scroll = 0;
+        app.history_index = None;
+        app.clear_history_draft();
+        app.pending_images.clear();
+        app.pending_text_pastes.clear();
         show_local_toast(
             app,
             "input cleared — Ctrl+C again to exit",

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::view::tools::presenter_for;
 use muta_contracts::ColorSchemeConfig;
@@ -196,7 +196,69 @@ pub fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Load custom theme files from `$XDG_CONFIG_HOME/mutx/themes`.
+/// Discover all candidate theme directories across project workspace and user configuration roots.
+pub fn candidate_theme_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // 1. Workspace / project-local paths
+    if let Some(ws) = workspace {
+        if !ws.as_os_str().is_empty() {
+            dirs.push(ws.join(".mutx").join("themes"));
+            dirs.push(ws.join(".muta").join("themes"));
+            dirs.push(ws.join("themes"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_mutx = cwd.join(".mutx").join("themes");
+        if !dirs.contains(&cwd_mutx) {
+            dirs.push(cwd_mutx);
+        }
+        let cwd_muta = cwd.join(".muta").join("themes");
+        if !dirs.contains(&cwd_muta) {
+            dirs.push(cwd_muta);
+        }
+        let cwd_themes = cwd.join("themes");
+        if !dirs.contains(&cwd_themes) {
+            dirs.push(cwd_themes);
+        }
+    }
+
+    // 2. User config directories
+    let mutx_themes = crate::paths::get().themes_dir();
+    if !dirs.contains(&mutx_themes) {
+        dirs.push(mutx_themes);
+    }
+    let legacy_muta_themes = muta_persistence::paths::get().themes_dir();
+    if !dirs.contains(&legacy_muta_themes) {
+        dirs.push(legacy_muta_themes);
+    }
+    if let Some(home) = dirs::home_dir() {
+        let dot_mutx = home.join(".mutx").join("themes");
+        if !dirs.contains(&dot_mutx) {
+            dirs.push(dot_mutx);
+        }
+        let dot_muta = home.join(".muta").join("themes");
+        if !dirs.contains(&dot_muta) {
+            dirs.push(dot_muta);
+        }
+    }
+
+    // 3. User data directories
+    if let Some(data_dir) = dirs::data_local_dir().or_else(dirs::data_dir) {
+        let data_mutx = data_dir.join("mutx").join("themes");
+        if !dirs.contains(&data_mutx) {
+            dirs.push(data_mutx);
+        }
+        let data_muta = data_dir.join("muta").join("themes");
+        if !dirs.contains(&data_muta) {
+            dirs.push(data_muta);
+        }
+    }
+
+    dirs
+}
+
+/// Load custom theme files from a single directory.
 pub fn load_theme_files(themes_dir: &Path) -> Vec<muta_contracts::ThemeFile> {
     let mut themes = Vec::new();
     let Ok(entries) = fs::read_dir(themes_dir) else {
@@ -214,11 +276,48 @@ pub fn load_theme_files(themes_dir: &Path) -> Vec<muta_contracts::ThemeFile> {
             {
                 theme.id = stem.to_string();
             }
+            if (theme.name.is_empty() || theme.name == "Custom")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                let title = stem
+                    .split(['-', '_'])
+                    .filter(|w| !w.is_empty())
+                    .map(|w| {
+                        let mut chars = w.chars();
+                        match chars.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !title.is_empty() {
+                    theme.name = title;
+                }
+            }
             themes.push(theme);
         }
     }
     themes.sort_by(|a, b| a.name.cmp(&b.name));
     themes
+}
+
+/// Load all custom theme files from all candidate theme directories, deduplicating by id.
+pub fn load_all_theme_files(workspace: Option<&Path>) -> Vec<muta_contracts::ThemeFile> {
+    let mut all_themes = Vec::new();
+    for dir in candidate_theme_dirs(workspace) {
+        let loaded = load_theme_files(&dir);
+        for theme in loaded {
+            if !all_themes
+                .iter()
+                .any(|t: &muta_contracts::ThemeFile| t.id.eq_ignore_ascii_case(&theme.id))
+            {
+                all_themes.push(theme);
+            }
+        }
+    }
+    all_themes.sort_by(|a, b| a.name.cmp(&b.name));
+    all_themes
 }
 
 #[cfg(test)]
@@ -376,5 +475,31 @@ caret = "#00ffff"
                 .as_deref(),
             Some("#00ffff")
         );
+    }
+
+    #[test]
+    fn load_all_theme_files_discovers_workspace_themes_and_deduplicates() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let ws_dir = temp.path().join("my-project");
+        let ws_themes = ws_dir.join(".mutx").join("themes");
+        std::fs::create_dir_all(&ws_themes).unwrap();
+
+        let theme_proj = r##"
+name = "Solarized Dark"
+description = "Precision colors for machines and people"
+[colors]
+background = "#002b36"
+surface = "#073642"
+text = "#839496"
+muted = "#586e75"
+accent = "#268bd2"
+success = "#859900"
+warning = "#b58900"
+error = "#dc322f"
+"##;
+        std::fs::write(ws_themes.join("solarized-dark.toml"), theme_proj).unwrap();
+
+        let loaded = load_all_theme_files(Some(&ws_dir));
+        assert!(loaded.iter().any(|t| t.id == "solarized-dark" && t.name == "Solarized Dark"));
     }
 }

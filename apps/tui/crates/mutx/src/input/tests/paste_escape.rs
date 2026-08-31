@@ -21,6 +21,7 @@ fn esc_closes_slash_completion_menu() {
         InputContext {
             active_modal: crate::Modal::None,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
@@ -35,7 +36,6 @@ fn esc_closes_slash_completion_menu() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -44,7 +44,7 @@ fn esc_closes_slash_completion_menu() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -72,6 +72,7 @@ fn esc_closes_path_completion_menu() {
         InputContext {
             active_modal: crate::Modal::None,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::Path,
             suggestion_count: 3,
@@ -86,7 +87,6 @@ fn esc_closes_path_completion_menu() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -95,7 +95,7 @@ fn esc_closes_path_completion_menu() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -122,6 +122,7 @@ fn esc_falls_through_when_no_completion_is_open() {
         InputContext {
             active_modal: crate::Modal::None,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -136,7 +137,6 @@ fn esc_falls_through_when_no_completion_is_open() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -145,7 +145,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -170,6 +170,7 @@ fn escape_returns_from_always_confirmation() {
         InputContext {
             active_modal: crate::Modal::Permission,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: true,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -184,7 +185,6 @@ fn escape_returns_from_always_confirmation() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -193,7 +193,7 @@ fn escape_returns_from_always_confirmation() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -215,6 +215,7 @@ fn esc_in_models_browse_closes_the_modal() {
         InputContext {
             active_modal: crate::Modal::Models,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -229,7 +230,6 @@ fn esc_in_models_browse_closes_the_modal() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -238,7 +238,7 @@ fn esc_in_models_browse_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -259,6 +259,7 @@ fn esc_in_connections_browse_closes_the_modal() {
         InputContext {
             active_modal: crate::Modal::Connections,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -273,7 +274,6 @@ fn esc_in_connections_browse_closes_the_modal() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -282,7 +282,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -353,6 +353,7 @@ fn escape_in_btw_modal_closes_the_modal() {
         InputContext {
             active_modal: crate::Modal::Btw,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -367,7 +368,6 @@ fn escape_in_btw_modal_closes_the_modal() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -376,7 +376,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: crate::overlays::ConfigFocus::Categories,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -458,10 +458,9 @@ fn bracketed_paste_routes_in_free_text_modals() {
         "bracketed paste should be dropped in Help"
     );
 
-    // Modal::Config with custom theme editing active accepts bracketed paste
+    // Modal::Config is a navigation modal, so bracketed paste is dropped
     let config_context = InputContext {
         active_modal: crate::Modal::Config,
-        config_custom_editing: true,
         ..Default::default()
     };
     let mut input = String::new();
@@ -474,5 +473,5 @@ fn bracketed_paste_routes_in_free_text_modals() {
         config_context,
         &mut drag,
     );
-    assert!(matches!(action, InputAction::BracketedPaste(t) if t == payload));
+    assert_eq!(action, InputAction::None);
 }

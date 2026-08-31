@@ -120,7 +120,7 @@ impl AuthStore {
         &self,
         provider_id: &str,
         preset_id: Option<&str>,
-        auth: muta_contracts::ChannelAuth,
+        auth: muta_contracts::ConnectionAuth,
     ) -> Option<&TokenSet> {
         if let Some(tokens) = self.tokens.get(provider_id) {
             return Some(tokens);
@@ -150,7 +150,7 @@ impl AuthStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::ChannelAuth;
+    use muta_contracts::ConnectionAuth;
 
     #[test]
     fn round_trips_through_toml() {
@@ -259,7 +259,7 @@ mod tests {
             .get_for_provider(
                 "google-antigravity111",
                 Some("antigravity-oauth"),
-                ChannelAuth::AntigravityOAuth,
+                ConnectionAuth::AntigravityOAuth,
             )
             .unwrap();
         assert_eq!(resolved.access, "legacy_token");
@@ -285,7 +285,7 @@ mod tests {
             .get_for_provider(
                 "google-antigravity222",
                 Some("antigravity-oauth"),
-                ChannelAuth::AntigravityOAuth,
+                ConnectionAuth::AntigravityOAuth,
             )
             .unwrap();
         assert_eq!(resolved_222.access, "work_token");
@@ -296,7 +296,7 @@ mod tests {
             .get_for_provider(
                 "google-antigravity111",
                 Some("antigravity-oauth"),
-                ChannelAuth::AntigravityOAuth,
+                ConnectionAuth::AntigravityOAuth,
             )
             .unwrap();
         assert_eq!(resolved_111.access, "legacy_token");

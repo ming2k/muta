@@ -122,9 +122,9 @@ impl App {
         self.custom_field = 0;
         self.custom_edit_id = None;
         let default_name = match self.custom_auth {
-            muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT subscription",
-            muta_contracts::ChannelAuth::CopilotOAuth => "Copilot",
-            muta_contracts::ChannelAuth::AntigravityOAuth => "Google Antigravity",
+            muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT subscription",
+            muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
+            muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
             _ => "xAI",
         };
         self.custom_name = default_name.to_string();
@@ -151,7 +151,7 @@ impl App {
     }
 
     /// Auth mode of a provider picker row (for OAuth re-connect routing).
-    pub fn provider_row_auth(&self, id: &str) -> muta_contracts::ChannelAuth {
+    pub fn provider_row_auth(&self, id: &str) -> muta_contracts::ConnectionAuth {
         self.provider_picker
             .rows
             .iter()
@@ -162,9 +162,9 @@ impl App {
 
     /// Open the provider editor in **edit** mode for an existing user provider,
     /// pre-filling its metadata. The visible fields depend on whether it is a
-    /// preset vs custom provider, and its auth type: a custom API-key channel shows
-    /// Name / Base URL / Token, a preset API-key channel shows Name / Token, and an
-    /// OAuth channel (ChatGPT/Codex, xAI, Copilot, Antigravity) shows Name only.
+    /// preset vs custom provider, and its auth type: a custom API-key connection shows
+    /// Name / Base URL / Token, a preset API-key connection shows Name / Token, and an
+    /// OAuth connection (ChatGPT/Codex, xAI, Copilot, Antigravity) shows Name only.
     /// The Model field is always hidden (models are managed in the Models picker).
     pub fn open_edit_provider_editor(
         &mut self,
@@ -172,7 +172,7 @@ impl App {
         name: String,
         protocol: String,
         base_url: String,
-        auth: ChannelAuth,
+        auth: ConnectionAuth,
         is_preset: bool,
     ) {
         if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {

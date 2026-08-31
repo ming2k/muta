@@ -297,7 +297,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
     let copilot = Connection {
         id: "copilot".to_string(),
         preset_id: Some("copilot-oauth".to_string()),
-        auth: muta_contracts::ChannelAuth::CopilotOAuth,
+        auth: muta_contracts::ConnectionAuth::CopilotOAuth,
         ..Default::default()
     };
     let channel = derive_channel(
@@ -494,7 +494,7 @@ fn catalog_builds_from_the_state_store_only() {
 fn antigravity_models_derivation_and_hidden_filter() {
     let _sandbox = sandboxed_paths();
     let mut conn = instance("g11", Some("antigravity-oauth"));
-    conn.auth = muta_contracts::ChannelAuth::AntigravityOAuth;
+    conn.auth = muta_contracts::ConnectionAuth::AntigravityOAuth;
     let connections = Connections {
         connections: vec![conn],
     };

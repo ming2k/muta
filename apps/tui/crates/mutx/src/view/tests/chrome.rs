@@ -123,6 +123,10 @@ fn redesigned_components_render_without_panicking() {
             false,
             &theme,
             &crate::model::selection::SelectionState::None,
+            false,
+            None,
+            &mut 0,
+            0,
         );
         draw_models_modal(
             f,
@@ -328,7 +332,7 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
     let mut terminal = mutx_engine::TestTerminal::new(80, 24);
 
     terminal.draw(|frame| {
-        draw_config_view(
+        draw_settings_view(
             frame,
             ConfigViewProps {
                 category_index: 0,
@@ -336,13 +340,10 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 focus: ConfigFocus::Categories,
                 color_scheme: "zen",
                 custom_color_scheme: &custom,
-                custom_color_draft: &custom,
-                custom_editing: false,
-                input: "",
-                cursor_position: 0,
                 transcript_layout: crate::layout::Strategy::TurnBand,
                 expand_auto_scroll: false,
                 click_outside_dismiss: true,
+                web_segment: 0,
                 websearch: None,
                 workspace: "~/workspace",
                 category_scroll: &mut 0,
@@ -359,15 +360,10 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
         grid_row(&terminal, 1).contains("Main › Settings"),
         "Row 1 must show the view stack breadcrumbs"
     );
-    assert!(
-        !grid_row(&terminal, 2).contains("CATEGORIES"),
-        "Panel title row must be removed"
-    );
-    // Categories should not contain icons
     assert!(!grid_row(&terminal, 3).contains("◐"));
 
     terminal.draw(|frame| {
-        draw_config_view(
+        draw_settings_view(
             frame,
             ConfigViewProps {
                 category_index: 0,
@@ -375,13 +371,10 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 focus: ConfigFocus::Detail,
                 color_scheme: "custom",
                 custom_color_scheme: &custom,
-                custom_color_draft: &custom,
-                custom_editing: true,
-                input: "#8ea191",
-                cursor_position: 7,
                 transcript_layout: crate::layout::Strategy::TurnBand,
                 expand_auto_scroll: false,
                 click_outside_dismiss: true,
+                web_segment: 0,
                 websearch: None,
                 workspace: "~/workspace",
                 category_scroll: &mut 0,

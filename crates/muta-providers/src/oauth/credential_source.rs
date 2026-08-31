@@ -4,7 +4,7 @@ use super::OAuth;
 use super::config::config_by_provider_id;
 use super::store::AuthStore;
 use futures::future::BoxFuture;
-use muta_contracts::{ChannelAuth, CredentialSource, ResolvedAuth};
+use muta_contracts::{ConnectionAuth, CredentialSource, ResolvedAuth};
 use std::fmt;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub struct OAuthCredentialSource {
     pub provider_id: String,
     pub preset_id: Option<String>,
-    pub auth: ChannelAuth,
+    pub auth: ConnectionAuth,
     oauth: Option<Arc<OAuth>>,
 }
 
@@ -24,7 +24,7 @@ impl OAuthCredentialSource {
     pub fn new(
         provider_id: impl Into<String>,
         preset_id: Option<impl Into<String>>,
-        auth: ChannelAuth,
+        auth: ConnectionAuth,
     ) -> Self {
         let provider_id = provider_id.into();
         let preset_id = preset_id.map(Into::into);

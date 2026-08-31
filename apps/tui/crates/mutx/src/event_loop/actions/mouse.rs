@@ -10,7 +10,9 @@ use crate::model::selection::{CellDragInfo, SelectionState, floor_grapheme_bound
 use crate::step_interaction::StepKind;
 use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
 
-use super::super::{UiRuntime, handle_permission_submit, resolve_focused_mut};
+use super::modals::handle_permission_submit;
+use super::super::runtime::UiRuntime;
+use super::super::transcript::resolve_focused_mut;
 
 /// Loop stage (input dispatch): the `SelectionStart` arm of the action match.
 pub(super) async fn handle_selection_start(
@@ -415,17 +417,6 @@ pub(super) fn handle_selection_update(app: &mut App, x: u16, y: u16) {
 
 /// Loop stage (input dispatch): the `SelectionEnd` arm of the action match.
 pub(super) fn handle_selection_end(app: &mut App) {
-    handle_selection_end_impl(app);
-}
-
-/// Test entry for [`handle_selection_end`] — same logic, callable from the
-/// event loop's relay tests (the handler itself is `pub(super)` to actions).
-#[cfg(test)]
-pub(crate) fn handle_selection_end_for_test(app: &mut App) {
-    handle_selection_end_impl(app);
-}
-
-fn handle_selection_end_impl(app: &mut App) {
     app.drag.finish(&mut app.selection);
     // An edge-autoscroll armed by this drag stops with it: holding the
     // pointer still after release must not keep scrolling the input.

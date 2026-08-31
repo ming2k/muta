@@ -1,14 +1,15 @@
 pub mod client;
-pub mod fetch;
 pub mod html;
+pub mod reader;
 pub mod search;
 pub mod snapshot;
 
 #[cfg(test)]
 mod tests;
 
-pub use fetch::WebFetchTool;
 pub use html::html_to_text;
+#[allow(unused_imports)]
+pub use reader::{WebFetchTool, WebReaderTool};
 pub use search::WebSearchTool;
 pub use snapshot::{WebPageSnapshot, WebSnapshotResult};
 

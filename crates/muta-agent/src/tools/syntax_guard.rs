@@ -125,6 +125,40 @@ fn verify_rust_delimiter_balance(source: &str) -> Result<(), String> {
             continue;
         }
 
+        // Raw string literals: r"..." or r#"..."# or r##"..."##
+        if ch == 'r' && (next_ch == Some('"') || next_ch == Some('#')) {
+            let mut hash_count = 0;
+            let mut j = i + 1;
+            while j < len && chars[j] == '#' {
+                hash_count += 1;
+                j += 1;
+            }
+            if j < len && chars[j] == '"' {
+                // Skip to closing '"' + hash_count * '#'
+                j += 1;
+                'raw_str: while j < len {
+                    if chars[j] == '"' {
+                        let mut match_hashes = true;
+                        for k in 0..hash_count {
+                            if j + 1 + k >= len || chars[j + 1 + k] != '#' {
+                                match_hashes = false;
+                                break;
+                            }
+                        }
+                        if match_hashes {
+                            i = j + 1 + hash_count;
+                            break 'raw_str;
+                        }
+                    }
+                    j += 1;
+                }
+                if j >= len {
+                    i = len;
+                }
+                continue;
+            }
+        }
+
         // String / char literals
         if ch == '"' {
             in_string = true;

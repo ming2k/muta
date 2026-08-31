@@ -16,7 +16,7 @@
 //! Stored in `$XDG_STATE_HOME/muta/connections.toml` — a program-managed
 //! state file, separate from the user-edited `config.toml`.
 
-use muta_contracts::{ChannelAuth, ClientIdentity, WireProtocol};
+use muta_contracts::{ClientIdentity, ConnectionAuth, WireProtocol};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil;
@@ -39,11 +39,11 @@ pub struct Connection {
     /// connection whose transport/endpoint/models are declared directly below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset_id: Option<String>,
-    /// How this connection authenticates. [`ChannelAuth::ApiKey`] (the default)
+    /// How this connection authenticates. [`ConnectionAuth::ApiKey`] (the default)
     /// resolves the bearer from the connection credential; the OAuth variants
     /// resolve from `auth.toml`.
     #[serde(default)]
-    pub auth: ChannelAuth,
+    pub auth: ConnectionAuth,
     /// Optional environment variable name holding this connection's credential.
     /// A 12-factor override: when set (and non-empty), it wins over
     /// `credentials.toml`. Declared once per connection, never per route.
@@ -77,7 +77,7 @@ impl Default for Connection {
             id: String::new(),
             name: None,
             preset_id: None,
-            auth: ChannelAuth::ApiKey,
+            auth: ConnectionAuth::ApiKey,
             api_key_env: None,
             client_identity: ClientIdentity::Native,
             protocol: None,

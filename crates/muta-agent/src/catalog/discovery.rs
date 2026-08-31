@@ -10,7 +10,7 @@
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
-use muta_contracts::{ChannelAuth, WireProtocol};
+use muta_contracts::{ConnectionAuth, WireProtocol};
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
@@ -48,7 +48,7 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             continue;
         };
         if !spec.discovery
-            || connection.auth == ChannelAuth::AntigravityOAuth
+            || connection.auth == ConnectionAuth::AntigravityOAuth
             || connection
                 .base_url
                 .as_deref()

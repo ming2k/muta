@@ -166,10 +166,8 @@ fn tab_stays_inert_when_no_trigger_text_survives() {
 }
 
 #[test]
-fn enter_in_connections_modal_is_inert_no_activate_concept() {
-    // Connections is a pure management surface: it has no activate concept
-    // (switching the active provider is the Models picker's job), so Enter
-    // must not map to `ProviderPickerActivate`. It is inert in browse mode.
+fn enter_in_connections_modal_opens_connection_detail() {
+    // Connections modal: Enter opens connection detail and live usage.
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -180,6 +178,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
         InputContext {
             active_modal: crate::Modal::Connections,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -194,7 +193,6 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -203,12 +201,27 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::OpenConnectionDetail);
+
+    // Inside detail view, Enter is inert
+    let action_detail = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::Connections,
+            session_info_detail: false,
+            connection_info_detail: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action_detail, InputAction::None);
 }
 
 #[test]
@@ -249,6 +262,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
         InputContext {
             active_modal: crate::Modal::None,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: true,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -263,7 +277,6 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -272,7 +285,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -311,6 +324,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
         InputContext {
             active_modal: crate::Modal::Btw,
             session_info_detail: false,
+            connection_info_detail: false,
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -325,7 +339,6 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
-            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -334,7 +347,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
-            config_custom_editing: false,
+            config_focus: Default::default(),
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,

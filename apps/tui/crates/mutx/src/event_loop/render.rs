@@ -8,7 +8,8 @@ use crate::model::layout::LayoutMap;
 use crate::view;
 use crate::{App, Modal, ProviderDeleteChoice, Recess};
 
-use super::{display_status, effective_reasoning_effort};
+use super::actions::effective_reasoning_effort;
+use super::transcript::display_status;
 
 /// Loop stage: the per-frame draw. Paints the chrome (startup picker,
 /// transcript, hint bar, composer, completion popup, effort-ignition
@@ -503,11 +504,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let queue_editing = app.queue_editing_target(viewed_session_id);
             let busy = app.running_sessions.contains(viewed_session_id);
             let is_history_search = app.active_modal() == Modal::HistorySearch;
-            let history_recall = if app.active_modal() == Modal::None {
-                app.history_recall_position()
-            } else {
-                None
-            };
             let completion_active = if app.active_modal() == Modal::None
                 && !app.completion_dismissed
                 && app.completion_kind() != CompletionKind::None
@@ -539,7 +535,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                             _ => (QueueEditKind::FollowUp, number),
                         }),
                         slash_len.is_some(),
-                        history_recall,
                         completion_active,
                         is_history_search,
                     ),
@@ -739,6 +734,10 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.modal_keymap_open,
                 &app.theme,
                 &app.selection,
+                app.connection_info_detail,
+                app.connection_detail.as_ref(),
+                &mut app.connection_info_scroll,
+                spinner_phase,
             ))
         }
         Modal::Models => {
@@ -880,11 +879,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         )),
         Modal::OauthPending => {
             let title: &'static str = match app.custom_auth {
-                muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT subscription",
-                muta_contracts::ChannelAuth::CopilotOAuth => "Copilot",
-                muta_contracts::ChannelAuth::XaiOAuth => "xAI",
-                muta_contracts::ChannelAuth::AntigravityOAuth => "Google Antigravity",
-                muta_contracts::ChannelAuth::ApiKey => "OAuth",
+                muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT subscription",
+                muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
+                muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
+                muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
+                muta_contracts::ConnectionAuth::ApiKey => "OAuth",
             };
             Some(view::draw_oauth_pending(
                 title,
@@ -1106,7 +1105,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             } else {
                 "Main › Settings"
             };
-            let rects = view::draw_config_view(
+            let rects = view::draw_settings_view(
                 f,
                 view::ConfigViewProps {
                     category_index: app.config_category,
@@ -1114,13 +1113,10 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     focus: app.config_focus,
                     color_scheme: &app.color_scheme,
                     custom_color_scheme: &app.custom_color_scheme,
-                    custom_color_draft: &app.custom_color_draft,
-                    custom_editing: app.config_custom_editing,
-                    input: &app.input,
-                    cursor_position: app.cursor_position,
                     transcript_layout: app.transcript_layout,
                     expand_auto_scroll: app.expand_auto_scroll,
                     click_outside_dismiss: app.click_outside_dismiss,
+                    web_segment: app.config_web_segment,
                     websearch: app.websearch_config.as_ref(),
                     workspace: &app.current_workspace,
                     category_scroll: &mut app.config_scroll,

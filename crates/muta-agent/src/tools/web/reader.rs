@@ -1,8 +1,9 @@
+use std::sync::RwLock;
+
 use async_trait::async_trait;
 use muta_contracts::{SharedWebSearchConfig, Tool, WebSearchConfig};
 use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
-use std::sync::RwLock;
 
 use crate::tools::web::client::{UNTRUSTED_PREFIX, UNTRUSTED_SUFFIX, http_client};
 use crate::tools::web::snapshot::{WebSnapshotResult, take_snapshot};
@@ -10,20 +11,20 @@ use crate::tools::web::snapshot::{WebSnapshotResult, take_snapshot};
 pub const WEB_FETCH_MAX_TOKENS: usize = 4_000;
 
 #[derive(ToolSchema, Deserialize)]
-struct WebFetchArgs {
-    #[tool(desc = "The fully-qualified URL to fetch (http/https)")]
+struct WebReaderArgs {
+    #[tool(desc = "The fully-qualified URL to read (http/https)")]
     url: String,
     #[tool(desc = "If true, return raw content without HTML stripping (default false)")]
     raw: Option<bool>,
 }
 
-/// Fetch a URL and return its text content (HTML stripped to text).
-pub struct WebFetchTool {
+/// Read a web page URL and extract its clean Markdown content via the configured Reader.
+pub struct WebReaderTool {
     config: SharedWebSearchConfig,
     client: RwLock<Option<(String, Result<reqwest::Client, String>)>>,
 }
 
-impl WebFetchTool {
+impl WebReaderTool {
     pub fn new() -> Self {
         Self::with_config(WebSearchConfig::default())
     }
@@ -70,14 +71,14 @@ impl WebFetchTool {
     }
 }
 
-impl Default for WebFetchTool {
+impl Default for WebReaderTool {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl Tool for WebFetchTool {
+impl Tool for WebReaderTool {
     fn name(&self) -> &str {
         "fetch_url"
     }
@@ -104,10 +105,10 @@ impl Tool for WebFetchTool {
         "Fetch a web page and return its text content as clean Markdown."
     }
     fn parameters(&self) -> serde_json::Value {
-        WebFetchArgs::parameters_schema()
+        WebReaderArgs::parameters_schema()
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        let args: WebFetchArgs =
+        let args: WebReaderArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let url = &args.url;
         if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -127,9 +128,9 @@ impl Tool for WebFetchTool {
             let (keep, _kept) =
                 muta_contracts::tokenizer::truncate_to_tokens(&body, WEB_FETCH_MAX_TOKENS / 2);
             return Ok(format!(
-                "{UNTRUSTED_PREFIX}[Fetched {tokens} tokens from {url} (reader: {reader_name}, \
+                "{UNTRUSTED_PREFIX}[Read {tokens} tokens from {url} (reader: {reader_name}, \
 content-type: {content_type}); kept the first {}/{} tokens — the page is longer than the tool's \
-context budget. Fetch a more specific URL/anchor or a section link for the part you need.]\n{keep}\
+context budget. Request a more specific URL/anchor or a section link for the part you need.]\n{keep}\
 {UNTRUSTED_SUFFIX}",
                 WEB_FETCH_MAX_TOKENS / 2,
                 WEB_FETCH_MAX_TOKENS
@@ -138,3 +139,5 @@ context budget. Fetch a more specific URL/anchor or a section link for the part 
         Ok(format!("{UNTRUSTED_PREFIX}{body}{UNTRUSTED_SUFFIX}"))
     }
 }
+
+pub use WebReaderTool as WebFetchTool;

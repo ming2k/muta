@@ -57,18 +57,18 @@ pub fn draw_queue_modal(
 
     let QueueModalView { items, blocked } = view;
 
-    // Keep the modal title a plain `Queue`: the count and the paused/blocked
+    // Keep the modal title a plain `Follow-ups`: the count and the paused/blocked
     // state are already visible in the persistent queue bar, so echoing them
     // in the header only adds noise. The footer still surfaces `F3 block /
     // resume` where the block state matters.
-    let title = "Queue";
+    let title = "Follow-ups";
 
     let mut body: Vec<Line> = Vec::new();
     let mut selected_line: Option<usize> = None;
 
     if items.is_empty() {
         body.push(placeholder(
-            "No messages queued. Press Enter while the agent runs to stage one.",
+            "No follow-ups queued. Press Enter while the agent runs to stage one.",
             true,
             theme.muted(),
         ));

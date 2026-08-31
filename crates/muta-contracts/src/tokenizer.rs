@@ -924,33 +924,22 @@ mod tests {
         }
     }
 
-    /// Reference counts for this repository's own files (first 40 KB), from
-    /// the offline python reference. The 2% tolerance absorbs the one known
-    /// class-modeling difference (non-ASCII digits; `\d` in the reference is
-    /// ASCII-only).
+    /// Reference counts for static corpus fixture files.
     #[test]
     fn corpus_file_counts_within_tolerance() {
         let cases: &[(&str, usize)] = &[
-            ("../../crates/muta-agent/src/agent/mod.rs", 10_478),
-            ("../../crates/muta-contracts/src/pressure.rs", 10_855),
-            ("../../README.zh-CN.md", 1_098),
-            ("../../CHANGELOG.md", 10_207),
+            ("tests/fixtures/corpus/chinese_doc.md", 538),
+            ("tests/fixtures/corpus/english_doc.md", 262),
+            ("tests/fixtures/corpus/code_sample.rs", 316),
+            ("tests/fixtures/corpus/json_spec.json", 247),
         ];
         let t = Tokenizer::new();
         for (path, expected) in cases {
-            // A missing corpus file must FAIL, not silently pass: the whole
-            // point of pinning repo files is that they exist (a moved file
-            // previously degraded this test to asserting nothing).
             let text = std::fs::read_to_string(path)
                 .unwrap_or_else(|e| panic!("corpus file {path} unreadable: {e}"));
-            // Reference counts are generated from the repository's canonical
-            // LF form. Git may materialize CRLF on Windows, which is a checkout
-            // policy difference rather than tokenizer drift.
             let text = text.replace("\r\n", "\n");
-            let text = &text[..text.len().min(40_000)];
-            let got = t.count(text);
-            let drift = (got as f64 - *expected as f64).abs() / *expected as f64;
-            assert!(drift < 0.02, "{path}: {got} vs {expected} ({drift:.3})");
+            let got = t.count(&text);
+            assert_eq!(&got, expected, "{path}: {got} vs {expected}");
         }
     }
 

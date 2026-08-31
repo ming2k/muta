@@ -1,0 +1,155 @@
+//! SiliconFlow (硅基流动) balance / usage fetcher.
+//!
+//! Query endpoint: `GET https://api.siliconflow.cn/v1/user/info`
+
+use muta_contracts::async_trait;
+use muta_contracts::{ProviderUsage, UsageMetric};
+use serde::Deserialize;
+
+use super::ProviderUsageFetcher;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SiliconFlowUserResponse {
+    #[serde(default)]
+    pub(crate) code: i64,
+    #[serde(default)]
+    pub(crate) data: Option<SiliconFlowUserData>,
+    #[serde(default)]
+    pub(crate) status: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SiliconFlowUserData {
+    #[serde(default)]
+    pub(crate) email: Option<String>,
+    #[serde(default)]
+    pub(crate) balance: Option<String>,
+    #[serde(default, rename = "chargeBalance")]
+    pub(crate) charge_balance: Option<String>,
+    #[serde(default, rename = "totalBalance")]
+    pub(crate) total_balance: Option<String>,
+}
+
+pub struct SiliconFlowUsageFetcher;
+
+#[async_trait]
+impl ProviderUsageFetcher for SiliconFlowUsageFetcher {
+    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
+        preset_id == Some("siliconflow") || base_url.contains("siliconflow.cn") || base_url.contains("siliconflow.com")
+    }
+
+    async fn fetch_usage(
+        &self,
+        client: &reqwest::Client,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<ProviderUsage, String> {
+        let endpoint = if base_url.contains("siliconflow") {
+            let base = base_url.trim_end_matches('/');
+            let base = base.strip_suffix("/v1").unwrap_or(base);
+            format!("{base}/v1/user/info")
+        } else {
+            "https://api.siliconflow.cn/v1/user/info".to_string()
+        };
+
+        let resp = client
+            .get(&endpoint)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {text}"));
+        }
+
+        let body: SiliconFlowUserResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse SiliconFlow user response: {e}"))?;
+
+        parse_siliconflow_user(body)
+    }
+}
+
+pub(crate) fn parse_siliconflow_user(body: SiliconFlowUserResponse) -> Result<ProviderUsage, String> {
+    let data = body.data.ok_or_else(|| {
+        format!("No data returned by SiliconFlow user info API (code: {})", body.code)
+    })?;
+
+    let total = data.total_balance.clone().unwrap_or_else(|| "0.00".to_string());
+    let primary_balance = format!("¥{total}");
+
+    let mut metrics = Vec::new();
+    if let Some(email) = data.email && !email.is_empty() {
+        metrics.push(UsageMetric {
+            label: "Account Email".to_string(),
+            value: email,
+            unit: None,
+        });
+    }
+    metrics.push(UsageMetric {
+        label: "Total Balance".to_string(),
+        value: total,
+        unit: Some("CNY".to_string()),
+    });
+    if let Some(charge) = data.charge_balance {
+        metrics.push(UsageMetric {
+            label: "Recharge Balance".to_string(),
+            value: charge,
+            unit: Some("CNY".to_string()),
+        });
+    }
+    if let Some(gift) = data.balance {
+        metrics.push(UsageMetric {
+            label: "Gift Balance".to_string(),
+            value: gift,
+            unit: Some("CNY".to_string()),
+        });
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .ok();
+
+    Ok(ProviderUsage {
+        plan: if body.status { Some("Active".to_string()) } else { None },
+        primary_balance: Some(primary_balance),
+        metrics,
+        updated_at_ms: now_ms,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_siliconflow_user_json() {
+        let json = r#"{
+            "code": 20000,
+            "message": "success",
+            "status": true,
+            "data": {
+                "id": "sf-123",
+                "email": "user@example.com",
+                "balance": "5.00",
+                "chargeBalance": "20.00",
+                "totalBalance": "25.00"
+            }
+        }"#;
+
+        let parsed: SiliconFlowUserResponse = serde_json::from_str(json).unwrap();
+        let usage = parse_siliconflow_user(parsed).unwrap();
+
+        assert_eq!(usage.plan.as_deref(), Some("Active"));
+        assert_eq!(usage.primary_balance.as_deref(), Some("¥25.00"));
+        assert_eq!(usage.metrics.len(), 4);
+        assert_eq!(usage.metrics[0].label, "Account Email");
+        assert_eq!(usage.metrics[0].value, "user@example.com");
+    }
+}

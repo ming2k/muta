@@ -1,6 +1,7 @@
 //! Color palette used across the renderer.
 
 use std::borrow::Cow;
+use std::path::Path;
 
 use muta_contracts::{ColorSchemeConfig, ComponentThemesConfig, ThemeFile};
 use mutx_engine::Color;
@@ -32,8 +33,8 @@ impl ColorSchemePreset {
     }
 }
 
-/// Built-in palettes plus the editable custom slot. Order is the UI order.
-pub const COLOR_SCHEMES: [ColorSchemePreset; 6] = [
+/// Built-in palettes. Order is the UI order.
+pub const COLOR_SCHEMES: [ColorSchemePreset; 5] = [
     ColorSchemePreset::static_preset("zen", "Zen", "Quiet charcoal with sage accents", false),
     ColorSchemePreset::static_preset(
         "midnight",
@@ -54,12 +55,6 @@ pub const COLOR_SCHEMES: [ColorSchemePreset; 6] = [
         "Warm light surface for bright terminals",
         false,
     ),
-    ColorSchemePreset::static_preset(
-        "custom",
-        "Custom",
-        "Your editable eight-color palette",
-        true,
-    ),
 ];
 
 // ── Default Styling Constants ──────────────────────────────────────────────
@@ -79,46 +74,7 @@ pub struct SemanticPalette {
     pub error: Color,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CustomColorField {
-    pub label: &'static str,
-    pub hint: &'static str,
-}
 
-pub const CUSTOM_COLOR_FIELDS: [CustomColorField; 8] = [
-    CustomColorField {
-        label: "Background",
-        hint: "terminal canvas",
-    },
-    CustomColorField {
-        label: "Surface",
-        hint: "panels and menus",
-    },
-    CustomColorField {
-        label: "Text",
-        hint: "primary foreground",
-    },
-    CustomColorField {
-        label: "Muted",
-        hint: "secondary foreground",
-    },
-    CustomColorField {
-        label: "Accent",
-        hint: "focus and brand",
-    },
-    CustomColorField {
-        label: "Success",
-        hint: "positive states",
-    },
-    CustomColorField {
-        label: "Warning",
-        hint: "caution states",
-    },
-    CustomColorField {
-        label: "Error",
-        hint: "failure states",
-    },
-];
 
 /// Styles used during rendering.
 #[derive(Clone)]
@@ -271,20 +227,20 @@ impl Default for Theme {
 /// names, so the palette can be retuned in one place. The fields stay `pub`
 /// for `Theme::default()` construction; new rendering code should prefer these.
 impl Theme {
-    /// Return all available color schemes: built-ins + custom theme files in `$XDG_CONFIG_HOME/mutx/themes` + custom slot.
+    /// Return all available color schemes: built-ins + custom theme files across workspace and user locations.
     pub fn available_color_schemes() -> Vec<ColorSchemePreset> {
+        Self::available_color_schemes_with_workspace(None)
+    }
+
+    /// Return all available color schemes given an optional workspace root.
+    pub fn available_color_schemes_with_workspace(workspace: Option<&Path>) -> Vec<ColorSchemePreset> {
         let mut list = Vec::new();
         // 1. Built-in presets (Zen, Midnight, Nord, Catppuccin, Paper)
-        for preset in COLOR_SCHEMES.iter().take(5) {
+        for preset in &COLOR_SCHEMES {
             list.push(preset.clone());
         }
-        // 2. Custom files from mutx themes_dir (and legacy muta themes_dir)
-        let themes_dir = crate::paths::get().themes_dir();
-        let mut files = crate::config::load_theme_files(&themes_dir);
-        let legacy_themes_dir = muta_persistence::paths::get().themes_dir();
-        if legacy_themes_dir.exists() && legacy_themes_dir != themes_dir {
-            files.extend(crate::config::load_theme_files(&legacy_themes_dir));
-        }
+        // 2. Custom files from workspace, mutx themes_dir, and legacy muta themes_dir
+        let files = crate::config::load_all_theme_files(workspace);
         for file in files {
             if !list
                 .iter()
@@ -300,15 +256,17 @@ impl Theme {
                 });
             }
         }
-        // 3. The Custom editor slot
-        list.push(COLOR_SCHEMES[5].clone());
         list
     }
 
     /// Canonicalize a persisted scheme id. Unknown and empty ids use Zen.
     pub fn normalize_color_scheme(name: &str) -> String {
+        Self::normalize_color_scheme_with_workspace(name, None)
+    }
+
+    pub fn normalize_color_scheme_with_workspace(name: &str, workspace: Option<&Path>) -> String {
         let name = name.trim();
-        let schemes = Self::available_color_schemes();
+        let schemes = Self::available_color_schemes_with_workspace(workspace);
         schemes
             .iter()
             .find(|scheme| scheme.id.eq_ignore_ascii_case(name))
@@ -317,8 +275,12 @@ impl Theme {
     }
 
     pub fn color_scheme_index(name: &str) -> usize {
+        Self::color_scheme_index_with_workspace(name, None)
+    }
+
+    pub fn color_scheme_index_with_workspace(name: &str, workspace: Option<&Path>) -> usize {
         let name = name.trim();
-        let schemes = Self::available_color_schemes();
+        let schemes = Self::available_color_schemes_with_workspace(workspace);
         schemes
             .iter()
             .position(|scheme| scheme.id.eq_ignore_ascii_case(name))
@@ -326,8 +288,12 @@ impl Theme {
     }
 
     pub fn color_scheme_label(name: &str) -> String {
+        Self::color_scheme_label_with_workspace(name, None)
+    }
+
+    pub fn color_scheme_label_with_workspace(name: &str, workspace: Option<&Path>) -> String {
         let name = name.trim();
-        let schemes = Self::available_color_schemes();
+        let schemes = Self::available_color_schemes_with_workspace(workspace);
         schemes
             .iter()
             .find(|scheme| scheme.id.eq_ignore_ascii_case(name))
@@ -337,6 +303,15 @@ impl Theme {
 
     /// Build a complete renderer theme from a preset id, external theme file, or custom semantics.
     pub fn from_color_scheme(name: &str, custom: &ColorSchemeConfig) -> Self {
+        Self::from_color_scheme_with_workspace(name, custom, None)
+    }
+
+    /// Build a complete renderer theme from a preset id, external theme file, or custom semantics with workspace support.
+    pub fn from_color_scheme_with_workspace(
+        name: &str,
+        _custom: &ColorSchemeConfig,
+        workspace: Option<&Path>,
+    ) -> Self {
         match name.trim().to_ascii_lowercase().as_str() {
             "midnight" => Self::from_semantic(SemanticPalette {
                 background: Color::Rgb(6, 10, 18),
@@ -378,15 +353,10 @@ impl Theme {
                 warning: Color::Rgb(157, 105, 31),
                 error: Color::Rgb(177, 63, 58),
             }),
-            "custom" => Self::from_custom(custom),
+            "custom" => Self::default(),
             "zen" => Self::default(),
             other => {
-                let themes_dir = crate::paths::get().themes_dir();
-                let mut files = crate::config::load_theme_files(&themes_dir);
-                let legacy_themes_dir = muta_persistence::paths::get().themes_dir();
-                if legacy_themes_dir.exists() && legacy_themes_dir != themes_dir {
-                    files.extend(crate::config::load_theme_files(&legacy_themes_dir));
-                }
+                let files = crate::config::load_all_theme_files(workspace);
                 if let Some(found) = files.into_iter().find(|t| t.id.eq_ignore_ascii_case(other)) {
                     Self::from_theme_file(&found)
                 } else {
@@ -467,42 +437,7 @@ impl Theme {
         ]
     }
 
-    pub fn custom_color_value(config: &ColorSchemeConfig, index: usize) -> Option<&str> {
-        match index {
-            0 => Some(&config.background),
-            1 => Some(&config.surface),
-            2 => Some(&config.text),
-            3 => Some(&config.muted),
-            4 => Some(&config.accent),
-            5 => Some(&config.success),
-            6 => Some(&config.warning),
-            7 => Some(&config.error),
-            _ => None,
-        }
-    }
 
-    /// Store one custom field after canonical `#RRGGBB` validation.
-    pub fn set_custom_color_value(
-        config: &mut ColorSchemeConfig,
-        index: usize,
-        value: &str,
-    ) -> bool {
-        let Some(value) = normalize_hex(value) else {
-            return false;
-        };
-        match index {
-            0 => config.background = value,
-            1 => config.surface = value,
-            2 => config.text = value,
-            3 => config.muted = value,
-            4 => config.accent = value,
-            5 => config.success = value,
-            6 => config.warning = value,
-            7 => config.error = value,
-            _ => return false,
-        }
-        true
-    }
 
     pub fn color_from_hex(value: &str) -> Option<Color> {
         let value = value.strip_prefix('#').unwrap_or(value);
@@ -785,15 +720,8 @@ impl Theme {
     }
 }
 
-fn normalize_hex(value: &str) -> Option<String> {
-    let value = value.trim();
-    let digits = value.strip_prefix('#').unwrap_or(value);
-    if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Some(format!("#{}", digits.to_ascii_lowercase()))
-    } else {
-        None
-    }
-}
+
+
 
 fn rgb(color: Color) -> (u8, u8, u8) {
     match color {
@@ -830,17 +758,7 @@ mod tests {
         assert_eq!(Theme::normalize_color_scheme(""), "zen");
     }
 
-    #[test]
-    fn custom_hex_values_are_canonicalized_and_applied() {
-        let mut custom = ColorSchemeConfig::default();
-        assert!(Theme::set_custom_color_value(&mut custom, 4, "A1B2c3"));
-        assert_eq!(custom.accent, "#a1b2c3");
-        assert!(!Theme::set_custom_color_value(&mut custom, 4, "blue"));
-        assert_eq!(
-            Theme::from_color_scheme("custom", &custom).brand(),
-            Color::Rgb(161, 178, 195)
-        );
-    }
+
 
     #[test]
     fn every_preset_has_a_distinct_canonical_index() {
@@ -848,6 +766,34 @@ mod tests {
         for (index, scheme) in schemes.iter().enumerate() {
             assert_eq!(Theme::color_scheme_index(&scheme.id), index);
         }
+    }
+
+    #[test]
+    fn discovers_workspace_themes_in_available_color_schemes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let ws = temp.path().join("proj");
+        let ws_themes = ws.join(".mutx").join("themes");
+        std::fs::create_dir_all(&ws_themes).unwrap();
+
+        let raw = r##"
+name = "Monokai Pro"
+description = "Monokai pro dark"
+[colors]
+background = "#2d2a2e"
+surface = "#403e41"
+text = "#fcfcfa"
+muted = "#727072"
+accent = "#ffd866"
+success = "#a9dc76"
+warning = "#fc9867"
+error = "#ff6188"
+"##;
+        std::fs::write(ws_themes.join("monokai-pro.toml"), raw).unwrap();
+
+        let schemes = Theme::available_color_schemes_with_workspace(Some(&ws));
+        assert!(schemes.iter().any(|s| s.id == "monokai-pro" && s.is_file));
+        let theme = Theme::from_color_scheme_with_workspace("monokai-pro", &ColorSchemeConfig::default(), Some(&ws));
+        assert_eq!(theme.app_bg, Color::Rgb(45, 42, 46));
     }
 
     #[test]

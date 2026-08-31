@@ -122,6 +122,10 @@ pub fn provider() -> io::Result<()> {
                     false,
                     &theme,
                     &crate::model::selection::SelectionState::None,
+                    false,
+                    None,
+                    &mut 0,
+                    0,
                 );
             });
         },

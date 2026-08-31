@@ -39,11 +39,11 @@ parent_call_id: string | null, } } | { "UserQuestionReply": { request_id: string
  */
 parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchProvider": { provider_type: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddProvider": { name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, user_agent: string | null, models: Array<string>, 
 /**
- * How the seeded channels authenticate. Default (`ApiKey`) keeps the
- * historical behavior; `XaiOAuth` marks SuperGrok channels whose live
+ * How the connection authenticates. Default (`ApiKey`) keeps the
+ * historical behavior; `XaiOAuth` marks SuperGrok connections whose live
  * access token is resolved from `auth.toml`.
  */
-auth: ChannelAuth, 
+auth: ConnectionAuth, 
 /**
  * The stable preset id this connection is created from.
  */
@@ -51,7 +51,7 @@ preset_id: string | null,
 /**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
-client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ChannelAuth, } } | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientIdentity | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
+client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientIdentity | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1): `None` keeps the stored
  * overrides untouched; `Some(record)` replaces them wholesale (an
@@ -63,7 +63,7 @@ overrides: CapabilityOverrides | null, } } | { "EditModelReasoning": { model: st
  * Capability overrides (ADR-0149 layer 1) — same semantics as
  * [`AgentRequest::EditProviderModel::overrides`].
  */
-overrides: CapabilityOverrides | null, } } | { "DeleteProvider": { id: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
+overrides: CapabilityOverrides | null, } } | { "DeleteProvider": { id: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryConnectionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
 /**
  * How many recent events to include in the event-log tail.
  */
@@ -102,11 +102,6 @@ summary: string,
  * Path to complete logs on disk (if captured).
  */
 log_path?: string | null, };
-
-/**
- * How a user-defined channel authenticates.
- */
-export type ChannelAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
 
 /**
  * First-class client identity presets and custom identity for connection impersonation.
@@ -289,6 +284,77 @@ alias_of?: string, command?: CommandSpec, };
  * Semantic kind of one backend-produced composer completion.
  */
 export type ComposerCompletionKind = "slash" | "slash_alias" | "intent" | "path_file" | "path_dir" | "path_explicit";
+
+/**
+ * How a user-defined connection authenticates.
+ */
+export type ConnectionAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
+
+/**
+ * Full inspection detail for one connection in the `/connections` modal.
+ */
+export type ConnectionDetail = { 
+/**
+ * Canonical connection id.
+ */
+id: string, 
+/**
+ * User-visible connection name.
+ */
+name: string, 
+/**
+ * Preset id if created from a preset (e.g. "deepseek", "anthropic").
+ */
+preset_id?: string | null, 
+/**
+ * Human-friendly preset label (e.g. "DeepSeek", "Anthropic").
+ */
+preset_label?: string | null, 
+/**
+ * Wire protocol label (e.g. "openai", "anthropic", "google").
+ */
+protocol: string, 
+/**
+ * Base URL endpoint.
+ */
+base_url: string, 
+/**
+ * Authentication type description (e.g. "API Key", "OAuth").
+ */
+auth_type: string, 
+/**
+ * Masked API key preview for security (e.g. "sk-12...abcd"), or None if no key.
+ */
+api_key_masked?: string | null, 
+/**
+ * Where the credential originates (e.g. "credentials.toml", "Environment (DEEPSEEK_API_KEY)").
+ */
+api_key_source: string, 
+/**
+ * Client identity configuration.
+ */
+client_identity: ClientIdentity, 
+/**
+ * Effective User-Agent string sent with requests.
+ */
+user_agent: string, 
+/**
+ * Every model served by this connection.
+ */
+models: Array<string>, 
+/**
+ * Active / default model for this connection if known.
+ */
+active_model?: string | null, 
+/**
+ * Remote provider usage / quota / balance state.
+ */
+usage: ConnectionUsageState, };
+
+/**
+ * State of a connection's usage / quota retrieval.
+ */
+export type ConnectionUsageState = { "status": "unsupported" } | { "status": "fetching" } | { "status": "available", "data": ProviderUsage } | { "status": "error", "data": string };
 
 export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, };
 
@@ -887,9 +953,9 @@ client_identity: ClientIdentity,
  */
 last_used_ms: number | null, 
 /**
- * How the default channel authenticates.
+ * How the connection authenticates.
  */
-auth: ChannelAuth, };
+auth: ConnectionAuth, };
 
 /**
  * Full snapshot of provider-picker state: which provider is the current
@@ -904,6 +970,27 @@ export type ProviderPickerSnapshot = {
  * `config.default_connection`.
  */
 default_id: string, rows: Array<ProviderPickerRow>, };
+
+/**
+ * Generic normalized provider usage / quota / balance info.
+ */
+export type ProviderUsage = { 
+/**
+ * High-level plan / account status (e.g. "Active", "Available", "Free Tier", "Tier 2", "Pay-as-you-go").
+ */
+plan?: string | null, 
+/**
+ * Primary balance / credit summary (e.g. "¥10.00", "$5.20", "10.00 CNY").
+ */
+primary_balance?: string | null, 
+/**
+ * Structured usage metrics / breakdown.
+ */
+metrics?: Array<UsageMetric>, 
+/**
+ * Unix epoch milliseconds of when this usage data was retrieved.
+ */
+updated_at_ms?: number | null, };
 
 /**
  * Controls how many queued messages are injected when the agent reaches a queue drain point.
@@ -1560,6 +1647,23 @@ export type TrustDomain = "mcp" | "skills" | "hooks" | "rules" | "roots";
 export type TurnPerformanceSnapshot = { round: number, turn: number, attempt: number, completion_tokens: number, usage_source: RequestUsageSource, performance: RequestPerformance, };
 
 /**
+ * One named metric in a provider's usage / quota report.
+ */
+export type UsageMetric = { 
+/**
+ * Metric label, e.g. "Total Balance", "Granted Balance", "Rate Limit".
+ */
+label: string, 
+/**
+ * Metric value, e.g. "¥10.00", "200 req / 10s", "0.50".
+ */
+value: string, 
+/**
+ * Optional unit or currency, e.g. "CNY", "USD", "requests".
+ */
+unit?: string | null, };
+
+/**
  * A single question inside an `ask_user` tool call.
  */
 export type UserQuestion = { 
@@ -1593,6 +1697,49 @@ export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>,
  * Origin label identifying which runner produced this request (ADR-0138).
  */
 origin?: string | null, };
+
+/**
+ * A persisted Web Connection record, declaring how to connect to a search or reader provider.
+ * Stored in `$XDG_STATE_HOME/muta/web_connections.toml`.
+ */
+export type WebConnection = { 
+/**
+ * Stable, unique connection identifier (e.g. "exa-default", "work-searxng").
+ */
+id: string, 
+/**
+ * Human-readable display name shown in pickers and UI.
+ */
+name?: string | null, 
+/**
+ * Capability kind (Search, Reader, Dual).
+ */
+kind: WebConnectionKind, 
+/**
+ * Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "jina").
+ */
+preset_id?: string | null, 
+/**
+ * Optional environment variable name supplying the API key (12-factor override).
+ */
+api_key_env?: string | null, 
+/**
+ * Custom base URL / endpoint (e.g. SearXNG endpoint or private Firecrawl server).
+ */
+base_url?: string | null, 
+/**
+ * Optional custom HTTP headers sent with requests.
+ */
+custom_headers?: { [key in string]: string } | null, 
+/**
+ * Whether this connection is active and enabled for routing.
+ */
+enabled: boolean, };
+
+/**
+ * Type of capability provided by a web connection.
+ */
+export type WebConnectionKind = "search" | "reader" | "dual";
 
 /**
  * A partial update to the `[websearch]` table. Every field is optional:
@@ -1648,7 +1795,15 @@ bocha_api_key?: string,
 /**
  * Jina Reader API key. Empty string clears the stored key.
  */
-jina_api_key?: string, };
+jina_api_key?: string, 
+/**
+ * Optional new or updated connection to upsert into `web_connections.toml`.
+ */
+upsert_connection?: WebConnection, 
+/**
+ * Optional connection ID to delete from `web_connections.toml`.
+ */
+delete_connection?: string, };
 
 /**
  * The frontend-facing view of the effective `[websearch]` configuration.
@@ -1657,7 +1812,11 @@ jina_api_key?: string, };
  * either reply ([`AgentResponse::WebSearchConfigSnapshot`] or
  * [`AgentResponse::WebSearchConfigUpdated`]).
  */
-export type WebSearchConfigView = { provider: string, reader: string, proxy?: string, timeout_secs: number, searxng_url?: string, exa_api_key_set: boolean, parallel_api_key_set: boolean, tavily_api_key_set: boolean, bocha_api_key_set: boolean, jina_api_key_set: boolean, };
+export type WebSearchConfigView = { provider: string, reader: string, proxy?: string, timeout_secs: number, searxng_url?: string, exa_api_key_set: boolean, parallel_api_key_set: boolean, tavily_api_key_set: boolean, bocha_api_key_set: boolean, jina_api_key_set: boolean, 
+/**
+ * Configured web connection instances from `web_connections.toml`.
+ */
+connections: Array<WebConnection>, };
 
 /**
  * First-class security state attached to every harness snapshot.

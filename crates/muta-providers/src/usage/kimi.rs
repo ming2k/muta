@@ -1,0 +1,138 @@
+//! Kimi (Moonshot) balance / usage fetcher.
+//!
+//! Query endpoint: `GET https://api.moonshot.cn/v1/users/me/balance`
+
+use muta_contracts::async_trait;
+use muta_contracts::{ProviderUsage, UsageMetric};
+use serde::Deserialize;
+
+use super::ProviderUsageFetcher;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct KimiBalanceResponse {
+    #[serde(default)]
+    pub(crate) code: i64,
+    #[serde(default)]
+    pub(crate) data: Option<KimiBalanceData>,
+    #[serde(default)]
+    pub(crate) status: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct KimiBalanceData {
+    #[serde(default)]
+    pub(crate) available_balance: f64,
+    #[serde(default)]
+    pub(crate) voucher_balance: f64,
+    #[serde(default)]
+    pub(crate) cash_balance: f64,
+}
+
+pub struct KimiUsageFetcher;
+
+#[async_trait]
+impl ProviderUsageFetcher for KimiUsageFetcher {
+    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
+        preset_id == Some("kimi") || base_url.contains("moonshot.cn")
+    }
+
+    async fn fetch_usage(
+        &self,
+        client: &reqwest::Client,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<ProviderUsage, String> {
+        let endpoint = if base_url.contains("moonshot.cn") {
+            let base = base_url.trim_end_matches('/');
+            let base = base.strip_suffix("/v1").unwrap_or(base);
+            format!("{base}/v1/users/me/balance")
+        } else {
+            "https://api.moonshot.cn/v1/users/me/balance".to_string()
+        };
+
+        let resp = client
+            .get(&endpoint)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {text}"));
+        }
+
+        let body: KimiBalanceResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse Kimi balance response: {e}"))?;
+
+        parse_kimi_balance(body)
+    }
+}
+
+pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUsage, String> {
+    let data = body.data.ok_or_else(|| {
+        format!("No data returned by Kimi balance API (code: {})", body.code)
+    })?;
+
+    let primary_balance = format!("¥{:.2}", data.available_balance);
+
+    let mut metrics = Vec::new();
+    metrics.push(UsageMetric {
+        label: "Available Balance".to_string(),
+        value: format!("¥{:.2}", data.available_balance),
+        unit: Some("CNY".to_string()),
+    });
+    metrics.push(UsageMetric {
+        label: "Cash Balance".to_string(),
+        value: format!("¥{:.2}", data.cash_balance),
+        unit: Some("CNY".to_string()),
+    });
+    metrics.push(UsageMetric {
+        label: "Voucher Balance".to_string(),
+        value: format!("¥{:.2}", data.voucher_balance),
+        unit: Some("CNY".to_string()),
+    });
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .ok();
+
+    Ok(ProviderUsage {
+        plan: if body.status { Some("Active".to_string()) } else { None },
+        primary_balance: Some(primary_balance),
+        metrics,
+        updated_at_ms: now_ms,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_kimi_balance_json() {
+        let json = r#"{
+            "code": 0,
+            "data": {
+                "available_balance": 25.8,
+                "voucher_balance": 5.0,
+                "cash_balance": 20.8
+            },
+            "status": true
+        }"#;
+
+        let parsed: KimiBalanceResponse = serde_json::from_str(json).unwrap();
+        let usage = parse_kimi_balance(parsed).unwrap();
+
+        assert_eq!(usage.plan.as_deref(), Some("Active"));
+        assert_eq!(usage.primary_balance.as_deref(), Some("¥25.80"));
+        assert_eq!(usage.metrics.len(), 3);
+        assert_eq!(usage.metrics[0].label, "Available Balance");
+        assert_eq!(usage.metrics[0].value, "¥25.80");
+    }
+}

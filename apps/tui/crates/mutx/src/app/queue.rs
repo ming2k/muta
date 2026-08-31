@@ -475,11 +475,14 @@ impl App {
     /// Commit the composer's current content into the pointed-at queue item,
     /// **in place** — the queue's length and order are untouched; only the
     /// item's content changes — and dissolve the pointer.
-    pub fn commit_queue_pointer(&mut self, session_id: &str) -> Option<()> {
+    pub fn commit_queue_pointer(
+        &mut self,
+        session_id: &str,
+        text: String,
+        images: Vec<ImagePart>,
+        text_pastes: Vec<String>,
+    ) -> Option<()> {
         let id = self.queue_pointer.clone()?;
-        let text = self.input.clone();
-        let images = self.pending_images.clone();
-        let text_pastes = self.pending_text_pastes.clone();
 
         self.queue_pointer = None;
         self.queue_pointer_draft.clear();

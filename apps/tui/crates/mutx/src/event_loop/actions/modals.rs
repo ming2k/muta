@@ -9,10 +9,8 @@ use std::sync::atomic::Ordering;
 use muta_contracts::AgentRequest;
 
 use crate::overlays;
-use crate::view::Theme;
 use crate::{App, Modal};
 
-use super::super::arm_effort_ignition_if_max;
 use super::ActionFlow;
 
 /// Loop stage (input dispatch): the `SubmitCustomProvider` arm.
@@ -198,7 +196,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                         String::new(),
                         String::new(),
                         String::new(),
-                        muta_contracts::ChannelAuth::ApiKey,
+                        muta_contracts::ConnectionAuth::ApiKey,
                         false,
                     ));
                 app.model_search = false;
@@ -211,8 +209,91 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
 /// Loop stage (input dispatch): the `SubmitModelEditor` arm.
 pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
     if app.active_modal() == Modal::ModelEditor
-        && let Some(id) = app.editor_target.clone()
+        && let Some(target) = app.editor_target.clone()
     {
+        if let Some(payload) = target.strip_prefix("web_search:") {
+            let key = app.input.trim().to_string();
+            let (preset_id, name) = match payload {
+                "tavily" => (Some("tavily".to_string()), "Tavily AI Search".to_string()),
+                "bocha" => (Some("bocha".to_string()), "Bocha AI Search".to_string()),
+                "searxng" => (Some("searxng".to_string()), "SearXNG Instance".to_string()),
+                "parallel" => (Some("parallel".to_string()), "Parallel Search".to_string()),
+                "custom-search" => (None, "Custom Search Relay".to_string()),
+                _ => (Some("exa".to_string()), "Exa Search".to_string()),
+            };
+            let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
+            let new_conn = muta_contracts::WebSearchConnection {
+                id: id.clone(),
+                name: Some(name),
+                preset_id,
+                api_key_env: None,
+                base_url: None,
+                custom_headers: None,
+                enabled: true,
+            };
+
+            let mut update = muta_contracts::WebSearchConfigUpdate {
+                upsert_search_connection: Some(new_conn),
+                provider: Some(id),
+                ..Default::default()
+            };
+            if !key.is_empty() {
+                match payload {
+                    "tavily" => update.tavily_api_key = Some(key),
+                    "bocha" => update.bocha_api_key = Some(key),
+                    "parallel" => update.parallel_api_key = Some(key),
+                    "exa" => update.exa_api_key = Some(key),
+                    _ => {}
+                }
+            }
+            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+
+            app.input.clear();
+            app.set_cursor(0);
+            app.editor_target = None;
+            app.pop_transient_surface();
+            return ActionFlow::NextEvent;
+        }
+
+        if let Some(payload) = target.strip_prefix("web_reader:") {
+            let key = app.input.trim().to_string();
+            let (preset_id, name) = match payload {
+                "firecrawl" => (Some("firecrawl".to_string()), "Firecrawl Reader".to_string()),
+                "custom-reader" => (None, "Custom Web Reader".to_string()),
+                _ => (Some("jina".to_string()), "Jina Reader".to_string()),
+            };
+            let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
+            let new_conn = muta_contracts::WebReaderConnection {
+                id: id.clone(),
+                name: Some(name),
+                preset_id,
+                api_key_env: None,
+                base_url: None,
+                custom_headers: None,
+                enabled: true,
+            };
+
+            let mut update = muta_contracts::WebSearchConfigUpdate {
+                upsert_reader_connection: Some(new_conn),
+                reader: Some(id),
+                ..Default::default()
+            };
+            if !key.is_empty() {
+                match payload {
+                    "jina" => update.jina_api_key = Some(key),
+                    _ => {}
+                }
+            }
+            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+
+            app.input.clear();
+            app.set_cursor(0);
+            app.editor_target = None;
+            app.pop_transient_surface();
+            return ActionFlow::NextEvent;
+        }
+
+        let id = target;
         let model = if app.editor_model.trim().is_empty() {
             app.provider_picker
                 .rows
@@ -375,14 +456,6 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.model_modal_follow = true;
             app.modal_index = 0;
             app.pop_transient_surface();
-        } else if app.active_modal() == Modal::Config && app.config_custom_editing {
-            // Click-outside closes the settings stack. Discard
-            // the transactional custom preview before leaving.
-            app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
-            app.custom_color_draft = app.custom_color_scheme.clone();
-            app.config_custom_editing = false;
-            app.input.clear();
-            app.set_cursor(0);
         }
         // Queue's exit hook (the open-time auto-block release) now lives in
         // `hide_active_panel` — every hide path releases it, not just this
@@ -397,6 +470,9 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
 /// Loop stage (input dispatch): the `ModalUp` arm (per-modal ↑ navigation).
 pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
     match app.active_modal() {
+        Modal::Connections if app.connection_info_detail => {
+            app.connection_info_scroll = app.connection_info_scroll.saturating_sub(1);
+        }
         Modal::Connections | Modal::Models => {
             // Walk the fuzzy-filtered rows of the *active picker*
             // (providers in Connections, flat (provider, model)
@@ -494,43 +570,31 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.config_detail_scroll = 0;
             }
             crate::overlays::ConfigFocus::Detail => {
-                if app.config_category == 0 && app.config_custom_editing {
-                    let num_schemes = crate::view::Theme::available_color_schemes().len();
-                    let custom_field_idx =
-                        app.config_detail_index.saturating_sub(num_schemes).min(7);
-                    let _ = crate::view::Theme::set_custom_color_value(
-                        &mut app.custom_color_draft,
-                        custom_field_idx,
-                        &app.input,
-                    );
-                    let next_field = (custom_field_idx + 8 - 1) % 8;
-                    app.config_detail_index = num_schemes + next_field;
-                    app.input =
-                        crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
-                            .unwrap_or("#000000")
-                            .to_string();
-                    app.set_cursor_end();
+                let ws_path = if app.current_workspace.is_empty() {
+                    None
                 } else {
-                    let count = match app.config_category {
-                        0 => crate::view::Theme::available_color_schemes().len(),
-                        1 => 5usize,
-                        2 => 1usize,
-                        3 => 10usize,
-                        _ => 4usize,
-                    };
-                    if count > 0 {
-                        app.config_detail_index = (app.config_detail_index + count - 1) % count;
-                    }
-                    if app.config_category == 0 {
-                        let schemes = crate::view::Theme::available_color_schemes();
-                        if let Some(scheme) =
-                            schemes.get(app.config_detail_index % schemes.len().max(1))
-                        {
-                            app.theme = crate::view::Theme::from_color_scheme(
-                                &scheme.id,
-                                &app.custom_color_scheme,
-                            );
-                        }
+                    Some(std::path::Path::new(&app.current_workspace))
+                };
+                let count = match app.config_category {
+                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path).len().max(1),
+                    1 => 5usize,
+                    2 => 1usize,
+                    3 => 10usize,
+                    _ => 4usize,
+                };
+                if count > 0 {
+                    app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                }
+                if app.config_category == 0 {
+                    let schemes = crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                    if let Some(scheme) =
+                        schemes.get(app.config_detail_index % schemes.len().max(1))
+                    {
+                        app.theme = crate::view::Theme::from_color_scheme_with_workspace(
+                            &scheme.id,
+                            &app.custom_color_scheme,
+                            ws_path,
+                        );
                     }
                 }
             }
@@ -613,6 +677,9 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
 /// Loop stage (input dispatch): the `ModalDown` arm (per-modal ↓ navigation).
 pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
     match app.active_modal() {
+        Modal::Connections if app.connection_info_detail => {
+            app.connection_info_scroll = app.connection_info_scroll.saturating_add(1);
+        }
         Modal::Connections | Modal::Models => {
             let count = app.picker_row_count().max(1);
             app.modal_index = (app.modal_index + 1) % count;
@@ -665,43 +732,31 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 app.config_detail_scroll = 0;
             }
             crate::overlays::ConfigFocus::Detail => {
-                if app.config_category == 0 && app.config_custom_editing {
-                    let num_schemes = crate::view::Theme::available_color_schemes().len();
-                    let custom_field_idx =
-                        app.config_detail_index.saturating_sub(num_schemes).min(7);
-                    let _ = crate::view::Theme::set_custom_color_value(
-                        &mut app.custom_color_draft,
-                        custom_field_idx,
-                        &app.input,
-                    );
-                    let next_field = (custom_field_idx + 1) % 8;
-                    app.config_detail_index = num_schemes + next_field;
-                    app.input =
-                        crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
-                            .unwrap_or("#000000")
-                            .to_string();
-                    app.set_cursor_end();
+                let ws_path = if app.current_workspace.is_empty() {
+                    None
                 } else {
-                    let count = match app.config_category {
-                        0 => crate::view::Theme::available_color_schemes().len(),
-                        1 => 5usize,
-                        2 => 1usize,
-                        3 => 10usize,
-                        _ => 4usize,
-                    };
-                    if count > 0 {
-                        app.config_detail_index = (app.config_detail_index + 1) % count;
-                    }
-                    if app.config_category == 0 {
-                        let schemes = crate::view::Theme::available_color_schemes();
-                        if let Some(scheme) =
-                            schemes.get(app.config_detail_index % schemes.len().max(1))
-                        {
-                            app.theme = crate::view::Theme::from_color_scheme(
-                                &scheme.id,
-                                &app.custom_color_scheme,
-                            );
-                        }
+                    Some(std::path::Path::new(&app.current_workspace))
+                };
+                let count = match app.config_category {
+                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path).len().max(1),
+                    1 => 5usize,
+                    2 => 1usize,
+                    3 => 10usize,
+                    _ => 4usize,
+                };
+                if count > 0 {
+                    app.config_detail_index = (app.config_detail_index + 1) % count;
+                }
+                if app.config_category == 0 {
+                    let schemes = crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                    if let Some(scheme) =
+                        schemes.get(app.config_detail_index % schemes.len().max(1))
+                    {
+                        app.theme = crate::view::Theme::from_color_scheme_with_workspace(
+                            &scheme.id,
+                            &app.custom_color_scheme,
+                            ws_path,
+                        );
                     }
                 }
             }
@@ -774,6 +829,214 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Activity
         | Modal::ViewSwitcher
         | Modal::None => {}
+    }
+}
+
+pub(crate) fn effective_reasoning_effort(app: &App) -> Option<&str> {
+    app.provider_picker
+        .rows
+        .iter()
+        .find(|row| row.id == app.current_provider)
+        .and_then(|row| row.model_info.iter().find(|m| m.model == app.current_model))
+        .and_then(|m| {
+            let show = match m.protocol.as_str() {
+                "anthropic" => m.thinking == Some(true),
+                _ => m.effort.is_some(),
+            };
+            if show { m.effort.as_deref() } else { None }
+        })
+}
+
+pub(crate) fn arm_effort_ignition_if_max(app: &mut App) {
+    if effective_reasoning_effort(app) == Some("max") && app.effort_ignition_epoch.is_none() {
+        app.effort_ignition_epoch = Some(std::time::Instant::now());
+    }
+}
+
+pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bool) {
+    if key_ready {
+        let _ = app.tx.send(AgentRequest::SwitchProvider {
+            provider_type: id,
+            model,
+            api_key: None,
+            base_url: None,
+        });
+        arm_effort_ignition_if_max(app);
+        app.dismiss_surface();
+    } else if app.provider_row_auth(&id).is_oauth() {
+        let auth = app.provider_row_auth(&id);
+        let method = auth
+            .oauth_provider_id()
+            .and_then(muta_providers::oauth::config_by_provider_id)
+            .and_then(|config| config.effective_default_login_method())
+            .or_else(|| auth.default_login_method())
+            .unwrap_or(muta_contracts::LoginMethod::Device);
+        let _ = app.tx.send(AgentRequest::ConnectProvider { id, method });
+        app.dismiss_surface();
+    } else {
+        app.push_transient_surface(Modal::ModelEditor);
+        app.editor_target = Some(id);
+        app.editor_field = 0;
+        app.editor_key.clear();
+        app.editor_model = model;
+        app.editor_model_settings_only = false;
+        app.editor_target_is_builtin = false;
+        app.editor_effort = "high".to_string();
+        app.editor_thinking = true;
+        app.input.clear();
+        app.set_cursor(0);
+        app.model_search = false;
+    }
+}
+
+pub(crate) async fn handle_permission_submit(
+    app: &mut App,
+    runtime: &crate::event_loop::runtime::UiRuntime,
+) {
+    let one_off = app.pending_permission.as_ref().is_some_and(|r| r.one_off);
+    let reject_idx = if one_off { 1 } else { 2 };
+    let details_idx = if one_off { 2 } else { 3 };
+    if app.permission_confirm_always {
+        if app.modal_index == 1 {
+            app.permission_confirm_always = false;
+            app.modal_index = 1;
+            return;
+        }
+    } else {
+        if app.modal_index == details_idx {
+            app.permission_show_details = !app.permission_show_details;
+            app.permission_scroll = 0;
+            return;
+        }
+        if !one_off && app.modal_index == 1 {
+            app.permission_confirm_always = true;
+            app.permission_show_details = false;
+            app.modal_index = 0;
+            return;
+        }
+    }
+    if let Some(request) = app.pending_permission.take() {
+        let decision = if app.permission_confirm_always {
+            muta_contracts::PermissionDecision::Always
+        } else {
+            match app.modal_index {
+                0 => muta_contracts::PermissionDecision::Once,
+                i if i == reject_idx => muta_contracts::PermissionDecision::Reject,
+                _ => muta_contracts::PermissionDecision::Reject,
+            }
+        };
+        let request_id = request.id;
+        let parent_call_id = runtime
+            .runner_permission_parent
+            .lock()
+            .await
+            .remove(&request_id);
+        let _ = app.tx.send(AgentRequest::PermissionReply {
+            request_id: request_id.clone(),
+            decision,
+            parent_call_id,
+        });
+        if decision == muta_contracts::PermissionDecision::Reject {
+            let queued: Vec<muta_contracts::PermissionRequest> =
+                runtime.pending_permission.lock().await.drain(..).collect();
+            let mut parents = runtime.runner_permission_parent.lock().await;
+            for pending in queued {
+                let parent_call_id = parents.remove(&pending.id);
+                let _ = app.tx.send(AgentRequest::PermissionReply {
+                    request_id: pending.id,
+                    decision: muta_contracts::PermissionDecision::Reject,
+                    parent_call_id,
+                });
+            }
+            app.pending_permission = None;
+            app.pop_transient_surface();
+        } else {
+            let mut queue = runtime.pending_permission.lock().await;
+            queue.retain(|r| r.id != request_id);
+            app.pending_permission = queue.front().cloned();
+            drop(queue);
+            if app.pending_permission.is_none() {
+                app.pop_transient_surface();
+            }
+        }
+        app.modal_index = 0;
+        app.permission_scroll = 0;
+        app.permission_max_scroll = 0;
+        app.permission_confirm_always = false;
+        app.permission_show_details = false;
+    }
+}
+
+pub(crate) fn modal_page_step(app: &App) -> usize {
+    let h = if app.modal_body_height > 0 {
+        app.modal_body_height
+    } else {
+        app.view_height
+    };
+    h.saturating_sub(1).max(1) as usize
+}
+
+pub(crate) mod question_effects {
+    use super::{AgentRequest, App};
+    use crate::event_loop::runtime::UiRuntime;
+    use std::sync::atomic::Ordering;
+
+    pub(crate) async fn apply(
+        effects: &[crate::question_model::QuestionEffect],
+        app: &mut App,
+        runtime: &UiRuntime,
+    ) {
+        for effect in effects {
+            match effect {
+                crate::question_model::QuestionEffect::Reply {
+                    request_id,
+                    answers,
+                } => {
+                    if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
+                        runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
+                        if let Some(command) = crate::trust_gate::answer_to_command(answers) {
+                            let _ = app.tx.send(AgentRequest::SlashCommand(command));
+                        }
+                        continue;
+                    }
+                    let parent_call_id = runtime
+                        .runner_question_parent
+                        .lock()
+                        .await
+                        .remove(request_id);
+                    let _ = app.tx.send(AgentRequest::UserQuestionReply {
+                        request_id: request_id.clone(),
+                        answers: answers.clone(),
+                        parent_call_id,
+                    });
+                }
+                crate::question_model::QuestionEffect::Cancelled { request_id } => {
+                    if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
+                        runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
+                        continue;
+                    }
+                    let parent_call_id = runtime
+                        .runner_question_parent
+                        .lock()
+                        .await
+                        .remove(request_id);
+                    let _ = app.tx.send(AgentRequest::UserQuestionReply {
+                        request_id: request_id.clone(),
+                        answers: Vec::new(),
+                        parent_call_id,
+                    });
+                }
+                crate::question_model::QuestionEffect::Closed { request_id } => {
+                    let mut queue = runtime.pending_question.lock().await;
+                    queue.retain(|r| r.id != *request_id);
+                    if queue.is_empty() {
+                        app.question = None;
+                        app.pop_transient_surface();
+                        app.modal_index = 0;
+                    }
+                }
+            }
+        }
     }
 }
 

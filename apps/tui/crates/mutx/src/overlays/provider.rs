@@ -60,20 +60,22 @@ pub fn draw_connections_modal(
     keymap_open: bool,
     theme: &Theme,
     selection: &SelectionState,
+    connection_info_detail: bool,
+    connection_detail: Option<&muta_contracts::ConnectionDetail>,
+    connection_info_scroll: &mut usize,
+    spinner_phase: usize,
 ) -> mutx_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let header_rect = f.header;
 
-    // `a add` opens the preset chooser and is the primary action in this view
-    // (rank 80), surviving width collapse longer than `D delete` (rank 70).
-    // There is no `Enter activate` here — switching the active provider is the Models
-    // picker's job; this surface only manages instances.
-    let browse_hints: [FooterHint; 7] = [
+    // `a add` opens the preset chooser and `Enter details` drills into connection info/usage.
+    let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary("a", "preset"),
+        FooterHint::primary(keyvocab::ENTER, "details"),
+        FooterHint::secondary("a", "preset"),
         FooterHint::secondary("c", "custom"),
         FooterHint::secondary("e", "edit"),
         FooterHint::secondary("r", "refresh"),
@@ -116,6 +118,55 @@ pub fn draw_connections_modal(
         );
         if let Some(fo) = f.footer {
             render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
+        }
+        return area;
+    }
+
+    if connection_info_detail {
+        let conn_title = connection_detail
+            .map(|d| d.name.as_str())
+            .unwrap_or("Details");
+        let header = breadcrumb_parts("Connections", conn_title);
+        modal_header_parts(frame, f.header, &header, theme);
+        let detail_footer: [FooterHint; 3] = [
+            FooterHint::always(keyvocab::ESC, "list"),
+            FooterHint::secondary("r", "refresh"),
+            FooterHint::secondary("e", "edit"),
+        ];
+        let body = match connection_detail {
+            None => {
+                const SPINNER_FRAMES: [&str; 10] =
+                    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+                vec![
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+                        Span::styled(
+                            "Loading connection details and provider usage…",
+                            Style::default().fg(theme.muted()),
+                        ),
+                    ]),
+                ]
+            }
+            Some(detail) => connection_detail_body(detail, theme),
+        };
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame,
+            f.body,
+            &rows,
+            connection_info_scroll,
+            None,
+            theme,
+            selection,
+            layout_map,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer(frame, fo, &detail_footer, theme);
         }
         return area;
     }
@@ -515,6 +566,129 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
             Span::styled(" for custom", Style::default().fg(theme.muted())),
         ]),
     ]
+}
+
+/// Render the detail body lines for one connection (configuration + caller identity + models + provider usage).
+fn connection_detail_body(
+    detail: &muta_contracts::ConnectionDetail,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let label = Style::default().fg(theme.dim());
+    let value = Style::default().fg(theme.fg());
+    let header_style = Style::default().fg(theme.primary).add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme.muted());
+    let highlight = Style::default().fg(theme.primary);
+    let warning = Style::default().fg(theme.warning);
+
+    let kv = |k: &str, v: String| {
+        Line::from(vec![
+            Span::styled(format!("{k}: "), label),
+            Span::styled(v, value),
+        ])
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(Span::styled("Configuration", header_style)));
+    lines.push(kv("ID", detail.id.clone()));
+    lines.push(kv("Name", detail.name.clone()));
+    if let Some(preset) = &detail.preset_label {
+        lines.push(kv("Preset", preset.clone()));
+    } else if let Some(pid) = &detail.preset_id {
+        lines.push(kv("Preset ID", pid.clone()));
+    } else {
+        lines.push(kv("Type", "Custom Connection".to_string()));
+    }
+    lines.push(kv("Protocol", detail.protocol.clone()));
+    lines.push(kv("Base URL", detail.base_url.clone()));
+    lines.push(kv("Auth Type", detail.auth_type.clone()));
+    if let Some(masked) = &detail.api_key_masked {
+        lines.push(Line::from(vec![
+            Span::styled("API Key: ", label),
+            Span::styled(masked.clone(), value),
+            Span::styled(format!(" ({})", detail.api_key_source), muted),
+        ]));
+    } else {
+        lines.push(kv("Credential", detail.api_key_source.clone()));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Caller Identity", header_style)));
+    lines.push(kv("Preset", detail.client_identity.label().to_string()));
+    lines.push(kv("User-Agent", detail.user_agent.clone()));
+    if let muta_contracts::ClientIdentity::Custom { extra_headers, .. } = &detail.client_identity {
+        if !extra_headers.is_empty() {
+            lines.push(Line::from(Span::styled("Custom Headers:", label)));
+            for (k, v) in extra_headers {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", label),
+                    Span::styled(format!("{k}: "), label),
+                    Span::styled(v.clone(), value),
+                ]));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Served Models", header_style)));
+    if let Some(active) = &detail.active_model {
+        lines.push(Line::from(vec![
+            Span::styled("Active Model: ", label),
+            Span::styled(active.clone(), highlight),
+        ]));
+    }
+    if detail.models.is_empty() {
+        lines.push(Line::from(Span::styled("(no models configured)", muted)));
+    } else {
+        let models_str = detail.models.join(", ");
+        lines.push(Line::from(vec![
+            Span::styled(format!("Models ({}): ", detail.models.len()), label),
+            Span::styled(models_str, value),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Provider Usage & Quota", header_style)));
+    match &detail.usage {
+        muta_contracts::ConnectionUsageState::Available(usage) => {
+            if let Some(plan) = &usage.plan {
+                lines.push(kv("Plan / Status", plan.clone()));
+            }
+            if let Some(bal) = &usage.primary_balance {
+                lines.push(Line::from(vec![
+                    Span::styled("Primary Balance: ", label),
+                    Span::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD)),
+                ]));
+            }
+            for metric in &usage.metrics {
+                let val = match &metric.unit {
+                    Some(u) => format!("{} {}", metric.value, u),
+                    None => metric.value.clone(),
+                };
+                lines.push(kv(&metric.label, val));
+            }
+        }
+        muta_contracts::ConnectionUsageState::Unsupported => {
+            lines.push(Line::from(Span::styled(
+                "Usage query is not supported for this provider.",
+                muted,
+            )));
+        }
+        muta_contracts::ConnectionUsageState::Error(err) => {
+            lines.push(Line::from(vec![
+                Span::styled("Usage query failed: ", warning),
+                Span::styled(err.clone(), value),
+            ]));
+        }
+        muta_contracts::ConnectionUsageState::Fetching => {
+            lines.push(Line::from(Span::styled(
+                "Querying provider usage…",
+                muted,
+            )));
+        }
+    }
+
+    lines
 }
 
 /// Build the **Models** flat model list body via the shared [`crate::components::row::ListRow`]
@@ -2610,6 +2784,10 @@ mod tests {
                 false,
                 &theme,
                 &selection,
+                false,
+                None,
+                &mut 0,
+                0,
             );
         });
         let text = buffer_text(&terminal);
@@ -2642,10 +2820,114 @@ mod tests {
                 false,
                 &theme,
                 &selection,
+                false,
+                None,
+                &mut 0,
+                0,
             );
         });
         let text = buffer_text(&terminal);
         assert!(text.contains("(no matches — try a shorter or different query)"));
         assert!(text.contains("clear search"));
+    }
+
+    #[test]
+    fn connections_modal_detail_view_renders_info_and_usage() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(80, 30);
+        let detail = muta_contracts::ConnectionDetail {
+            id: "deepseek-prod".to_string(),
+            name: "DeepSeek Production".to_string(),
+            preset_id: Some("deepseek".to_string()),
+            preset_label: Some("DeepSeek".to_string()),
+            protocol: "openai".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            auth_type: "API Key".to_string(),
+            api_key_masked: Some("sk-12...abcd".to_string()),
+            api_key_source: "credentials.toml".to_string(),
+            client_identity: muta_contracts::ClientIdentity::Native,
+            user_agent: "muta/0.37.21".to_string(),
+            models: vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
+            active_model: Some("deepseek-chat".to_string()),
+            usage: muta_contracts::ConnectionUsageState::Available(muta_contracts::ProviderUsage {
+                plan: Some("Available".to_string()),
+                primary_balance: Some("¥100.50".to_string()),
+                metrics: vec![
+                    muta_contracts::UsageMetric {
+                        label: "Total Balance".to_string(),
+                        value: "100.50".to_string(),
+                        unit: Some("CNY".to_string()),
+                    },
+                ],
+                updated_at_ms: None,
+            }),
+        };
+
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+                true,
+                Some(&detail),
+                &mut 0,
+                0,
+            );
+        });
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Connections"));
+        assert!(text.contains("DeepSeek Production"));
+        assert!(text.contains("Configuration"));
+        assert!(text.contains("deepseek-prod"));
+        assert!(text.contains("https://api.deepseek.com"));
+        assert!(text.contains("sk-12...abcd"));
+        assert!(text.contains("Caller Identity"));
+        assert!(text.contains("Served Models"));
+        assert!(text.contains("deepseek-chat"));
+
+        // Scroll to view usage section
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 8;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+                true,
+                Some(&detail),
+                &mut 8,
+                0,
+            );
+        });
+
+        let scrolled_text = buffer_text(&terminal);
+        assert!(scrolled_text.contains("Provider Usage & Quota"));
+        assert!(scrolled_text.contains("¥100.50"));
+        assert!(scrolled_text.contains("100.50 CNY"));
     }
 }

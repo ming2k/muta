@@ -505,29 +505,18 @@ impl App {
         true
     }
 
-    /// Cancel the inline history recall walk and restore the stashed draft
-    /// (text and attachments together) immediately. Returns true if history
-    /// recall was active and cancelled.
-    pub fn cancel_history_recall(&mut self) -> bool {
-        if self.history_index.is_none() {
-            return false;
+    /// Cancel inline history recall and restore the draft that was saved
+    /// before navigation began.
+    pub fn cancel_history_recall(&mut self) {
+        if self.history_index.is_some() {
+            self.history_index = None;
+            self.input = std::mem::take(&mut self.history_draft);
+            self.pending_images = std::mem::take(&mut self.history_draft_images);
+            self.pending_text_pastes = std::mem::take(&mut self.history_draft_text_pastes);
+            self.set_cursor_end();
+            self.suggestion_index = None;
+            self.completion_dismissed = true;
         }
-        self.history_index = None;
-        self.input = std::mem::take(&mut self.history_draft);
-        self.pending_images = std::mem::take(&mut self.history_draft_images);
-        self.pending_text_pastes = std::mem::take(&mut self.history_draft_text_pastes);
-        self.set_cursor_end();
-        self.suggestion_index = None;
-        self.completion_dismissed = true;
-        true
-    }
-
-    /// Return `(1-based index, total)` of the current session's inline history recall position,
-    /// or `None` if inline history recall is not active.
-    pub fn history_recall_position(&self) -> Option<(usize, usize)> {
-        let pos = self.history_index?;
-        let total = self.current_session_history().len();
-        Some((pos + 1, total))
     }
 
     /// Tear down the history modal's borrowed state: hand the parked composer

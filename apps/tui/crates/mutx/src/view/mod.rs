@@ -41,6 +41,8 @@ pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::*;
+#[allow(unused_imports)]
+pub use crate::views::settings::*;
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
@@ -54,7 +56,7 @@ use crate::text_layout::WrappedLine;
 #[cfg(test)]
 use crate::text_layout::{block_selection_range, line_selection};
 #[allow(unused_imports)]
-pub use crate::theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, Theme};
+pub use crate::theme::{COLOR_SCHEMES, Theme};
 #[cfg(test)]
 use mutx_engine::text::{prohibited_line_end, prohibited_line_start};
 // Re-export the drawing sub-trees so consumers that used to reach them through

@@ -409,7 +409,7 @@ pub fn draw_todo_bar(
         .find(|i| i.status == TodoStatus::InProgress)
         .or_else(|| todos.items.iter().find(|i| i.status == TodoStatus::Pending));
 
-    // ── Left identity: `TODOS d/t` ──
+    // Left identity: `TODOS d/t`
     // Uppercase reads as a section tag rather than a lowercase token; the
     // count sits one space off the label.
     let left: Vec<Span<'static>> = vec![
@@ -419,7 +419,7 @@ pub fn draw_todo_bar(
     ];
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
 
-    // ── Right legend: `Ctrl+T expand`, dropping under width pressure ──
+    // Right legend: `Ctrl+T expand`, dropping under width pressure
     let mk_legend = |density: TodoLegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(keycap_span(theme, Key::CTRL_T.display()));
@@ -1297,7 +1297,7 @@ pub fn draw_queue_bar(
     // blends with the frame instead of reading as a raised band.
     let full_w = rect.width as usize;
 
-    // ── Resolve the next item to pop ────────────────────────────────────────
+    // Resolve the next item to pop
     // Dispatch is FIFO: the front-most item pops first. Every bar item is a
     // next-round entry now (ADR-0126).
     let next = items.first();
@@ -1324,9 +1324,9 @@ pub fn draw_queue_bar(
         .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
 
-    // ── Left: `QUEUE N [blocked]` ───────────────────────────────────────────
+    // Left: `FOLLOW-UPS N [blocked]`
     let mut left: Vec<Span<'static>> =
-        vec![Span::styled("QUEUE", tag_style), Span::styled(" ", dim)];
+        vec![Span::styled("FOLLOW-UPS", tag_style), Span::styled(" ", dim)];
     let count_label = if count > 99 {
         "99+".to_string()
     } else {
@@ -1342,7 +1342,7 @@ pub fn draw_queue_bar(
         left.push(Span::styled("blocked", count_style));
     }
 
-    // ── Right-side keycap legend ────────────────────────────────────────────
+    // Right-side keycap legend
     // The keys explain the outbox affordances (the Ctrl row, ADR-0126):
     //   Ctrl+P — block / resume the outbox (toggles; label flips with state)
     //   Ctrl+Q — expand the full queue list
@@ -1371,7 +1371,7 @@ pub fn draw_queue_bar(
         spans
     };
 
-    // ── Middle: next-item preview ───────────────────────────────────────────
+    // Middle: next-item preview
     // One-line, control-chars-collapsed. The preview is the most elastic
     // segment: it truncates to whatever the identity and the legend leave
     // behind, and disappears entirely on very narrow rows.
@@ -1437,7 +1437,7 @@ pub fn draw_queue_bar(
         });
     let preview_w = preview.as_ref().map_or(0, |p| p.width());
 
-    // ── Compose the single row: left · preview … legend ─────────────────────
+    // Compose the single row: left · preview … legend
     let mut row: Vec<Span<'static>> = Vec::with_capacity(left.len() + right.len() + 4);
     row.extend(left);
     if let Some(preview) = preview {
@@ -2678,7 +2678,7 @@ mod tests {
 
     #[test]
     fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
-        // Matching the todo bar: the `QUEUE` tag leads at the gutter in the
+        // Matching the todo bar: the `FOLLOW-UPS` tag leads at the gutter in the
         // brand accent on the plain frame surface — no tray glyph, no raised
         // tint — so the two bars read as one quiet family.
         let theme = Theme::default();
@@ -2702,8 +2702,8 @@ mod tests {
         let cells = terminal.buffer().content.clone();
 
         // (1) The tag leads at the gutter, brand-colored.
-        assert_eq!(cells[0].symbol(), "Q", "expected 'QUEUE' tag at col 0");
-        assert_eq!(cells[0].fg(), theme.brand(), "QUEUE tag not brand-colored");
+        assert_eq!(cells[0].symbol(), "F", "expected 'FOLLOW-UPS' tag at col 0");
+        assert_eq!(cells[0].fg(), theme.brand(), "FOLLOW-UPS tag not brand-colored");
 
         // (2) The bar sits on the plain surface: no raised tint anywhere
         // (sample the row's trailing cell too).
@@ -2723,7 +2723,7 @@ mod tests {
             &Theme::default(),
         );
         // Identity + zero count on the single row; no time label anymore.
-        assert!(text.contains("QUEUE 0"), "row was {text:?}");
+        assert!(text.contains("FOLLOW-UPS 0"), "row was {text:?}");
         assert!(!text.contains("--:--"), "time label leaked: {text:?}");
         // The layout hides an empty queue, so the bar renders no hint for it.
         assert!(!text.contains("queue empty"), "empty hint leaked: {text:?}");
@@ -2745,7 +2745,7 @@ mod tests {
             &Theme::default(),
         );
         // Identity + count reflects the one item; no time label anymore.
-        assert!(text.contains("QUEUE 1"), "row was {text:?}");
+        assert!(text.contains("FOLLOW-UPS 1"), "row was {text:?}");
         assert!(!text.contains(":"), "time label leaked: {text:?}");
         // Legend: the keycap units are same-rank peers (R2) — joined by
         // plain whitespace, never a `·` (which would imply one modifies the

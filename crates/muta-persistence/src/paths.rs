@@ -174,6 +174,12 @@ impl Dirs {
         self.state_dir.join("connections.toml")
     }
 
+    /// Web connections (`$XDG_STATE_HOME/muta/web_connections.toml`).
+    /// The program-managed state for web search and fetch connections.
+    pub fn web_connections_file(&self) -> PathBuf {
+        self.state_dir.join("web_connections.toml")
+    }
+
     /// `$XDG_STATE_HOME/muta/route_settings.json` — the user's per-route
     /// reasoning overrides (ADR-0014 category: state, *not* cache; deleting
     /// them loses user configuration no endpoint can re-derive). See

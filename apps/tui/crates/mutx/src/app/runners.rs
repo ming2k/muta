@@ -198,6 +198,7 @@ impl App {
         targets
     }
 
+    #[allow(dead_code)]
     pub(crate) fn retain_visible_focused_target(&mut self) {
         if self.active_modal() != Modal::None {
             self.focused_target = None;
