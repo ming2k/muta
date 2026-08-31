@@ -26,10 +26,10 @@ impl InputReader {
                     match event::poll(std::time::Duration::from_millis(200)) {
                         Ok(true) => match event::read() {
                             Ok(ev) => {
-                                if let Event::Key(k) = &ev {
-                                    if k.kind == crossterm::event::KeyEventKind::Release {
-                                        continue;
-                                    }
+                                if let Event::Key(k) = &ev
+                                    && k.kind == crossterm::event::KeyEventKind::Release
+                                {
+                                    continue;
                                 }
                                 if !sink.handle(ev) {
                                     break;

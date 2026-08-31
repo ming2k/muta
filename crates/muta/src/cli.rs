@@ -664,8 +664,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--config-dir" | "--data-dir" | "--state-dir" | "--cache-dir" => {
                 return Err(format!(
                     "{name} was removed: use matching MUTA_*_DIR environment variables instead"
-                )
-                .into());
+                ));
             }
             "--json" | "-j" => json = true,
             "--version" | "-V" => version = true,

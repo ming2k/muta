@@ -248,14 +248,13 @@ impl<T> DropdownState<T> {
 
         // Skip disabled items if possible
         for _ in 0..len {
-            if let Some(&raw_idx) = self.filtered_indices.get(next) {
-                if let Some(it) = self.items.get(raw_idx) {
-                    if !it.disabled {
-                        self.selected_idx = next;
-                        self.ensure_visible();
-                        return;
-                    }
-                }
+            if let Some(&raw_idx) = self.filtered_indices.get(next)
+                && let Some(it) = self.items.get(raw_idx)
+                && !it.disabled
+            {
+                self.selected_idx = next;
+                self.ensure_visible();
+                return;
             }
             next = if next == 0 {
                 len.saturating_sub(1)
@@ -281,14 +280,13 @@ impl<T> DropdownState<T> {
 
         // Skip disabled items if possible
         for _ in 0..len {
-            if let Some(&raw_idx) = self.filtered_indices.get(next) {
-                if let Some(it) = self.items.get(raw_idx) {
-                    if !it.disabled {
-                        self.selected_idx = next;
-                        self.ensure_visible();
-                        return;
-                    }
-                }
+            if let Some(&raw_idx) = self.filtered_indices.get(next)
+                && let Some(it) = self.items.get(raw_idx)
+                && !it.disabled
+            {
+                self.selected_idx = next;
+                self.ensure_visible();
+                return;
             }
             next = if next + 1 >= len { 0 } else { next + 1 };
         }
@@ -431,10 +429,10 @@ impl<T: Clone> DropdownState<T> {
                 DropdownEventOutcome::Handled
             }
             (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Tab) => {
-                if let Some(item) = self.selected_item() {
-                    if !item.disabled {
-                        return DropdownEventOutcome::Confirmed(item.payload.clone());
-                    }
+                if let Some(item) = self.selected_item()
+                    && !item.disabled
+                {
+                    return DropdownEventOutcome::Confirmed(item.payload.clone());
                 }
                 DropdownEventOutcome::Handled
             }

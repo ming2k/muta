@@ -239,10 +239,8 @@ pub async fn update(
         conns.remove_reader(&del_id);
         conns_modified = true;
     }
-    if conns_modified {
-        if let Err(e) = conns.save() {
-            tracing::warn!("Could not save web_connections.toml: {e}");
-        }
+    if conns_modified && let Err(e) = conns.save() {
+        tracing::warn!("Could not save web_connections.toml: {e}");
     }
 
     // 3. Hot-apply through the shared handle

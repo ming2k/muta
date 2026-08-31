@@ -107,6 +107,7 @@ impl PromptCacheSpec {
         reports_misses: false,
     };
 
+    #[allow(clippy::expect_used)] // Static route declarations must fail fast when internally invalid.
     pub fn materialize(self) -> PromptCacheCapabilities {
         let capabilities = PromptCacheCapabilities {
             modes: self.modes.to_vec(),

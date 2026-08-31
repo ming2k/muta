@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Generic normalized provider usage / quota / balance info.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ProviderUsage {
     /// High-level plan / account status (e.g. "Active", "Available", "Free Tier", "Tier 2", "Pay-as-you-go").
@@ -21,7 +21,7 @@ pub struct ProviderUsage {
 }
 
 /// One named metric in a provider's usage / quota report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct UsageMetric {
     /// Metric label, e.g. "Total Balance", "Granted Balance", "Rate Limit".
@@ -34,11 +34,12 @@ pub struct UsageMetric {
 }
 
 /// State of a connection's usage / quota retrieval.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "status", content = "data", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ConnectionUsageState {
     /// Provider does not support remote usage querying.
+    #[default]
     Unsupported,
     /// Usage query is currently in progress.
     Fetching,
@@ -46,12 +47,6 @@ pub enum ConnectionUsageState {
     Available(ProviderUsage),
     /// Usage query failed with an error message.
     Error(String),
-}
-
-impl Default for ConnectionUsageState {
-    fn default() -> Self {
-        Self::Unsupported
-    }
 }
 
 /// Full inspection detail for one connection in the `/connections` modal.

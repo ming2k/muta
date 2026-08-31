@@ -181,10 +181,10 @@ pub(crate) fn extract_selection_text(
             }
             return None;
         }
-    } else if let SelectionState::Block { message_idx, .. } = sel {
-        if *message_idx == crate::view::INPUT_MSG_IDX {
-            return Some(input.to_string());
-        }
+    } else if let SelectionState::Block { message_idx, .. } = sel
+        && *message_idx == crate::view::INPUT_MSG_IDX
+    {
+        return Some(input.to_string());
     }
 
     let grid = |mi, bi| layout_map.table_grid(mi, bi);

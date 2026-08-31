@@ -122,9 +122,7 @@ pub(crate) fn probe_input_selection_relay(
 }
 
 pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAction> {
-    if app.config_dropdown.is_none() {
-        return None;
-    }
+    app.config_dropdown.as_ref()?;
 
     let Event::Key(k) = event else {
         return Some(input::InputAction::None);

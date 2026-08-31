@@ -618,16 +618,16 @@ fn connection_detail_body(
     lines.push(Line::from(Span::styled("Caller Identity", header_style)));
     lines.push(kv("Preset", detail.client_identity.label().to_string()));
     lines.push(kv("User-Agent", detail.user_agent.clone()));
-    if let muta_contracts::ClientIdentity::Custom { extra_headers, .. } = &detail.client_identity {
-        if !extra_headers.is_empty() {
-            lines.push(Line::from(Span::styled("Custom Headers:", label)));
-            for (k, v) in extra_headers {
-                lines.push(Line::from(vec![
-                    Span::styled("  • ", label),
-                    Span::styled(format!("{k}: "), label),
-                    Span::styled(v.clone(), value),
-                ]));
-            }
+    if let muta_contracts::ClientIdentity::Custom { extra_headers, .. } = &detail.client_identity
+        && !extra_headers.is_empty()
+    {
+        lines.push(Line::from(Span::styled("Custom Headers:", label)));
+        for (k, v) in extra_headers {
+            lines.push(Line::from(vec![
+                Span::styled("  • ", label),
+                Span::styled(format!("{k}: "), label),
+                Span::styled(v.clone(), value),
+            ]));
         }
     }
 

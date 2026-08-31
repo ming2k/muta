@@ -70,9 +70,10 @@ pub enum ContextRelation {
 pub struct RouteFingerprint(pub String);
 
 /// How this immutable request carries conversation state on the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum RequestDelivery {
+    #[default]
     FullReplay,
     RemoteContinuation {
         previous_response_id: String,
@@ -82,12 +83,6 @@ pub enum RequestDelivery {
     /// Replay the complete local context, preferring provider-owned output
     /// items attached to assistant nodes over lossy neutral reconstruction.
     OpaqueReplay,
-}
-
-impl Default for RequestDelivery {
-    fn default() -> Self {
-        Self::FullReplay
-    }
 }
 
 /// A server-side response anchor valid for one exact local graph node/route.
@@ -133,6 +128,7 @@ pub type ProviderArtifacts = serde_json::Map<String, serde_json::Value>;
 /// instructions and provider-private metadata are intentionally excluded:
 /// instructions are a request envelope, while artifacts are credentials for
 /// replaying the semantic node rather than part of its meaning.
+#[allow(clippy::expect_used)] // `serde_json::Value` serialization is structurally infallible.
 pub fn semantic_context_head<'a>(messages: impl IntoIterator<Item = &'a crate::Message>) -> String {
     let mut digest = Sha256::new();
     for message in messages {
@@ -154,6 +150,7 @@ pub fn semantic_context_head<'a>(messages: impl IntoIterator<Item = &'a crate::M
     format!("sha256:{:x}", digest.finalize())
 }
 
+#[allow(clippy::expect_used)] // Tool declarations contain no fallible custom serializers.
 pub fn request_envelope_fingerprint(
     messages: &[crate::Message],
     tools: &[crate::ToolSpec],
@@ -227,6 +224,7 @@ pub fn read_continuation_cursor(message: &crate::Message) -> Option<Continuation
     .ok()
 }
 
+#[allow(clippy::expect_used)] // The cursor contains only strings and has no fallible serializer.
 pub fn write_continuation_cursor(artifacts: &mut ProviderArtifacts, cursor: &ContinuationCursor) {
     artifacts.insert(
         CONTINUATION_ARTIFACT_KEY.to_string(),

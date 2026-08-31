@@ -884,12 +884,8 @@ impl Agent {
             } else {
                 None
             };
-            if let Some(cursor) = bound_cursor {
-                let artifacts = completion_meta
-                    .as_mut()
-                    .expect("completion metadata exists")
-                    .artifacts
-                    .get_or_insert_with(serde_json::Map::new);
+            if let (Some(cursor), Some(meta)) = (bound_cursor, completion_meta.as_mut()) {
+                let artifacts = meta.artifacts.get_or_insert_with(serde_json::Map::new);
                 muta_contracts::write_continuation_cursor(artifacts, &cursor);
             }
             let response = Message {

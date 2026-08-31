@@ -14,6 +14,7 @@ use crate::{App, Modal};
 use super::ActionFlow;
 
 /// Loop stage (input dispatch): the `SubmitCustomProvider` arm.
+#[allow(clippy::expect_used)] // The editor only exposes registered protocol choices.
 pub(super) fn handle_submit_custom_provider(app: &mut App) {
     if app.active_modal() == Modal::CustomProvider {
         // Commit the focused text field's live value first.
@@ -293,11 +294,8 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                 reader: Some(id),
                 ..Default::default()
             };
-            if !key.is_empty() {
-                match payload {
-                    "jina" => update.jina_api_key = Some(key),
-                    _ => {}
-                }
+            if !key.is_empty() && payload == "jina" {
+                update.jina_api_key = Some(key);
             }
             let _ = app
                 .tx

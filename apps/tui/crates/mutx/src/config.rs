@@ -201,12 +201,12 @@ pub fn candidate_theme_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     // 1. Workspace / project-local paths
-    if let Some(ws) = workspace {
-        if !ws.as_os_str().is_empty() {
-            dirs.push(ws.join(".mutx").join("themes"));
-            dirs.push(ws.join(".muta").join("themes"));
-            dirs.push(ws.join("themes"));
-        }
+    if let Some(ws) = workspace
+        && !ws.as_os_str().is_empty()
+    {
+        dirs.push(ws.join(".mutx").join("themes"));
+        dirs.push(ws.join(".muta").join("themes"));
+        dirs.push(ws.join("themes"));
     }
     if let Ok(cwd) = std::env::current_dir() {
         let cwd_mutx = cwd.join(".mutx").join("themes");

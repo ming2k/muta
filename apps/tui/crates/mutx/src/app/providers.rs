@@ -162,6 +162,7 @@ impl App {
     /// Name / Base URL / Token, a preset API-key connection shows Name / Token, and an
     /// OAuth connection (ChatGPT/Codex, xAI, Copilot, Antigravity) shows Name only.
     /// The Model field is always hidden (models are managed in the Models picker).
+    #[allow(clippy::too_many_arguments)] // Editor state is seeded from one connection snapshot.
     pub fn open_edit_provider_editor(
         &mut self,
         id: String,

@@ -216,10 +216,11 @@ const MAX_BREAKPOINTS: usize = 4;
 fn stamp_caching_breakpoints(body: &mut Value, system_text: &str, control: &Value) {
     let mut breakpoints = 0usize;
 
-    if !body["tools"].is_null() {
-        if breakpoints < MAX_BREAKPOINTS && stamp_last_array_element(&mut body["tools"], control) {
-            breakpoints += 1;
-        }
+    if !body["tools"].is_null()
+        && breakpoints < MAX_BREAKPOINTS
+        && stamp_last_array_element(&mut body["tools"], control)
+    {
+        breakpoints += 1;
     }
 
     if !system_text.is_empty() {

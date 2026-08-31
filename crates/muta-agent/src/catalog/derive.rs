@@ -207,6 +207,7 @@ pub fn derive_channel(
 
 /// The base transport for a non-OAuth connection: preset route (always derived
 /// from the hardcoded preset spec) or the pure-custom declaration.
+#[allow(clippy::expect_used)] // `route_models` validates preset IDs before this derivation step.
 fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, String) {
     if let Some(pid) = connection.preset_id.as_deref() {
         let preset = provider_preset_spec(pid)

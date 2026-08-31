@@ -315,6 +315,7 @@ pub async fn run_app_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Keeps event-loop resources borrowed without a second state bundle.
 async fn process_one_event(
     event: &Event,
     app: &mut App,
