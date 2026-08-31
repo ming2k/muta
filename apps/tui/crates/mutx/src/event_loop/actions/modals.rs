@@ -39,7 +39,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     protocol,
                     base_url,
                     api_key,
-                    client_identity: None,
+                    client_identity: Some(app.custom_client_identity.clone()),
                 });
                 // Phase 3 (ADR-0133): the chain ends at chat. Pop the nav
                 // frame (the picker this editor was opened over) and hand
@@ -56,11 +56,11 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
             // reasoning is opted in per model from the Models
             // picker.
             let models: Vec<String> = if app.custom_fields.contains(&crate::CustomField::Model) {
-                vec![muta_contracts::sanitize_model_id(&app.custom_model)]
+                vec![app.custom_model.trim().to_string()]
             } else {
                 app.custom_models
                     .iter()
-                    .map(|m| muta_contracts::sanitize_model_id(m))
+                    .map(|m| m.trim().to_string())
                     .collect()
             };
             let usable = models.iter().any(|m| !m.is_empty());
@@ -81,7 +81,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     models,
                     auth: app.custom_auth,
                     preset_id,
-                    client_identity: None,
+                    client_identity: Some(app.custom_client_identity.clone()),
                 });
                 app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
@@ -182,7 +182,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                     .iter()
                     .find(|r| r.id == id)
                     .cloned();
-                let (name, protocol, base_url, auth, is_preset) = row
+                let (name, protocol, base_url, auth, is_preset, client_identity) = row
                     .map(|r| {
                         (
                             r.name,
@@ -190,6 +190,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                             r.base_url,
                             r.auth,
                             !r.preset_id.is_empty() && r.preset_id != "custom-openai",
+                            r.client_identity,
                         )
                     })
                     .unwrap_or((
@@ -198,9 +199,18 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                         String::new(),
                         muta_contracts::ConnectionAuth::ApiKey,
                         false,
+                        muta_contracts::ClientIdentity::Native,
                     ));
                 app.model_search = false;
-                app.open_edit_provider_editor(id, name, protocol, base_url, auth, is_preset);
+                app.open_edit_provider_editor(
+                    id,
+                    name,
+                    protocol,
+                    base_url,
+                    auth,
+                    is_preset,
+                    client_identity,
+                );
             }
         }
     }

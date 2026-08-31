@@ -299,9 +299,14 @@ pub(super) async fn dispatch_action(
                 app.cycle_custom_field(false);
             }
         }
-        input::InputAction::MoveCustomSuggestion { forward } => {
+        input::InputAction::ScrollCustomProvider { forward } => {
             if app.active_modal() == Modal::CustomProvider {
-                app.move_custom_suggestion(forward);
+                app.scroll_custom_provider(forward);
+            }
+        }
+        input::InputAction::CycleCustomProviderChoice { forward } => {
+            if app.active_modal() == Modal::CustomProvider {
+                app.cycle_custom_choice(forward);
             }
         }
         input::InputAction::MovePresetChoice { forward } => {
@@ -1843,11 +1848,6 @@ pub(super) async fn dispatch_action(
         input::InputAction::InsertChar(c) => {
             // Already handled by process_event mutating app.input
             let _ = c;
-            // The custom-provider filter field re-ranks its suggestion
-            // list as the query changes.
-            if app.active_modal() == Modal::CustomProvider {
-                app.on_custom_filter_changed();
-            }
             app.suggestion_index = None;
             // The user is editing again, so live completions are
             // once again useful — clear the Enter-commit dismissal.
@@ -1863,9 +1863,6 @@ pub(super) async fn dispatch_action(
             app.reconcile_attachments();
         }
         input::InputAction::Backspace => {
-            if app.active_modal() == Modal::CustomProvider {
-                app.on_custom_filter_changed();
-            }
             app.suggestion_index = None;
             app.completion_dismissed = false;
             // Same as InsertChar: editing the input box reclaims focus
@@ -1883,9 +1880,6 @@ pub(super) async fn dispatch_action(
             // only keeps the completion latch, focus ownership, and staged
             // attachments consistent with the new buffer (a chip-aware
             // forward delete may have orphaned a staged entry).
-            if app.active_modal() == Modal::CustomProvider {
-                app.on_custom_filter_changed();
-            }
             app.suggestion_index = None;
             app.completion_dismissed = false;
             // Editing the input box reclaims focus from any transcript step,

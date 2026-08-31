@@ -1,4 +1,4 @@
-//! Provider modals state: preset chooser, custom editor fields, the OAuth flow, model suggestions, delete staging.
+//! Provider modals state: preset chooser, custom editor fields, the OAuth flow, and delete staging.
 
 use super::*;
 
@@ -54,20 +54,16 @@ impl App {
         self.custom_fields = preset.fields();
         self.custom_field = 0;
         self.custom_protocol_wire = preset.protocol.to_string();
+        self.custom_client_identity = muta_contracts::ClientIdentity::Native;
         self.custom_models = preset.models.iter().map(|m| m.to_string()).collect();
         self.custom_url_hint = preset.url_hint.to_string();
         self.custom_user_agent = preset.user_agent.map(str::to_string);
         self.custom_auth = preset.auth;
         self.custom_preset_id = Some(preset.id.to_string());
-        self.custom_suggest_index = 0;
         self.custom_name.clear();
         self.custom_base_url = preset.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
-        self.custom_model = self
-            .custom_model_candidates()
-            .first()
-            .map(|m| m.to_string())
-            .unwrap_or_default();
+        self.custom_model.clear();
     }
 
     /// Open the provider editor seeded from `preset` (create mode) on the Name
@@ -174,6 +170,7 @@ impl App {
         base_url: String,
         auth: ConnectionAuth,
         is_preset: bool,
+        client_identity: muta_contracts::ClientIdentity,
     ) {
         if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
             self.push_transient_surface(Modal::CustomProvider);
@@ -184,6 +181,7 @@ impl App {
         self.custom_fields = edit_fields(is_preset, auth);
         self.custom_field = 0;
         self.custom_protocol_wire = protocol;
+        self.custom_client_identity = client_identity;
         self.custom_models.clear();
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
@@ -192,7 +190,6 @@ impl App {
         // are sent as `EditProvider`, which ignores the preset id anyway, and
         // a stray id here must not leak into a later create flow.
         self.custom_preset_id = None;
-        self.custom_suggest_index = 0;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;
         self.custom_token.clear();
@@ -216,123 +213,91 @@ impl App {
         self.custom_fields.len().max(1) as u8
     }
 
-    /// The registry model ids matching the editor's protocol wire format — the
-    /// Model filter field's candidate pool.
-    pub fn custom_model_candidates(&self) -> Vec<&'static str> {
-        crate::protocol_model_candidates(&self.custom_protocol_wire)
-    }
-
-    /// The model suggestions matching the live filter (`self.input` while the
-    /// Model field is focused): protocol candidates that fuzzy-match, plus the
-    /// raw typed text as a custom id when it is not already a candidate.
-    pub fn custom_model_suggestions(&self) -> Vec<String> {
-        let q = self.input.trim();
-        let q_clean = muta_contracts::sanitize_model_id(q);
-        let mut out: Vec<String> = self
-            .custom_model_candidates()
-            .into_iter()
-            .filter(|id| {
-                q.is_empty()
-                    || id.contains(q)
-                    || (!q_clean.is_empty() && id.contains(&q_clean))
-                    || crate::fuzzy::fuzzy_match(id, q).is_some()
-                    || (!q_clean.is_empty() && crate::fuzzy::fuzzy_match(id, &q_clean).is_some())
-            })
-            .map(|s| s.to_string())
-            .collect();
-        let custom_id = if !q_clean.is_empty() {
-            q_clean
+    /// Scroll the custom editor body with `↑` / `↓`.
+    pub fn scroll_custom_provider(&mut self, forward: bool) {
+        if forward {
+            self.custom_scroll = self.custom_scroll.saturating_add(1);
         } else {
-            q.to_string()
-        };
-        if !custom_id.is_empty() && !out.iter().any(|m| m == &custom_id) {
-            out.push(custom_id.clone());
-        }
-        // Stable sort: an exact match floats to the top so typing a known id
-        // selects it rather than a longer id that merely contains it as a
-        // substring (e.g. "gpt-4o" beats "gpt-4o-mini").
-        if !custom_id.is_empty() {
-            out.sort_by_key(|m| m != &custom_id && m != q);
-        }
-        out
-    }
-
-    /// Commit the highlighted Model suggestion into `custom_model`. No-op off the
-    /// Model field (the only filter field).
-    fn commit_custom_suggestion(&mut self) {
-        if self.current_custom_field() == Some(CustomField::Model) {
-            let suggestions = self.custom_model_suggestions();
-            if let Some(value) = suggestions.get(self.custom_suggest_index) {
-                self.custom_model = value.clone();
-            }
+            self.custom_scroll = self.custom_scroll.saturating_sub(1);
         }
     }
 
-    /// Move the Model suggestion highlight, committing the newly-highlighted
-    /// suggestion live. When the Model field is NOT focused, scrolls the modal
-    /// body instead.
-    pub fn move_custom_suggestion(&mut self, forward: bool) {
-        if self.current_custom_field() == Some(CustomField::Model) {
-            let len = self.custom_model_suggestions().len();
-            if len == 0 {
-                return;
+    /// Cycle an inline selector in the custom editor with `←` / `→`.
+    pub fn cycle_custom_choice(&mut self, forward: bool) {
+        match self.current_custom_field() {
+            Some(CustomField::Protocol) => {
+                const PROTOCOLS: &[muta_contracts::WireProtocol] = &[
+                    muta_contracts::WireProtocol::OpenAiChatCompletions,
+                    muta_contracts::WireProtocol::OpenAiResponses,
+                    muta_contracts::WireProtocol::AnthropicMessages,
+                    muta_contracts::WireProtocol::GoogleGenerateContent,
+                ];
+                let current = self
+                    .custom_protocol_wire
+                    .parse::<muta_contracts::WireProtocol>()
+                    .unwrap_or_default();
+                let index = PROTOCOLS
+                    .iter()
+                    .position(|value| *value == current)
+                    .unwrap_or(0);
+                let next = if forward {
+                    (index + 1) % PROTOCOLS.len()
+                } else {
+                    (index + PROTOCOLS.len() - 1) % PROTOCOLS.len()
+                };
+                self.custom_protocol_wire = PROTOCOLS[next].to_string();
             }
-            self.custom_suggest_index = if forward {
-                (self.custom_suggest_index + 1) % len
-            } else {
-                (self.custom_suggest_index + len - 1) % len
-            };
-            self.commit_custom_suggestion();
-        } else {
-            // Non-Model fields: ↑/↓ scroll the modal body.
-            if forward {
-                self.custom_scroll = self.custom_scroll.saturating_add(1);
-            } else {
-                self.custom_scroll = self.custom_scroll.saturating_sub(1);
+            Some(CustomField::ClientIdentity) => {
+                let choices = muta_contracts::ClientIdentity::PRESETS;
+                let index = choices
+                    .iter()
+                    .position(|value| value == &self.custom_client_identity)
+                    .unwrap_or(0);
+                let next = if forward {
+                    (index + 1) % choices.len()
+                } else {
+                    (index + choices.len() - 1) % choices.len()
+                };
+                self.custom_client_identity = choices[next].clone();
             }
+            _ => {}
         }
     }
 
-    /// React to a change in the Model filter query: reset the highlight to the
-    /// best (first) match and commit it.
-    pub fn on_custom_filter_changed(&mut self) {
-        if self.current_custom_field() == Some(CustomField::Model) {
-            self.custom_suggest_index = 0;
-            self.commit_custom_suggestion();
-        }
+    /// Whether the focused provider field owns the composer text buffer.
+    pub fn custom_text_field_focused(&self) -> bool {
+        matches!(
+            self.current_custom_field(),
+            Some(
+                CustomField::Name | CustomField::BaseUrl | CustomField::Token | CustomField::Model
+            )
+        )
     }
 
     /// Save the composer line into the focused text field's buffer (Name / Base
-    /// URL / Token). The Model field is a filter whose value is already committed
-    /// live, so its transient query is discarded.
+    /// URL / Token / Model). Selector fields do not own a text value.
     pub fn stash_custom_field(&mut self) {
         let value = std::mem::take(&mut self.input);
         match self.current_custom_field() {
             Some(CustomField::Name) => self.custom_name = value,
             Some(CustomField::BaseUrl) => self.custom_base_url = value,
             Some(CustomField::Token) => self.custom_token = value,
-            _ => {} // Model filter field: value already committed live.
+            Some(CustomField::Model) => self.custom_model = value,
+            _ => {}
         }
     }
 
     /// Load the focused field into the composer line: the buffer for a text
-    /// field, or a fresh (empty) filter for the Model field, with the suggestion
-    /// highlight positioned on the current committed value.
+    /// field. Inline selector fields leave the composer empty.
     pub fn load_custom_field(&mut self) {
         self.input = match self.current_custom_field() {
             Some(CustomField::Name) => self.custom_name.clone(),
             Some(CustomField::BaseUrl) => self.custom_base_url.clone(),
             Some(CustomField::Token) => self.custom_token.clone(),
+            Some(CustomField::Model) => self.custom_model.clone(),
             _ => String::new(),
         };
         self.set_cursor_end();
-        if self.current_custom_field() == Some(CustomField::Model) {
-            self.custom_suggest_index = self
-                .custom_model_suggestions()
-                .iter()
-                .position(|v| v == &self.custom_model)
-                .unwrap_or(0);
-        }
     }
 
     /// Move the provider editor focus (`Tab` / `BackTab`), wrapping across the

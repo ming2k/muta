@@ -1368,52 +1368,6 @@ pub fn draw_model_editor(
     area
 }
 
-/// Render the suggestion dropdown shared by the filter fields: up to a few
-/// matches, the highlighted one marked `›` in the brand tone, windowed around the
-/// highlight so a long list stays navigable. An empty list shows a `(no match)`
-/// hint (Enter then uses the typed text).
-fn suggestion_lines(
-    suggestions: &[String],
-    highlight: usize,
-    empty_hint: &str,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    const MAX: usize = 6;
-    if suggestions.is_empty() {
-        return vec![Line::from(Span::styled(
-            format!("    {empty_hint}"),
-            Style::default().fg(theme.muted()),
-        ))];
-    }
-    let start = if highlight >= MAX {
-        highlight + 1 - MAX
-    } else {
-        0
-    };
-    suggestions
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(MAX)
-        .map(|(i, s)| {
-            let s_style = crate::components::options::choice_style(
-                crate::components::options::ChoiceTone::Flat,
-                i == highlight,
-                theme,
-            );
-            let (marker, style) = if i == highlight {
-                (
-                    " › ",
-                    Style::default().fg(s_style.fg).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ("   ", Style::default().fg(s_style.dim))
-            };
-            Line::from(Span::styled(format!("{marker}{s}"), style))
-        })
-        .collect()
-}
-
 /// Draw the OAuth-in-progress sheet: instruction, URL, optional user code, status.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_oauth_pending(
@@ -1710,23 +1664,22 @@ pub struct CustomEditorView<'a> {
     pub name_buf: &'a str,
     pub base_url_buf: &'a str,
     pub token_buf: &'a str,
-    /// Display name of the committed model (shown when Model is unfocused).
-    pub model_display: &'a str,
+    pub model_buf: &'a str,
+    /// Selected inference API protocol wire id.
+    pub protocol_display: &'a str,
+    /// Selected request/client identity label.
+    pub identity_display: &'a str,
     /// Base URL placeholder — the preset's expected endpoint shape.
     pub url_hint: &'a str,
-    /// Model suggestions for the Model filter field (empty off that field).
-    pub suggestions: &'a [String],
-    pub suggest_index: usize,
-    /// The focused field's live value (text buffer, or the Model filter query).
+    /// The focused text field's live value. Selector fields leave it empty.
     pub input: &'a str,
     pub cursor_position: usize,
 }
 
 /// Draw the provider editor: a per-preset form drawn from [`CustomEditorView::fields`]
-/// (Name / Base URL / Token, plus a type-to-filter Model field when a preset
-/// opts in). Focusing the Model field renders a suggestion
-/// dropdown below the form; `↑/↓` move the highlight (committed live). The Token
-/// is masked unless focused. In edit mode the header reads `Edit · <name>`.
+/// (Name / Base URL / Token / Model plus inline protocol and identity selectors
+/// for pure-custom connections). The four basic connection values are ordinary
+/// strings; `←` / `→` cycle selector fields. The Token is masked unless focused.
 pub fn draw_custom_provider_editor(
     view: CustomEditorView<'_>,
     frame: &mut Frame,
@@ -1742,22 +1695,16 @@ pub fn draw_custom_provider_editor(
         name_buf,
         base_url_buf,
         token_buf,
-        model_display,
+        model_buf,
+        protocol_display,
+        identity_display,
         url_hint,
-        suggestions,
-        suggest_index,
         input,
         cursor_position,
     } = view;
 
     let geometry = ContentModalSpec::CUSTOM_PROVIDER;
-    let model_focused = fields.get(field as usize) == Some(&CustomField::Model);
-    let suggest_count = if model_focused && !suggestions.is_empty() {
-        (suggestions.len().min(8) as u16) + 2
-    } else {
-        0
-    };
-    let desired = (fields.len() as u16) + suggest_count + modal_chrome_rows(geometry.modal_spec());
+    let desired = (fields.len() as u16) + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -1813,22 +1760,19 @@ pub fn draw_custom_provider_editor(
             placeholder(raw, focused, hint),
         ])
     };
-    // The Model filter row shows the live query (caret) when focused, else the
-    // committed model's display name.
-    let model_row = |focused: bool| {
-        let value = if focused {
-            placeholder(
-                field_viewport(input, cursor_position, field_w).1,
-                true,
-                "type to filter…",
-            )
+    let choice_row = |focused: bool, label: &str, value: &str| {
+        let display = if focused {
+            format!("‹ {value} ›")
         } else {
-            Span::styled(
-                truncate_ellipsis(model_display, field_w.max(1)),
-                value_style(false),
-            )
+            value.to_string()
         };
-        Line::from(vec![field_label("Model", focused), value])
+        Line::from(vec![
+            field_label(label, focused),
+            Span::styled(
+                truncate_ellipsis(&display, field_w.max(1)),
+                value_style(focused),
+            ),
+        ])
     };
 
     let header_width = f.header.map(|h| h.width as usize).unwrap_or(80);
@@ -1854,35 +1798,14 @@ pub fn draw_custom_provider_editor(
             CustomField::Name => text_row(focused, "Name", name_buf, "e.g. My Relay", false),
             CustomField::BaseUrl => text_row(focused, "Base URL", base_url_buf, url_hint, false),
             CustomField::Token => text_row(focused, "Token", token_buf, token_hint, true),
-            CustomField::Model => model_row(focused),
+            CustomField::Model => text_row(focused, "Model", model_buf, "e.g. gpt-5", false),
+            CustomField::Protocol => choice_row(focused, "API", protocol_display),
+            CustomField::ClientIdentity => choice_row(focused, "Identity", identity_display),
         });
-    }
-    // Suggestion dropdown while the Model filter field is focused.
-    let model_focused = fields.get(field as usize) == Some(&CustomField::Model);
-    if model_focused {
-        body.push(Line::from(""));
-        body.push(Line::from(Span::styled(
-            " Model matches".to_string(),
-            Style::default().fg(theme.muted()),
-        )));
-        body.extend(suggestion_lines(
-            suggestions,
-            suggest_index,
-            "(type a custom model id)",
-            theme,
-        ));
     }
 
     let body_rect = f.body;
-    // While the Model filter is focused, keep the highlighted suggestion
-    // on-screen as ↑/↓ moves it. The suggestion block starts at
-    // `fields.len() + 2` (form rows + blank + "Model matches" header), so the
-    // highlight's visual row is that base plus `suggest_index`.
-    let follow = if model_focused && !suggestions.is_empty() {
-        Some(fields.len() + 2 + suggest_index)
-    } else {
-        None
-    };
+    let follow = Some(field as usize);
     render_body(
         frame,
         body_rect,
@@ -1894,9 +1817,12 @@ pub fn draw_custom_provider_editor(
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
         hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
-        if model_focused {
-            hints.push(FooterHint::secondary("type", "filter"));
-            hints.push(FooterHint::navigation(keyvocab::ARROWS_UD, "choose"));
+        let choice_focused = matches!(
+            fields.get(field as usize),
+            Some(CustomField::Protocol | CustomField::ClientIdentity)
+        );
+        if choice_focused {
+            hints.push(FooterHint::navigation(keyvocab::ARROWS_LR, "choose"));
         } else {
             hints.push(FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"));
         }
@@ -1905,18 +1831,19 @@ pub fn draw_custom_provider_editor(
         render_modal_footer(frame, fo, &hints, theme);
     }
 
-    // Caret on the focused field's row — every visible field borrows the input
-    // line (plain text for Name/URL/Token, the filter query for Model). Subtract
+    // Caret on the focused text field's row. Subtract
     // the focused field's viewport offset and clamp to stay inside the body.
     // The caret's vertical position must also account for `scroll`: render_body
-    // advanced it to keep the followed suggestion visible, so the focused field
-    // row may have scrolled off the top. Only show the caret when the field is
-    // still in the viewport (scroll <= row < scroll + visible); otherwise hide
-    // it (the user is reviewing suggestions below the form).
+    // advanced it to keep the focused row visible. Only show the caret when the
+    // field is still in the viewport (scroll <= row < scroll + visible).
     let row = field as usize;
+    let text_focused = matches!(
+        fields.get(field as usize),
+        Some(CustomField::Name | CustomField::BaseUrl | CustomField::Token | CustomField::Model)
+    );
     let visible = body_rect.height as usize;
     let in_view = (*scroll <= row) && (row < *scroll + visible);
-    if in_view {
+    if in_view && text_focused {
         let prefix_w = 3 + LABEL_W as u16; // focus marker + padded label
         let caret_col = caret_column(input, cursor_position);
         let max_x = body_rect.right().saturating_sub(1);

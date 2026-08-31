@@ -176,7 +176,7 @@ fn redesigned_components_render_without_panicking() {
         // Preset chooser.
         let mut preset_scroll = 0;
         draw_preset_chooser(0, f, &theme, &mut preset_scroll);
-        // Provider editor on the Model filter field.
+        // Provider editor on the Model text field.
         use crate::providers::CustomField;
         let mut scroll = 0;
         draw_custom_provider_editor(
@@ -186,6 +186,8 @@ fn redesigned_components_render_without_panicking() {
                     CustomField::BaseUrl,
                     CustomField::Token,
                     CustomField::Model,
+                    CustomField::Protocol,
+                    CustomField::ClientIdentity,
                 ],
                 field: 3,
                 editing: false,
@@ -194,10 +196,10 @@ fn redesigned_components_render_without_panicking() {
                 name_buf: "My Relay",
                 base_url_buf: "https://relay/v1/chat/completions",
                 token_buf: "tok",
-                model_display: "GPT-4o",
+                model_buf: "GPT-4o",
+                protocol_display: "openai-chat-completions",
+                identity_display: "muta (Native)",
                 url_hint: "https://relay.example.com/v1/chat/completions",
-                suggestions: &["GPT-4o".to_string(), "GPT-4o mini".to_string()],
-                suggest_index: 0,
                 input: "gpt",
                 cursor_position: 3,
             },

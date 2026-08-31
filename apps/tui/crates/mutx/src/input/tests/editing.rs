@@ -379,6 +379,49 @@ fn c_in_connections_modal_opens_custom_connection() {
 }
 
 #[test]
+fn arrows_cycle_custom_provider_selectors_without_editing_text() {
+    for (key, forward) in [(KeyCode::Left, false), (KeyCode::Right, true)] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(key, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::CustomProvider,
+                // `None` while Protocol or Client Identity is focused.
+                custom_provider_field: None,
+                ..Default::default()
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::CycleCustomProviderChoice { forward });
+        assert!(input.is_empty());
+    }
+}
+
+#[test]
+fn custom_provider_model_field_accepts_plain_text() {
+    let mut input = "GLM-5".to_string();
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::CustomProvider,
+            custom_provider_field: Some(3),
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::InsertChar('.'));
+    assert_eq!(input, "GLM-5.");
+}
+
+#[test]
 fn b_and_d_in_preset_chooser_pick_the_login_method() {
     // The preset chooser exposes explicit OAuth login-method selection:
     // `b` = browser PKCE, `d` = device code. Whether the highlighted preset

@@ -19,9 +19,7 @@
 //!   models; see [`ModelSection`]), and [`models_body_lines`] maps the flat
 //!   row indices onto the body's line geometry for the renderer.
 
-use muta_contracts::{
-    ConnectionAuth, ProviderModelInfo, ProviderPickerSnapshot, WireProtocol, baseline_models,
-};
+use muta_contracts::{ConnectionAuth, ProviderModelInfo, ProviderPickerSnapshot, WireProtocol};
 
 use crate::fuzzy;
 
@@ -41,11 +39,13 @@ pub enum CustomField {
     BaseUrl,
     Token,
     Model,
+    Protocol,
+    ClientIdentity,
 }
 
-/// A curated starting point for adding a user-defined provider. The protocol is
-/// pre-locked (no protocol picker), the relay's model list is seeded, and the
-/// URL placeholder shows the expected endpoint shape. Modelled as *data* — one
+/// A curated starting point for adding a user-defined provider. Curated presets
+/// lock the protocol and seed their model list; the standalone custom definition
+/// exposes protocol, model, and request identity in its editor. Modelled as *data* — one
 /// table entry per preset — mirroring `muta_providers::OPENAI_PROVIDER_SPECS`.
 pub struct ProviderPreset {
     /// Stable identifier shared with the matching entry in
@@ -104,6 +104,16 @@ impl ProviderPreset {
     pub fn fields(&self) -> Vec<CustomField> {
         if self.auth.is_oauth() {
             return vec![CustomField::Name];
+        }
+        if self.id == CUSTOM_CONNECTION.id {
+            return vec![
+                CustomField::Name,
+                CustomField::BaseUrl,
+                CustomField::Token,
+                CustomField::Model,
+                CustomField::Protocol,
+                CustomField::ClientIdentity,
+            ];
         }
         let mut fields = vec![CustomField::Name];
         if self.needs_url {
@@ -341,7 +351,13 @@ pub fn edit_fields(is_preset: bool, auth: ConnectionAuth) -> Vec<CustomField> {
     } else if is_preset {
         vec![CustomField::Name, CustomField::Token]
     } else {
-        vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+        vec![
+            CustomField::Name,
+            CustomField::BaseUrl,
+            CustomField::Token,
+            CustomField::Protocol,
+            CustomField::ClientIdentity,
+        ]
     }
 }
 
@@ -356,16 +372,16 @@ pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
     protocol_wire == WireProtocol::GoogleGenerateContent.as_str()
 }
 
-/// The registry model ids that match a custom protocol's wire format, used as the
-/// candidate list when picking a model for a custom provider (the "list select"
-/// half of "list select + custom fallback"). An unknown protocol falls back to
-/// the OpenAI set, which is also the default.
-pub fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
+/// The registry model ids matching a wire protocol. Kept as a test helper for
+/// registry and preset consistency; the custom connection editor intentionally
+/// does not use this list.
+#[cfg(test)]
+fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
     let Ok(protocol) = protocol_wire.parse::<WireProtocol>() else {
         return Vec::new();
     };
     let mut seen = std::collections::HashSet::new();
-    baseline_models()
+    muta_contracts::baseline_models()
         .filter(|m| m.protocol == protocol)
         .map(|m| m.id)
         // Deduplicate: a model id can appear in multiple provider tables (e.g.
@@ -1418,12 +1434,19 @@ mod tests {
     }
 
     #[test]
-    fn edit_fields_api_key_shows_name_url_token_for_custom_only() {
-        // A pure-custom API-key provider exposes Name, Base URL, and Token.
+    fn edit_fields_api_key_shows_transport_and_identity_for_custom_only() {
+        // A pure-custom API-key provider also exposes its transport and
+        // request identity.
         let custom_fields = edit_fields(false, ConnectionAuth::ApiKey);
         assert_eq!(
             custom_fields,
-            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+            vec![
+                CustomField::Name,
+                CustomField::BaseUrl,
+                CustomField::Token,
+                CustomField::Protocol,
+                CustomField::ClientIdentity,
+            ]
         );
 
         // A preset API-key provider derives its Base URL from the preset spec,

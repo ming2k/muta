@@ -374,7 +374,9 @@ async fn process_one_event(
     let history_searching = app.history_search;
     let model_searching = app.model_search;
     let modal_keymap_open = app.modal_keymap_open;
-    let custom_provider_field = if active_modal == Modal::CustomProvider {
+    let custom_provider_field = if active_modal == Modal::CustomProvider
+        && app.custom_text_field_focused()
+    {
         Some(app.custom_field)
     } else {
         None

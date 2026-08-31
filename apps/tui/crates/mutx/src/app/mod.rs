@@ -1046,17 +1046,21 @@ pub struct App {
     pub editor_tool_override: Option<bool>,
     /// Focused field of the provider editor (`Modal::CustomProvider`) as an
     /// index into [`Self::custom_fields`] — the per-preset visible field set
-    /// (Name / Base URL / Token / Model). The focused field always borrows the
-    /// composer line; the Model field borrows it as a live filter query.
+    /// (Name / Base URL / Token / Model / Protocol / Client Identity). Text
+    /// fields borrow the composer line; selectors are cycled inline.
     pub custom_field: u8,
     /// The ordered visible fields of the provider editor, chosen by the active
     /// preset (create) or the edited connection's protocol (edit). Empty when no
     /// editor is open.
     pub custom_fields: Vec<CustomField>,
-    /// Wire protocol of the provider being created/edited (`"openai"` |
-    /// `"anthropic"` | `"google"`), carried from the preset or the edited
-    /// provider rather than chosen with a protocol picker.
+    /// Wire protocol of the provider being created/edited. Curated presets
+    /// carry their fixed protocol; a pure-custom connection exposes this as
+    /// an inline selector.
     pub custom_protocol_wire: String,
+    /// Client identity (User-Agent and impersonation headers) selected for a
+    /// pure-custom connection. Curated presets keep their provider-defined
+    /// identity.
+    pub custom_client_identity: muta_contracts::ClientIdentity,
     /// Models seeded by the active preset (create mode). Submitted as the
     /// provider's model list unless the editor exposes a free-text Model field
     /// (then the single typed model is submitted instead). Empty in edit mode.
@@ -1085,9 +1089,6 @@ pub struct App {
     /// Scroll offset for the OAuth pending modal body. Reset when the modal
     /// opens or its content changes.
     pub oauth_scroll: usize,
-    /// Highlight index into the live suggestion list for the provider editor's
-    /// Model **filter** field (type to filter, `↑/↓` to move, committed live).
-    pub custom_suggest_index: usize,
     /// Scroll offset for the custom-provider editor body. Rendered body sets
     /// the upper bound automatically.
     pub custom_scroll: usize,
@@ -1096,8 +1097,7 @@ pub struct App {
     /// Models picker). `None` is create mode.
     pub custom_edit_id: Option<String>,
     /// Provider-editor buffers holding the unfocused text fields (the focused one
-    /// lives in the borrowed composer line). Name / Base URL / Token / Model /
-    /// Effort.
+    /// lives in the borrowed composer line). Name / Base URL / Token / Model.
     pub custom_name: String,
     pub custom_base_url: String,
     pub custom_token: String,

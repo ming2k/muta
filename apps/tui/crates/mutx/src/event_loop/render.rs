@@ -907,18 +907,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             } else {
                 crate::preset_label_for(app.custom_preset_id.as_deref())
             };
-            let model_display = if app.custom_model.is_empty() {
-                "—".to_string()
-            } else {
-                app.custom_model.clone()
-            };
-            // Suggestion dropdown for the Model filter field.
-            let suggestions: Vec<String> =
-                if app.current_custom_field() == Some(crate::CustomField::Model) {
-                    app.custom_model_suggestions()
-                } else {
-                    Vec::new()
-                };
             Some(view::draw_custom_provider_editor(
                 view::CustomEditorView {
                     fields: &app.custom_fields,
@@ -929,10 +917,10 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     name_buf: &app.custom_name,
                     base_url_buf: &app.custom_base_url,
                     token_buf: &app.custom_token,
-                    model_display: &model_display,
+                    model_buf: &app.custom_model,
+                    protocol_display: &app.custom_protocol_wire,
+                    identity_display: app.custom_client_identity.label(),
                     url_hint: &app.custom_url_hint,
-                    suggestions: &suggestions,
-                    suggest_index: app.custom_suggest_index,
                     input: &app.input,
                     cursor_position: app.cursor_position,
                 },

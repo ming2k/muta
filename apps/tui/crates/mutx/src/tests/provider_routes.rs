@@ -300,6 +300,8 @@ fn custom_connection_opens_as_a_sibling_of_the_preset_chooser() {
             crate::CustomField::BaseUrl,
             crate::CustomField::Token,
             crate::CustomField::Model,
+            crate::CustomField::Protocol,
+            crate::CustomField::ClientIdentity,
         ]
     );
 }
@@ -356,7 +358,7 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let custom_preset = &crate::providers::CUSTOM_CONNECTION;
     app.open_custom_provider_editor(custom_preset);
-    // Fields: Name(0) / Base URL(1) / Token(2) / Model(3).
+    // Fields: Name / Base URL / Token / Model / Protocol / Identity.
     let n = app.custom_fields.len() as u8;
     // Type a name, then advance: the name is stashed and the Base URL field
     // loads its (empty) buffer.
@@ -365,7 +367,7 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     assert_eq!(app.custom_field, 1);
     assert_eq!(app.custom_name, "My Relay");
     assert!(app.input.is_empty(), "Base URL buffer is empty");
-    // Wrap backward from Name (0) to the last field (Model).
+    // Wrap backward from Name (0) to the last field (Identity).
     app.cycle_custom_field(false); // 1 -> 0
     assert_eq!(app.custom_field, 0);
     assert_eq!(app.input, "My Relay", "Name buffer reloads into the line");
@@ -374,32 +376,71 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 }
 
 #[test]
-fn custom_provider_model_filter_commits_and_offers_custom_id() {
+fn custom_provider_model_is_an_unmodified_text_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // The real generic preset: it exposes the Model field and seeds no
     // models, so the flow under test is exactly what ships.
     let free_model_preset = &crate::providers::CUSTOM_CONNECTION;
     app.open_custom_provider_editor(free_model_preset);
-    // The default model is the first candidate of the preset's (OpenAI) protocol.
-    assert!(
-        app.custom_model_candidates()
-            .contains(&app.custom_model.as_str())
-    );
-    // Focus the Model filter field (the last field) and type a known model.
-    app.custom_field = app.custom_fields.len() as u8 - 1;
+    assert!(app.custom_model.is_empty());
+    // Focus Model and type an arbitrary, case-sensitive id. No registry-backed
+    // suggestions or normalization participate.
+    app.custom_field = 3;
     assert_eq!(app.current_custom_field(), Some(crate::CustomField::Model));
     app.load_custom_field();
-    app.input = "gpt-4o".to_string();
-    app.on_custom_filter_changed();
-    assert_eq!(app.custom_model, "gpt-4o");
-    // A query matching nothing in the registry is still offered as a custom id.
-    app.input = "my-private-model".to_string();
-    app.on_custom_filter_changed();
-    assert_eq!(app.custom_model, "my-private-model");
-    // A query with spaces is automatically sanitized to use hyphens.
-    app.input = "my custom private model".to_string();
-    app.on_custom_filter_changed();
-    assert_eq!(app.custom_model, "my-custom-private-model");
+    app.input = "My Private Model/V2".to_string();
+    app.stash_custom_field();
+    assert_eq!(app.custom_model, "My Private Model/V2");
+}
+
+#[test]
+fn custom_provider_cycles_protocol_and_request_identity() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_custom_provider_editor(&crate::providers::CUSTOM_CONNECTION);
+
+    app.custom_field = 4;
+    assert_eq!(
+        app.current_custom_field(),
+        Some(crate::CustomField::Protocol)
+    );
+    app.cycle_custom_choice(true);
+    assert_eq!(app.custom_protocol_wire, "openai-responses");
+
+    app.custom_field = 5;
+    assert_eq!(
+        app.current_custom_field(),
+        Some(crate::CustomField::ClientIdentity)
+    );
+    app.cycle_custom_choice(true);
+    assert_eq!(
+        app.custom_client_identity,
+        muta_contracts::ClientIdentity::OpenCode
+    );
+}
+
+#[test]
+fn custom_provider_edit_restores_protocol_and_request_identity() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_edit_provider_editor(
+        "relay".to_string(),
+        "Relay".to_string(),
+        "anthropic-messages".to_string(),
+        "https://relay.example/v1/messages".to_string(),
+        muta_contracts::ConnectionAuth::ApiKey,
+        false,
+        muta_contracts::ClientIdentity::ClaudeCode,
+    );
+
+    assert_eq!(app.custom_protocol_wire, "anthropic-messages");
+    assert_eq!(
+        app.custom_client_identity,
+        muta_contracts::ClientIdentity::ClaudeCode
+    );
+    assert!(app.custom_fields.contains(&crate::CustomField::Protocol));
+    assert!(
+        app.custom_fields
+            .contains(&crate::CustomField::ClientIdentity)
+    );
 }
 
 #[test]
@@ -409,7 +450,7 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
     // model id (not a seeded list) plus the relay endpoint.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let preset = &crate::providers::CUSTOM_CONNECTION;
-    // The editor's visible fields include the Model filter field.
+    // The editor exposes the four basic strings plus API and identity selectors.
     assert_eq!(
         preset.fields(),
         vec![
@@ -417,24 +458,24 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
             crate::CustomField::BaseUrl,
             crate::CustomField::Token,
             crate::CustomField::Model,
+            crate::CustomField::Protocol,
+            crate::CustomField::ClientIdentity,
         ]
     );
     app.open_custom_provider_editor(preset);
     app.custom_name = "WeChat".to_string();
     app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
     app.custom_token = "tok".to_string();
-    // Focus the Model field, type the cased id, and commit it via the
-    // suggestion commit (a cased id is offered as a custom value).
+    // Focus the Model field and type the cased id directly.
     app.custom_field = 3;
     app.load_custom_field();
     app.input = "GLM-5.2".to_string();
-    app.on_custom_filter_changed();
+    app.stash_custom_field();
     assert_eq!(app.custom_model, "GLM-5.2");
 
     // Submit: the request carries the single typed model, no preset id, and
     // the endpoint — a case-sensitive id travels
     // verbatim (the WeChat endpoint 400s on the lowercase spelling).
-    app.stash_custom_field();
     let payload = serde_json::json!({
         "name": app.custom_name,
         "protocol": app.custom_protocol_wire,

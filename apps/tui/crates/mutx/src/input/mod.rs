@@ -80,11 +80,8 @@ pub struct InputContext {
     /// (`App::modal_keymap_open`). When true, `?` / Esc toggle or dismiss the
     /// page instead of acting on the underlying list, and Enter is inert.
     pub modal_keymap_open: bool,
-    /// Focused field index of the provider editor, or `None` when that modal is
-    /// not open. Every visible field borrows the composer line (Name / Base URL /
-    /// Token as plain text, Model as a live filter), so printable keys always edit
-    /// it. Mirrors `App::custom_field` while [`Self::active_modal`] is
-    /// `super::Modal::CustomProvider`.
+    /// Focused text-field index of the provider editor, or `None` when the
+    /// modal is closed or an inline selector is focused.
     pub custom_provider_field: Option<u8>,
     /// Focused field of the key editor (`Modal::ModelEditor`): `0` = API key,
     /// `1` = effort selector, `2` = thinking toggle. `None` when that modal is
@@ -116,9 +113,7 @@ pub struct InputContext {
 }
 
 impl InputContext {
-    /// Whether any provider-editor field is focused. Every visible field borrows
-    /// the composer line (Name / Base URL / Token as plain text, Model as a live
-    /// filter), so all are text fields now (ADR-0046 removed the Thinking toggle).
+    /// Whether a provider-editor text field is focused.
     fn custom_text_field_focused(&self) -> bool {
         self.custom_provider_field.is_some()
     }
@@ -136,8 +131,8 @@ fn edits_input_field(context: &InputContext) -> bool {
         super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
-        // The provider editor edits the composer line on every visible field
-        // (Name / Base URL / Token / Model all borrow it).
+        // The provider editor's four basic string fields borrow the composer;
+        // Protocol and Client Identity are inline selectors.
         super::Modal::CustomProvider => context.custom_text_field_focused(),
         _ => false,
     }
@@ -289,9 +284,13 @@ pub enum InputAction {
     /// (`Tab` / `BackTab`), wrapping at the ends.
     CustomProviderNextField,
     CustomProviderPrevField,
-    /// Move the suggestion highlight in the provider editor's Model filter field
-    /// with `↑` / `↓`. `forward` = down.
-    MoveCustomSuggestion {
+    /// Scroll the custom-provider form with `↑` / `↓`. `forward` = down.
+    ScrollCustomProvider {
+        forward: bool,
+    },
+    /// Cycle the focused custom provider selector (`Protocol` or
+    /// `ClientIdentity`) with `←` / `→`.
+    CycleCustomProviderChoice {
         forward: bool,
     },
     /// Move the preset-chooser selection with `↑` / `↓`. `forward` = down.
@@ -2437,8 +2436,13 @@ pub fn process_event(
                     {
                         return InputAction::ModelEditorEffortCycle { delta: -1 };
                     }
-                    // In the provider editor every field borrows the composer
-                    // line, so ←/→ move the caret within the focused field.
+                    if context.active_modal == super::Modal::CustomProvider
+                        && context.custom_provider_field.is_none()
+                    {
+                        return InputAction::CycleCustomProviderChoice { forward: false };
+                    }
+                    // In provider-editor text fields, ←/→ retain ordinary
+                    // caret movement.
                     if edits_input_field(&context) && *cursor_position > 0 {
                         // Ctrl+Left (and Alt+Left on terminals that translate
                         // it) jumps back one whitespace-delimited word,
@@ -2475,6 +2479,11 @@ pub fn process_event(
                         && context.editor_field == Some(1)
                     {
                         return InputAction::ModelEditorEffortCycle { delta: 1 };
+                    }
+                    if context.active_modal == super::Modal::CustomProvider
+                        && context.custom_provider_field.is_none()
+                    {
+                        return InputAction::CycleCustomProviderChoice { forward: true };
                     }
                     if edits_input_field(&context) && *cursor_position < input.chars().count() {
                         // Ctrl+Right (and Alt+Right) jump forward one word.
@@ -2572,7 +2581,7 @@ pub fn process_event(
                         }
                         super::Modal::OauthPending => InputAction::ScrollUp,
                         super::Modal::CustomProvider => {
-                            InputAction::MoveCustomSuggestion { forward: false }
+                            InputAction::ScrollCustomProvider { forward: false }
                         }
                         super::Modal::ModelEditor | super::Modal::InputInjection => {
                             InputAction::None
@@ -2655,7 +2664,7 @@ pub fn process_event(
                         }
                         super::Modal::OauthPending => InputAction::ScrollDown,
                         super::Modal::CustomProvider => {
-                            InputAction::MoveCustomSuggestion { forward: true }
+                            InputAction::ScrollCustomProvider { forward: true }
                         }
                         super::Modal::ModelEditor | super::Modal::InputInjection => {
                             InputAction::None

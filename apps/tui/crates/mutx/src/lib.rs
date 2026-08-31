@@ -99,9 +99,7 @@ mod snapshot_tests;
 pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, SelectionEdge};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{ActivityTab, Modal, Recess, TelemetryTab};
-pub(crate) use providers::{
-    CustomField, PROVIDER_PRESETS, preset_label_for, protocol_model_candidates,
-};
+pub(crate) use providers::{CustomField, PROVIDER_PRESETS, preset_label_for};
 
 use muta_contracts::{
     AgentRequest, AgentResponse, HarnessSnapshot, LoopStatus, Message, ParentStatus,
@@ -2369,6 +2367,7 @@ pub async fn run_tui(
         custom_field: 0,
         custom_fields: Vec::new(),
         custom_protocol_wire: String::new(),
+        custom_client_identity: muta_contracts::ClientIdentity::Native,
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
         custom_user_agent: None,
@@ -2381,7 +2380,6 @@ pub async fn run_tui(
         oauth_pending_error: None,
         oauth_selected_item: 0,
         oauth_scroll: 0,
-        custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,
         custom_name: String::new(),
