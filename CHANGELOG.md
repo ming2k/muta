@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.22] - 2026-08-31
+
+### Added
+
+- Added independent web search and page reader connections with built-in
+  presets for Exa, Tavily, Bocha, SearXNG, DuckDuckGo, Jina, and Firecrawl.
+- Added provider usage reporting for DeepSeek, Kimi, OpenRouter, and
+  SiliconFlow connections.
+- Added protocol and client identity selectors to the custom provider editor,
+  with direct entry of arbitrary model IDs.
+
 ### Changed
 
 - Replaced duplicate transport/wire/endpoint representations with four canonical inference protocols and typed provider dialects; unknown and legacy protocol labels now fail instead of falling back to OpenAI.
@@ -5751,7 +5762,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.21...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.22...HEAD
+[0.37.22]: https://github.com/ming2k/muta/compare/v0.37.21...v0.37.22
 [0.37.21]: https://github.com/ming2k/muta/compare/v0.37.20...v0.37.21
 [0.37.20]: https://github.com/ming2k/muta/compare/v0.37.19...v0.37.20
 [0.37.19]: https://github.com/ming2k/muta/compare/v0.37.18...v0.37.19
