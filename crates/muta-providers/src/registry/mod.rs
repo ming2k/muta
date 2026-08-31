@@ -157,6 +157,9 @@ pub struct ProviderPresetSpec {
     /// context window or claim vision support the model lacks. When `false`,
     /// discovery keeps only registry-known ids (the historical behavior).
     pub fitting: bool,
+    /// Prompt-cache behavior verified for this exact preset route. Protocol
+    /// compatibility alone never grants cache controls.
+    pub prompt_cache: muta_contracts::PromptCacheSpec,
 }
 
 /// The single registry of provider presets offered when adding a connection.
@@ -260,13 +263,9 @@ impl OpenAiProviderSpec {
 /// attribution id (`Provider::provider_id`) so assistant responses are
 /// attributed to the logical model even after a mid-session switch.
 ///
-/// `session_id` participates in prompt-cache control (ADR-0067): when the
-/// resolved [`muta_contracts::CachePolicy`] for the model's family is
-/// [`SessionKey`](muta_contracts::CachePolicy::SessionKey) (Moonshot / Kimi), the
-/// session id is stamped as the provider's `prompt_cache_key` so the server-side
-/// cache namespaces per conversation and repeated prefixes hit at a discount.
-/// Pass `None` when no session is known yet (shared bootstrap); the key is then
-/// left unset and the provider caches at the server's default granularity.
+/// `session_id` is offered as a routing key only when this exact channel
+/// declares [`muta_contracts::CacheActivation::RoutingKey`]. A protocol or
+/// model-family resemblance never grants that capability to a relay.
 pub fn build_provider_for_channel(
     channel: &Channel,
     entry_id: &str,
@@ -333,6 +332,7 @@ pub fn build_provider_for_channel(
             provider = provider
                 .with_thinking(cfg)
                 .with_model_capabilities(capabilities)
+                .with_prompt_cache_capabilities(channel.prompt_cache.clone())
                 .with_copilot(*copilot);
             Arc::new(provider)
         }
@@ -343,11 +343,18 @@ pub fn build_provider_for_channel(
             copilot,
         } => {
             let capabilities = channel.capabilities();
-            let policy = muta_contracts::CachePolicy::for_family(&capabilities.family);
-            let cache_key = if policy.injects_session_key() {
-                session_id.map(str::to_string)
-            } else {
-                None
+            let cache_plan = channel
+                .prompt_cache
+                .resolve(
+                    muta_contracts::CachePreference::ProviderDefault,
+                    session_id.map(str::to_string),
+                )
+                .expect("provider-default cache resolution cannot fail");
+            let cache_key = match &cache_plan {
+                muta_contracts::ResolvedCachePlan::Enabled { routing_key, .. } => {
+                    routing_key.clone()
+                }
+                _ => None,
             };
             // For OpenAI-family transports the effort knob IS the reasoning
             // control: a model that advertises a ladder (GLM-5.x — always-on
@@ -366,6 +373,7 @@ pub fn build_provider_for_channel(
             )
             .with_reasoning_effort(effective_effort)
             .with_prompt_cache_key(cache_key)
+            .with_cache_plan(cache_plan)
             .with_model_capabilities(capabilities)
             .with_copilot(*copilot)
             .with_id(entry_id.to_string());
@@ -559,6 +567,8 @@ mod build_tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
@@ -586,6 +596,8 @@ mod build_tests {
             model: "glm-5.3".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "zai-code", None);
         assert_eq!(provider.effort(), Some(muta_contracts::Effort::High));
@@ -617,6 +629,8 @@ mod build_tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.effort(), None);
@@ -641,6 +655,8 @@ mod build_tests {
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");

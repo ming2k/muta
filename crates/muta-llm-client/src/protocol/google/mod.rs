@@ -15,11 +15,11 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use muta_contracts::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use muta_contracts::{ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
-use crate::{Client, Endpoint, TurnState};
+use crate::{Client, Endpoint};
 use crate::{decode_response_json, ensure_success, transport_error};
 
 pub mod request;
@@ -30,22 +30,31 @@ pub mod response;
 /// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
 pub const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+fn google_completion(
+    response_json: &Value,
+) -> Result<muta_contracts::ProviderCompletion, String> {
+    let root = response_json.get("response").unwrap_or(response_json);
+    let mut message = response::message(response_json)?;
+    let artifacts = message.provider_meta.take();
+    Ok(muta_contracts::ProviderCompletion {
+        message,
+        meta: muta_contracts::ProviderCompletionMeta {
+            usage: response::usage(&root["usageMetadata"]),
+            artifacts,
+            continuation: None,
+        },
+    })
+}
+
 /// Google native provider.
 ///
-/// Embeds the shared [`Endpoint`] (connection config) and [`TurnState`] (tool
-/// schemas + last usage). The provider holds no wire-format-unique fields:
+/// Embeds the shared [`Endpoint`] (connection config). The provider holds no wire-format-unique fields:
 /// Google's transport differences (key as query param, versioned base, native
 /// function declarations) are confined to [`request`] / [`response`].
 pub struct GoogleProvider {
     pub endpoint: Endpoint,
-    pub turn: TurnState,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
-    /// Stash for Google thought signatures attached to streamed function-call
-    /// parts, drained into `provider_meta` for exact stateless replay.
-    pub last_thought_signatures: Arc<Mutex<Map<String, Value>>>,
-    /// Stash for the latest streamed text-part thought signature.
-    pub last_text_thought_signature: Arc<Mutex<Option<String>>>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: muta_contracts::ModelCapabilities,
@@ -96,10 +105,7 @@ impl GoogleProvider {
                 "google",
             )
             .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
-            last_thought_signatures: Arc::new(Mutex::new(Map::new())),
-            last_text_thought_signature: Arc::new(Mutex::new(None)),
             capabilities,
             reasoning_effort: None,
             project_id: None,
@@ -123,10 +129,7 @@ impl GoogleProvider {
                 "google",
             )
             .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
-            last_thought_signatures: Arc::new(Mutex::new(Map::new())),
-            last_text_thought_signature: Arc::new(Mutex::new(None)),
             capabilities,
             reasoning_effort: None,
             project_id: None,
@@ -247,17 +250,11 @@ impl GoogleProvider {
         &self,
         response: reqwest::Response,
     ) -> BoxStream<'static, Result<ProviderStreamEvent, String>> {
-        self.last_thought_signatures
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        *self
-            .last_text_thought_signature
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
         let next_tool_index = std::sync::Arc::new(std::sync::Mutex::new(0usize));
-        let thought_signatures = self.last_thought_signatures.clone();
-        let text_thought_signature = self.last_text_thought_signature.clone();
+        let thought_signatures = Arc::new(Mutex::new(Map::new()));
+        let text_thought_signature = Arc::new(Mutex::new(None::<String>));
+        let terminal_signatures = thought_signatures.clone();
+        let terminal_text_signature = text_thought_signature.clone();
         let stream = crate::sse::data_payloads(response, "Google").flat_map({
             let next_tool_index = next_tool_index.clone();
             move |item| {
@@ -342,7 +339,37 @@ impl GoogleProvider {
                 futures::stream::iter(events)
             }
         });
-        stream.boxed()
+        let terminal = futures::stream::once(async move {
+            let signatures = std::mem::take(
+                &mut *terminal_signatures
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()),
+            );
+            let text_signature = terminal_text_signature
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+            let mut artifacts = Map::new();
+            if !signatures.is_empty() {
+                artifacts.insert(
+                    response::THOUGHT_SIGNATURES_META_KEY.to_string(),
+                    Value::Object(signatures),
+                );
+            }
+            if let Some(signature) = text_signature {
+                artifacts.insert(
+                    response::TEXT_THOUGHT_SIGNATURE_META_KEY.to_string(),
+                    Value::String(signature),
+                );
+            }
+            Ok(ProviderStreamEvent::Completed(
+                muta_contracts::ProviderCompletionMeta {
+                    artifacts: (!artifacts.is_empty()).then_some(artifacts),
+                    ..Default::default()
+                },
+            ))
+        });
+        stream.chain(terminal).boxed()
     }
 
     /// Record that this channel's upstream rejected our `thinkingConfig` and
@@ -379,7 +406,10 @@ impl GoogleProvider {
     /// (Gemini 3.x cannot reason with thinking off); what changes is that we
     /// stop asking for the chain to be disclosed, which is the upstream's
     /// prerogative — the turn itself is not an error.
-    async fn chat_without_thinking(&self, request: ModelRequest) -> Result<Message, String> {
+    async fn chat_without_thinking(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         tracing::warn!(
             model = %self.endpoint.model,
             "upstream rejected thinkingConfig; retrying without disclosed thinking (chain withheld by upstream)"
@@ -402,11 +432,7 @@ impl GoogleProvider {
             ));
         }
 
-        if let Some(usage) = response::usage(&root["usageMetadata"]) {
-            self.turn.stash_usage(usage);
-        }
-
-        response::message(&response_json)
+        google_completion(&response_json)
     }
 
     #[cfg(test)]
@@ -566,40 +592,10 @@ impl Provider for GoogleProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<muta_contracts::TokenUsage> {
-        self.turn.take_usage()
-    }
-
-    fn take_last_provider_meta(&self) -> Option<Map<String, Value>> {
-        let mut signatures = self
-            .last_thought_signatures
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let text_signature = self
-            .last_text_thought_signature
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        if signatures.is_empty() && text_signature.is_none() {
-            return None;
-        }
-        let mut provider_meta = Map::new();
-        if !signatures.is_empty() {
-            provider_meta.insert(
-                response::THOUGHT_SIGNATURES_META_KEY.to_string(),
-                Value::Object(std::mem::take(&mut *signatures)),
-            );
-        }
-        if let Some(signature) = text_signature {
-            provider_meta.insert(
-                response::TEXT_THOUGHT_SIGNATURE_META_KEY.to_string(),
-                Value::String(signature),
-            );
-        }
-        Some(provider_meta)
-    }
-
-    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         let omit = self.thinking_was_rejected();
         let response = self
             .send_google_request(&request, false, omit, Some(self.client.request_timeout()))
@@ -629,11 +625,7 @@ impl Provider for GoogleProvider {
             ));
         }
 
-        if let Some(usage) = response::usage(&root["usageMetadata"]) {
-            self.turn.stash_usage(usage);
-        }
-
-        response::message(&response_json)
+        google_completion(&response_json)
     }
 
     async fn stream_chat(

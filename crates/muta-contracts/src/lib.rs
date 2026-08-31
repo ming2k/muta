@@ -23,7 +23,11 @@ pub use color_scheme_config::{
     DiffThemeConfig, InputThemeConfig, ThemeFile,
 };
 pub mod cache;
-pub use cache::CachePolicy;
+pub use cache::{
+    CacheActivation, CachePreference, CacheResolutionError, CacheTtl, PromptCacheCapabilities,
+    PromptCacheSpec, PromptCacheUsage, ResolvedCacheMode, ResolvedCachePlan,
+    read_prompt_cache_usage,
+};
 pub mod repeat;
 pub use repeat::{
     DEFAULT_MAX_AGE_DAYS, RepeatJob, Schedule, ScheduleAt, ScheduledJob, parse_schedule_arg,
@@ -62,6 +66,7 @@ pub use auth::{CredentialSource, ResolvedAuth, StaticCredentialSource, static_cr
 pub mod tool_validation;
 
 pub mod capability;
+pub mod provider_state;
 pub mod catalog;
 pub mod channel_auth;
 pub mod client_identity;
@@ -138,6 +143,14 @@ pub mod web_config;
 pub use capability::{
     CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints, ProviderStreamEvent,
     ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
+};
+pub use provider_state::{
+    CONTINUATION_ARTIFACT_KEY, ContinuationMode, ContextRelation, ContextRevision,
+    ContinuationCursor, CursorInvalidationReason, EnvelopeRevision,
+    OPENAI_RESPONSE_ID_ARTIFACT_KEY, OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY, ProviderArtifacts, ProviderCompletion,
+    ProviderCompletionMeta, ProviderCursorState, RequestDelivery, RouteFingerprint,
+    read_continuation_cursor, request_envelope_fingerprint, select_request_delivery,
+    semantic_context_head, write_continuation_cursor,
 };
 pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};

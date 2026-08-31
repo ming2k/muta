@@ -324,6 +324,9 @@ pub struct RouteSettings {
     /// user's own per-route choices and are never rebuilt from an endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_overrides: Option<muta_contracts::CapabilityOverrides>,
+    /// Prompt-cache behavior requested for this concrete route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_preference: Option<muta_contracts::CachePreference>,
 }
 
 impl RouteSettings {
@@ -1721,18 +1724,21 @@ name = "DeepSeek"
             effort: None,
             thinking: None,
             capability_overrides: None,
+            cache_preference: None,
         };
         assert!(bare.is_empty());
         let with_effort = RouteSettings {
             effort: Some("high".to_string()),
             thinking: None,
             capability_overrides: None,
+            cache_preference: None,
         };
         assert!(!with_effort.is_empty());
         let with_thinking = RouteSettings {
             effort: None,
             thinking: Some(false),
             capability_overrides: None,
+            cache_preference: None,
         };
         assert!(!with_thinking.is_empty());
     }

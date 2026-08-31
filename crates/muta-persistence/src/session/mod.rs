@@ -1763,7 +1763,7 @@ pub async fn summarize_with_provider(
             ));
         }
     };
-    let summary = response.content.trim().to_string();
+    let summary = response.message.content.trim().to_string();
     if summary.is_empty() {
         return Err("Summarization returned an empty summary.".to_string());
     }

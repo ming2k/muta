@@ -95,6 +95,20 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec {
+        activations: &[
+            muta_contracts::CacheActivation::Implicit,
+            muta_contracts::CacheActivation::RoutingKey,
+        ],
+        supported_ttls: &[],
+        default_ttl: None,
+        disable_supported: false,
+        max_breakpoints: None,
+        min_cacheable_tokens: None,
+        reports_reads: true,
+        reports_writes: false,
+        reports_misses: false,
+    },
     id: "kimi-code",
     baselines: MODELS,
     base_url: "https://api.kimi.com/coding/v1/chat/completions",

@@ -16,18 +16,17 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, Effort, Message, ModelRequest, Provider, ProviderPromptHints,
-    ProviderStreamEvent, ResolvedAuth,
+    CredentialSource, Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+    ResolvedAuth,
 };
 use std::sync::{Arc, Mutex};
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint, TurnState};
+use crate::{Client, Endpoint};
 
 /// OpenAI Responses-API provider (ChatGPT subscription backend).
 pub struct OpenAiResponsesProvider {
     pub endpoint: Endpoint,
-    pub turn: TurnState,
     pub reasoning_effort: Option<Effort>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
@@ -39,6 +38,9 @@ pub struct OpenAiResponsesProvider {
     /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
     /// `Copilot-Vision-Request` for vision turns).
     pub copilot: bool,
+    /// Whether upstream persists response state and accepts
+    /// `previous_response_id`. Subscription backends force this off.
+    pub store: bool,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
 }
@@ -52,12 +54,12 @@ impl OpenAiResponsesProvider {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint::with_credentials(credentials, model, base_url, "chatgpt"),
-            turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
             capabilities,
             chatgpt: false,
             copilot: false,
+            store: true,
         }
     }
 
@@ -102,12 +104,23 @@ impl OpenAiResponsesProvider {
     /// Enable ChatGPT subscription headers (`originator: muta` and `ChatGPT-Account-Id`).
     pub fn with_chatgpt(mut self, chatgpt: bool) -> Self {
         self.chatgpt = chatgpt;
+        if chatgpt {
+            self.store = false;
+        }
         self
     }
 
     /// Flip on Copilot-mode request headers.
     pub fn with_copilot(mut self, copilot: bool) -> Self {
         self.copilot = copilot;
+        if copilot {
+            self.store = false;
+        }
+        self
+    }
+
+    pub fn with_store(mut self, store: bool) -> Self {
+        self.store = store;
         self
     }
 
@@ -197,7 +210,12 @@ impl OpenAiResponsesProvider {
     }
 
     fn build_body(&self, request: ModelRequest, stream: bool) -> serde_json::Value {
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            messages,
+            tool_specs,
+            delivery,
+            ..
+        } = request;
         request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -205,6 +223,8 @@ impl OpenAiResponsesProvider {
                 stream,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                delivery: &delivery,
+                store: self.store,
             },
             &self.capabilities,
         )
@@ -229,6 +249,23 @@ impl Provider for OpenAiResponsesProvider {
         self.capabilities.clone()
     }
 
+    fn route_fingerprint(&self) -> muta_contracts::RouteFingerprint {
+        muta_contracts::RouteFingerprint(format!(
+            "openai-responses:{}:{}:{}",
+            self.endpoint.base_url,
+            self.endpoint.model,
+            if self.store { "stored" } else { "local" }
+        ))
+    }
+
+    fn continuation_mode(&self) -> muta_contracts::ContinuationMode {
+        if self.store {
+            muta_contracts::ContinuationMode::RemoteStored
+        } else {
+            muta_contracts::ContinuationMode::OpaqueReplay
+        }
+    }
+
     fn prompt_hints(&self) -> ProviderPromptHints {
         ProviderPromptHints {
             system_guidance: "",
@@ -239,11 +276,10 @@ impl Provider for OpenAiResponsesProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<muta_contracts::TokenUsage> {
-        self.turn.take_usage()
-    }
-
-    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         let label = self.label();
         let body = self.build_body(request, false);
         let resp = self.send_request(&body, false).await?;
@@ -251,10 +287,26 @@ impl Provider for OpenAiResponsesProvider {
         if let Some(err) = value.get("error") {
             return Err(format!("{label} Error: {}", err));
         }
-        if let Some(usage) = response::usage(&value["usage"]) {
-            self.turn.stash_usage(usage);
-        }
-        Ok(response::message(&value["output"]))
+        let mut artifacts = serde_json::Map::new();
+        artifacts.insert(
+            muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
+            value["output"].clone(),
+        );
+        let continuation = value["id"].as_str().map(|response_id| {
+            muta_contracts::ContinuationCursor {
+                route: self.route_fingerprint(),
+                local_head: String::new(),
+                response_id: response_id.to_string(),
+            }
+        });
+        Ok(muta_contracts::ProviderCompletion {
+            message: response::message(&value["output"]),
+            meta: muta_contracts::ProviderCompletionMeta {
+                usage: response::usage(&value["usage"]),
+                artifacts: Some(artifacts),
+                continuation,
+            },
+        })
     }
 
     async fn stream_chat(
@@ -292,10 +344,26 @@ impl Provider for OpenAiResponsesProvider {
         // directly (mirrors the chat-completions streaming path) — no stashing
         // into the turn is needed.
         let parser = Arc::new(Mutex::new(response::ResponsesStream::new()));
+        let route = self.route_fingerprint();
         let stream = crate::sse::data_payloads(resp, label).map(move |item| {
             let data = item?;
             let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
-            Ok::<_, String>(p.parse(&data))
+            let mut events = p.parse(&data);
+            for event in &mut events {
+                if let ProviderStreamEvent::Completed(meta) = event
+                    && let Some(artifacts) = meta.artifacts.as_mut()
+                    && let Some(response_id) = artifacts
+                        .remove(muta_contracts::OPENAI_RESPONSE_ID_ARTIFACT_KEY)
+                        .and_then(|value| value.as_str().map(str::to_string))
+                {
+                    meta.continuation = Some(muta_contracts::ContinuationCursor {
+                        route: route.clone(),
+                        local_head: String::new(),
+                        response_id,
+                    });
+                }
+            }
+            Ok::<_, String>(events)
         });
         Ok(stream
             .flat_map(|result| match result {

@@ -133,6 +133,7 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
     id: "zai-code",
     baselines: MODELS,
     base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",

@@ -405,8 +405,8 @@ impl SessionStore {
                     .event_log
                     .append(SessionEvent::MessagesAppended { messages: delta })?;
                 dirty = true;
-            } else if commit.messages.len() != durable_len {
-                // Diverged (compaction/fork/replay) — full replace, exactly as
+            } else if commit.messages.len() != durable_len || !prefix_matches {
+                // Diverged (compaction/fork/replay or in-place edit/freeze) — full replace, exactly as
                 // `append_turn` does.
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::MessagesReplaced {

@@ -37,8 +37,8 @@ struct TestStreamProvider;
 
 #[async_trait]
 impl Provider for TestStreamProvider {
-    async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
-        Ok(Message::new(Role::Assistant, MOCK_REPLY))
+    async fn chat(&self, _request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        Ok(muta_contracts::ProviderCompletion::message(Message::new(Role::Assistant, MOCK_REPLY)))
     }
 
     async fn stream_chat(

@@ -84,7 +84,21 @@ impl Tool for WebFetchTool {
     fn is_available(&self) -> bool {
         let snapshot = self.config.get();
         let reader = snapshot.reader.trim();
-        !reader.is_empty() && reader != "none" && reader != "disabled" && reader != "(none)"
+        if reader.is_empty()
+            || reader == "none"
+            || reader == "disabled"
+            || reader == "(none)"
+        {
+            return false;
+        }
+        match reader {
+            "jina" => snapshot
+                .jina_api_key
+                .as_ref()
+                .map(|k| !k.expose_secret().trim().is_empty())
+                .unwrap_or(false),
+            _ => true,
+        }
     }
     fn description(&self) -> &str {
         "Fetch a web page and return its text content as clean Markdown."

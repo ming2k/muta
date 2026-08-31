@@ -164,7 +164,7 @@ pub async fn compact_entries(
         Err(_) => return Err("Compaction LLM call timed out".to_string()),
     };
 
-    let mut summary = response.content;
+    let mut summary = response.message.content;
     let file_section = file_tracker.format_markdown();
     summary.push_str(&file_section);
 

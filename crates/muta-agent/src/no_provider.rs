@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use muta_contracts::{Message, ModelRequest, Provider};
+use muta_contracts::{ModelRequest, Provider, ProviderCompletion};
 
 /// The provider id reported by [`NoProvider`]. Callers that need to gate on
 /// "is there a real provider installed?" compare against this constant (or
@@ -42,7 +42,7 @@ impl NoProvider {
 
 #[async_trait]
 impl Provider for NoProvider {
-    async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: ModelRequest) -> Result<ProviderCompletion, String> {
         Err(no_provider_message())
     }
 
@@ -83,7 +83,10 @@ mod tests {
         struct Other;
         #[async_trait]
         impl Provider for Other {
-            async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
+            async fn chat(
+                &self,
+                _request: ModelRequest,
+            ) -> Result<muta_contracts::ProviderCompletion, String> {
                 unreachable!()
             }
             async fn stream_chat(

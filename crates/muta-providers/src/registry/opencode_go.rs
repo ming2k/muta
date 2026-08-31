@@ -281,6 +281,7 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
     id: "opencode-go",
     baselines: MODELS,
     // Endpoints are per-model by wire format (see `route_for_model`); the

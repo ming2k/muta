@@ -106,14 +106,9 @@ impl Steward {
         .map_err(|_| StewardError::Timeout(timeout))?
         .map_err(StewardError::ProviderError)?;
 
-        // Steward requests are out-of-band harness work. Drain their
-        // provider-opaque side channels immediately so a concurrent primary
-        // stream cannot accidentally book the Steward's usage or thinking
-        // signature as part of the user's turn.
-        let _ = self.provider.take_last_usage();
-        let _ = self.provider.take_last_provider_meta();
-
-        let content = response.content.as_str();
+        // Steward completions own their metadata. Because nothing is stashed
+        // on the provider, concurrent primary requests cannot observe it.
+        let content = response.message.content.as_str();
         if content.trim().is_empty() {
             return Err(StewardError::EmptyResponse);
         }
@@ -192,9 +187,12 @@ mod tests {
 
     #[async_trait]
     impl Provider for MockProvider {
-        async fn chat(&self, _req: ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _req: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
             match &self.response {
-                Ok(content) => Ok(Message::new(Role::Assistant, content)),
+                Ok(content) => Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                    Role::Assistant,
+                    content,
+                ))),
                 Err(err) => Err(err.clone()),
             }
         }
@@ -289,14 +287,14 @@ mod tests {
 
         #[async_trait]
         impl Provider for CapturingProvider {
-            async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+            async fn chat(&self, request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
                 if let Some(last) = request.messages.last() {
                     *self.last_user_prompt.lock().unwrap() = last.content.clone();
                 }
-                Ok(Message::new(
+                Ok(muta_contracts::ProviderCompletion::message(Message::new(
                     Role::Assistant,
                     r#"{"title":"T","intent":"I","history":[]}"#,
-                ))
+                )))
             }
             async fn stream_chat(
                 &self,

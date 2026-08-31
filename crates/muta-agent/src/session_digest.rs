@@ -194,10 +194,13 @@ mod tests {
 
     #[async_trait]
     impl Provider for CannedProvider {
-        async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
             *self.last_messages.lock().unwrap() = request.messages;
             *self.last_tool_specs.lock().unwrap() = request.tool_specs;
-            Ok(Message::new(Role::Assistant, self.reply.clone()))
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                Role::Assistant,
+                self.reply.clone(),
+            )))
         }
 
         async fn stream_chat(

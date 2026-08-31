@@ -1141,8 +1141,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for CannedProvider {
-        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-            Ok(Message::new(Role::Assistant, "found 3 relevant files"))
+        async fn chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
+            Ok(muta_contracts::ProviderCompletion::message(
+                Message::new(Role::Assistant, "found 3 relevant files"),
+            ))
         }
         async fn stream_chat(
             &self,
@@ -1177,8 +1182,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for FlakyThenOkProvider {
-        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-            Ok(Message::new(Role::Assistant, "recovered"))
+        async fn chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
+            Ok(muta_contracts::ProviderCompletion::message(
+                Message::new(Role::Assistant, "recovered"),
+            ))
         }
 
         async fn stream_chat(
@@ -1204,16 +1214,22 @@ mod tests {
                     None,
                 ));
             }
-            Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::TextDelta("recovered".to_string()),
-            )])))
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("recovered".to_string())),
+                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+            ])))
         }
     }
     #[async_trait::async_trait]
     impl Provider for RecordingProvider {
-        async fn chat(&self, request: muta_contracts::ModelRequest) -> Result<Message, String> {
+        async fn chat(
+            &self,
+            request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             *self.request.lock().unwrap() = Some(request);
-            Ok(Message::new(Role::Assistant, "found 3 relevant files"))
+            Ok(muta_contracts::ProviderCompletion::message(
+                Message::new(Role::Assistant, "found 3 relevant files"),
+            ))
         }
 
         async fn stream_chat(
@@ -1389,8 +1405,13 @@ mod tests {
 
     #[async_trait]
     impl Provider for GatedProvider {
-        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-            Ok(Message::new(Role::Assistant, "gated"))
+        async fn chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
+            Ok(muta_contracts::ProviderCompletion::message(
+                Message::new(Role::Assistant, "gated"),
+            ))
         }
         async fn stream_chat(
             &self,
@@ -1618,9 +1639,14 @@ mod tests {
         }
         #[async_trait::async_trait]
         impl Provider for RecordingProvider {
-            async fn chat(&self, request: muta_contracts::ModelRequest) -> Result<Message, String> {
+            async fn chat(
+                &self,
+                request: muta_contracts::ModelRequest,
+            ) -> Result<muta_contracts::ProviderCompletion, String> {
                 self.record(&request);
-                Ok(Message::new(Role::Assistant, "done"))
+                Ok(muta_contracts::ProviderCompletion::message(
+                    Message::new(Role::Assistant, "done"),
+                ))
             }
             async fn stream_chat(
                 &self,

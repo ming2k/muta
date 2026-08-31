@@ -29,8 +29,11 @@ struct CompactionProvider;
 
 #[async_trait]
 impl Provider for CompactionProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-        Ok(Message::new(Role::Assistant, "mock AI summary"))
+    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        Ok(muta_contracts::ProviderCompletion::message(Message::new(
+            Role::Assistant,
+            "mock AI summary",
+        )))
     }
 
     async fn stream_chat(
@@ -2202,6 +2205,39 @@ async fn commit_turn_unifies_messages_counter_and_usage_in_one_event_batch() {
 }
 
 #[tokio::test]
+async fn commit_turn_replaces_messages_when_same_length_but_content_changed() {
+    let directory = std::env::temp_dir().join(format!("muta-commit-edit-{}", uuid::Uuid::new_v4()));
+    let path = directory.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    store
+        .replace_messages(vec![Message::new(
+            muta_contracts::Role::User,
+            "original prompt",
+        )])
+        .await
+        .unwrap();
+
+    let edited = vec![Message::new(
+        muta_contracts::Role::User,
+        "edited prompt",
+    )];
+
+    store
+        .commit_turn(CommitTurn {
+            messages: &edited,
+            round_counter: None,
+            usage_records: &[],
+        })
+        .await
+        .unwrap();
+
+    let fresh = SessionStore::for_path(path.clone());
+    assert_eq!(fresh.model_window().await[0].content, "edited prompt");
+
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
 async fn append_turn_is_noop_when_nothing_new() {
     // Passing a history no longer than the durable baseline (e.g. right
     // after a compaction rewrote the window via `replace_messages`) must
@@ -2570,7 +2606,7 @@ async fn run_compaction_falls_back_when_provider_errors() {
     struct FailingProvider;
     #[async_trait]
     impl Provider for FailingProvider {
-        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
             Err("boom".to_string())
         }
         async fn stream_chat(

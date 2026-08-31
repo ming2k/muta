@@ -64,6 +64,7 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
     id: "xai-oauth",
     baselines: MODELS,
     base_url: "https://api.x.ai/v1/chat/completions",

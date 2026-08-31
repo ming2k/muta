@@ -19,7 +19,7 @@ use serde_json::Value;
 /// hit rate and the cost is attributed correctly. `cache_creation_input_tokens`
 /// stays zero: OpenAI-style auto-caching has no separate write counter.
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
-    let cached = muta_contracts::cache::read_cached_tokens(usage);
+    let cache = muta_contracts::read_prompt_cache_usage(usage);
     let prompt = usage["prompt_tokens"].as_i64();
     let completion = usage["completion_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
@@ -28,15 +28,15 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
         (Some(p), None, Some(t)) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: (t - p).max(0),
             total_tokens: t,
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
         _ => {
             // Fall back to total_tokens only.
@@ -44,8 +44,8 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 total_tokens: t,
-                cache_read_input_tokens: cached.unwrap_or(0),
-                ..Default::default()
+                cache_creation_input_tokens: cache.write_tokens,
+                cache_read_input_tokens: cache.read_tokens,
             })
         }
     }

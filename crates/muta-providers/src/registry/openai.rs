@@ -191,6 +191,21 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec {
+        activations: &[
+            muta_contracts::CacheActivation::Implicit,
+            muta_contracts::CacheActivation::ExplicitBreakpoints,
+            muta_contracts::CacheActivation::RoutingKey,
+        ],
+        supported_ttls: &[muta_contracts::CacheTtl::ThirtyMinutes],
+        default_ttl: Some(muta_contracts::CacheTtl::ThirtyMinutes),
+        disable_supported: false,
+        max_breakpoints: Some(4),
+        min_cacheable_tokens: Some(1024),
+        reports_reads: true,
+        reports_writes: true,
+        reports_misses: false,
+    },
     id: "openai",
     baselines: MODELS,
     base_url: "https://api.openai.com/v1/chat/completions",

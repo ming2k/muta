@@ -2,8 +2,7 @@
 //!
 //! A thin executor over the pure [`request`], [`response`], [`signature`], and
 //! [`thinking`] layers plus the shared transport helpers. The provider struct
-//! holds the shared [`Endpoint`] (connection config), the shared [`TurnState`]
-//! (tool schemas + last usage), and only two Anthropic-unique fields:
+//! holds the shared [`Endpoint`] (connection config) and only two Anthropic-unique fields:
 //! `max_tokens` (the Messages API requires it) and `thinking` (the resolved
 //! reasoning config). Everything else — body construction, header assembly,
 //! cache breakpoints, thinking stamps, response/stream parsing — lives in a
@@ -20,13 +19,11 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ResolvedAuth,
+    CredentialSource, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent, ResolvedAuth,
 };
-use std::sync::Arc;
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint, TurnState};
+use crate::{Client, Endpoint};
 
 pub mod request;
 pub mod response;
@@ -42,12 +39,11 @@ pub use thinking::ThinkingConfig;
 
 /// Anthropic-compatible `/messages` provider.
 ///
-/// Embeds the shared [`Endpoint`] and [`TurnState`], plus the two
-/// Anthropic-unique fields: `max_tokens` (the Messages API requires it) and
+/// Embeds the shared [`Endpoint`], plus the two Anthropic-unique fields:
+/// `max_tokens` (the Messages API requires it) and
 /// `thinking` (the resolved reasoning/effort config).
 pub struct AnthropicMessagesProvider {
     pub endpoint: Endpoint,
-    pub turn: TurnState,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
     /// `max_tokens` sent on every `/messages` request. The Messages API
@@ -61,10 +57,9 @@ pub struct AnthropicMessagesProvider {
     /// Use GitHub Copilot's bearer authentication and client headers for its
     /// `/v1/messages` adapter instead of stock Anthropic API-key headers.
     pub copilot: bool,
-    /// Stash for the signature of the most recent assistant `thinking` block,
-    /// accumulated across SSE chunks (streaming) or read once (non-streaming),
-    /// drained into the message's `provider_meta` for the next replay.
-    pub last_thinking_signature: Arc<signature::SignatureStash>,
+    /// Prompt-cache controls declared by the concrete route.
+    pub prompt_cache: muta_contracts::PromptCacheCapabilities,
+    pub cache_preference: muta_contracts::CachePreference,
 }
 
 impl AnthropicMessagesProvider {
@@ -92,13 +87,13 @@ impl AnthropicMessagesProvider {
         Self {
             endpoint: Endpoint::from_static_key(api_key, model, base_url, "anthropic")
                 .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
             max_tokens: 8192,
             thinking,
             capabilities,
             copilot: false,
-            last_thinking_signature: signature::SignatureStash::shared(),
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
         }
     }
 
@@ -114,13 +109,13 @@ impl AnthropicMessagesProvider {
         Self {
             endpoint: Endpoint::with_credentials(credentials, model, base_url, "anthropic")
                 .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
             max_tokens: 8192,
             thinking,
             capabilities,
             copilot: false,
-            last_thinking_signature: signature::SignatureStash::shared(),
+            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
+            cache_preference: muta_contracts::CachePreference::ProviderDefault,
         }
     }
 
@@ -143,6 +138,38 @@ impl AnthropicMessagesProvider {
     ) -> Self {
         self.capabilities = capabilities;
         self
+    }
+
+    pub fn with_prompt_cache_capabilities(
+        mut self,
+        capabilities: muta_contracts::PromptCacheCapabilities,
+    ) -> Self {
+        self.prompt_cache = capabilities;
+        self
+    }
+
+    pub fn with_cache_preference(
+        mut self,
+        preference: muta_contracts::CachePreference,
+    ) -> Self {
+        self.cache_preference = preference;
+        self
+    }
+
+    fn resolve_cache_plan(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<muta_contracts::ResolvedCachePlan, String> {
+        let preference = if request.cache_preference
+            == muta_contracts::CachePreference::ProviderDefault
+        {
+            self.cache_preference
+        } else {
+            request.cache_preference
+        };
+        self.prompt_cache
+            .resolve(preference, None)
+            .map_err(|error| error.to_string())
     }
 
     /// Enable GitHub Copilot's Anthropic Messages adapter headers.
@@ -265,26 +292,12 @@ impl Provider for AnthropicMessagesProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<muta_contracts::TokenUsage> {
-        self.turn.take_usage()
-    }
-
-    fn take_last_provider_meta(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
-        // Drain the thinking signature accumulated during the last turn into
-        // the provider-opaque sidecar the harness stamps on the assistant
-        // message.
-        self.last_thinking_signature.take().map(|sig| {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                "thinking_signature".to_string(),
-                serde_json::Value::String(sig),
-            );
-            map
-        })
-    }
-
-    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         let ephemeral = request.ephemeral;
+        let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -295,6 +308,7 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
                 ephemeral,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
@@ -304,14 +318,23 @@ impl Provider for AnthropicMessagesProvider {
 
         let assembled = response::assemble_message(&response_json)?;
 
-        if let Some(usage) = response::usage(&response_json["usage"]) {
-            self.turn.stash_usage(usage);
-        }
-        if let Some(sig) = assembled.thinking_signature.clone() {
-            self.last_thinking_signature.set(sig);
-        }
-
-        Ok(response::into_message(assembled))
+        let usage = response::usage(&response_json["usage"]);
+        let artifacts = assembled.thinking_signature.as_ref().map(|signature| {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "thinking_signature".to_string(),
+                serde_json::Value::String(signature.clone()),
+            );
+            map
+        });
+        Ok(muta_contracts::ProviderCompletion {
+            message: response::into_message(assembled),
+            meta: muta_contracts::ProviderCompletionMeta {
+                usage,
+                artifacts,
+                continuation: None,
+            },
+        })
     }
 
     async fn stream_chat(
@@ -319,6 +342,7 @@ impl Provider for AnthropicMessagesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let ephemeral = request.ephemeral;
+        let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -329,6 +353,7 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
                 ephemeral,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
@@ -347,6 +372,7 @@ impl Provider for AnthropicMessagesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let ephemeral = request.ephemeral;
+        let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -357,16 +383,15 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
                 ephemeral,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
 
         let response = self.send_request(&body, true).await?;
 
-        // Side-channel: hoover up signature fragments before the typed parser
-        // (which ignores `signature_delta`), so the assembled assistant turn can
-        // carry the full signature in `provider_meta` for the next replay.
-        let sig_stash = self.last_thinking_signature.clone();
+        let sig_stash = signature::SignatureStash::shared();
+        let terminal_stash = sig_stash.clone();
         // Usage arrives split across `message_start` (input + cache counters)
         // and `message_delta` (output); the accumulator merges them so the
         // emitted Usage events carry the full counts.
@@ -384,7 +409,23 @@ impl Provider for AnthropicMessagesProvider {
             };
             futures::stream::iter(events)
         });
-        Ok(stream.boxed())
+        let terminal = futures::stream::once(async move {
+            let artifacts = terminal_stash.take().map(|signature| {
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "thinking_signature".to_string(),
+                    serde_json::Value::String(signature),
+                );
+                map
+            });
+            Ok(ProviderStreamEvent::Completed(
+                muta_contracts::ProviderCompletionMeta {
+                    artifacts,
+                    ..Default::default()
+                },
+            ))
+        });
+        Ok(stream.chain(terminal).boxed())
     }
 }
 

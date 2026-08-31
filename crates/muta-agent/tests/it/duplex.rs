@@ -44,8 +44,13 @@ struct IdleProvider;
 
 #[async_trait]
 impl Provider for IdleProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-        Ok(Message::new(Role::Assistant, "done"))
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
+        Ok(muta_contracts::ProviderCompletion::message(
+            Message::new(Role::Assistant, "done"),
+        ))
     }
     async fn stream_chat(
         &self,
@@ -201,7 +206,10 @@ struct StreamWriteCallProvider(AtomicUsize);
 
 #[async_trait]
 impl Provider for StreamWriteCallProvider {
-    async fn chat(&self, _: muta_contracts::ModelRequest) -> Result<Message, String> {
+    async fn chat(
+        &self,
+        _: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
     async fn stream_chat(

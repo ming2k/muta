@@ -14,8 +14,8 @@ struct IdleProvider;
 
 #[async_trait]
 impl Provider for IdleProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-        Ok(Message::new(Role::Assistant, "done"))
+    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        Ok(muta_contracts::ProviderCompletion::message(Message::new(Role::Assistant, "done")))
     }
 
     async fn stream_chat(

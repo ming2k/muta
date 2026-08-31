@@ -137,11 +137,20 @@ mod shared_config_tests {
         let search = WebSearchTool::with_shared_config(shared.clone());
         let fetch = WebFetchTool::with_shared_config(shared.clone());
 
+        // Default search (exa) is available, but default reader (jina) without key is not ready.
         assert!(search.is_available());
+        assert!(!fetch.is_available());
+
+        // Supplying jina_api_key makes fetch available.
+        shared.set(WebSearchConfig {
+            jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
+            ..WebSearchConfig::default()
+        });
         assert!(fetch.is_available());
 
         shared.set(WebSearchConfig {
             provider: "none".to_string(),
+            jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
             ..WebSearchConfig::default()
         });
         assert!(!search.is_available());

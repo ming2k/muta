@@ -1475,6 +1475,7 @@ dependencies = [
  "inventory",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "ts-rs",
  "uuid",

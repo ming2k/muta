@@ -60,13 +60,10 @@ pub struct BodyInput<'a> {
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
-    /// Optional session-scoped prompt-cache key (Moonshot / Kimi). When set, the
-    /// body carries `prompt_cache_key` so the server-side cache namespaces per
-    /// session and repeated prefixes (system prompt, recent messages) hit at a
-    /// discount. Resolved from the model's [`muta_contracts::CachePolicy`] by the
-    /// provider adapter; `None` omits the field entirely (OpenAI ignores it
-    /// harmlessly, but we still don't send it unless the policy is `SessionKey`).
+    /// Optional route-approved cache-affinity key.
     pub prompt_cache_key: Option<&'a str>,
+    /// Cache controls resolved against this exact provider route.
+    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
 
 /// Build the chat-completions request body.
@@ -100,6 +97,7 @@ pub fn body_with_capabilities(
         tool_specs,
         reasoning_effort,
         prompt_cache_key,
+        cache_plan,
     } = input;
 
     // If the model doesn't support vision, strip inline images so the API
@@ -233,6 +231,26 @@ pub fn body_with_capabilities(
         // ignore it harmlessly.
         body["prompt_cache_key"] = json!(key);
     }
+    if let muta_contracts::ResolvedCachePlan::Enabled { mode, ttl, .. } = cache_plan
+        && (*mode == muta_contracts::ResolvedCacheMode::ExplicitOnly || ttl.is_some())
+    {
+        let mode = match mode {
+            muta_contracts::ResolvedCacheMode::ExplicitOnly
+            | muta_contracts::ResolvedCacheMode::Explicit => "explicit",
+            muta_contracts::ResolvedCacheMode::Automatic
+            | muta_contracts::ResolvedCacheMode::Implicit => "implicit",
+        };
+        let mut options = json!({ "mode": mode });
+        if let Some(ttl) = ttl {
+            options["ttl"] = json!(match ttl {
+                muta_contracts::CacheTtl::FiveMinutes => "5m",
+                muta_contracts::CacheTtl::ThirtyMinutes => "30m",
+                muta_contracts::CacheTtl::OneHour => "1h",
+                muta_contracts::CacheTtl::TwentyFourHours => "24h",
+            });
+        }
+        body["prompt_cache_options"] = options;
+    }
     body
 }
 
@@ -318,6 +336,10 @@ pub fn content(m: &Message) -> Value {
 mod tests {
     use super::*;
     use muta_contracts::ToolCall;
+
+    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
+        muta_contracts::ResolvedCachePlan::Unsupported;
+
     #[test]
     fn request_filters_empty_assistant_history() {
         let body = super::body(
@@ -332,6 +354,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
 
@@ -349,6 +372,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: Some(Effort::Xhigh),
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
 
@@ -365,6 +389,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: Some("session-42"),
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         assert_eq!(body["prompt_cache_key"], "session-42");
@@ -380,6 +405,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         assert!(body.get("prompt_cache_key").is_none());
@@ -442,6 +468,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
 
@@ -485,6 +512,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -509,6 +537,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -543,6 +572,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -570,6 +600,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -601,6 +632,7 @@ mod tests {
                 tool_specs: None,
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let msgs = body["messages"].as_array().unwrap();

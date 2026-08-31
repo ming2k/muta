@@ -307,6 +307,10 @@ impl Agent {
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
             .assemble(&enriched, &context, &tools)
+            .with_route_state(
+                &self.provider.route_fingerprint(),
+                self.provider.continuation_mode(),
+            )
     }
 
     /// Weights for an assembled request through the session-wide
@@ -501,11 +505,9 @@ impl Agent {
     /// Book one turn's token usage into [`RoundState::token_usage`] and, when a
     /// ledger is installed, into the token-source ledger.
     ///
-    /// `streamed_usage` is the usage reported mid-stream (OpenAI
-    /// `include_usage` / Anthropic `message_delta`), if any. When absent, we
-    /// fall back to [`Provider::take_last_usage`] (usage reported out-of-band
-    /// instead of as a mid-stream `Usage` event) and finally to the local
-    /// char-class estimator.
+    /// `reported_usage` is the usage carried by the request's completion
+    /// metadata (or a legacy mid-stream usage event), if any. When absent, we
+    /// fall back to the local estimator.
     ///
     /// This is the single point that decides whether a turn counts as
     /// **reported** (authoritative) or **estimated** (heuristic), and records
@@ -514,7 +516,7 @@ impl Agent {
         &self,
         state: &mut RoundState,
         response: &Message,
-        streamed_usage: Option<TokenUsage>,
+        reported_usage: Option<TokenUsage>,
         request: &mut RequestAccountingGuard,
     ) -> muta_contracts::TurnPerformanceSnapshot {
         // Seal the generation clock now, while we hold a validated assistant
@@ -522,8 +524,7 @@ impl Agent {
         // inflates the measured generation span.
         request.seal_generation();
         state.generation_ms = state.generation_ms.saturating_add(request.generation_ms);
-        // Prefer the usage the provider reported (streamed, then drained).
-        let reported = streamed_usage.or_else(|| self.provider.take_last_usage());
+        let reported = reported_usage;
         // Any streamed-but-unfinalized tail (the last open pretoken) belongs
         // to the completion count too: close the incremental counter before
         // settling so the estimate matches what a whole-text count would say.

@@ -780,6 +780,12 @@ impl RequestAccountingGuard {
                 self.observe_usage(*usage);
                 return;
             }
+            muta_contracts::ProviderStreamEvent::Completed(meta) => {
+                if let Some(usage) = meta.usage {
+                    self.observe_usage(usage);
+                }
+                return;
+            }
         }
 
         if fragments.is_empty() {
@@ -1438,7 +1444,7 @@ mod tests {
         async fn chat(
             &self,
             _: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::Message, String> {
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             unreachable!("decide_command_stdin must not call the provider")
         }
         async fn stream_chat(

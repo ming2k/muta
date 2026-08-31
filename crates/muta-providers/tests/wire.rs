@@ -72,7 +72,8 @@ async fn openai_chat_completions_parses_content_reasoning_tool_calls_and_headers
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("chat should succeed");
+        .expect("chat should succeed")
+        .message;
 
     assert_eq!(message.content, "Hello!");
     assert_eq!(
@@ -145,7 +146,8 @@ async fn chatgpt_responses_resolves_credential_source_bearer_before_sending() {
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("credential-source bearer should reach the ChatGPT backend");
+        .expect("credential-source bearer should reach the ChatGPT backend")
+        .message;
 
     assert_eq!(message.content, "ok");
 }
@@ -172,7 +174,8 @@ async fn openai_chat_completions_strips_tool_call_echo_when_native_calls_present
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("chat should succeed");
+        .expect("chat should succeed")
+        .message;
 
     assert!(
         message.content.is_empty(),
@@ -236,7 +239,8 @@ async fn openai_chat_completions_omits_auth_header_when_api_key_is_empty() {
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("keyless chat should succeed");
+        .expect("keyless chat should succeed")
+        .message;
     assert_eq!(message.content, "ok");
 }
 
@@ -398,7 +402,8 @@ async fn anthropic_chat_assembles_text_thinking_and_tool_use() {
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("chat should succeed");
+        .expect("chat should succeed")
+        .message;
 
     assert_eq!(message.content, "Done.");
     assert_eq!(message.reasoning_content.as_deref(), Some("deliberating"));
@@ -538,7 +543,8 @@ async fn assert_factory_body(mut channel: Channel, expected: Value) {
     let msg = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
-        .expect("factory-built provider chat must succeed");
+        .expect("factory-built provider chat must succeed")
+        .message;
     assert_eq!(msg.content, "ok");
 }
 
@@ -562,6 +568,8 @@ async fn factory_publishes_explicit_high_effort() {
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
 }
@@ -589,6 +597,8 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     // The request publishes the effort override; the absence of a `thinking`
     // field is verified by the companion unit test.
@@ -613,6 +623,8 @@ async fn factory_publishes_thinking_without_output_config() {
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
         channel,
@@ -642,6 +654,8 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
         channel,
@@ -671,6 +685,8 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
         channel,
@@ -701,6 +717,8 @@ async fn fable5_always_on_thinking_ignores_off_override() {
         model: "claude-fable-5".into(),
         remote: None,
         user_overrides: None,
+        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
         channel,

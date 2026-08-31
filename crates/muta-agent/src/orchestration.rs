@@ -153,6 +153,20 @@ impl Provider for ProxyProvider {
             .prompt_hints()
     }
 
+    fn route_fingerprint(&self) -> muta_contracts::RouteFingerprint {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .route_fingerprint()
+    }
+
+    fn continuation_mode(&self) -> muta_contracts::ContinuationMode {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .continuation_mode()
+    }
+
     fn set_debug_capture(&self, enabled: bool, dir: PathBuf) {
         self.debug_enabled.store(enabled, Ordering::SeqCst);
         *self
@@ -165,7 +179,10 @@ impl Provider for ProxyProvider {
         self.debug_enabled.load(Ordering::SeqCst)
     }
 
-    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         let p = self
             .holder
             .read()
@@ -178,10 +195,10 @@ impl Provider for ProxyProvider {
         let result = p.chat(request).await;
         if let Some(capture) = capture {
             let item = match &result {
-                Ok(message) => serde_json::json!({
+                Ok(completion) => serde_json::json!({
                     "status": "ok",
                     "duration_ms": started.elapsed().as_millis() as u64,
-                    "message": message,
+                    "completion": completion,
                 }),
                 Err(error) => serde_json::json!({
                     "status": "error",
@@ -256,8 +273,8 @@ impl Provider for ProxyProvider {
         }
     }
 
-    /// Delegate usage support + drain to the live inner provider so attribution
-    /// tracks the active provider even after a mid-session `/models` swap.
+    /// Delegate usage support to the live inner provider so attribution tracks
+    /// the active provider even after a mid-session `/models` swap.
     fn usage_supported(&self) -> bool {
         self.holder
             .read()
@@ -265,19 +282,6 @@ impl Provider for ProxyProvider {
             .usage_supported()
     }
 
-    fn take_last_usage(&self) -> Option<muta_contracts::TokenUsage> {
-        self.holder
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .take_last_usage()
-    }
-
-    fn take_last_provider_meta(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
-        self.holder
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .take_last_provider_meta()
-    }
 }
 
 // ── /debug trace ──────────────────────────────────────────────
@@ -2349,12 +2353,12 @@ mod digest_tests {
 
     #[async_trait]
     impl muta_contracts::Provider for DigestProvider {
-        async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
             self.consults.fetch_add(1, Ordering::SeqCst);
-            Ok(Message::new(
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
                 "{\"title\":\"Fixing the build\",\"intent\":\"User wants CI green.\",\"history\":[\"Reproduced the failing test\"]}",
-            ))
+            )))
         }
         async fn stream_chat(
             &self,

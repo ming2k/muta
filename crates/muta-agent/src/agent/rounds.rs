@@ -319,14 +319,6 @@ impl Agent {
                     messages,
                 )
                 .await;
-                // Freeze every tool output that slid out of the recency
-                // protection window into its final provider shape, **before**
-                // the request snapshot is taken. One freeze per message per
-                // lifetime keeps the wire prefix byte-stable across rounds
-                // (KV-cache alignment, ADR-0137); without this the assembler
-                // would re-derive truncations from a shifting recency window
-                // and break the prefix on two consecutive rounds.
-                crate::model_request::freeze_for_cache_stability(messages, 6);
                 // TurnStart hooks belong to a logical ReAct turn, not to
                 // each network attempt. Run them once before checkpointing the
                 // request so retries cannot duplicate injected context or hook
@@ -420,10 +412,11 @@ impl Agent {
             let mut calls: Vec<ToolCall> = Vec::new();
             let mut emitted_text = false;
             let mut emitted_reasoning = false;
-            // Token usage reported mid-stream via a `Usage` event (OpenAI
-            // `include_usage`, Anthropic `message_delta`). Captured here and
-            // preferred over the local estimate when booking the turn.
+            // `Usage` remains a progress signal for protocols that report it
+            // before their terminal frame. Provider-owned response state is
+            // accepted only from the unique `Completed` event below.
             let mut streamed_usage: Option<TokenUsage> = None;
+            let mut completion_meta: Option<muta_contracts::ProviderCompletionMeta> = None;
             let mut text_loop_detector = crate::stream_loop_detector::StreamLoopDetector::new(1024);
             let mut reasoning_loop_detector =
                 crate::stream_loop_detector::StreamLoopDetector::new(1024);
@@ -581,6 +574,15 @@ impl Agent {
                                 return Err(HarnessError::from(error));
                             }
                         };
+                        if completion_meta.is_some() {
+                            let err_msg = "Provider emitted data after the terminal completion event."
+                                .to_string();
+                            request_accounting.record_error(&err_msg);
+                            return Err(HarnessError::Retryable {
+                                message: err_msg,
+                                retry_after_ms: None,
+                            });
+                        }
                         request_accounting.observe_stream_event(
                             &event,
                             std::time::Instant::now(),
@@ -658,11 +660,26 @@ impl Agent {
                                 // the local estimate at booking time.
                                 streamed_usage = Some(usage);
                             }
+                            ProviderStreamEvent::Completed(meta) => {
+                                if let Some(usage) = meta.usage {
+                                    streamed_usage = Some(usage);
+                                }
+                                completion_meta = Some(meta);
+                            }
                         }
                     }
                 }
             }
             request_accounting.mark_stream_end();
+            if completion_meta.is_none() && stream_loop_incident.is_none() {
+                let err_msg = "Provider stream ended without a terminal completion event; response state was not committed."
+                    .to_string();
+                request_accounting.record_error(&err_msg);
+                return Err(HarnessError::Retryable {
+                    message: err_msg,
+                    retry_after_ms: None,
+                });
+            }
             // A Stream Sentinel consult still in flight when the stream ended
             // naturally still owes a verdict: settling it here (bounded by the
             // consult's own 2s timeout) preserves the blocking consult's
@@ -817,6 +834,47 @@ impl Agent {
                     call.id = format!("call_{}", uuid::Uuid::new_v4());
                 }
             }
+            let bound_cursor = if let Some(cursor) = completion_meta
+                .as_mut()
+                .and_then(|meta| meta.continuation.as_mut())
+            {
+                let prospective = Message {
+                    role: Role::Assistant,
+                    content: content.clone(),
+                    content_blob: None,
+                    display_content: None,
+                    reasoning_content: (!reasoning_content.is_empty())
+                        .then_some(reasoning_content.clone()),
+                    tool_calls: (!calls.is_empty()).then_some(calls.clone()),
+                    tool_call_id: None,
+                    images: None,
+                    provider: None,
+                    model: None,
+                    effort: None,
+                    provider_meta: None,
+                    hidden: false,
+                    children: None,
+                    runner_meta: None,
+                    origin: None,
+                    timestamp: None,
+                    sent_at_ms: None,
+                    cache_frozen: false,
+                };
+                cursor.local_head = muta_contracts::semantic_context_head(
+                    messages.iter().chain(std::iter::once(&prospective)),
+                );
+                Some(cursor.clone())
+            } else {
+                None
+            };
+            if let Some(cursor) = bound_cursor {
+                let artifacts = completion_meta
+                    .as_mut()
+                    .expect("completion metadata exists")
+                    .artifacts
+                    .get_or_insert_with(serde_json::Map::new);
+                muta_contracts::write_continuation_cursor(artifacts, &cursor);
+            }
             let response = Message {
                 role: Role::Assistant,
                 content,
@@ -835,11 +893,11 @@ impl Agent {
                 // (thinking-gated per protocol), so the transcript can label
                 // each turn with the effort it truly used.
                 effort: self.provider.effort().map(|e| e.as_str().to_string()),
-                // Drain any provider-opaque wire credential the turn
-                // accumulated (e.g. the Anthropic thinking signature) so the
-                // next replay re-emits it verbatim. None for providers that
-                // carry none; the map is opaque to this layer.
-                provider_meta: self.provider.take_last_provider_meta(),
+                // Provider-private replay material is valid only at terminal
+                // completion and belongs to this exact assistant node.
+                provider_meta: completion_meta
+                    .as_mut()
+                    .and_then(|meta| meta.artifacts.take()),
                 hidden: false,
                 children: None,
                 runner_meta: None,
@@ -858,7 +916,10 @@ impl Agent {
             let performance = self.book_turn_usage(
                 &mut round.state,
                 &response,
-                streamed_usage.take(),
+                completion_meta
+                    .as_ref()
+                    .and_then(|meta| meta.usage)
+                    .or_else(|| streamed_usage.take()),
                 &mut request_accounting,
             );
             on_event(AgentEvent::TurnPerformance(performance));

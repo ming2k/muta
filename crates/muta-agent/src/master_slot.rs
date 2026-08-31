@@ -144,10 +144,9 @@ mod tests {
         async fn chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<muta_contracts::Message, String> {
-            Ok(muta_contracts::Message::new(
-                muta_contracts::Role::Assistant,
-                "ok",
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
+            Ok(muta_contracts::ProviderCompletion::message(
+                muta_contracts::Message::new(muta_contracts::Role::Assistant, "ok"),
             ))
         }
         async fn stream_chat(

@@ -3,8 +3,7 @@
 //!
 //! A thin executor over the pure [`request`], [`response`], and [`echo`]
 //! layers plus the shared transport helpers. The provider struct holds only
-//! the shared [`Endpoint`] (connection config) and [`TurnState`] (tool schemas
-//! and last usage) — every wire-format detail lives in a pure, independently
+//! the shared [`Endpoint`] (connection config) — every wire-format detail lives in a pure, independently
 //! testable module.
 //!
 //! Module layout (mirrors the Google and Anthropic providers):
@@ -24,7 +23,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint, TurnState};
+use crate::{Client, Endpoint};
 
 pub mod echo;
 pub mod request;
@@ -32,11 +31,10 @@ pub mod response;
 
 /// OpenAI-compatible chat-completions provider.
 ///
-/// Embeds the shared [`Endpoint`] (connection config) and [`TurnState`] (tool
-/// schemas + last usage) plus the optional OpenAI `reasoning_effort` override.
+/// Embeds the shared [`Endpoint`] plus the optional OpenAI
+/// `reasoning_effort` override.
 pub struct OpenAiChatCompletionsProvider {
     pub endpoint: Endpoint,
-    pub turn: TurnState,
     pub reasoning_effort: Option<Effort>,
     /// Optional session-scoped prompt-cache key (Moonshot / Kimi). Set once per
     /// session via [`with_prompt_cache_key`](Self::with_prompt_cache_key); when
@@ -44,6 +42,8 @@ pub struct OpenAiChatCompletionsProvider {
     /// cache namespaces per session and repeated prefixes hit at a discount.
     /// Resolved from the model's [`muta_contracts::CachePolicy`] by the registry.
     pub prompt_cache_key: Option<String>,
+    /// Cache controls already validated against the concrete catalog route.
+    pub cache_plan: muta_contracts::ResolvedCachePlan,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: muta_contracts::ModelCapabilities,
@@ -77,10 +77,10 @@ impl OpenAiChatCompletionsProvider {
         Self {
             endpoint: Endpoint::from_static_key(api_key, model, base_url, "openai")
                 .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
             prompt_cache_key: None,
+            cache_plan: muta_contracts::ResolvedCachePlan::Unsupported,
             capabilities,
             copilot: false,
         }
@@ -97,10 +97,10 @@ impl OpenAiChatCompletionsProvider {
         Self {
             endpoint: Endpoint::with_credentials(credentials, model, base_url, "openai")
                 .with_user_agent(user_agent),
-            turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
             prompt_cache_key: None,
+            cache_plan: muta_contracts::ResolvedCachePlan::Unsupported,
             capabilities,
             copilot: false,
         }
@@ -120,13 +120,14 @@ impl OpenAiChatCompletionsProvider {
         self
     }
 
-    /// Set the session-scoped `prompt_cache_key` (Moonshot / Kimi). Typically the
-    /// session id, so all turns in a session share a server-side cache namespace.
-    /// Only takes effect for model families whose [`muta_contracts::CachePolicy`] is
-    /// [`SessionKey`](muta_contracts::CachePolicy::SessionKey); the registry decides
-    /// whether to set this. Returns `self` for chaining.
+    /// Set the route-approved prompt-cache routing key.
     pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
         self.prompt_cache_key = key;
+        self
+    }
+
+    pub fn with_cache_plan(mut self, plan: muta_contracts::ResolvedCachePlan) -> Self {
+        self.cache_plan = plan;
         self
     }
 
@@ -253,11 +254,10 @@ impl Provider for OpenAiChatCompletionsProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<muta_contracts::TokenUsage> {
-        self.turn.take_usage()
-    }
-
-    async fn chat(&self, request: ModelRequest) -> Result<muta_contracts::Message, String> {
+    async fn chat(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -267,6 +267,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
+                cache_plan: &self.cache_plan,
             },
             &self.capabilities,
         );
@@ -279,12 +280,10 @@ impl Provider for OpenAiChatCompletionsProvider {
             return Err(format!("{label} Error: {}", err));
         }
 
-        if let Some(usage) = response::usage(&response_json["usage"]) {
-            self.turn.stash_usage(usage);
-        }
+        let usage = response::usage(&response_json["usage"]);
 
         let choice = &response_json["choices"][0]["message"];
-        Ok(response::message(choice, |raw, had_native| {
+        let message = response::message(choice, |raw, had_native| {
             let emitted = echo::ToolCallEchoFilter::filter_content(raw, had_native);
             tracing::debug!(
                 target: "muta_contracts::provider",
@@ -297,7 +296,14 @@ impl Provider for OpenAiChatCompletionsProvider {
                 "openai chat echo summary",
             );
             emitted
-        }))
+        });
+        Ok(muta_contracts::ProviderCompletion {
+            message,
+            meta: muta_contracts::ProviderCompletionMeta {
+                usage,
+                ..Default::default()
+            },
+        })
     }
 
     async fn stream_chat(
@@ -313,6 +319,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
+                cache_plan: &self.cache_plan,
             },
             &self.capabilities,
         );
@@ -340,6 +347,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
+                cache_plan: &self.cache_plan,
             },
             &self.capabilities,
         );
@@ -388,11 +396,13 @@ impl Provider for OpenAiChatCompletionsProvider {
                 tool_call_deltas = filter.tool_call_deltas,
                 "openai stream summary",
             );
-            let events: Vec<Result<ProviderStreamEvent, String>> = if emitted.is_empty() {
-                Vec::new()
-            } else {
-                vec![Ok(ProviderStreamEvent::TextDelta(emitted))]
-            };
+            let mut events: Vec<Result<ProviderStreamEvent, String>> = Vec::new();
+            if !emitted.is_empty() {
+                events.push(Ok(ProviderStreamEvent::TextDelta(emitted)));
+            }
+            events.push(Ok(ProviderStreamEvent::Completed(
+                muta_contracts::ProviderCompletionMeta::default(),
+            )));
             Ok::<_, String>(events)
         });
         Ok(body
@@ -447,6 +457,8 @@ mod tests {
     fn body_with_tools(tools: &[Arc<dyn Tool>]) -> serde_json::Value {
         let request = ModelRequest::with_tools(vec![Message::new(Role::User, "go")], tools);
         let (messages, tool_specs) = request.into_parts();
+        static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
+            muta_contracts::ResolvedCachePlan::Unsupported;
         request::body(
             messages,
             request::BodyInput {
@@ -455,6 +467,7 @@ mod tests {
                 tool_specs: Some(&tool_specs),
                 reasoning_effort: None,
                 prompt_cache_key: None,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         )
     }

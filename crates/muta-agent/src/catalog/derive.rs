@@ -91,6 +91,15 @@ pub fn derive_channel(
 ) -> Channel {
     let remote = cache.remote_metadata_for(&connection.id, model).cloned();
     let route_settings = routes.settings_for(&connection.id, model);
+    let prompt_cache = connection
+        .preset_id
+        .as_deref()
+        .and_then(provider_preset_spec)
+        .map(|preset| preset.prompt_cache.materialize())
+        .unwrap_or_else(muta_contracts::PromptCacheCapabilities::unsupported);
+    let cache_preference = route_settings
+        .and_then(|settings| settings.cache_preference)
+        .unwrap_or_default();
 
     // Effort applies to OpenAI/Anthropic/Google alike; thinking is an
     // Anthropic-protocol switch.
@@ -185,6 +194,8 @@ pub fn derive_channel(
         user_overrides: route_settings
             .and_then(|r| r.capability_overrides.clone())
             .filter(|o| !o.is_empty()),
+        prompt_cache,
+        cache_preference,
     }
 }
 

@@ -142,6 +142,23 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec {
+        activations: &[
+            muta_contracts::CacheActivation::Automatic,
+            muta_contracts::CacheActivation::ExplicitBreakpoints,
+        ],
+        supported_ttls: &[
+            muta_contracts::CacheTtl::FiveMinutes,
+            muta_contracts::CacheTtl::OneHour,
+        ],
+        default_ttl: Some(muta_contracts::CacheTtl::FiveMinutes),
+        disable_supported: true,
+        max_breakpoints: Some(4),
+        min_cacheable_tokens: None,
+        reports_reads: true,
+        reports_writes: true,
+        reports_misses: false,
+    },
     id: "anthropic",
     baselines: MODELS,
     base_url: "https://api.anthropic.com/v1/messages",

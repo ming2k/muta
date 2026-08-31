@@ -41,6 +41,7 @@ pub struct BodyInput<'a> {
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
     pub ephemeral: bool,
+    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
 
 /// Build the `/messages` request body from the harness message list.
@@ -64,6 +65,7 @@ pub fn body_with_capabilities(
         max_tokens,
         thinking,
         ephemeral,
+        cache_plan,
     } = input;
 
     let tool_specs = tool_specs.map(|specs| {
@@ -130,9 +132,27 @@ pub fn body_with_capabilities(
         "max_tokens": max_tokens,
         "stream": stream,
     });
+    if let Some(specs) = tool_specs {
+        body["tools"] = specs;
+    }
+    if !system_text.is_empty() {
+        body["system"] = json!(system_text);
+    }
 
-    if !ephemeral {
-        stamp_caching_breakpoints(&mut body, &tool_specs, &system_text);
+    if !ephemeral
+        && let muta_contracts::ResolvedCachePlan::Enabled { mode, ttl, .. } = cache_plan
+    {
+        let control = cache_control(*ttl);
+        match mode {
+            muta_contracts::ResolvedCacheMode::Automatic => {
+                body["cache_control"] = control;
+            }
+            muta_contracts::ResolvedCacheMode::Explicit
+            | muta_contracts::ResolvedCacheMode::ExplicitOnly => {
+                stamp_caching_breakpoints(&mut body, &system_text, &control);
+            }
+            muta_contracts::ResolvedCacheMode::Implicit => {}
+        }
     }
     stamp_thinking(&mut body, capabilities, max_tokens, thinking);
     body
@@ -195,12 +215,13 @@ const MAX_BREAKPOINTS: usize = 4;
 /// Stamp cache breakpoints across the `tools → system → messages` zones within
 /// the 4-breakpoint budget: last tool, last system block, and the two newest
 /// messages. No-op for zones that are absent.
-fn stamp_caching_breakpoints(body: &mut Value, tool_specs: &Option<Value>, system_text: &str) {
+fn stamp_caching_breakpoints(body: &mut Value, system_text: &str, control: &Value) {
     let mut breakpoints = 0usize;
 
-    if let Some(specs) = tool_specs {
-        body["tools"] = specs.clone();
-        if breakpoints < MAX_BREAKPOINTS && stamp_last_array_element(&mut body["tools"]) {
+    if !body["tools"].is_null() {
+        if breakpoints < MAX_BREAKPOINTS
+            && stamp_last_array_element(&mut body["tools"], control)
+        {
             breakpoints += 1;
         }
     }
@@ -209,7 +230,7 @@ fn stamp_caching_breakpoints(body: &mut Value, tool_specs: &Option<Value>, syste
         // `system` must be a block *array* to carry a breakpoint; a bare string
         // cannot. Emit one text block and stamp it within budget.
         let mut sys_block = json!({"type":"text","text": system_text});
-        if breakpoints < MAX_BREAKPOINTS && stamp_cache_control(&mut sys_block) {
+        if breakpoints < MAX_BREAKPOINTS && stamp_cache_control(&mut sys_block, control) {
             breakpoints += 1;
         }
         body["system"] = json!([sys_block]);
@@ -220,15 +241,31 @@ fn stamp_caching_breakpoints(body: &mut Value, tool_specs: &Option<Value>, syste
     stamp_message_history_breakpoints(
         &mut body["messages"],
         MAX_BREAKPOINTS.saturating_sub(breakpoints),
+        control,
     );
+}
+
+fn cache_control(ttl: Option<muta_contracts::CacheTtl>) -> Value {
+    let mut control = json!({"type": "ephemeral"});
+    if let Some(ttl) = ttl {
+        control["ttl"] = json!(match ttl {
+            muta_contracts::CacheTtl::FiveMinutes => "5m",
+            muta_contracts::CacheTtl::OneHour => "1h",
+            muta_contracts::CacheTtl::ThirtyMinutes
+            | muta_contracts::CacheTtl::TwentyFourHours => {
+                unreachable!("cache plan was resolved against Anthropic capabilities")
+            }
+        });
+    }
+    control
 }
 
 /// The standard 5-minute breakpoint marker, the cheapest cache tier. Returns
 /// `false` if `block` is not a JSON object, so callers can short-circuit budget
 /// accounting on non-stampable shapes.
-fn stamp_cache_control(block: &mut Value) -> bool {
+fn stamp_cache_control(block: &mut Value, control: &Value) -> bool {
     if let Some(obj) = block.as_object_mut() {
-        obj.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        obj.insert("cache_control".to_string(), control.clone());
         true
     } else {
         false
@@ -238,11 +275,11 @@ fn stamp_cache_control(block: &mut Value) -> bool {
 /// Stamp a breakpoint on the last element of a JSON array (e.g. the last tool
 /// definition, or the last content block of a message). Returns `false` if the
 /// value is not a non-empty array.
-fn stamp_last_array_element(arr: &mut Value) -> bool {
+fn stamp_last_array_element(arr: &mut Value, control: &Value) -> bool {
     if let Some(items) = arr.as_array_mut()
         && let Some(last) = items.last_mut()
     {
-        stamp_cache_control(last)
+        stamp_cache_control(last, control)
     } else {
         false
     }
@@ -250,7 +287,7 @@ fn stamp_last_array_element(arr: &mut Value) -> bool {
 
 /// Stamp breakpoints on the trailing messages' last content blocks, newest then
 /// second-newest, capped at `budget` (and 2 — beyond two there is no value).
-fn stamp_message_history_breakpoints(messages: &mut Value, budget: usize) {
+fn stamp_message_history_breakpoints(messages: &mut Value, budget: usize, control: &Value) {
     let Some(msgs) = messages.as_array_mut() else {
         return;
     };
@@ -260,7 +297,7 @@ fn stamp_message_history_breakpoints(messages: &mut Value, budget: usize) {
         if stamped >= cap {
             break;
         }
-        if stamp_last_array_element(&mut msg["content"]) {
+        if stamp_last_array_element(&mut msg["content"], control) {
             stamped += 1;
         }
     }

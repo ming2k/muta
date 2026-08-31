@@ -12,9 +12,9 @@
 //! attribution) live in one place, while each API's request *shape* lives in
 //! its own module.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use muta_contracts::{CredentialSource, ResolvedAuth, SecretString, TokenUsage, static_credential};
+use muta_contracts::{CredentialSource, ResolvedAuth, SecretString, static_credential};
 
 pub use muta_contracts::client_identity::*;
 
@@ -153,45 +153,6 @@ impl Endpoint {
 
     pub fn id(&self) -> &str {
         &self.id
-    }
-}
-
-/// Response-side mutable state shared by all three providers: the most recent
-/// token-usage snapshot drained via [`muta_contracts::Provider::take_last_usage`].
-///
-/// Factored out so a provider struct embeds `pub turn: TurnState` instead of
-/// restating the `Mutex` field. Recovering from a poisoned mutex (a prior
-/// panic must not take down the next request) is handled uniformly here.
-pub struct TurnState {
-    /// Stash for the most recent `usage` object, drained once by
-    /// `take_last_usage`.
-    last_usage: Mutex<Option<TokenUsage>>,
-}
-
-impl TurnState {
-    pub fn new() -> Self {
-        Self {
-            last_usage: Mutex::new(None),
-        }
-    }
-
-    /// Stash the usage from the most recent turn.
-    pub fn stash_usage(&self, usage: TokenUsage) {
-        *self.last_usage.lock().unwrap_or_else(|e| e.into_inner()) = Some(usage);
-    }
-
-    /// Drain and return the most recent usage snapshot, if any.
-    pub fn take_usage(&self) -> Option<TokenUsage> {
-        self.last_usage
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-    }
-}
-
-impl Default for TurnState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

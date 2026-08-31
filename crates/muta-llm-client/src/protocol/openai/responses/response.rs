@@ -32,21 +32,21 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     // Route cache-read accounting through the shared helper so the cache
     // policy is enforced in one place (ADR-0067). The Responses API hides the
     // discount in `input_tokens_details.cached_tokens`, which the helper reads.
-    let cached = muta_contracts::cache::read_cached_tokens(usage);
+    let cache = muta_contracts::read_prompt_cache_usage(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: t,
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
     }
 }
@@ -236,9 +236,25 @@ impl ResponsesStream {
                 }
             }
             "response.completed" => {
-                if let Some(u) = usage(&value["response"]["usage"]) {
-                    events.push(ProviderStreamEvent::Usage(u));
+                let response = &value["response"];
+                let mut artifacts = serde_json::Map::new();
+                artifacts.insert(
+                    muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
+                    response["output"].clone(),
+                );
+                if let Some(id) = response["id"].as_str() {
+                    artifacts.insert(
+                        muta_contracts::OPENAI_RESPONSE_ID_ARTIFACT_KEY.to_string(),
+                        serde_json::Value::String(id.to_string()),
+                    );
                 }
+                events.push(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta {
+                        usage: usage(&response["usage"]),
+                        artifacts: Some(artifacts),
+                        continuation: None,
+                    },
+                ));
             }
             // `response.created`, `response.in_progress`, `*.added`/`*.done`
             // for text/reasoning parts, and `response.failed` carry no harness-

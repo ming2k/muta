@@ -13,10 +13,9 @@ use serde::{Deserialize, Serialize};
 /// counts. Anthropic reports both: its `input_tokens` is ONLY the uncached
 /// dynamic suffix, so the cache write/read counts must be tracked separately
 /// (and added into `prompt_tokens`/`total_tokens`) or the context meter would
-/// undercount every cached turn. OpenAI / Gemini / Moonshot auto-cache (or
-/// session-key cache) and surface the hit as a single read count — their
-/// `cache_creation_input_tokens` stays zero. The shared parser lives in
-/// [`crate::cache`]; see [`crate::CachePolicy`].
+/// undercount every cached turn. Other routes may report reads, writes, or
+/// misses independently. Protocol adapters normalize those counters through
+/// [`crate::read_prompt_cache_usage`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TokenUsage {

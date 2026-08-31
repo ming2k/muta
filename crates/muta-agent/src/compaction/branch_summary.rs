@@ -100,7 +100,7 @@ pub async fn generate_branch_summary(
         Err(_) => return Err("Branch summarization timed out".to_string()),
     };
 
-    let mut summary = response.content;
+    let mut summary = response.message.content;
     let file_section = file_tracker.format_markdown();
     summary.push_str(&file_section);
 

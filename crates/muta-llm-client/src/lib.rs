@@ -32,7 +32,7 @@ pub mod transport;
 pub use client::Client;
 pub use endpoint::{
     COPILOT_CLIENT_HEADERS, ClientIdentity, Endpoint, MUTA_USER_AGENT, OPENCODE_USER_AGENT,
-    OPENCODE_VERSION, TurnState, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
+    OPENCODE_VERSION, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
 pub use transport::{decode_response_json, ensure_success, retry_after_ms, transport_error};
 

@@ -31,21 +31,21 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     // Route cache-read accounting through the shared helper so the cache
     // policy is enforced in one place (ADR-0067). Google hides the discount in
     // `cachedContentTokenCount`, which the helper reads.
-    let cached = muta_contracts::cache::read_cached_tokens(usage);
+    let cache = muta_contracts::read_prompt_cache_usage(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: prompt.unwrap_or(0),
             completion_tokens: completion.unwrap_or(0),
             total_tokens: t,
-            cache_read_input_tokens: cached.unwrap_or(0),
-            ..Default::default()
+            cache_creation_input_tokens: cache.write_tokens,
+            cache_read_input_tokens: cache.read_tokens,
         }),
     }
 }

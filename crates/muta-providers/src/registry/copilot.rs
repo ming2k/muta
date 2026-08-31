@@ -33,6 +33,7 @@ pub const MODELS: &[Model] = &[Model {
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
     id: "copilot-oauth",
     baselines: MODELS,
     base_url: "https://api.githubcopilot.com/chat/completions",

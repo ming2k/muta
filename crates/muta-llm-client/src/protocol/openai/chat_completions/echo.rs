@@ -123,6 +123,9 @@ impl ToolCallEchoFilter {
                 // Metadata, not content: pass through untouched.
                 vec![ProviderStreamEvent::Usage(usage)]
             }
+            ProviderStreamEvent::Completed(meta) => {
+                vec![ProviderStreamEvent::Completed(meta)]
+            }
         }
     }
 

@@ -23,6 +23,8 @@ pub struct BodyInput<'a> {
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     pub reasoning_effort: Option<Effort>,
+    pub delivery: &'a muta_contracts::RequestDelivery,
+    pub store: bool,
 }
 
 /// Build the Responses request body.
@@ -50,13 +52,15 @@ pub fn body_with_capabilities(
         stream,
         tool_specs,
         reasoning_effort,
+        delivery,
+        store,
     } = input;
 
     // Fold system messages into `instructions`, strip images on non-vision
     // models (the Responses API rejects `input_image` on them).
     let mut instructions = String::new();
     let mut working: Vec<Message> = Vec::with_capacity(messages.len());
-    for mut m in messages {
+    for (index, mut m) in messages.into_iter().enumerate() {
         match m.role {
             Role::System => {
                 if !instructions.is_empty() {
@@ -65,6 +69,14 @@ pub fn body_with_capabilities(
                 instructions.push_str(&m.content);
             }
             _ => {
+                if let muta_contracts::RequestDelivery::RemoteContinuation {
+                    input_start,
+                    ..
+                } = delivery
+                    && index < *input_start
+                {
+                    continue;
+                }
                 if !capabilities.vision {
                     m.images = None;
                 }
@@ -115,6 +127,18 @@ pub fn body_with_capabilities(
                 input_items.push(message_item("user", &m, "input_text"));
             }
             Role::Assistant => {
+                if matches!(delivery, muta_contracts::RequestDelivery::OpaqueReplay)
+                    && let Some(items) = m
+                        .provider_meta
+                        .as_ref()
+                        .and_then(|meta| {
+                            meta.get(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
+                        })
+                        .and_then(Value::as_array)
+                {
+                    input_items.extend(items.iter().cloned());
+                    continue;
+                }
                 // Strip unanswered tool calls from this assistant turn.
                 if let Some(calls) = m.tool_calls.as_mut() {
                     calls.retain(|c| answered.contains(&c.id));
@@ -154,12 +178,21 @@ pub fn body_with_capabilities(
         "model": model_id,
         "input": input_items,
         "stream": stream,
-        // The ChatGPT subscription backend (chatgpt.com/backend-api/codex/
-        // responses) refuses to persist responses and rejects the request with
-        // `{"detail":"Store must be set to false"}` unless this is explicitly
-        // false. The platform Responses API (api.openai.com) ignores it.
-        "store": false,
+        // Responses persistence mode:
+        // - On ChatGPT subscription backend (`chatgpt.com/backend-api/codex/responses`),
+        //   the backend requires `store: false`.
+        // - On the OpenAI platform Responses API (`api.openai.com`), `store: false`
+        //   disables response retention on the server, while `store: true` retains
+        //   response objects and enables `previous_response_id` continuation chains.
+        "store": store,
     });
+    if let muta_contracts::RequestDelivery::RemoteContinuation {
+        previous_response_id,
+        ..
+    } = delivery
+    {
+        body["previous_response_id"] = json!(previous_response_id);
+    }
     if !instructions.is_empty() {
         body["instructions"] = json!(instructions);
     }
@@ -314,6 +347,9 @@ mod tests {
     use super::*;
     use muta_contracts::ToolCall;
 
+    static DEFAULT_DELIVERY: muta_contracts::RequestDelivery =
+        muta_contracts::RequestDelivery::FullReplay;
+
     fn assistant_with_call(call: ToolCall, content: &str) -> Message {
         Message {
             tool_calls: Some(vec![call]),
@@ -333,6 +369,8 @@ mod tests {
                 stream: true,
                 tool_specs: None,
                 reasoning_effort: None,
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
             },
         );
         assert_eq!(body["instructions"], "be concise");
@@ -364,6 +402,8 @@ mod tests {
                 stream: true,
                 tool_specs: None,
                 reasoning_effort: None,
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
             },
         );
         let input = body["input"].as_array().unwrap();
@@ -392,6 +432,8 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
             },
         );
         let input = body["input"].as_array().unwrap();
@@ -409,6 +451,8 @@ mod tests {
                 stream: true,
                 tool_specs: None,
                 reasoning_effort: Some(Effort::Medium),
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
             },
         );
         // The most verbose summaries the backend offers — the raw chain of
@@ -503,6 +547,8 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
             },
             &caps,
         );

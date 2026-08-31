@@ -146,6 +146,12 @@ pub struct Channel {
     /// the remote overlay in [`Channel::capabilities`]. `None` means the
     /// user has no opinion and the two lower layers decide.
     pub user_overrides: Option<crate::model::CapabilityOverrides>,
+    /// Prompt-cache controls and telemetry declared by this concrete route.
+    /// This is intentionally independent of model-family capabilities: a
+    /// relay speaking the same wire protocol may expose none of them.
+    pub prompt_cache: crate::PromptCacheCapabilities,
+    /// User-selected cache intent for this route.
+    pub cache_preference: crate::CachePreference,
 }
 
 impl fmt::Debug for Channel {
@@ -158,6 +164,8 @@ impl fmt::Debug for Channel {
             .field("model", &self.model)
             .field("remote", &self.remote)
             .field("user_overrides", &self.user_overrides)
+            .field("prompt_cache", &self.prompt_cache)
+            .field("cache_preference", &self.cache_preference)
             .finish()
     }
 }
@@ -283,6 +291,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CachePreference, PromptCacheCapabilities};
 
     #[test]
     fn catalog_lookup_is_exact_match() {
@@ -303,6 +312,8 @@ mod tests {
                 model: "deepseek-v4-flash".to_string(),
                 remote: None,
                 user_overrides: None,
+                cache_preference: CachePreference::ProviderDefault,
+                prompt_cache: PromptCacheCapabilities::unsupported(),
             }],
             default_channel: 0,
             builtin: true,
@@ -336,6 +347,8 @@ mod tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: CachePreference::ProviderDefault,
+            prompt_cache: PromptCacheCapabilities::unsupported(),
         };
         assert!(!channel.key_ready());
     }
@@ -368,6 +381,8 @@ mod tests {
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
+            cache_preference: CachePreference::ProviderDefault,
+            prompt_cache: PromptCacheCapabilities::unsupported(),
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
     }
@@ -395,6 +410,8 @@ mod tests {
                     model: "glm-5.2".to_string(),
                     remote: None,
                     user_overrides: None,
+                    cache_preference: CachePreference::ProviderDefault,
+                    prompt_cache: PromptCacheCapabilities::unsupported(),
                 },
                 Channel {
                     id: "minimax-m3".to_string(),
@@ -410,6 +427,8 @@ mod tests {
                     model: "minimax-m3".to_string(),
                     remote: None,
                     user_overrides: None,
+                    cache_preference: CachePreference::ProviderDefault,
+                    prompt_cache: PromptCacheCapabilities::unsupported(),
                 },
             ],
             default_channel: 0,
@@ -468,6 +487,8 @@ mod tests {
                 model: "fixture-alpha".to_string(),
                 remote: None,
                 user_overrides: None,
+                cache_preference: CachePreference::ProviderDefault,
+                prompt_cache: PromptCacheCapabilities::unsupported(),
             }],
             default_channel: 0,
             builtin: true,

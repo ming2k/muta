@@ -84,6 +84,17 @@ pub struct ModelRequest {
     /// to prevent polluting the persistent session KV-cache.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// Explicit wire delivery plan selected from the conversation state and
+    /// the concrete provider route.
+    #[serde(default)]
+    pub delivery: crate::RequestDelivery,
+    /// Semantic context version for diagnostics and state validation.
+    pub context_revision: crate::ContextRevision,
+    pub context_relation: crate::ContextRelation,
+    /// Request-envelope version (instructions/tools/controls).
+    pub envelope_revision: crate::EnvelopeRevision,
+    /// Per-request prompt-cache intent. Ephemeral requests default to disabled.
+    pub cache_preference: crate::CachePreference,
 }
 
 impl ModelRequest {
@@ -93,7 +104,13 @@ impl ModelRequest {
             messages,
             tool_specs: Vec::new(),
             ephemeral: false,
+            delivery: crate::RequestDelivery::FullReplay,
+            context_revision: crate::ContextRevision::empty(),
+            context_relation: crate::ContextRelation::Initial,
+            envelope_revision: crate::EnvelopeRevision::ephemeral(),
+            cache_preference: crate::CachePreference::ProviderDefault,
         }
+        .with_recomputed_revisions()
     }
 
     /// Build an ephemeral request without tools (e.g. title generation, compaction).
@@ -102,7 +119,13 @@ impl ModelRequest {
             messages,
             tool_specs: Vec::new(),
             ephemeral: true,
+            delivery: crate::RequestDelivery::FullReplay,
+            context_revision: crate::ContextRevision::empty(),
+            context_relation: crate::ContextRelation::Initial,
+            envelope_revision: crate::EnvelopeRevision::ephemeral(),
+            cache_preference: crate::CachePreference::ProviderDefault,
         }
+        .with_recomputed_revisions()
     }
 
     /// Set the ephemeral flag on the request.
@@ -124,7 +147,51 @@ impl ModelRequest {
             messages,
             tool_specs,
             ephemeral: false,
+            delivery: crate::RequestDelivery::FullReplay,
+            context_revision: crate::ContextRevision::empty(),
+            context_relation: crate::ContextRelation::Initial,
+            envelope_revision: crate::EnvelopeRevision::ephemeral(),
+            cache_preference: crate::CachePreference::ProviderDefault,
         }
+        .with_recomputed_revisions()
+    }
+
+    pub fn with_delivery(mut self, delivery: crate::RequestDelivery) -> Self {
+        self.delivery = delivery;
+        self
+    }
+
+    pub fn with_route_state(
+        mut self,
+        route: &crate::RouteFingerprint,
+        mode: crate::ContinuationMode,
+    ) -> Self {
+        let (delivery, relation) =
+            crate::select_request_delivery(&self.messages, route, mode);
+        self.delivery = delivery;
+        self.context_relation = relation;
+        self
+    }
+
+    pub fn with_recomputed_revisions(mut self) -> Self {
+        self.context_revision = crate::ContextRevision {
+            sequence: self
+                .messages
+                .iter()
+                .filter(|message| message.role != crate::Role::System)
+                .count() as u64,
+            head: Some(crate::semantic_context_head(self.messages.iter())),
+        };
+        self.envelope_revision = crate::EnvelopeRevision {
+            sequence: 0,
+            fingerprint: crate::request_envelope_fingerprint(&self.messages, &self.tool_specs),
+        };
+        self
+    }
+
+    pub fn with_cache_preference(mut self, preference: crate::CachePreference) -> Self {
+        self.cache_preference = preference;
+        self
     }
 
     /// Borrow tool declarations in the optional form used by request builders.
@@ -168,11 +235,14 @@ pub enum ProviderStreamEvent {
     /// usage simply never emit this variant — the harness then falls back to
     /// the local char-class estimator.
     Usage(TokenUsage),
+    /// Terminal metadata for this exact stream. A stream that ends without
+    /// this event is incomplete and must not advance provider continuation.
+    Completed(crate::ProviderCompletionMeta),
 }
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    async fn chat(&self, request: ModelRequest) -> Result<Message, String>;
+    async fn chat(&self, request: ModelRequest) -> Result<crate::ProviderCompletion, String>;
     async fn stream_chat(
         &self,
         request: ModelRequest,
@@ -181,7 +251,7 @@ pub trait Provider: Send + Sync {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        Ok(self
+        let events = self
             .stream_chat(request)
             .await?
             .filter_map(|item| async move {
@@ -190,7 +260,13 @@ pub trait Provider: Send + Sync {
                     Ok(delta) => Some(Ok(ProviderStreamEvent::TextDelta(delta))),
                     Err(error) => Some(Err(error)),
                 }
-            })
+            });
+        Ok(events
+            .chain(futures::stream::once(async {
+                Ok(ProviderStreamEvent::Completed(
+                    crate::ProviderCompletionMeta::default(),
+                ))
+            }))
             .boxed())
     }
 
@@ -237,6 +313,16 @@ pub trait Provider: Send + Sync {
         ProviderPromptHints::default()
     }
 
+    /// Stable identity of the concrete protocol/endpoint/model route.
+    fn route_fingerprint(&self) -> crate::RouteFingerprint {
+        crate::RouteFingerprint(format!("{}:{}", self.provider_id(), self.model()))
+    }
+
+    /// How this route can carry prior response state.
+    fn continuation_mode(&self) -> crate::ContinuationMode {
+        crate::ContinuationMode::FullReplay
+    }
+
     /// Toggle capture for debugging. When `enabled` is true, every
     /// request flowing through this provider is serialized — request messages,
     /// the streamed/returned response, provider id, model, and a timestamp — to
@@ -272,37 +358,6 @@ pub trait Provider: Send + Sync {
         false
     }
 
-    /// Drain and return the usage reported by the **last** `chat` /
-    /// `stream_chat_events` call, if the provider reports one.
-    ///
-    /// The contract is "consume once": a provider that supports usage stashes
-    /// the most recent `usage` object internally and hands it out here, then
-    /// clears it. The harness calls this right after the provider request
-    /// completes so the value is always fresh. Returns `None` for providers
-    /// that don't report usage (the default), in which case the harness
-    /// estimates locally.
-    fn take_last_usage(&self) -> Option<TokenUsage> {
-        None
-    }
-
-    /// Drain and return any **provider-opaque wire credential** the last turn
-    /// accumulated and that the harness should persist on the assistant message
-    /// for faithful multi-turn replay, as a `provider_meta` sidecar map.
-    ///
-    /// The contract mirrors [`Provider::take_last_usage`]: consume-once. A
-    /// provider that needs to round-trip protocol detail across turns (e.g.
-    /// the Anthropic `thinking` block signature, which the upstream requires
-    /// verbatim to reconstruct prior reasoning) overrides this, returning a map
-    /// whose keys it also reads when re-serializing that message. The keys are
-    /// provider-private — `core`/`agent` never inspect them; they are written
-    /// verbatim into the message's `provider_meta` and read back by the same
-    /// provider family on the next request.
-    ///
-    /// Returns `None` (the default) for providers that carry no such detail;
-    /// the harness then leaves `provider_meta` unset.
-    fn take_last_provider_meta(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
-        None
-    }
 }
 
 #[async_trait]

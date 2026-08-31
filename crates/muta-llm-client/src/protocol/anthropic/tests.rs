@@ -7,9 +7,16 @@
 use super::request::{self, BodyInput};
 use super::response;
 use super::*;
-use muta_contracts::{Effort, Role, ThinkingMode, Tool};
+use muta_contracts::{Effort, Message, ResolvedCacheMode, ResolvedCachePlan, Role, ThinkingMode, Tool};
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+static DEFAULT_UNSUPPORTED_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Unsupported;
+static DEFAULT_EXPLICIT_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Enabled {
+    mode: ResolvedCacheMode::Explicit,
+    ttl: Some(muta_contracts::CacheTtl::FiveMinutes),
+    routing_key: None,
+};
 
 // ── request body shape ────────────────────────────────────────────────────
 
@@ -21,6 +28,7 @@ fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> Body
         max_tokens: provider.max_tokens,
         thinking: provider.thinking,
         ephemeral: false,
+        cache_plan: &DEFAULT_UNSUPPORTED_CACHE_PLAN,
     }
 }
 
@@ -35,8 +43,7 @@ fn request_body_lifts_system_to_top_level() {
         ],
         body_input(&provider, false),
     );
-    assert_eq!(body["system"][0]["type"], "text");
-    assert_eq!(body["system"][0]["text"], "you are concise");
+    assert_eq!(body["system"], "you are concise");
     let msgs = body["messages"].as_array().unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0]["role"], "user");
@@ -126,6 +133,7 @@ fn request_body_includes_tools_in_anthropic_shape() {
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
             ephemeral: false,
+            cache_plan: &DEFAULT_UNSUPPORTED_CACHE_PLAN,
         },
     );
     let tool = &body["tools"][0];
@@ -191,6 +199,7 @@ fn cache_breakpoints_hit_all_four_zones() {
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
             ephemeral: false,
+            cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
         },
     );
     assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
@@ -227,6 +236,7 @@ fn ephemeral_request_disables_cache_breakpoints() {
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
             ephemeral: true,
+            cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
         },
     );
     assert_eq!(count_cache_breakpoints(&body), 0);
@@ -256,6 +266,7 @@ fn cache_breakpoints_never_exceed_four_cap() {
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
             ephemeral: false,
+            cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
         },
     );
     assert!(
@@ -299,13 +310,15 @@ fn cache_breakpoints_use_default_five_minute_ttl() {
 fn cache_breakpoints_degrade_when_zones_absent() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
+    let mut input = body_input(&provider, false);
+    input.cache_plan = &DEFAULT_EXPLICIT_CACHE_PLAN;
     let body = request::body(
         vec![
             Message::new(Role::User, "first"),
             Message::new(Role::Assistant, "second"),
             Message::new(Role::User, "third"),
         ],
-        body_input(&provider, false),
+        input,
     );
     assert!(body.get("system").is_none());
     assert!(body.get("tools").is_none());
@@ -316,13 +329,15 @@ fn cache_breakpoints_degrade_when_zones_absent() {
 fn cache_breakpoints_skip_non_stampable_system_shape() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
+    let mut input = body_input(&provider, false);
+    input.cache_plan = &DEFAULT_EXPLICIT_CACHE_PLAN;
     let body = request::body(
         vec![
             Message::new(Role::System, ""),
             Message::new(Role::User, "hi"),
             Message::new(Role::Assistant, "yo"),
         ],
-        body_input(&provider, false),
+        input,
     );
     assert!(body.get("system").is_none() || body["system"].as_array().is_none());
     assert_eq!(count_cache_breakpoints(&body), 2);
@@ -644,21 +659,6 @@ fn anthropic_usage_absent_returns_none() {
     assert_eq!(parsed.prompt_tokens, 0);
     assert_eq!(parsed.completion_tokens, 5);
     assert_eq!(parsed.total_tokens, 5);
-}
-
-// ── signature stash ───────────────────────────────────────────────────────
-
-#[test]
-fn take_last_provider_meta_drains_thinking_signature() {
-    let provider =
-        AnthropicMessagesProvider::new("k".to_string(), "claude-opus-4-8".to_string(), "https://x");
-    provider.last_thinking_signature.set("sig_xyz".to_string());
-    let meta = provider.take_last_provider_meta().expect("some meta");
-    assert_eq!(meta["thinking_signature"], "sig_xyz");
-    assert!(
-        provider.take_last_provider_meta().is_none(),
-        "stash drained on first take"
-    );
 }
 
 #[test]
