@@ -193,9 +193,11 @@ impl<T> DropdownState<T> {
 
     /// Select item by ID if it exists.
     pub fn select_by_id(&mut self, id: &str) -> bool {
-        if let Some(pos) = self.filtered_indices.iter().position(|&idx| {
-            self.items.get(idx).map(|it| it.id.as_str()) == Some(id)
-        }) {
+        if let Some(pos) = self
+            .filtered_indices
+            .iter()
+            .position(|&idx| self.items.get(idx).map(|it| it.id.as_str()) == Some(id))
+        {
             self.selected_idx = pos;
             self.ensure_visible();
             true
@@ -255,7 +257,11 @@ impl<T> DropdownState<T> {
                     }
                 }
             }
-            next = if next == 0 { len.saturating_sub(1) } else { next - 1 };
+            next = if next == 0 {
+                len.saturating_sub(1)
+            } else {
+                next - 1
+            };
         }
         self.selected_idx = next;
         self.ensure_visible();
@@ -470,11 +476,20 @@ pub fn compute_dropdown_rect(
     let rows_per_item: u16 = if has_descriptions { 2 } else { 1 };
     // Content rows + border (2) + footer hint (1) + title breathing room (1)
     let content_height = (item_count as u16 * rows_per_item) + 4;
-    let max_avail_height = anchor.max_height.min(screen_area.height.saturating_sub(2)).max(5);
+    let max_avail_height = anchor
+        .max_height
+        .min(screen_area.height.saturating_sub(2))
+        .max(5);
     let height = content_height.min(max_avail_height).max(5);
 
-    let max_avail_width = anchor.max_width.min(screen_area.width.saturating_sub(4)).max(20);
-    let width = anchor.min_width.max(anchor.target_rect.width).min(max_avail_width);
+    let max_avail_width = anchor
+        .max_width
+        .min(screen_area.width.saturating_sub(4))
+        .max(20);
+    let width = anchor
+        .min_width
+        .max(anchor.target_rect.width)
+        .min(max_avail_width);
 
     match anchor.placement {
         DropdownPlacement::CenterScreen => {
@@ -483,12 +498,18 @@ pub fn compute_dropdown_rect(
             Rect::new(x, y, width, height)
         }
         DropdownPlacement::Above => {
-            let x = anchor.target_rect.x.min(screen_area.x + screen_area.width.saturating_sub(width));
+            let x = anchor
+                .target_rect
+                .x
+                .min(screen_area.x + screen_area.width.saturating_sub(width));
             let y = anchor.target_rect.y.saturating_sub(height);
             Rect::new(x.max(screen_area.x), y.max(screen_area.y), width, height)
         }
         DropdownPlacement::Below => {
-            let x = anchor.target_rect.x.min(screen_area.x + screen_area.width.saturating_sub(width));
+            let x = anchor
+                .target_rect
+                .x
+                .min(screen_area.x + screen_area.width.saturating_sub(width));
             let y = (anchor.target_rect.y + anchor.target_rect.height)
                 .min(screen_area.y + screen_area.height.saturating_sub(height));
             Rect::new(x.max(screen_area.x), y, width, height)
@@ -499,13 +520,20 @@ pub fn compute_dropdown_rect(
             let space_above = anchor.target_rect.y.saturating_sub(screen_area.y);
 
             let place_below = space_below >= height || space_below >= space_above;
-            let x = anchor.target_rect.x.min(screen_area.x + screen_area.width.saturating_sub(width));
+            let x = anchor
+                .target_rect
+                .x
+                .min(screen_area.x + screen_area.width.saturating_sub(width));
 
             let y = if place_below {
                 (anchor.target_rect.y + anchor.target_rect.height)
                     .min(screen_area.y + screen_area.height.saturating_sub(height))
             } else {
-                anchor.target_rect.y.saturating_sub(height).max(screen_area.y)
+                anchor
+                    .target_rect
+                    .y
+                    .saturating_sub(height)
+                    .max(screen_area.y)
             };
 
             Rect::new(x.max(screen_area.x), y, width, height)
@@ -561,10 +589,7 @@ pub fn draw_dropdown<T>(
     let inner_width = popup_area.width.saturating_sub(4);
 
     // 5. Title line
-    let mut title_spans = vec![Span::styled(
-        "▼ ",
-        Style::default().fg(theme.brand()),
-    )];
+    let mut title_spans = vec![Span::styled("▼ ", Style::default().fg(theme.brand()))];
 
     if let Some(title) = &state.title {
         title_spans.push(Span::styled(
@@ -604,7 +629,9 @@ pub fn draw_dropdown<T>(
             let cursor_span = if is_selected {
                 Span::styled(
                     "› ",
-                    Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD),
                 )
             } else {
                 Span::raw("  ")
@@ -627,7 +654,9 @@ pub fn draw_dropdown<T>(
             };
 
             let title_style = if item.disabled {
-                Style::default().fg(theme.dim()).add_modifier(Modifier::STRIKETHROUGH)
+                Style::default()
+                    .fg(theme.dim())
+                    .add_modifier(Modifier::STRIKETHROUGH)
             } else if is_selected {
                 Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
             } else {
@@ -697,7 +726,9 @@ pub fn draw_dropdown<T>(
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "▲",
-                Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
             ))),
             up_rect,
         );
@@ -712,7 +743,9 @@ pub fn draw_dropdown<T>(
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "▼",
-                Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
             ))),
             dn_rect,
         );
@@ -727,15 +760,33 @@ pub fn draw_dropdown<T>(
     );
 
     let footer_line = Line::from(vec![
-        Span::styled("↑/↓", Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "↑/↓",
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Select  ", Style::default().fg(theme.dim())),
-        Span::styled("↵", Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "↵",
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Confirm  ", Style::default().fg(theme.dim())),
-        Span::styled("Esc", Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Cancel", Style::default().fg(theme.dim())),
     ]);
 
-    f.render_widget(Paragraph::new(footer_line).alignment(Alignment::Right), footer_rect);
+    f.render_widget(
+        Paragraph::new(footer_line).alignment(Alignment::Right),
+        footer_rect,
+    );
 }
 
 #[cfg(test)]
@@ -795,7 +846,8 @@ mod tests {
     fn test_dropdown_filtering() {
         let items = vec![
             DropdownItem::new("gpt4", "GPT-4o", "openai").with_description("Smartest model"),
-            DropdownItem::new("claude", "Claude 3.5 Sonnet", "anthropic").with_description("Great for coding"),
+            DropdownItem::new("claude", "Claude 3.5 Sonnet", "anthropic")
+                .with_description("Great for coding"),
             DropdownItem::new("llama", "Llama 3.3", "meta").with_description("Open weights"),
         ];
 

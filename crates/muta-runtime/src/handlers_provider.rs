@@ -1203,7 +1203,11 @@ fn mask_api_key(key: &str) -> Option<String> {
     if trimmed.len() <= 8 {
         Some("********".to_string())
     } else {
-        Some(format!("{}...{}", &trimmed[..4], &trimmed[trimmed.len() - 4..]))
+        Some(format!(
+            "{}...{}",
+            &trimmed[..4],
+            &trimmed[trimmed.len() - 4..]
+        ))
     }
 }
 
@@ -1221,7 +1225,9 @@ pub(crate) async fn query_connection_detail(
     let (protocol, base_url) = entry
         .default_channel()
         .map(|c| match &c.transport {
-            muta_agent::Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
+            muta_agent::Transport::OpenAi { base_url, .. } => {
+                ("openai".to_string(), base_url.clone())
+            }
             muta_agent::Transport::OpenAiResponses { base_url, .. } => {
                 ("openai_responses".to_string(), base_url.clone())
             }
@@ -1233,8 +1239,13 @@ pub(crate) async fn query_connection_detail(
             }
         })
         .unwrap_or_else(|| {
-            let p = connection.protocol.unwrap_or(WireProtocol::OpenAiChatCompletions);
-            (p.to_string(), connection.base_url.clone().unwrap_or_default())
+            let p = connection
+                .protocol
+                .unwrap_or(WireProtocol::OpenAiChatCompletions);
+            (
+                p.to_string(),
+                connection.base_url.clone().unwrap_or_default(),
+            )
         });
 
     let preset_label = connection
@@ -1266,7 +1277,11 @@ pub(crate) async fn query_connection_detail(
         .filter(|ua| !ua.is_empty())
         .unwrap_or_else(|| connection.client_identity.user_agent().to_string());
 
-    let models = entry.channels.iter().map(|c| c.model.clone()).collect::<Vec<_>>();
+    let models = entry
+        .channels
+        .iter()
+        .map(|c| c.model.clone())
+        .collect::<Vec<_>>();
     let active_model = entry.default_channel().map(|c| c.model.clone());
 
     let usage = muta_providers::fetch_provider_usage(

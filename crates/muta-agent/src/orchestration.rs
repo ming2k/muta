@@ -281,7 +281,6 @@ impl Provider for ProxyProvider {
             .unwrap_or_else(|error| error.into_inner())
             .usage_supported()
     }
-
 }
 
 // ── /debug trace ──────────────────────────────────────────────
@@ -2353,7 +2352,10 @@ mod digest_tests {
 
     #[async_trait]
     impl muta_contracts::Provider for DigestProvider {
-        async fn chat(&self, _request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        async fn chat(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             self.consults.fetch_add(1, Ordering::SeqCst);
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,

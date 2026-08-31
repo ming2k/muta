@@ -29,7 +29,10 @@ struct CompactionProvider;
 
 #[async_trait]
 impl Provider for CompactionProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "mock AI summary",
@@ -2217,10 +2220,7 @@ async fn commit_turn_replaces_messages_when_same_length_but_content_changed() {
         .await
         .unwrap();
 
-    let edited = vec![Message::new(
-        muta_contracts::Role::User,
-        "edited prompt",
-    )];
+    let edited = vec![Message::new(muta_contracts::Role::User, "edited prompt")];
 
     store
         .commit_turn(CommitTurn {
@@ -2606,7 +2606,10 @@ async fn run_compaction_falls_back_when_provider_errors() {
     struct FailingProvider;
     #[async_trait]
     impl Provider for FailingProvider {
-        async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        async fn chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             Err("boom".to_string())
         }
         async fn stream_chat(

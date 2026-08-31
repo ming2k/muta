@@ -4,9 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::components::dropdown::DropdownEventOutcome;
 use crate::input::{self};
-use crate::model::selection::{
-    SelectionState, floor_grapheme_boundary, inclusive_grapheme_end,
-};
+use crate::model::selection::{SelectionState, floor_grapheme_boundary, inclusive_grapheme_end};
 use crate::{App, Modal, ProviderDeleteChoice, SelectionEdge};
 
 /// Probe a raw input event against an active **whole-input selection**.
@@ -158,33 +156,35 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                     if payload == "add_new" {
                         let add_dropdown =
                             crate::views::settings::build_add_web_connection_dropdown(0);
-                        let anchor =
-                            crate::components::dropdown::DropdownAnchor::center_screen();
+                        let anchor = crate::components::dropdown::DropdownAnchor::center_screen();
                         app.config_dropdown = Some((add_dropdown, anchor));
                         return Some(input::InputAction::None);
                     }
-                    let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                        Box::new(muta_contracts::WebSearchConfigUpdate {
-                            provider: Some(payload),
-                            ..Default::default()
-                        }),
-                    ));
+                    let _ = app
+                        .tx
+                        .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                provider: Some(payload),
+                                ..Default::default()
+                            }),
+                        ));
                 }
                 "websearch_reader" => {
                     if payload == "add_new" {
                         let add_dropdown =
                             crate::views::settings::build_add_web_connection_dropdown(1);
-                        let anchor =
-                            crate::components::dropdown::DropdownAnchor::center_screen();
+                        let anchor = crate::components::dropdown::DropdownAnchor::center_screen();
                         app.config_dropdown = Some((add_dropdown, anchor));
                         return Some(input::InputAction::None);
                     }
-                    let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                        Box::new(muta_contracts::WebSearchConfigUpdate {
-                            reader: Some(payload),
-                            ..Default::default()
-                        }),
-                    ));
+                    let _ = app
+                        .tx
+                        .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                reader: Some(payload),
+                                ..Default::default()
+                            }),
+                        ));
                 }
                 "add_search_connection" => {
                     let (name, needs_key) = match payload.as_str() {
@@ -214,13 +214,15 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                             custom_headers: None,
                             enabled: true,
                         };
-                        let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                            Box::new(muta_contracts::WebSearchConfigUpdate {
-                                upsert_search_connection: Some(new_conn),
-                                provider: Some(id),
-                                ..Default::default()
-                            }),
-                        ));
+                        let _ = app
+                            .tx
+                            .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                                Box::new(muta_contracts::WebSearchConfigUpdate {
+                                    upsert_search_connection: Some(new_conn),
+                                    provider: Some(id),
+                                    ..Default::default()
+                                }),
+                            ));
                     }
                 }
                 "add_reader_connection" => {
@@ -248,13 +250,15 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                             custom_headers: None,
                             enabled: true,
                         };
-                        let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                            Box::new(muta_contracts::WebSearchConfigUpdate {
-                                upsert_reader_connection: Some(new_conn),
-                                reader: Some(id),
-                                ..Default::default()
-                            }),
-                        ));
+                        let _ = app
+                            .tx
+                            .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                                Box::new(muta_contracts::WebSearchConfigUpdate {
+                                    upsert_reader_connection: Some(new_conn),
+                                    reader: Some(id),
+                                    ..Default::default()
+                                }),
+                            ));
                     }
                 }
                 _ => {}

@@ -83,7 +83,10 @@ struct MockProvider;
 
 #[async_trait]
 impl Provider for MockProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Ok(muta_contracts::ProviderCompletion::message(Message::new(
             Role::Assistant,
             "Hello! I am a mock AI. How can I help you today?",
@@ -133,7 +136,10 @@ fn registry_collects_all_self_registered_tools() {
 
 #[async_trait]
 impl Provider for RetryOnceProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
@@ -164,7 +170,10 @@ impl Provider for RetryOnceProvider {
 
 #[async_trait]
 impl Provider for PartialToolRetryProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
@@ -200,7 +209,10 @@ impl Provider for PartialToolRetryProvider {
 
 #[async_trait]
 impl Provider for ToolThenRetryProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
@@ -242,7 +254,10 @@ impl Provider for ToolThenRetryProvider {
 
 #[async_trait]
 impl Provider for AlwaysRetryableProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
@@ -675,7 +690,10 @@ struct FailThenSucceedProvider {
 
 #[async_trait]
 impl Provider for FailThenSucceedProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
@@ -704,7 +722,9 @@ impl Provider for FailThenSucceedProvider {
         } else {
             Ok(Box::pin(stream::iter(vec![
                 Ok(ProviderStreamEvent::TextDelta("recovered".to_string())),
-                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
             ])))
         }
     }
@@ -856,7 +876,10 @@ struct HangingProvider;
 
 #[async_trait]
 impl Provider for HangingProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("chat is not used by the streaming path".to_string())
     }
     async fn stream_chat(
@@ -872,8 +895,14 @@ struct InstantProvider;
 
 #[async_trait]
 impl Provider for InstantProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
-        Ok(muta_contracts::ProviderCompletion::message(Message::new(Role::Assistant, "done")))
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
+        Ok(muta_contracts::ProviderCompletion::message(Message::new(
+            Role::Assistant,
+            "done",
+        )))
     }
     async fn stream_chat(
         &self,
@@ -897,7 +926,10 @@ struct SettlingProvider {
 
 #[async_trait]
 impl Provider for SettlingProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("chat is not used by the streaming path".to_string())
     }
     async fn stream_chat(
@@ -926,7 +958,10 @@ struct TrickleThenSilentProvider;
 
 #[async_trait]
 impl Provider for TrickleThenSilentProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("chat is not used by the streaming path".to_string())
     }
     async fn stream_chat(
@@ -952,7 +987,10 @@ struct GatedProvider {
 
 #[async_trait]
 impl Provider for GatedProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, String> {
         Err("chat is not used by the streaming path".to_string())
     }
     async fn stream_chat(

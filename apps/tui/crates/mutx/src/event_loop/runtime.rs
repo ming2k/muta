@@ -7,12 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Mutex;
 
-use muta_contracts::{
-    HarnessSnapshot, ParentStatus, PermissionRequest, ProviderPickerSnapshot,
-    SessionOverview, TodoList, UserQuestionRequest,
-};
 #[cfg(test)]
 use muta_contracts::LoopStatus;
+use muta_contracts::{
+    HarnessSnapshot, ParentStatus, PermissionRequest, ProviderPickerSnapshot, SessionOverview,
+    TodoList, UserQuestionRequest,
+};
 
 use crate::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::versioned::Versioned;

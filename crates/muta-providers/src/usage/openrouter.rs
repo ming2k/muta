@@ -83,9 +83,9 @@ impl ProviderUsageFetcher for OpenRouterUsageFetcher {
 }
 
 pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<ProviderUsage, String> {
-    let data = body.data.ok_or_else(|| {
-        "No data returned by OpenRouter auth/key API".to_string()
-    })?;
+    let data = body
+        .data
+        .ok_or_else(|| "No data returned by OpenRouter auth/key API".to_string())?;
 
     let plan = if data.is_free_tier {
         Some("Free Tier".to_string())
@@ -100,7 +100,9 @@ pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<Provid
     };
 
     let mut metrics = Vec::new();
-    if let Some(lbl) = data.label && !lbl.is_empty() {
+    if let Some(lbl) = data.label
+        && !lbl.is_empty()
+    {
         metrics.push(UsageMetric {
             label: "Key Label".to_string(),
             value: lbl,

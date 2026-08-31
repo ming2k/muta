@@ -4,9 +4,7 @@
 
 use std::path::PathBuf;
 
-use muta_contracts::{
-    SecretString, WebReaderConnection, WebSearchConnection,
-};
+use muta_contracts::{SecretString, WebReaderConnection, WebSearchConnection};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Credentials;
@@ -87,14 +85,21 @@ impl WebConnections {
             .iter()
             .find(|c| c.id.eq_ignore_ascii_case(&norm))
             .or_else(|| {
-                self.search_connections
-                    .iter()
-                    .find(|c| c.preset_id.as_deref().unwrap_or("").eq_ignore_ascii_case(&norm))
+                self.search_connections.iter().find(|c| {
+                    c.preset_id
+                        .as_deref()
+                        .unwrap_or("")
+                        .eq_ignore_ascii_case(&norm)
+                })
             })
     }
 
     pub fn upsert_search(&mut self, connection: WebSearchConnection) {
-        if let Some(existing) = self.search_connections.iter_mut().find(|c| c.id == connection.id) {
+        if let Some(existing) = self
+            .search_connections
+            .iter_mut()
+            .find(|c| c.id == connection.id)
+        {
             *existing = connection;
         } else {
             self.search_connections.push(connection);
@@ -133,14 +138,21 @@ impl WebConnections {
             .iter()
             .find(|c| c.id.eq_ignore_ascii_case(&norm))
             .or_else(|| {
-                self.reader_connections
-                    .iter()
-                    .find(|c| c.preset_id.as_deref().unwrap_or("").eq_ignore_ascii_case(&norm))
+                self.reader_connections.iter().find(|c| {
+                    c.preset_id
+                        .as_deref()
+                        .unwrap_or("")
+                        .eq_ignore_ascii_case(&norm)
+                })
             })
     }
 
     pub fn upsert_reader(&mut self, connection: WebReaderConnection) {
-        if let Some(existing) = self.reader_connections.iter_mut().find(|c| c.id == connection.id) {
+        if let Some(existing) = self
+            .reader_connections
+            .iter_mut()
+            .find(|c| c.id == connection.id)
+        {
             *existing = connection;
         } else {
             self.reader_connections.push(connection);
@@ -263,7 +275,10 @@ mod tests {
         };
         conns.upsert_reader(custom_reader);
         assert_eq!(conns.reader_connections.len(), 1);
-        assert_eq!(conns.get_reader("my-jina").unwrap().display_name(), "My Jina Reader");
+        assert_eq!(
+            conns.get_reader("my-jina").unwrap().display_name(),
+            "My Jina Reader"
+        );
 
         conns.remove_reader("my-jina");
         assert!(conns.reader_connections.is_empty());

@@ -1145,9 +1145,10 @@ mod tests {
             &self,
             _request: muta_contracts::ModelRequest,
         ) -> Result<muta_contracts::ProviderCompletion, String> {
-            Ok(muta_contracts::ProviderCompletion::message(
-                Message::new(Role::Assistant, "found 3 relevant files"),
-            ))
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                Role::Assistant,
+                "found 3 relevant files",
+            )))
         }
         async fn stream_chat(
             &self,
@@ -1186,9 +1187,10 @@ mod tests {
             &self,
             _request: muta_contracts::ModelRequest,
         ) -> Result<muta_contracts::ProviderCompletion, String> {
-            Ok(muta_contracts::ProviderCompletion::message(
-                Message::new(Role::Assistant, "recovered"),
-            ))
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                Role::Assistant,
+                "recovered",
+            )))
         }
 
         async fn stream_chat(
@@ -1216,7 +1218,9 @@ mod tests {
             }
             Ok(Box::pin(stream::iter(vec![
                 Ok(ProviderStreamEvent::TextDelta("recovered".to_string())),
-                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
             ])))
         }
     }
@@ -1227,9 +1231,10 @@ mod tests {
             request: muta_contracts::ModelRequest,
         ) -> Result<muta_contracts::ProviderCompletion, String> {
             *self.request.lock().unwrap() = Some(request);
-            Ok(muta_contracts::ProviderCompletion::message(
-                Message::new(Role::Assistant, "found 3 relevant files"),
-            ))
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                Role::Assistant,
+                "found 3 relevant files",
+            )))
         }
 
         async fn stream_chat(
@@ -1409,9 +1414,10 @@ mod tests {
             &self,
             _request: muta_contracts::ModelRequest,
         ) -> Result<muta_contracts::ProviderCompletion, String> {
-            Ok(muta_contracts::ProviderCompletion::message(
-                Message::new(Role::Assistant, "gated"),
-            ))
+            Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                Role::Assistant,
+                "gated",
+            )))
         }
         async fn stream_chat(
             &self,
@@ -1436,7 +1442,9 @@ mod tests {
                         name: Some("read_text".to_string()),
                         arguments: "{}".to_string(),
                     }),
-                    Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+                    Ok(ProviderStreamEvent::Completed(
+                        muta_contracts::ProviderCompletionMeta::default(),
+                    )),
                 ])))
             } else {
                 // Second request: tell the test the runner is mid-flight, then
@@ -1645,9 +1653,10 @@ mod tests {
                 request: muta_contracts::ModelRequest,
             ) -> Result<muta_contracts::ProviderCompletion, String> {
                 self.record(&request);
-                Ok(muta_contracts::ProviderCompletion::message(
-                    Message::new(Role::Assistant, "done"),
-                ))
+                Ok(muta_contracts::ProviderCompletion::message(Message::new(
+                    Role::Assistant,
+                    "done",
+                )))
             }
             async fn stream_chat(
                 &self,

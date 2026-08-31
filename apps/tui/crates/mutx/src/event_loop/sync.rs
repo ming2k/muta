@@ -9,8 +9,8 @@ use crate::event_loop::runtime::{OauthAddSignal, OutboxSignal, UiRuntime, now_ep
 use crate::event_loop::transcript::{
     apply_height_invalidation, apply_transcript_patch, displayed_transcript_did_change,
 };
-use crate::model::document::{TranscriptMessage, UserMessageOrigin};
 use crate::modal::Modal;
+use crate::model::document::{TranscriptMessage, UserMessageOrigin};
 
 /// Mirror shared runtime state into `App` each frame.
 pub(crate) async fn sync_runtime_state_to_app(
@@ -413,8 +413,7 @@ pub(crate) async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
                     .chain(app.side_messages.iter())
                     .rev()
                     .find(|m| {
-                        m.insert_id.as_deref() == Some(input_id.as_str())
-                            && m.role == Role::User
+                        m.insert_id.as_deref() == Some(input_id.as_str()) && m.role == Role::User
                     })
                     .map(|m| (m.raw.clone(), Vec::new(), Vec::new()));
                 app.requeue_dispatch(&session_id, &input_id, held);

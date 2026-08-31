@@ -10,9 +10,9 @@ use crate::model::selection::{CellDragInfo, SelectionState, floor_grapheme_bound
 use crate::step_interaction::StepKind;
 use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
 
-use super::modals::handle_permission_submit;
 use super::super::runtime::UiRuntime;
 use super::super::transcript::resolve_focused_mut;
+use super::modals::handle_permission_submit;
 
 /// Loop stage (input dispatch): the `SelectionStart` arm of the action match.
 pub(super) async fn handle_selection_start(

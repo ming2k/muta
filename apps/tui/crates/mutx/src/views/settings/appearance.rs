@@ -50,11 +50,8 @@ pub(super) fn draw_appearance_detail(
                 .add_modifier(Modifier::BOLD)
         };
 
-        let preview_theme = Theme::from_color_scheme_with_workspace(
-            &preset.id,
-            props.custom_color_scheme,
-            ws_path,
-        );
+        let preview_theme =
+            Theme::from_color_scheme_with_workspace(&preset.id, props.custom_color_scheme, ws_path);
 
         let c1 = preview_theme.body();
         let c2 = preview_theme.panel();

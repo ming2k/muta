@@ -20,7 +20,10 @@ pub(super) fn draw_system_detail(
 
     let items = [
         ("Config File", "~/.config/muta/config.toml"),
-        ("Web Connections", "~/.local/state/muta/web_connections.toml"),
+        (
+            "Web Connections",
+            "~/.local/state/muta/web_connections.toml",
+        ),
         (
             "Workspace",
             if props.workspace.is_empty() {

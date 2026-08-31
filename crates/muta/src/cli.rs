@@ -662,10 +662,10 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 );
             }
             "--config-dir" | "--data-dir" | "--state-dir" | "--cache-dir" => {
-                return Err(
-                    format!("{name} was removed: use matching MUTA_*_DIR environment variables instead")
-                        .into(),
-                );
+                return Err(format!(
+                    "{name} was removed: use matching MUTA_*_DIR environment variables instead"
+                )
+                .into());
             }
             "--json" | "-j" => json = true,
             "--version" | "-V" => version = true,
@@ -1115,8 +1115,12 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -h, --help             print help ('muta help <command>' for more)\n");
             out.push_str("  -V, --version          print the version and exit\n");
             out.push_str("\nEnvironment:\n");
-            out.push_str("  MUTA_HOME              instance root for isolated execution (<dir>/muta)\n");
-            out.push_str("  MUTA_PORT              override default daemon TCP port (default: 9800)\n");
+            out.push_str(
+                "  MUTA_HOME              instance root for isolated execution (<dir>/muta)\n",
+            );
+            out.push_str(
+                "  MUTA_PORT              override default daemon TCP port (default: 9800)\n",
+            );
         }
         Some(topic) => {
             let spec = resolve(topic, COMMANDS)?;

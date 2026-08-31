@@ -575,7 +575,9 @@ fn connection_detail_body(
 ) -> Vec<Line<'static>> {
     let label = Style::default().fg(theme.dim());
     let value = Style::default().fg(theme.fg());
-    let header_style = Style::default().fg(theme.primary).add_modifier(Modifier::BOLD);
+    let header_style = Style::default()
+        .fg(theme.primary)
+        .add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(theme.muted());
     let highlight = Style::default().fg(theme.primary);
     let warning = Style::default().fg(theme.warning);
@@ -648,7 +650,10 @@ fn connection_detail_body(
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Provider Usage & Quota", header_style)));
+    lines.push(Line::from(Span::styled(
+        "Provider Usage & Quota",
+        header_style,
+    )));
     match &detail.usage {
         muta_contracts::ConnectionUsageState::Available(usage) => {
             if let Some(plan) = &usage.plan {
@@ -681,10 +686,7 @@ fn connection_detail_body(
             ]));
         }
         muta_contracts::ConnectionUsageState::Fetching => {
-            lines.push(Line::from(Span::styled(
-                "Querying provider usage…",
-                muted,
-            )));
+            lines.push(Line::from(Span::styled("Querying provider usage…", muted)));
         }
     }
 
@@ -2779,13 +2781,11 @@ mod tests {
             usage: muta_contracts::ConnectionUsageState::Available(muta_contracts::ProviderUsage {
                 plan: Some("Available".to_string()),
                 primary_balance: Some("¥100.50".to_string()),
-                metrics: vec![
-                    muta_contracts::UsageMetric {
-                        label: "Total Balance".to_string(),
-                        value: "100.50".to_string(),
-                        unit: Some("CNY".to_string()),
-                    },
-                ],
+                metrics: vec![muta_contracts::UsageMetric {
+                    label: "Total Balance".to_string(),
+                    value: "100.50".to_string(),
+                    unit: Some("CNY".to_string()),
+                }],
                 updated_at_ms: None,
             }),
         };

@@ -81,7 +81,9 @@ impl DiscoveryProtocol {
         auth: muta_contracts::ConnectionAuth,
         protocol: muta_contracts::WireProtocol,
     ) -> Self {
-        if auth == muta_contracts::ConnectionAuth::ChatGptOAuth || preset_id == Some("chatgpt-oauth") {
+        if auth == muta_contracts::ConnectionAuth::ChatGptOAuth
+            || preset_id == Some("chatgpt-oauth")
+        {
             Self::Codex
         } else {
             Self::from_wire_protocol(protocol)

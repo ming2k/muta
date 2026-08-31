@@ -256,7 +256,9 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     _ => {}
                 }
             }
-            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+            let _ = app
+                .tx
+                .send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
 
             app.input.clear();
             app.set_cursor(0);
@@ -268,7 +270,10 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
         if let Some(payload) = target.strip_prefix("web_reader:") {
             let key = app.input.trim().to_string();
             let (preset_id, name) = match payload {
-                "firecrawl" => (Some("firecrawl".to_string()), "Firecrawl Reader".to_string()),
+                "firecrawl" => (
+                    Some("firecrawl".to_string()),
+                    "Firecrawl Reader".to_string(),
+                ),
                 "custom-reader" => (None, "Custom Web Reader".to_string()),
                 _ => (Some("jina".to_string()), "Jina Reader".to_string()),
             };
@@ -294,7 +299,9 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     _ => {}
                 }
             }
-            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+            let _ = app
+                .tx
+                .send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
 
             app.input.clear();
             app.set_cursor(0);
@@ -586,7 +593,9 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     Some(std::path::Path::new(&app.current_workspace))
                 };
                 let count = match app.config_category {
-                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path).len().max(1),
+                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path)
+                        .len()
+                        .max(1),
                     1 => 5usize,
                     2 => 1usize,
                     3 => 10usize,
@@ -596,7 +605,8 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     app.config_detail_index = (app.config_detail_index + count - 1) % count;
                 }
                 if app.config_category == 0 {
-                    let schemes = crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                    let schemes =
+                        crate::view::Theme::available_color_schemes_with_workspace(ws_path);
                     if let Some(scheme) =
                         schemes.get(app.config_detail_index % schemes.len().max(1))
                     {
@@ -748,7 +758,9 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     Some(std::path::Path::new(&app.current_workspace))
                 };
                 let count = match app.config_category {
-                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path).len().max(1),
+                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path)
+                        .len()
+                        .max(1),
                     1 => 5usize,
                     2 => 1usize,
                     3 => 10usize,
@@ -758,7 +770,8 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     app.config_detail_index = (app.config_detail_index + 1) % count;
                 }
                 if app.config_category == 0 {
-                    let schemes = crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                    let schemes =
+                        crate::view::Theme::available_color_schemes_with_workspace(ws_path);
                     if let Some(scheme) =
                         schemes.get(app.config_detail_index % schemes.len().max(1))
                     {

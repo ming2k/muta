@@ -500,6 +500,10 @@ error = "#dc322f"
         std::fs::write(ws_themes.join("solarized-dark.toml"), theme_proj).unwrap();
 
         let loaded = load_all_theme_files(Some(&ws_dir));
-        assert!(loaded.iter().any(|t| t.id == "solarized-dark" && t.name == "Solarized Dark"));
+        assert!(
+            loaded
+                .iter()
+                .any(|t| t.id == "solarized-dark" && t.name == "Solarized Dark")
+        );
     }
 }

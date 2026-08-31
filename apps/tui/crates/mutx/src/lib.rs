@@ -59,8 +59,8 @@ pub(crate) mod components;
 pub(crate) mod disclosure;
 pub(crate) mod layout;
 pub(crate) mod overlays;
-pub(crate) mod views;
 pub(crate) mod tools;
+pub(crate) mod views;
 
 // Drawing leaves + shared tokens.
 pub(crate) mod chrome;
@@ -72,8 +72,8 @@ pub(crate) mod footer_stack;
 pub(crate) mod markdown_table;
 pub(crate) mod message_body;
 pub(crate) mod notice;
-pub(crate) mod view_header;
 pub(crate) mod primitives;
+pub(crate) mod view_header;
 
 pub(crate) mod text_layout;
 pub(crate) mod theme;

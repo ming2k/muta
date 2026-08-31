@@ -628,7 +628,9 @@ pub(super) async fn dispatch_action(
         input::InputAction::RefreshProviderModels => {
             if app.active_modal() == Modal::Connections && app.connection_info_detail {
                 let providers = app.providers_filtered();
-                if let Some(ranked) = providers.get(app.modal_index.min(providers.len().saturating_sub(1))) {
+                if let Some(ranked) =
+                    providers.get(app.modal_index.min(providers.len().saturating_sub(1)))
+                {
                     app.connection_detail = None;
                     let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
                         id: ranked.id.clone(),
@@ -830,8 +832,10 @@ pub(super) async fn dispatch_action(
                     crate::overlays::ConfigFocus::Categories => {
                         app.config_focus = crate::overlays::ConfigFocus::Detail;
                         if app.config_category == 0 {
-                            app.config_detail_index =
-                                Theme::color_scheme_index_with_workspace(&app.color_scheme, ws_path);
+                            app.config_detail_index = Theme::color_scheme_index_with_workspace(
+                                &app.color_scheme,
+                                ws_path,
+                            );
                         } else {
                             app.config_detail_index = 0;
                         }
@@ -840,7 +844,8 @@ pub(super) async fn dispatch_action(
                         match app.config_category {
                             0 => {
                                 // Appearance category:
-                                let schemes = Theme::available_color_schemes_with_workspace(ws_path);
+                                let schemes =
+                                    Theme::available_color_schemes_with_workspace(ws_path);
                                 let sel_idx = app.config_detail_index % schemes.len().max(1);
                                 if let Some(scheme) = schemes.get(sel_idx) {
                                     let name = &scheme.id;
@@ -850,12 +855,10 @@ pub(super) async fn dispatch_action(
                                         &app.custom_color_scheme,
                                         ws_path,
                                     );
-                                    let _ = app.tx.send(
-                                        AgentRequest::UpdateTuiColorScheme {
-                                            name: app.color_scheme.clone(),
-                                            custom: app.custom_color_scheme.clone(),
-                                        },
-                                    );
+                                    let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                        name: app.color_scheme.clone(),
+                                        custom: app.custom_color_scheme.clone(),
+                                    });
                                     app.save_tui_config();
                                 }
                             }
@@ -896,13 +899,19 @@ pub(super) async fn dispatch_action(
                                                 .as_ref()
                                                 .map(|ws| ws.timeout_secs)
                                                 .unwrap_or(20);
-                                            let next = if current >= 120 { 5 } else { (current + 5).max(5) };
-                                            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
-                                                Box::new(muta_contracts::WebSearchConfigUpdate {
-                                                    timeout_secs: Some(next),
-                                                    ..Default::default()
-                                                }),
-                                            ));
+                                            let next = if current >= 120 {
+                                                5
+                                            } else {
+                                                (current + 5).max(5)
+                                            };
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    muta_contracts::WebSearchConfigUpdate {
+                                                        timeout_secs: Some(next),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
                                         }
                                         2 => {
                                             let dropdown =
@@ -918,14 +927,16 @@ pub(super) async fn dispatch_action(
                                                 .as_ref()
                                                 .and_then(|ws| ws.search_connections.get(conn_idx))
                                             {
-                                                let _ = app.tx.send(
-                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                        muta_contracts::WebSearchConfigUpdate {
-                                                            provider: Some(conn.id.clone()),
-                                                            ..Default::default()
-                                                        },
-                                                    )),
-                                                );
+                                                let _ =
+                                                    app.tx
+                                                        .send(AgentRequest::UpdateWebSearchConfig(
+                                                        Box::new(
+                                                            muta_contracts::WebSearchConfigUpdate {
+                                                                provider: Some(conn.id.clone()),
+                                                                ..Default::default()
+                                                            },
+                                                        ),
+                                                    ));
                                             }
                                         }
                                         _ => {}
@@ -954,13 +965,19 @@ pub(super) async fn dispatch_action(
                                                 .as_ref()
                                                 .map(|ws| ws.timeout_secs)
                                                 .unwrap_or(20);
-                                            let next = if current >= 120 { 5 } else { (current + 5).max(5) };
-                                            let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
-                                                Box::new(muta_contracts::WebSearchConfigUpdate {
-                                                    timeout_secs: Some(next),
-                                                    ..Default::default()
-                                                }),
-                                            ));
+                                            let next = if current >= 120 {
+                                                5
+                                            } else {
+                                                (current + 5).max(5)
+                                            };
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    muta_contracts::WebSearchConfigUpdate {
+                                                        timeout_secs: Some(next),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
                                         }
                                         2 => {
                                             let dropdown =
@@ -976,14 +993,16 @@ pub(super) async fn dispatch_action(
                                                 .as_ref()
                                                 .and_then(|ws| ws.reader_connections.get(conn_idx))
                                             {
-                                                let _ = app.tx.send(
-                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                        muta_contracts::WebSearchConfigUpdate {
-                                                            reader: Some(conn.id.clone()),
-                                                            ..Default::default()
-                                                        },
-                                                    )),
-                                                );
+                                                let _ =
+                                                    app.tx
+                                                        .send(AgentRequest::UpdateWebSearchConfig(
+                                                        Box::new(
+                                                            muta_contracts::WebSearchConfigUpdate {
+                                                                reader: Some(conn.id.clone()),
+                                                                ..Default::default()
+                                                            },
+                                                        ),
+                                                    ));
                                             }
                                         }
                                         _ => {}
@@ -1329,7 +1348,9 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::OpenConnectionDetail => {
             let providers = app.providers_filtered();
-            if let Some(ranked) = providers.get(app.modal_index.min(providers.len().saturating_sub(1))) {
+            if let Some(ranked) =
+                providers.get(app.modal_index.min(providers.len().saturating_sub(1)))
+            {
                 app.connection_info_detail = true;
                 app.connection_detail = None;
                 app.connection_info_scroll = 0;

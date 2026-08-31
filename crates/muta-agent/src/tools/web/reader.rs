@@ -85,11 +85,7 @@ impl Tool for WebReaderTool {
     fn is_available(&self) -> bool {
         let snapshot = self.config.get();
         let reader = snapshot.reader.trim();
-        if reader.is_empty()
-            || reader == "none"
-            || reader == "disabled"
-            || reader == "(none)"
-        {
+        if reader.is_empty() || reader == "none" || reader == "disabled" || reader == "(none)" {
             return false;
         }
         match reader {

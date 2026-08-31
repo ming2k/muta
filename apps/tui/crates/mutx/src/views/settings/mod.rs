@@ -209,12 +209,7 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
     }
 
     // 4. Bottom Footer (3-Row Runner-Style)
-    draw_footer(
-        frame,
-        footer_rect,
-        props.focus,
-        props.theme,
-    );
+    draw_footer(frame, footer_rect, props.focus, props.theme);
 
     ConfigRects {
         area,
@@ -281,12 +276,7 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
     }
 }
 
-fn draw_footer(
-    frame: &mut Frame,
-    rect: Rect,
-    focus: ConfigFocus,
-    theme: &Theme,
-) {
+fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme) {
     if rect.height == 0 {
         return;
     }

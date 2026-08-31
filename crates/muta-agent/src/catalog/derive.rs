@@ -15,8 +15,8 @@
 
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
-    AnthropicMessagesDialect, ConnectionAuth, Effort, GoogleGenerateContentDialect, OpenAiChatDialect,
-    OpenAiResponsesDialect, SecretString, ThinkingMode, WireProtocol,
+    AnthropicMessagesDialect, ConnectionAuth, Effort, GoogleGenerateContentDialect,
+    OpenAiChatDialect, OpenAiResponsesDialect, SecretString, ThinkingMode, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::{Connection, Connections};
@@ -140,7 +140,9 @@ pub fn derive_channel(
             effort,
             dialect: OpenAiResponsesDialect::ChatGpt,
         },
-        ConnectionAuth::CopilotOAuth => copilot_route(connection, remote.as_ref(), effort, thinking),
+        ConnectionAuth::CopilotOAuth => {
+            copilot_route(connection, remote.as_ref(), effort, thinking)
+        }
         ConnectionAuth::AntigravityOAuth => Transport::Google {
             base_url: connection
                 .base_url

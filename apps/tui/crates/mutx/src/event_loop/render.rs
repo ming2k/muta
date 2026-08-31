@@ -1114,13 +1114,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 },
             );
             if let Some((ref mut state, ref anchor)) = app.config_dropdown {
-                crate::components::dropdown::draw_dropdown(
-                    f,
-                    state,
-                    anchor,
-                    &app.theme,
-                    f.area(),
-                );
+                crate::components::dropdown::draw_dropdown(f, state, anchor, &app.theme, f.area());
             }
             Some(rects.area)
         }

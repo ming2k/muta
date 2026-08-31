@@ -52,7 +52,11 @@ pub(super) fn draw_transcript_detail(
             ),
             Span::styled("Turn Band Layout  ", row_style),
             Span::styled(
-                if is_band { "[ Enabled ]" } else { "[ Disabled ]" },
+                if is_band {
+                    "[ Enabled ]"
+                } else {
+                    "[ Disabled ]"
+                },
                 Style::default()
                     .fg(props.theme.brand())
                     .add_modifier(Modifier::BOLD),
@@ -99,7 +103,11 @@ pub(super) fn draw_transcript_detail(
             ),
             Span::styled("Expand Auto-Scroll", row_style),
             Span::styled(
-                if is_expand { "[ Enabled ]" } else { "[ Disabled ]" },
+                if is_expand {
+                    "[ Enabled ]"
+                } else {
+                    "[ Disabled ]"
+                },
                 Style::default()
                     .fg(props.theme.brand())
                     .add_modifier(Modifier::BOLD),

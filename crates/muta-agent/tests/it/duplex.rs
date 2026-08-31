@@ -48,9 +48,10 @@ impl Provider for IdleProvider {
         &self,
         _request: muta_contracts::ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, String> {
-        Ok(muta_contracts::ProviderCompletion::message(
-            Message::new(Role::Assistant, "done"),
-        ))
+        Ok(muta_contracts::ProviderCompletion::message(Message::new(
+            Role::Assistant,
+            "done",
+        )))
     }
     async fn stream_chat(
         &self,

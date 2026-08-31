@@ -35,7 +35,9 @@ pub struct SiliconFlowUsageFetcher;
 #[async_trait]
 impl ProviderUsageFetcher for SiliconFlowUsageFetcher {
     fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
-        preset_id == Some("siliconflow") || base_url.contains("siliconflow.cn") || base_url.contains("siliconflow.com")
+        preset_id == Some("siliconflow")
+            || base_url.contains("siliconflow.cn")
+            || base_url.contains("siliconflow.com")
     }
 
     async fn fetch_usage(
@@ -75,16 +77,26 @@ impl ProviderUsageFetcher for SiliconFlowUsageFetcher {
     }
 }
 
-pub(crate) fn parse_siliconflow_user(body: SiliconFlowUserResponse) -> Result<ProviderUsage, String> {
+pub(crate) fn parse_siliconflow_user(
+    body: SiliconFlowUserResponse,
+) -> Result<ProviderUsage, String> {
     let data = body.data.ok_or_else(|| {
-        format!("No data returned by SiliconFlow user info API (code: {})", body.code)
+        format!(
+            "No data returned by SiliconFlow user info API (code: {})",
+            body.code
+        )
     })?;
 
-    let total = data.total_balance.clone().unwrap_or_else(|| "0.00".to_string());
+    let total = data
+        .total_balance
+        .clone()
+        .unwrap_or_else(|| "0.00".to_string());
     let primary_balance = format!("¥{total}");
 
     let mut metrics = Vec::new();
-    if let Some(email) = data.email && !email.is_empty() {
+    if let Some(email) = data.email
+        && !email.is_empty()
+    {
         metrics.push(UsageMetric {
             label: "Account Email".to_string(),
             value: email,
@@ -117,7 +129,11 @@ pub(crate) fn parse_siliconflow_user(body: SiliconFlowUserResponse) -> Result<Pr
         .ok();
 
     Ok(ProviderUsage {
-        plan: if body.status { Some("Active".to_string()) } else { None },
+        plan: if body.status {
+            Some("Active".to_string())
+        } else {
+            None
+        },
         primary_balance: Some(primary_balance),
         metrics,
         updated_at_ms: now_ms,

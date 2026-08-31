@@ -74,8 +74,6 @@ pub struct SemanticPalette {
     pub error: Color,
 }
 
-
-
 /// Styles used during rendering.
 #[derive(Clone)]
 pub struct Theme {
@@ -233,7 +231,9 @@ impl Theme {
     }
 
     /// Return all available color schemes given an optional workspace root.
-    pub fn available_color_schemes_with_workspace(workspace: Option<&Path>) -> Vec<ColorSchemePreset> {
+    pub fn available_color_schemes_with_workspace(
+        workspace: Option<&Path>,
+    ) -> Vec<ColorSchemePreset> {
         let mut list = Vec::new();
         // 1. Built-in presets (Zen, Midnight, Nord, Catppuccin, Paper)
         for preset in &COLOR_SCHEMES {
@@ -436,8 +436,6 @@ impl Theme {
             theme.warn(),
         ]
     }
-
-
 
     pub fn color_from_hex(value: &str) -> Option<Color> {
         let value = value.strip_prefix('#').unwrap_or(value);
@@ -720,9 +718,6 @@ impl Theme {
     }
 }
 
-
-
-
 fn rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -758,8 +753,6 @@ mod tests {
         assert_eq!(Theme::normalize_color_scheme(""), "zen");
     }
 
-
-
     #[test]
     fn every_preset_has_a_distinct_canonical_index() {
         let schemes = Theme::available_color_schemes();
@@ -792,7 +785,11 @@ error = "#ff6188"
 
         let schemes = Theme::available_color_schemes_with_workspace(Some(&ws));
         assert!(schemes.iter().any(|s| s.id == "monokai-pro" && s.is_file));
-        let theme = Theme::from_color_scheme_with_workspace("monokai-pro", &ColorSchemeConfig::default(), Some(&ws));
+        let theme = Theme::from_color_scheme_with_workspace(
+            "monokai-pro",
+            &ColorSchemeConfig::default(),
+            Some(&ws),
+        );
         assert_eq!(theme.app_bg, Color::Rgb(45, 42, 46));
     }
 

@@ -422,7 +422,10 @@ fn websearch_provider_dropdown_builds_and_selects() {
     };
     let dropdown = crate::overlays::build_websearch_provider_dropdown("tavily", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_provider"));
-    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("tavily"));
+    assert_eq!(
+        dropdown.selected_payload().map(|s| s.as_str()),
+        Some("tavily")
+    );
     assert_eq!(dropdown.items.len(), 8);
 }
 
@@ -452,7 +455,10 @@ fn websearch_reader_dropdown_builds_and_selects() {
     };
     let dropdown = crate::overlays::build_websearch_reader_dropdown("my-jina", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_reader"));
-    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("my-jina"));
+    assert_eq!(
+        dropdown.selected_payload().map(|s| s.as_str()),
+        Some("my-jina")
+    );
     assert_eq!(dropdown.items.len(), 3); // my-jina + disabled + add_new
 
     ws.reader_connections.clear();

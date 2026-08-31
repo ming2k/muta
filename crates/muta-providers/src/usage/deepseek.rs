@@ -74,10 +74,14 @@ impl ProviderUsageFetcher for DeepSeekUsageFetcher {
     }
 }
 
-pub(crate) fn parse_deepseek_balance(body: DeepSeekBalanceResponse) -> Result<ProviderUsage, String> {
-    let info = body.balance_infos.into_iter().next().ok_or_else(|| {
-        "No balance information returned by DeepSeek API".to_string()
-    })?;
+pub(crate) fn parse_deepseek_balance(
+    body: DeepSeekBalanceResponse,
+) -> Result<ProviderUsage, String> {
+    let info = body
+        .balance_infos
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No balance information returned by DeepSeek API".to_string())?;
 
     let currency = if info.currency.is_empty() {
         "CNY".to_string()
@@ -85,7 +89,13 @@ pub(crate) fn parse_deepseek_balance(body: DeepSeekBalanceResponse) -> Result<Pr
         info.currency
     };
 
-    let currency_symbol = if currency == "CNY" { "¥" } else if currency == "USD" { "$" } else { "" };
+    let currency_symbol = if currency == "CNY" {
+        "¥"
+    } else if currency == "USD" {
+        "$"
+    } else {
+        ""
+    };
     let primary_balance = if !currency_symbol.is_empty() {
         format!("{currency_symbol}{}", info.total_balance)
     } else {
@@ -116,7 +126,11 @@ pub(crate) fn parse_deepseek_balance(body: DeepSeekBalanceResponse) -> Result<Pr
     });
     metrics.push(UsageMetric {
         label: "Service Status".to_string(),
-        value: if body.is_available { "Available".to_string() } else { "Unavailable".to_string() },
+        value: if body.is_available {
+            "Available".to_string()
+        } else {
+            "Unavailable".to_string()
+        },
         unit: None,
     });
 

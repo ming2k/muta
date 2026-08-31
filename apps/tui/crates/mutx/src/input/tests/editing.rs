@@ -2057,11 +2057,8 @@ fn key_repeat_events_are_processed() {
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
 
-    let char_repeat = KeyEvent::new_with_kind(
-        KeyCode::Char('a'),
-        KeyModifiers::NONE,
-        KeyEventKind::Repeat,
-    );
+    let char_repeat =
+        KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Repeat);
     let action = process_event(
         Event::Key(char_repeat),
         &mut input,

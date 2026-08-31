@@ -71,8 +71,9 @@ fn top_chrome_row(
         return chrome_row(full_w, bg, theme, '↑', hidden_above);
     }
     if focused {
-        if let crate::components::composer_hints::ComposeTarget::QueueEdit { kind, number, .. } =
-            target
+        if let crate::components::composer_hints::ComposeTarget::QueueEdit {
+            kind, number, ..
+        } = target
         {
             let noun = match kind {
                 crate::components::composer_hints::QueueEditKind::Steer => "steer",

@@ -74,9 +74,9 @@ impl ProviderUsageFetcher for KimiUsageFetcher {
 }
 
 pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUsage, String> {
-    let data = body.data.ok_or_else(|| {
-        format!("No data returned by Kimi balance API (code: {})", body.code)
-    })?;
+    let data = body
+        .data
+        .ok_or_else(|| format!("No data returned by Kimi balance API (code: {})", body.code))?;
 
     let primary_balance = format!("¥{:.2}", data.available_balance);
 
@@ -103,7 +103,11 @@ pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUs
         .ok();
 
     Ok(ProviderUsage {
-        plan: if body.status { Some("Active".to_string()) } else { None },
+        plan: if body.status {
+            Some("Active".to_string())
+        } else {
+            None
+        },
         primary_balance: Some(primary_balance),
         metrics,
         updated_at_ms: now_ms,

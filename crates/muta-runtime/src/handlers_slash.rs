@@ -839,8 +839,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             let mut lines = Vec::new();
             lines.push(format!(
                 "Web tools: provider {}, reader {}.",
-                reloaded.websearch.provider,
-                reloaded.websearch.reader,
+                reloaded.websearch.provider, reloaded.websearch.reader,
             ));
             if report.removed.is_empty()
                 && report.connected.is_empty()

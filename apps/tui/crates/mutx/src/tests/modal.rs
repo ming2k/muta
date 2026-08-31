@@ -267,13 +267,8 @@ fn queue_pointer_commit_edits_in_place() {
     assert!(app.queue_pointer_prev("session-a")); // → a
     app.input = "delta".to_string();
     assert!(
-        app.commit_queue_pointer(
-            "session-a",
-            "delta".to_string(),
-            Vec::new(),
-            Vec::new(),
-        )
-        .is_some()
+        app.commit_queue_pointer("session-a", "delta".to_string(), Vec::new(), Vec::new(),)
+            .is_some()
     );
 
     let texts: Vec<&str> = app
@@ -302,13 +297,8 @@ fn queue_pointer_vanished_target_sends_as_new_message() {
     app.remove_dispatch("session-a", "a");
     // …so the commit dissolves the pointer but preserves the edit.
     assert!(
-        app.commit_queue_pointer(
-            "session-a",
-            "edited".to_string(),
-            Vec::new(),
-            Vec::new(),
-        )
-        .is_none()
+        app.commit_queue_pointer("session-a", "edited".to_string(), Vec::new(), Vec::new(),)
+            .is_none()
     );
     assert!(app.queue_pointer.is_none());
     assert_eq!(app.input, "edited", "the edit must survive the race");
@@ -1453,7 +1443,8 @@ fn config_view_navigation_and_theme_preview() {
     let previewed_scheme = &schemes[app.config_detail_index % schemes.len()];
     assert_eq!(
         app.theme.surface(),
-        crate::view::Theme::from_color_scheme(&previewed_scheme.id, &app.custom_color_scheme).surface()
+        crate::view::Theme::from_color_scheme(&previewed_scheme.id, &app.custom_color_scheme)
+            .surface()
     );
 
     // Revert preview on exit to categories
@@ -1461,7 +1452,8 @@ fn config_view_navigation_and_theme_preview() {
     app.config_focus = crate::overlays::ConfigFocus::Categories;
     assert_eq!(
         app.theme.surface(),
-        crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme).surface()
+        crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme)
+            .surface()
     );
 
     // Dismissing surface from Categories closes the settings view
@@ -1600,7 +1592,11 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     assert!(app.pop_sublayer());
     assert!(!app.connection_info_detail, "connection detail closed");
     assert!(app.connection_detail.is_none());
-    assert_eq!(app.active_modal(), crate::Modal::Connections, "connections modal stays up");
+    assert_eq!(
+        app.active_modal(),
+        crate::Modal::Connections,
+        "connections modal stays up"
+    );
     assert!(!app.pop_sublayer(), "no sub-layer left");
 }
 

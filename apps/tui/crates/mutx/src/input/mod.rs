@@ -1,8 +1,6 @@
 //! Input handling: keyboard and mouse events mapped to semantic actions.
 
-use crossterm::event::{
-    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
 use crate::model::layout::{LayoutMap, SemanticCursor};
 use crate::model::selection::SelectionDrag;
@@ -1617,7 +1615,9 @@ pub fn process_event(
                     }
                     match context.active_modal {
                         super::Modal::Models => InputAction::ProviderPickerActivate,
-                        super::Modal::Connections if context.connection_info_detail => InputAction::None,
+                        super::Modal::Connections if context.connection_info_detail => {
+                            InputAction::None
+                        }
                         super::Modal::Connections => InputAction::OpenConnectionDetail,
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                         super::Modal::ProviderPreset => InputAction::SelectPreset,
@@ -2267,8 +2267,7 @@ pub fn process_event(
                         InputAction::QueueMoveItem { delta: 1 }
                     } else if context.active_modal == super::Modal::Permissions && c == 'c' {
                         InputAction::PermissionsClearAll
-                    } else if context.active_modal == super::Modal::Config
-                        && (c == 'd' || c == 'D')
+                    } else if context.active_modal == super::Modal::Config && (c == 'd' || c == 'D')
                     {
                         InputAction::ConfigDeleteConnection
                     } else if c == ' '

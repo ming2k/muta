@@ -408,7 +408,10 @@ mod tests {
     struct DummyProvider;
     #[async_trait::async_trait]
     impl Provider for DummyProvider {
-        async fn chat(&self, _request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        async fn chat(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
                 "supervisor response",

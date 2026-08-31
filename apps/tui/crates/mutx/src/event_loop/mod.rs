@@ -15,12 +15,10 @@ pub(crate) use runtime::{
     CompletionSignal, NoticeToastSignal, OauthAddSignal, OutboxSignal, SideViewSignal, UiRuntime,
     UnsentInput, now_epoch_ms,
 };
-#[allow(unused_imports)]
-pub(crate) use transcript::{
-    apply_transcript_patch, display_status, resolve_focused_mut,
-};
 #[cfg(test)]
 pub(crate) use transcript::focused_messages_mut;
+#[allow(unused_imports)]
+pub(crate) use transcript::{apply_transcript_patch, display_status, resolve_focused_mut};
 
 #[cfg(test)]
 pub(crate) use actions::host_test_shims;
@@ -41,12 +39,12 @@ use tokio::sync::{Mutex, mpsc};
 
 use muta_contracts::{AgentRequest, LoopStatus, ProviderPickerSnapshot};
 
+use crate::App;
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::input::{self};
-use crate::model::document::TranscriptMessage;
 use crate::modal::Modal;
-use crate::App;
+use crate::model::document::TranscriptMessage;
 
 use input_reader::InputReader;
 use probes::{probe_config_dropdown, probe_delete_overlay};
@@ -226,8 +224,7 @@ pub async fn run_app_loop(
             || app.input_drag_scroll.is_some()
             || copy_pending.load(Ordering::SeqCst) > 0;
 
-        let is_typing_active =
-            app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
+        let is_typing_active = app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
         let animation_draw = animating && !is_typing_active;
 
         let needs_draw = frame_dirty
@@ -360,7 +357,9 @@ async fn process_one_event(
         app.completions()
     };
     let suggestion_count = completions.len();
-    let has_exact_suggestion = completions.iter().any(|c| c.insert_text == app.input || c.label == app.input);
+    let has_exact_suggestion = completions
+        .iter()
+        .any(|c| c.insert_text == app.input || c.label == app.input);
     let suggestion_index = app.suggestion_index;
     let completion_dismissed = app.completion_dismissed;
     let has_trigger_text = app.completion_trigger_text_present();
@@ -374,13 +373,12 @@ async fn process_one_event(
     let history_searching = app.history_search;
     let model_searching = app.model_search;
     let modal_keymap_open = app.modal_keymap_open;
-    let custom_provider_field = if active_modal == Modal::CustomProvider
-        && app.custom_text_field_focused()
-    {
-        Some(app.custom_field)
-    } else {
-        None
-    };
+    let custom_provider_field =
+        if active_modal == Modal::CustomProvider && app.custom_text_field_focused() {
+            Some(app.custom_field)
+        } else {
+            None
+        };
     let editor_field = if active_modal == Modal::ModelEditor {
         Some(app.editor_field)
     } else {
@@ -395,15 +393,14 @@ async fn process_one_event(
     let session_info_detail = app.session_info_detail;
     let connection_info_detail = app.connection_info_detail;
 
-    let modal_cmd_history: Option<String> =
-        if matches!(event, Event::Key(k) if k.code == crossterm::event::KeyCode::Enter)
-            && active_modal == Modal::None
-            && app.input.starts_with('/')
-        {
-            Some(app.input.clone())
-        } else {
-            None
-        };
+    let modal_cmd_history: Option<String> = if matches!(event, Event::Key(k) if k.code == crossterm::event::KeyCode::Enter)
+        && active_modal == Modal::None
+        && app.input.starts_with('/')
+    {
+        Some(app.input.clone())
+    } else {
+        None
+    };
 
     let recognized_command = app.input.starts_with('/')
         && crate::completion::resolved_slash_command_len(&app.input, &app.command_catalog)
@@ -454,24 +451,25 @@ async fn process_one_event(
         )
     };
 
-    let action =
-        if matches!(action, input::InputAction::SendSlash(_)) && !recognized_command {
-            if let input::InputAction::SendSlash(text) = action {
-                input::InputAction::SendChat(text)
-            } else {
-                action
-            }
+    let action = if matches!(action, input::InputAction::SendSlash(_)) && !recognized_command {
+        if let input::InputAction::SendSlash(text) = action {
+            input::InputAction::SendChat(text)
         } else {
             action
-        };
+        }
+    } else {
+        action
+    };
 
     if action.is_text_modal_command()
         && let Some(entry) = modal_cmd_history
     {
         let (name, args) = actions::split_command_word(&entry);
-        runtime.messages.write().await.push(
-            TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms()),
-        );
+        runtime
+            .messages
+            .write()
+            .await
+            .push(TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms()));
         app.record_input_history(entry, Vec::new(), Vec::new());
     }
 

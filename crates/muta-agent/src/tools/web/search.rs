@@ -25,10 +25,7 @@ struct ProviderCache {
     client: Result<reqwest::Client, String>,
 }
 
-type ProviderPair = (
-    Box<dyn SearchProvider>,
-    reqwest::Client,
-);
+type ProviderPair = (Box<dyn SearchProvider>, reqwest::Client);
 
 impl WebSearchTool {
     pub fn new() -> Self {

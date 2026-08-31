@@ -35,12 +35,12 @@ pub mod tree;
 pub mod usage_stats;
 pub mod view_switcher;
 
-pub use activity::{ActivityModalView, draw_activity_modal};
 #[allow(unused_imports)]
 pub use crate::views::settings::{
     ConfigCategory, ConfigFocus, ConfigViewProps, build_websearch_provider_dropdown,
     build_websearch_reader_dropdown, draw_settings_view,
 };
+pub use activity::{ActivityModalView, draw_activity_modal};
 pub use dashboard::{
     ConsoleCommand, ConsoleLine, ConsoleVerb, DashboardFocus, creation_order, draw_dashboard,
     draw_session_preview, parse_console_command,

@@ -41,14 +41,6 @@ pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::*;
-#[allow(unused_imports)]
-pub use crate::views::settings::*;
-use crate::view_header;
-#[allow(unused_imports)]
-pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, SettingsHead, ViewHeader, ViewHints, ViewKind, draw_runner_footer,
-    draw_view_header, draw_view_header_hints,
-};
 pub use crate::primitives::recess_backdrop;
 use crate::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};
 #[cfg(test)]
@@ -57,6 +49,14 @@ use crate::text_layout::WrappedLine;
 use crate::text_layout::{block_selection_range, line_selection};
 #[allow(unused_imports)]
 pub use crate::theme::{COLOR_SCHEMES, Theme};
+use crate::view_header;
+#[allow(unused_imports)]
+pub(crate) use crate::view_header::{
+    AsidesChip, BtwHead, SessionHead, SettingsHead, ViewHeader, ViewHints, ViewKind,
+    draw_runner_footer, draw_view_header, draw_view_header_hints,
+};
+#[allow(unused_imports)]
+pub use crate::views::settings::*;
 #[cfg(test)]
 use mutx_engine::text::{prohibited_line_end, prohibited_line_start};
 // Re-export the drawing sub-trees so consumers that used to reach them through

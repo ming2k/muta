@@ -101,5 +101,4 @@ mod tests {
             "system prompt must be byte-stable across assemblies"
         );
     }
-
 }

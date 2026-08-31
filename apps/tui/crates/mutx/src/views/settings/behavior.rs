@@ -53,7 +53,11 @@ pub(super) fn draw_behavior_detail(
             Span::styled("Click-Outside Dismiss", row_style),
             Span::raw("  "),
             Span::styled(
-                if is_dismiss { "[ Enabled ]" } else { "[ Disabled ]" },
+                if is_dismiss {
+                    "[ Enabled ]"
+                } else {
+                    "[ Disabled ]"
+                },
                 Style::default()
                     .fg(props.theme.brand())
                     .add_modifier(Modifier::BOLD),

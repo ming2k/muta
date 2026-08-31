@@ -187,7 +187,10 @@ mod tests {
 
     #[async_trait]
     impl Provider for MockProvider {
-        async fn chat(&self, _req: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+        async fn chat(
+            &self,
+            _req: ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, String> {
             match &self.response {
                 Ok(content) => Ok(muta_contracts::ProviderCompletion::message(Message::new(
                     Role::Assistant,
@@ -287,7 +290,10 @@ mod tests {
 
         #[async_trait]
         impl Provider for CapturingProvider {
-            async fn chat(&self, request: ModelRequest) -> Result<muta_contracts::ProviderCompletion, String> {
+            async fn chat(
+                &self,
+                request: ModelRequest,
+            ) -> Result<muta_contracts::ProviderCompletion, String> {
                 if let Some(last) = request.messages.last() {
                     *self.last_user_prompt.lock().unwrap() = last.content.clone();
                 }

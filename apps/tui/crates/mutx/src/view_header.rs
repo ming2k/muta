@@ -355,12 +355,7 @@ pub(crate) fn draw_view_header_hints(
         let pad_len = (rect.width as usize).saturating_sub(left_len + right_len);
         let pad = " ".repeat(pad_len);
 
-        let line = Line::from(vec![
-            left,
-            Span::raw(pad),
-            right_key,
-            right_pad,
-        ]);
+        let line = Line::from(vec![left, Span::raw(pad), right_key, right_pad]);
         frame.render_widget(Paragraph::new(line).style(fill), rect);
         return;
     }
@@ -408,7 +403,14 @@ pub(crate) fn draw_view_header_hints(
             let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
             let pairs_width: usize = chosen
                 .iter()
-                .map(|(key, label)| key.width() + if label.is_empty() { 0 } else { 1 + label.width() })
+                .map(|(key, label)| {
+                    key.width()
+                        + if label.is_empty() {
+                            0
+                        } else {
+                            1 + label.width()
+                        }
+                })
                 .sum();
             let needed =
                 note_width + pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
@@ -423,7 +425,14 @@ pub(crate) fn draw_view_header_hints(
     let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
     let pairs_width: usize = chosen
         .iter()
-        .map(|(key, label)| key.width() + if label.is_empty() { 0 } else { 1 + label.width() })
+        .map(|(key, label)| {
+            key.width()
+                + if label.is_empty() {
+                    0
+                } else {
+                    1 + label.width()
+                }
+        })
         .sum();
     let gaps =
         ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };

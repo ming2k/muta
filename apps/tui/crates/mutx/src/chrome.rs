@@ -1325,8 +1325,10 @@ pub fn draw_queue_bar(
         .add_modifier(Modifier::BOLD);
 
     // Left: `FOLLOW-UPS N [blocked]`
-    let mut left: Vec<Span<'static>> =
-        vec![Span::styled("FOLLOW-UPS", tag_style), Span::styled(" ", dim)];
+    let mut left: Vec<Span<'static>> = vec![
+        Span::styled("FOLLOW-UPS", tag_style),
+        Span::styled(" ", dim),
+    ];
     let count_label = if count > 99 {
         "99+".to_string()
     } else {
@@ -2703,7 +2705,11 @@ mod tests {
 
         // (1) The tag leads at the gutter, brand-colored.
         assert_eq!(cells[0].symbol(), "F", "expected 'FOLLOW-UPS' tag at col 0");
-        assert_eq!(cells[0].fg(), theme.brand(), "FOLLOW-UPS tag not brand-colored");
+        assert_eq!(
+            cells[0].fg(),
+            theme.brand(),
+            "FOLLOW-UPS tag not brand-colored"
+        );
 
         // (2) The bar sits on the plain surface: no raised tint anywhere
         // (sample the row's trailing cell too).

@@ -51,8 +51,10 @@ pub fn build_websearch_provider_dropdown(
                 _ => DropdownIndicator::Ready,
             };
 
-            let description = if let Some(preset) =
-                conn.preset_id.as_deref().and_then(muta_contracts::WebSearchPresets::find)
+            let description = if let Some(preset) = conn
+                .preset_id
+                .as_deref()
+                .and_then(muta_contracts::WebSearchPresets::find)
             {
                 preset.description.to_string()
             } else if let Some(url) = &conn.base_url {
@@ -61,13 +63,9 @@ pub fn build_websearch_provider_dropdown(
                 format!("Connection: {}", conn.id)
             };
 
-            let mut item = DropdownItem::new(
-                conn.id.clone(),
-                conn.display_name(),
-                conn.id.clone(),
-            )
-            .with_description(description)
-            .with_indicator(indicator);
+            let mut item = DropdownItem::new(conn.id.clone(), conn.display_name(), conn.id.clone())
+                .with_description(description)
+                .with_indicator(indicator);
 
             if let Some(b) = badge {
                 item = item.with_badge(b);
@@ -127,9 +125,13 @@ pub fn build_websearch_provider_dropdown(
     );
 
     items.push(
-        DropdownItem::new("add_new", "＋ Add Search Connection...", "add_new".to_string())
-            .with_description("Declare a new search connection from preset or custom URL")
-            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new(
+            "add_new",
+            "＋ Add Search Connection...",
+            "add_new".to_string(),
+        )
+        .with_description("Declare a new search connection from preset or custom URL")
+        .with_indicator(DropdownIndicator::Ready),
     );
 
     let mut state = DropdownState::new(Some("Select Web Search Connection"), items)
@@ -154,8 +156,10 @@ pub fn build_websearch_reader_dropdown(
             let is_custom = conn.preset_id.is_none();
             let badge = if is_custom { Some("Custom") } else { None };
 
-            let description = if let Some(preset) =
-                conn.preset_id.as_deref().and_then(muta_contracts::WebReaderPresets::find)
+            let description = if let Some(preset) = conn
+                .preset_id
+                .as_deref()
+                .and_then(muta_contracts::WebReaderPresets::find)
             {
                 preset.description.to_string()
             } else if let Some(url) = &conn.base_url {
@@ -164,13 +168,9 @@ pub fn build_websearch_reader_dropdown(
                 format!("Reader: {}", conn.id)
             };
 
-            let mut item = DropdownItem::new(
-                conn.id.clone(),
-                conn.display_name(),
-                conn.id.clone(),
-            )
-            .with_description(description)
-            .with_indicator(DropdownIndicator::Ready);
+            let mut item = DropdownItem::new(conn.id.clone(), conn.display_name(), conn.id.clone())
+                .with_description(description)
+                .with_indicator(DropdownIndicator::Ready);
 
             if let Some(b) = badge {
                 item = item.with_badge(b);
@@ -186,19 +186,25 @@ pub fn build_websearch_reader_dropdown(
     );
 
     items.push(
-        DropdownItem::new("add_new", "＋ Add Reader Connection...", "add_new".to_string())
-            .with_description("Declare a new reader connection from preset or custom URL")
-            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new(
+            "add_new",
+            "＋ Add Reader Connection...",
+            "add_new".to_string(),
+        )
+        .with_description("Declare a new reader connection from preset or custom URL")
+        .with_indicator(DropdownIndicator::Ready),
     );
 
-    let mut state = DropdownState::new(Some("Select Web Fetch Reader"), items)
-        .with_context("websearch_reader");
+    let mut state =
+        DropdownState::new(Some("Select Web Fetch Reader"), items).with_context("websearch_reader");
     state.select_by_id(current);
     state
 }
 
 /// Build a floating dropdown picker to choose a preset when adding a connection.
-pub fn build_add_web_connection_dropdown(segment: usize) -> crate::components::dropdown::DropdownState<String> {
+pub fn build_add_web_connection_dropdown(
+    segment: usize,
+) -> crate::components::dropdown::DropdownState<String> {
     use crate::components::dropdown::{DropdownIndicator, DropdownItem, DropdownState};
 
     let items = if segment == 0 {
@@ -219,14 +225,22 @@ pub fn build_add_web_connection_dropdown(segment: usize) -> crate::components::d
                 .with_description("Self-hosted meta-search engine JSON endpoint")
                 .with_badge("Search")
                 .with_indicator(DropdownIndicator::Ready),
-            DropdownItem::new("parallel", "Parallel Search (Hosted MCP)", "parallel".to_string())
-                .with_description("Hosted MCP Search · Keyless anonymous or API key")
-                .with_badge("Search")
-                .with_indicator(DropdownIndicator::Ready),
-            DropdownItem::new("custom-search", "Custom Search Relay", "custom-search".to_string())
-                .with_description("Custom search endpoint (REST / JSON API)")
-                .with_badge("Custom")
-                .with_indicator(DropdownIndicator::Ready),
+            DropdownItem::new(
+                "parallel",
+                "Parallel Search (Hosted MCP)",
+                "parallel".to_string(),
+            )
+            .with_description("Hosted MCP Search · Keyless anonymous or API key")
+            .with_badge("Search")
+            .with_indicator(DropdownIndicator::Ready),
+            DropdownItem::new(
+                "custom-search",
+                "Custom Search Relay",
+                "custom-search".to_string(),
+            )
+            .with_description("Custom search endpoint (REST / JSON API)")
+            .with_badge("Custom")
+            .with_indicator(DropdownIndicator::Ready),
         ]
     } else {
         vec![
@@ -238,10 +252,14 @@ pub fn build_add_web_connection_dropdown(segment: usize) -> crate::components::d
                 .with_description("Hosted or self-hosted web scraping engine")
                 .with_badge("Reader")
                 .with_indicator(DropdownIndicator::Ready),
-            DropdownItem::new("custom-reader", "Custom Web Reader", "custom-reader".to_string())
-                .with_description("Custom reader / crawler endpoint (e.g. Firecrawl / Crawl4AI)")
-                .with_badge("Custom")
-                .with_indicator(DropdownIndicator::Ready),
+            DropdownItem::new(
+                "custom-reader",
+                "Custom Web Reader",
+                "custom-reader".to_string(),
+            )
+            .with_description("Custom reader / crawler endpoint (e.g. Firecrawl / Crawl4AI)")
+            .with_badge("Custom")
+            .with_indicator(DropdownIndicator::Ready),
         ]
     };
 
@@ -309,10 +327,7 @@ pub(super) fn draw_websearch_detail(
         Span::styled(" ", Style::default().bg(props.theme.surface())),
         Span::styled(" [ Reader ] ", reader_tab_style),
         Span::styled("   ", Style::default().bg(props.theme.surface())),
-        Span::styled(
-            " [←/→ switch tab]",
-            Style::default().fg(props.theme.dim()),
-        ),
+        Span::styled(" [←/→ switch tab]", Style::default().fg(props.theme.dim())),
     ]));
     lines.push(Line::from(""));
 
@@ -470,8 +485,8 @@ pub(super) fn draw_websearch_detail(
             }
             let cursor = if is_sel { "›" } else { " " };
 
-            let is_active = ws.provider == conn.id
-                || ws.provider == conn.preset_id.as_deref().unwrap_or("");
+            let is_active =
+                ws.provider == conn.id || ws.provider == conn.preset_id.as_deref().unwrap_or("");
             let status_mark = if is_active { "●" } else { "○" };
             let tag = if is_active { " [Active]" } else { "" };
 
@@ -687,8 +702,8 @@ pub(super) fn draw_websearch_detail(
                 }
                 let cursor = if is_sel { "›" } else { " " };
 
-                let is_active = ws.reader == conn.id
-                    || ws.reader == conn.preset_id.as_deref().unwrap_or("");
+                let is_active =
+                    ws.reader == conn.id || ws.reader == conn.preset_id.as_deref().unwrap_or("");
                 let status_mark = if is_active { "●" } else { "○" };
                 let tag = if is_active { " [Active]" } else { "" };
 
@@ -701,7 +716,7 @@ pub(super) fn draw_websearch_detail(
                     Style::default()
                         .fg(props.theme.brand())
                         .add_modifier(Modifier::BOLD)
-                    } else {
+                } else {
                     Style::default()
                         .fg(props.theme.fg())
                         .add_modifier(Modifier::BOLD)
