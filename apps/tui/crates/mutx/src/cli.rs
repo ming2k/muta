@@ -68,13 +68,6 @@ pub struct CliArgs {
     /// `--remote <addr>` / `--token <token>`: daemon endpoint override.
     pub remote: Option<String>,
     pub token: Option<String>,
-    /// `--home <dir>`: instance root, equivalent to `MUTA_HOME`.
-    pub home: Option<PathBuf>,
-    /// Per-category path overrides, equivalent to the matching `MUTA_*_DIR`.
-    pub config_dir: Option<PathBuf>,
-    pub data_dir: Option<PathBuf>,
-    pub state_dir: Option<PathBuf>,
-    pub cache_dir: Option<PathBuf>,
 }
 
 struct Spec {
@@ -167,11 +160,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut version = false;
     let mut remote = None;
     let mut token = None;
-    let mut home = None;
-    let mut config_dir = None;
-    let mut data_dir = None;
-    let mut state_dir = None;
-    let mut cache_dir = None;
     let mut rest = Vec::new();
 
     let mut iter = args.iter().peekable();
@@ -182,23 +170,16 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 project = Some(PathBuf::from(flag_value("--project", inline, &mut iter)?));
             }
             "--home" => {
-                home = Some(PathBuf::from(flag_value("--home", inline, &mut iter)?));
+                return Err(
+                    "--home was removed: set the MUTA_HOME environment variable instead (e.g. MUTA_HOME=/tmp/dev)"
+                        .into(),
+                );
             }
-            "--config-dir" => {
-                config_dir = Some(PathBuf::from(flag_value(
-                    "--config-dir",
-                    inline,
-                    &mut iter,
-                )?));
-            }
-            "--data-dir" => {
-                data_dir = Some(PathBuf::from(flag_value("--data-dir", inline, &mut iter)?));
-            }
-            "--state-dir" => {
-                state_dir = Some(PathBuf::from(flag_value("--state-dir", inline, &mut iter)?));
-            }
-            "--cache-dir" => {
-                cache_dir = Some(PathBuf::from(flag_value("--cache-dir", inline, &mut iter)?));
+            "--config-dir" | "--data-dir" | "--state-dir" | "--cache-dir" => {
+                return Err(
+                    format!("{name} was removed: use matching MUTA_*_DIR environment variables instead")
+                        .into(),
+                );
             }
             "--delegate" | "--auto" | "--yolo" | "-y" | "--autopilot" => delegated = true,
             "--interactive" | "-i" => interactive = true,
@@ -239,11 +220,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         json,
         remote: remote.clone(),
         token: token.clone(),
-        home: home.clone(),
-        config_dir: config_dir.clone(),
-        data_dir: data_dir.clone(),
-        state_dir: state_dir.clone(),
-        cache_dir: cache_dir.clone(),
     };
     let ok = |mode| Ok(base(mode));
 
@@ -418,11 +394,13 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -j, --json             emit structured JSON where supported\n");
             out.push_str("  --delegate, --auto, -y run in delegated autonomous mode (auto-approving permissions)\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
-            out.push_str("      --home <dir>       use an instance rooted at <dir>/muta\n");
             out.push_str("      --remote <addr>    connect to a remote Muta daemon\n");
             out.push_str("      --token <token>    bearer token for daemon connection\n");
             out.push_str("  -h, --help             print help ('mutx help <command>' for more)\n");
             out.push_str("  -V, --version          print the version and exit\n");
+            out.push_str("\nEnvironment:\n");
+            out.push_str("  MUTA_HOME              instance root for isolated execution (<dir>/muta)\n");
+            out.push_str("  MUTA_PORT              override default daemon TCP port (default: 9800)\n");
             out.push_str("\nWith no command, mutx opens a fresh interactive session.\n");
             out.push_str("It checks the Muta daemon first and starts `muta` when needed.\n");
             out.push_str("Daemon and service administration remains under the `muta` command.\n");
@@ -465,7 +443,7 @@ pub fn completion_script(shell: Shell) -> String {
              \x20   local cur\n\
              \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
              \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-             \x20       COMPREPLY=($(compgen -W \"{commands} --project --home --remote --token --prompt -p --interactive -i --json -j --delegate --auto --yolo -y --autopilot --help --version\" -- \"$cur\"))\n\
+             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --delegate --auto --yolo -y --autopilot --help --version\" -- \"$cur\"))\n\
              \x20   fi\n\
              }}\n\
              complete -F _mutx mutx\n"
@@ -484,8 +462,7 @@ pub fn completion_script(shell: Shell) -> String {
         Shell::Fish => format!(
             "# fish completion for mutx\n\
              set -l cmds {commands}\n\
-             complete -c mutx -n '__fish_use_subcommand' -f -a \"$cmds\"\n\
-             complete -c mutx -l home -d 'separate Muta instance root' -r\n"
+             complete -c mutx -n '__fish_use_subcommand' -f -a \"$cmds\"\n"
         ),
     }
 }
@@ -529,13 +506,15 @@ mod tests {
     }
 
     #[test]
-    fn positional_prompt_and_path_overrides_are_preserved() {
-        let parsed = parse(&["--home", "/tmp/muta-test", "fix", "the", "build"]).unwrap();
+    fn home_flag_is_rejected_with_env_guidance() {
+        let err = parse(&["--home", "/tmp/muta-test"]).unwrap_err();
+        assert!(err.contains("MUTA_HOME"), "{err}");
+    }
+
+    #[test]
+    fn positional_prompt_is_preserved() {
+        let parsed = parse(&["fix", "the", "build"]).unwrap();
         assert!(matches!(parsed.mode, Mode::Fresh));
         assert_eq!(parsed.prompt.as_deref(), Some("fix the build"));
-        assert_eq!(
-            parsed.home.as_deref(),
-            Some(std::path::Path::new("/tmp/muta-test"))
-        );
     }
 }

@@ -36,14 +36,8 @@ pub mod response;
 pub struct OpenAiChatCompletionsProvider {
     pub endpoint: Endpoint,
     pub reasoning_effort: Option<Effort>,
-    /// Optional session-scoped prompt-cache key (Moonshot / Kimi). Set once per
-    /// session via [`with_prompt_cache_key`](Self::with_prompt_cache_key); when
-    /// present, every request carries `prompt_cache_key` so the server-side
-    /// cache namespaces per session and repeated prefixes hit at a discount.
-    /// Resolved from the model's [`muta_contracts::CachePolicy`] by the registry.
-    pub prompt_cache_key: Option<String>,
-    /// Cache controls already validated against the concrete catalog route.
-    pub cache_plan: muta_contracts::ResolvedCachePlan,
+    /// Route-scoped prompt-cache capabilities, defaults, and affinity.
+    pub prompt_cache: crate::PromptCacheConfig,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: muta_contracts::ModelCapabilities,
@@ -53,7 +47,7 @@ pub struct OpenAiChatCompletionsProvider {
     /// speak the chat-completions surface (the GPT-4o family and Copilot Free
     /// accounts, which do not have Responses-API access). Mirrors the same flag
     /// on [`OpenAiResponsesProvider`](crate::OpenAiResponsesProvider).
-    pub copilot: bool,
+    pub dialect: muta_contracts::OpenAiChatDialect,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
 }
@@ -79,10 +73,9 @@ impl OpenAiChatCompletionsProvider {
                 .with_user_agent(user_agent),
             client: Client::new(),
             reasoning_effort: None,
-            prompt_cache_key: None,
-            cache_plan: muta_contracts::ResolvedCachePlan::Unsupported,
+            prompt_cache: crate::PromptCacheConfig::default(),
             capabilities,
-            copilot: false,
+            dialect: muta_contracts::OpenAiChatDialect::Standard,
         }
     }
 
@@ -99,10 +92,9 @@ impl OpenAiChatCompletionsProvider {
                 .with_user_agent(user_agent),
             client: Client::new(),
             reasoning_effort: None,
-            prompt_cache_key: None,
-            cache_plan: muta_contracts::ResolvedCachePlan::Unsupported,
+            prompt_cache: crate::PromptCacheConfig::default(),
             capabilities,
-            copilot: false,
+            dialect: muta_contracts::OpenAiChatDialect::Standard,
         }
     }
 
@@ -120,14 +112,8 @@ impl OpenAiChatCompletionsProvider {
         self
     }
 
-    /// Set the route-approved prompt-cache routing key.
-    pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
-        self.prompt_cache_key = key;
-        self
-    }
-
-    pub fn with_cache_plan(mut self, plan: muta_contracts::ResolvedCachePlan) -> Self {
-        self.cache_plan = plan;
+    pub fn with_prompt_cache(mut self, prompt_cache: crate::PromptCacheConfig) -> Self {
+        self.prompt_cache = prompt_cache;
         self
     }
 
@@ -140,9 +126,8 @@ impl OpenAiChatCompletionsProvider {
         self
     }
 
-    /// Flip on Copilot-mode request headers (see [`Self::copilot`]).
-    pub fn with_copilot(mut self, copilot: bool) -> Self {
-        self.copilot = copilot;
+    pub fn with_dialect(mut self, dialect: muta_contracts::OpenAiChatDialect) -> Self {
+        self.dialect = dialect;
         self
     }
 
@@ -152,7 +137,11 @@ impl OpenAiChatCompletionsProvider {
     /// surfacing the right name in errors ("Copilot HTTP 400" vs "OpenAI HTTP
     /// 400") is essential for diagnosing which backend rejected a request.
     fn label(&self) -> &'static str {
-        if self.copilot { "Copilot" } else { "OpenAI" }
+        if self.dialect == muta_contracts::OpenAiChatDialect::Copilot {
+            "Copilot"
+        } else {
+            "OpenAI"
+        }
     }
 
     /// Apply the per-request auth + user-agent headers to a request builder.
@@ -167,11 +156,12 @@ impl OpenAiChatCompletionsProvider {
             .post(self.endpoint.base_url())
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
-        for (name, value) in request::headers(auth.token.expose_secret(), self.copilot) {
+        let copilot = self.dialect == muta_contracts::OpenAiChatDialect::Copilot;
+        for (name, value) in request::headers(auth.token.expose_secret(), copilot) {
             req = req.header(name, value);
         }
         for (name, value) in self.endpoint.client_identity().headers() {
-            if !self.copilot
+            if !copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()
                     .any(|(k, _)| *k == name)
@@ -258,6 +248,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         &self,
         request: ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, String> {
+        let cache_plan = self.prompt_cache.resolve(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -266,8 +257,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 stream: false,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
-                prompt_cache_key: self.prompt_cache_key.as_deref(),
-                cache_plan: &self.cache_plan,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
@@ -310,6 +300,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        let cache_plan = self.prompt_cache.resolve(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -318,8 +309,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 stream: true,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
-                prompt_cache_key: self.prompt_cache_key.as_deref(),
-                cache_plan: &self.cache_plan,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
@@ -338,6 +328,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        let cache_plan = self.prompt_cache.resolve(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -346,8 +337,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 stream: true,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
-                prompt_cache_key: self.prompt_cache_key.as_deref(),
-                cache_plan: &self.cache_plan,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
         );
@@ -466,7 +456,6 @@ mod tests {
                 stream: false,
                 tool_specs: Some(&tool_specs),
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         )

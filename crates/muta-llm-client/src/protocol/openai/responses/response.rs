@@ -30,7 +30,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let prompt = input;
     let completion = output.or_else(|| total.zip(prompt).map(|(t, p)| (t - p).max(0)));
     // Route cache-read accounting through the shared helper so the cache
-    // policy is enforced in one place (ADR-0067). The Responses API hides the
+    // policy is enforced in one place (ADR-0161). The Responses API hides the
     // discount in `input_tokens_details.cached_tokens`, which the helper reads.
     let cache = muta_contracts::read_prompt_cache_usage(usage);
     match (prompt, completion, total) {
@@ -40,6 +40,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: total.unwrap_or(p + c),
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: 0,
@@ -47,6 +48,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: t,
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
     }
 }
@@ -371,12 +373,13 @@ mod tests {
         );
         assert_eq!(ev.len(), 1);
         match &ev[0] {
-            ProviderStreamEvent::Usage(u) => {
+            ProviderStreamEvent::Completed(meta) => {
+                let u = meta.usage.expect("usage attached to completed event");
                 assert_eq!(u.prompt_tokens, 12);
                 assert_eq!(u.completion_tokens, 7);
                 assert_eq!(u.total_tokens, 19);
             }
-            _ => panic!("expected usage"),
+            _ => panic!("expected completed with usage"),
         }
     }
 

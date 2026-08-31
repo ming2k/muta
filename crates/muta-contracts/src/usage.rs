@@ -29,4 +29,9 @@ pub struct TokenUsage {
     /// discount by Anthropic; surfaced as `cached_tokens` /
     /// `cachedContentTokenCount` by the auto-caching providers).
     pub cache_read_input_tokens: i64,
+    /// Provider-reported input tokens that missed the prompt cache. This is a
+    /// provider-specific diagnostic breakout and is already included in
+    /// `prompt_tokens` when the upstream reports it.
+    #[serde(default)]
+    pub cache_miss_input_tokens: i64,
 }

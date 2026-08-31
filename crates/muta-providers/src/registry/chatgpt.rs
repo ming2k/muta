@@ -2,7 +2,7 @@
 //! subscription backend (the Codex Responses API).
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -31,7 +31,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -42,7 +42,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -53,7 +53,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -69,7 +69,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -80,7 +80,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -91,7 +91,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -102,7 +102,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -111,7 +111,7 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
+    prompt_cache: super::unsupported_prompt_cache,
     id: "chatgpt-oauth",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
@@ -120,7 +120,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
     // for each account and its capability metadata is trusted.
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     models: CHATGPT_BUILTIN_MODELS,
     discovery: true,
     fitting: true,

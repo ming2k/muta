@@ -12,13 +12,12 @@ native defaults are used when they are absent.
 
 | # | Source | Notes |
 |---|--------|-------|
-| 1 | `--home <dir>` | Instance root (ADR-0121): the CLI form of the `MUTA_HOME` selector; wins over the env var |
-| 2 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
-| 3 | `MUTA_HOME` | Instance root (ADR-0121): `<dir>/muta/{config,data,state,cache}` + `<dir>/muta/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
-| 4 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
-| 5 | Native per-OS default | `directories` crate: XDG defaults on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` / `%LOCALAPPDATA%` on Windows |
-| 6 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Unix-only last-resort default when native resolution is unavailable |
-| 7 | Current working directory | Last resort; never panics |
+| 1 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
+| 2 | `MUTA_HOME` | Instance root (ADR-0121): `<dir>/muta/{config,data,state,cache}` + `<dir>/muta/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
+| 3 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
+| 4 | Native per-OS default | `directories` crate: XDG defaults on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` / `%LOCALAPPDATA%` on Windows |
+| 5 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Unix-only last-resort default when native resolution is unavailable |
+| 6 | Current working directory | Last resort; never panics |
 
 All four categories honour the same stack — no per-subsystem special cases.
 The instance root sits *below* the per-category variables (specific beats
@@ -26,7 +25,7 @@ general) and *above* the `XDG_*` layer, so one sandbox switch wins over the
 ambient desktop environment.
 
 The daemon runtime files resolve through the same idea, terminated by
-[`instance_dir`]: `--home`/`MUTA_HOME` (`<dir>/muta/instance`) >
+[`instance_dir`]: `MUTA_HOME` (`<dir>/muta/instance`) >
 `$XDG_RUNTIME_DIR/muta` > the native fallback (data on Unix,
 `%LOCALAPPDATA%\muta\state\instance` on Windows). `MUTA_PORT` is the
 port-layer sibling: it overrides the well-known 9800 default (an explicit
@@ -189,7 +188,7 @@ Windows or macOS.
 
 ## Isolated instances (development and testing)
 
-`--home <dir>` (or `MUTA_HOME=<dir>`) gives both Muta command surfaces a fully separate
+`MUTA_HOME=<dir>` gives both Muta command surfaces a fully separate
 footprint: config, credentials, sessions, skills, logs, the daemon's native
 endpoint/lock/discovery record, and (via `MUTA_PORT`) the default TCP port.
 A sandboxed client spawns its on-demand daemon with the inherited
@@ -198,10 +197,10 @@ installation's daemon and data are never touched.
 
 | Purpose | Command |
 |---------|---------|
-| Run one terminal command isolated | `mutx --home /tmp/x <args>` |
+| Run one terminal command isolated | `MUTA_HOME=/tmp/x mutx <args>` |
 | Isolate a whole shell / CI step | `export MUTA_HOME=/tmp/x MUTA_PORT=9801` |
-| Run the test suites isolated | `export MUTA_HOME=$(mktemp -d)` then `cargo test` |
-| Confirm which instance a client sees | `muta --home /tmp/x daemon status --diagnostic` |
+| Run the test suites isolated | `export MUTA_HOME=$(mktemp -d)` then `cargo nextest run` |
+| Confirm which instance a client sees | `MUTA_HOME=/tmp/x muta daemon status --diagnostic` |
 
 See [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md)
 for the decision record.

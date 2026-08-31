@@ -4,7 +4,7 @@
 //! consults.
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -63,7 +63,7 @@ pub const MODELS: &[Model] = &[
     // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
     // Served over the Anthropic Messages wire format. Relays forward to
     // Anthropic's own `/messages` surface, so these carry
-    // `WireFormat::AnthropicCompat`.
+    // `WireProtocol::AnthropicMessages`.
     Model {
         id: "claude-opus-4-8",
         family: "claude",
@@ -71,7 +71,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::AnthropicAdaptive,
         tool_call: true,
         vision: true,
-        format: WireFormat::AnthropicCompat,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Opus 4.8 honors the full effort range including `xhigh`/`max`.
         effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
@@ -83,7 +83,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::AnthropicAdaptive,
         tool_call: true,
         vision: true,
-        format: WireFormat::AnthropicCompat,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
         effort_levels: muta_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
@@ -100,7 +100,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::AnthropicAdaptiveAlwaysOn,
         tool_call: true,
         vision: true,
-        format: WireFormat::AnthropicCompat,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Fable 5 honors the full effort range including `xhigh`/`max`.
         effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
@@ -117,7 +117,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::AnthropicAdaptiveOnByDefault,
         tool_call: true,
         vision: true,
-        format: WireFormat::AnthropicCompat,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Sonnet 5 honors the full range INCLUDING `xhigh` — the key difference
         // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
@@ -133,7 +133,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::AnthropicManual,
         tool_call: true,
         vision: true,
-        format: WireFormat::AnthropicCompat,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -141,29 +141,35 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec {
-        activations: &[
-            muta_contracts::CacheActivation::Automatic,
-            muta_contracts::CacheActivation::ExplicitBreakpoints,
+fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
+    muta_contracts::PromptCacheSpec {
+        modes: &[
+            muta_contracts::PromptCacheMode::Automatic,
+            muta_contracts::PromptCacheMode::Explicit,
         ],
-        supported_ttls: &[
-            muta_contracts::CacheTtl::FiveMinutes,
-            muta_contracts::CacheTtl::OneHour,
+        default_mode: Some(muta_contracts::PromptCacheMode::Automatic),
+        supported_retentions: &[
+            muta_contracts::CacheRetention::FiveMinutes,
+            muta_contracts::CacheRetention::OneHour,
         ],
-        default_ttl: Some(muta_contracts::CacheTtl::FiveMinutes),
+        default_retention: Some(muta_contracts::CacheRetention::FiveMinutes),
         disable_supported: true,
+        routing_key_supported: false,
         max_breakpoints: Some(4),
         min_cacheable_tokens: None,
         reports_reads: true,
         reports_writes: true,
         reports_misses: false,
-    },
+    }
+}
+
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: prompt_cache_for_model,
     id: "anthropic",
     baselines: MODELS,
     base_url: "https://api.anthropic.com/v1/messages",
     user_agent: None,
-    protocol: "anthropic",
+    protocol: WireProtocol::AnthropicMessages,
     models: ANTHROPIC_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

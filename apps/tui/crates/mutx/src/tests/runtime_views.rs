@@ -403,3 +403,43 @@ async fn console_kill_arm_cancels_on_selection_move() {
     assert!(app.host_kill_confirm.is_some(), "re-arm, not fire");
     assert_eq!(app.host_console_log.len(), 2, "no kill dispatched yet");
 }
+
+#[test]
+fn websearch_provider_dropdown_builds_and_selects() {
+    let ws = muta_contracts::WebSearchConfigView {
+        provider: "exa".to_string(),
+        reader: "jina".to_string(),
+        proxy: None,
+        timeout_secs: 20,
+        searxng_url: None,
+        exa_api_key_set: true,
+        parallel_api_key_set: false,
+        tavily_api_key_set: true,
+        bocha_api_key_set: false,
+        jina_api_key_set: false,
+    };
+    let dropdown = crate::overlays::build_websearch_provider_dropdown("tavily", Some(&ws));
+    assert_eq!(dropdown.context.as_deref(), Some("websearch_provider"));
+    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("tavily"));
+    assert_eq!(dropdown.items.len(), 7);
+}
+
+#[test]
+fn websearch_reader_dropdown_builds_and_selects() {
+    let ws = muta_contracts::WebSearchConfigView {
+        provider: "exa".to_string(),
+        reader: "builtin".to_string(),
+        proxy: None,
+        timeout_secs: 20,
+        searxng_url: None,
+        exa_api_key_set: false,
+        parallel_api_key_set: false,
+        tavily_api_key_set: false,
+        bocha_api_key_set: false,
+        jina_api_key_set: false,
+    };
+    let dropdown = crate::overlays::build_websearch_reader_dropdown("builtin", Some(&ws));
+    assert_eq!(dropdown.context.as_deref(), Some("websearch_reader"));
+    assert_eq!(dropdown.selected_payload().map(|s| s.as_str()), Some("builtin"));
+    assert_eq!(dropdown.items.len(), 3);
+}

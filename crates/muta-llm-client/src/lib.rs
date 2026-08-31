@@ -22,6 +22,7 @@
 pub mod client;
 pub mod endpoint;
 pub mod json;
+pub mod prompt_cache;
 pub mod protocol;
 pub mod sse;
 pub mod transport;
@@ -38,6 +39,7 @@ pub use transport::{decode_response_json, ensure_success, retry_after_ms, transp
 
 // Re-export the concrete provider types at the crate root for ergonomic access
 // and stable intra-doc links.
+pub use prompt_cache::PromptCacheConfig;
 pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ThinkingConfig, ThinkingMode};
 pub use protocol::google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
 pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvider};
@@ -57,7 +59,7 @@ pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvide
 mod test_baselines {
     use muta_contracts::model::BaselineModels;
     use muta_contracts::thinking::ThinkingSupport;
-    use muta_contracts::{Model, WireFormat};
+    use muta_contracts::{Model, WireProtocol};
 
     const CLAUDE_BASELINES: &[Model] = &[
         Model {
@@ -67,7 +69,7 @@ mod test_baselines {
             thinking: ThinkingSupport::AnthropicAdaptive,
             tool_call: true,
             vision: true,
-            format: WireFormat::AnthropicCompat,
+            protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
         },
@@ -78,7 +80,7 @@ mod test_baselines {
             thinking: ThinkingSupport::AnthropicAdaptive,
             tool_call: true,
             vision: true,
-            format: WireFormat::AnthropicCompat,
+            protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
         },
@@ -89,7 +91,7 @@ mod test_baselines {
             thinking: ThinkingSupport::AnthropicManual,
             tool_call: true,
             vision: true,
-            format: WireFormat::AnthropicCompat,
+            protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
             effort_levels: &[],
         },
@@ -103,7 +105,7 @@ mod test_baselines {
             thinking: ThinkingSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
-            format: WireFormat::OpenAi,
+            protocol: WireProtocol::OpenAiChatCompletions,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
         },
@@ -114,7 +116,7 @@ mod test_baselines {
             thinking: ThinkingSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
-            format: WireFormat::OpenAi,
+            protocol: WireProtocol::OpenAiChatCompletions,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
         },

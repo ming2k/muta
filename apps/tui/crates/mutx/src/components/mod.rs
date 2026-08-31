@@ -1,4 +1,5 @@
 pub(super) mod composer_hints;
+pub mod dropdown;
 pub(super) mod footer;
 pub(super) mod keycap;
 pub(super) mod list;
@@ -11,4 +12,5 @@ pub(super) mod row;
 pub(super) mod scroll;
 pub(super) mod selectable_body;
 pub(super) mod toast;
+pub(crate) mod secure_input;
 pub(crate) mod which_key;

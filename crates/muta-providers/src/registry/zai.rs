@@ -3,7 +3,7 @@
 
 use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::{OpenAiProviderSpec, ProviderPresetSpec};
 
@@ -41,7 +41,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_GLM_5,
     },
@@ -58,7 +58,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_GLM_5,
     },
@@ -69,7 +69,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_GLM_5,
     },
@@ -80,7 +80,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -91,7 +91,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -102,7 +102,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -113,7 +113,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -124,7 +124,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -133,12 +133,12 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
+    prompt_cache: super::unsupported_prompt_cache,
     id: "zai-code",
     baselines: MODELS,
     base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
     user_agent: Some(crate::ZCODE_USER_AGENT),
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     // Live-verified (2026-08): the coding endpoint serves GET /models and
     // returns the plan's current model ids (OpenAI list shape, ids only — no
     // capability metadata). Discovery intersects that live list against the

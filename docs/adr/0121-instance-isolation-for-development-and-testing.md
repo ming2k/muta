@@ -170,4 +170,4 @@ pre-0121 behaviour (the XDG runtime dir, then the data-dir fallback; port
 - ADR-0105 (one port, two protocols — the fixed 9800 default `NEENEE_PORT`
   now overrides)
 - `docs/reference/paths.md` (the updated precedence table)
-- `docs/dev/dev-and-test-isolation.md` (the contributor workflow)
+- `docs/dev/testing.md` (the test isolation & sandbox workflow)

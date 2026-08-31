@@ -9,6 +9,7 @@
 //!   ChatGPT subscription backend and the Copilot Responses channel
 //!   ([`OpenAiResponsesProvider`]).
 
+pub(crate) mod cache;
 pub mod chat_completions;
 pub mod responses;
 

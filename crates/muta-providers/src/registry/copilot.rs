@@ -2,7 +2,7 @@
 //! over OpenAI-compatible chat completions against `api.githubcopilot.com`.
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -25,7 +25,7 @@ pub const MODELS: &[Model] = &[Model {
     thinking: ThinkingSupport::None,
     tool_call: true,
     vision: true,
-    format: WireFormat::OpenAi,
+    protocol: WireProtocol::OpenAiChatCompletions,
     model_guidance: "",
     effort_levels: &[],
 }];
@@ -33,7 +33,7 @@ pub const MODELS: &[Model] = &[Model {
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
+    prompt_cache: super::unsupported_prompt_cache,
     id: "copilot-oauth",
     baselines: MODELS,
     base_url: "https://api.githubcopilot.com/chat/completions",
@@ -45,7 +45,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // unlocks GPT-5) without a hardcoded model list — every advertised id
     // the client registry does not know is fitted with its advertised
     // capability metadata, mirroring the kimi-code flow.
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     discovery: true,
     fitting: true,
     // Minimal seed: the id a fresh Copilot instance activates before the

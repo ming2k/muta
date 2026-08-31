@@ -315,6 +315,20 @@ mod tests {
             ),
             "Search \"ToolStep\" in src"
         );
+        assert_eq!(
+            summary(
+                "search_web",
+                serde_json::json!({"query": "rust async channels"})
+            ),
+            "Web search \"rust async channels\""
+        );
+        assert_eq!(
+            summary(
+                "fetch_url",
+                serde_json::json!({"url": "https://example.com"})
+            ),
+            "Fetch https://example.com"
+        );
     }
 
     #[test]

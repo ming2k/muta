@@ -16,19 +16,17 @@ struct WebSearchArgs {
 
 pub struct WebSearchTool {
     config: SharedWebSearchConfig,
-    chain: RwLock<Option<ChainCache>>,
+    provider: RwLock<Option<ProviderCache>>,
 }
 
-struct ChainCache {
+struct ProviderCache {
     sig: String,
-    primary: Box<dyn SearchProvider>,
-    fallback: Option<Box<dyn SearchProvider>>,
+    provider: Box<dyn SearchProvider>,
     client: Result<reqwest::Client, String>,
 }
 
-type ProviderChain = (
+type ProviderPair = (
     Box<dyn SearchProvider>,
-    Option<Box<dyn SearchProvider>>,
     reqwest::Client,
 );
 
@@ -44,49 +42,38 @@ impl WebSearchTool {
     pub fn with_shared_config(config: SharedWebSearchConfig) -> Self {
         Self {
             config,
-            chain: RwLock::new(None),
+            provider: RwLock::new(None),
         }
     }
 
-    pub(crate) fn current_chain(&self) -> Result<ProviderChain, String> {
+    pub(crate) fn current_provider(&self) -> Result<ProviderPair, String> {
         let snapshot = self.config.get();
         let sig = snapshot.signature();
         {
             let guard = self
-                .chain
+                .provider
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(cache) = guard.as_ref()
                 && cache.sig == sig
             {
                 return Ok((
-                    clone_provider(cache.primary.as_ref()),
-                    cache.fallback.as_deref().map(clone_provider),
+                    clone_provider(cache.provider.as_ref()),
                     cache.client.clone().map_err(|e| e.clone())?,
                 ));
             }
         }
-        let primary = crate::tools::search::build_provider(&snapshot, &snapshot.provider);
-        let fallback_name = snapshot.fallback.trim();
-        let fallback = if fallback_name.is_empty() {
-            None
-        } else {
-            Some(crate::tools::search::build_provider(
-                &snapshot,
-                fallback_name,
-            ))
-        };
+        let provider = crate::tools::search::build_provider(&snapshot, &snapshot.provider);
         let client = http_client(&snapshot);
         *self
-            .chain
+            .provider
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ChainCache {
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ProviderCache {
             sig,
-            primary: clone_provider(primary.as_ref()),
-            fallback: fallback.as_deref().map(clone_provider),
+            provider: clone_provider(provider.as_ref()),
             client: client.clone(),
         });
-        Ok((primary, fallback, client.map_err(|e| e.clone())?))
+        Ok((provider, client.map_err(|e| e.clone())?))
     }
 
     fn description_text() -> String {
@@ -152,34 +139,17 @@ impl Tool for WebSearchTool {
         let args: WebSearchArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let query = &args.query;
-        let (primary, fallback, client) = self.current_chain()?;
+        let (provider, client) = self.current_provider()?;
 
-        let output = match primary.search(&client, query).await {
-            Ok(output) => output,
-            Err(primary_err) => match &fallback {
-                Some(fallback) => match fallback.search(&client, query).await {
-                    Ok(output) => output,
-                    Err(fallback_err) => {
-                        return Err(format!(
-                            "Primary backend {} failed: {}\nFallback backend {} also failed: {}",
-                            primary.name(),
-                            primary_err,
-                            fallback.name(),
-                            fallback_err
-                        ));
-                    }
-                },
-                None => return Err(primary_err),
-            },
-        };
+        let output = provider.search(&client, query).await?;
         let body = match output {
             crate::tools::search::ProviderOutput::Results(results) => {
-                crate::tools::search::format_results(query, primary.name(), results)
+                crate::tools::search::format_results(query, provider.name(), results)
             }
             crate::tools::search::ProviderOutput::Blob(text) => {
                 format!(
                     "Search results for '{query}' (via {}):\n\n{text}",
-                    primary.name()
+                    provider.name()
                 )
             }
         };

@@ -2,18 +2,14 @@
 //! connections + presets + discovery cache, credential resolution, per-route
 //! reasoning, the fitted-model overlay, and live discovery.
 
-use super::derive::{
-    derive_channel, derive_entries, resolve_credential, route_models, transport_for_protocol,
-};
+use super::derive::{derive_channel, derive_entries, resolve_credential, route_models};
 use super::picker::channel_model_info;
 use super::{
     build_catalog, build_picker_state, discover_provider_models, sync_fitted_model_registry,
 };
 use muta_contracts::catalog::Transport;
-use muta_contracts::{Effort, RemoteModelEndpoint, ThinkingMode};
-use muta_persistence::config::{
-    Config, Credentials, DiscoveryCache, FittedModelInfo, UserTransport,
-};
+use muta_contracts::{Effort, OpenAiResponsesDialect, ThinkingMode, WireProtocol};
+use muta_persistence::config::{Config, Credentials, DiscoveryCache, FittedModelInfo};
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
 use muta_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
@@ -101,7 +97,7 @@ fn discovered_model_list_prefers_the_cache() {
 fn custom_instance_serves_its_declared_models() {
     let mut custom = instance("relay", None);
     custom.models = vec!["a".to_string(), "b".to_string()];
-    custom.transport = Some(UserTransport::OpenAi);
+    custom.protocol = Some(WireProtocol::OpenAiChatCompletions);
     custom.base_url = Some("https://relay.example.com/v1/chat/completions".to_string());
     assert_eq!(
         route_models(&custom, &DiscoveryCache::default()),
@@ -173,7 +169,10 @@ fn opencode_go_routes_models_by_wire_format() {
     // route_for_model agrees (the standalone resolver used by discovery).
     assert_eq!(
         route_for_model("opencode-go", "minimax-m3").map(|(p, b, _)| (p, b)),
-        Some(("anthropic", "https://opencode.ai/zen/go/v1/messages"))
+        Some((
+            WireProtocol::AnthropicMessages,
+            "https://opencode.ai/zen/go/v1/messages"
+        ))
     );
 }
 
@@ -289,7 +288,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         m.insert(
             "gpt-5".to_string(),
             muta_contracts::RemoteModelMetadata {
-                endpoint: Some(RemoteModelEndpoint::Responses),
+                protocol: Some(WireProtocol::OpenAiResponses),
                 ..Default::default()
             },
         );
@@ -311,7 +310,10 @@ fn copilot_route_uses_remote_endpoint_metadata() {
     assert!(
         matches!(
             &channel.transport,
-            Transport::OpenAiResponses { copilot: true, .. }
+            Transport::OpenAiResponses {
+                dialect: OpenAiResponsesDialect::Copilot,
+                ..
+            }
         ),
         "advertised Responses endpoint routes to the Responses transport"
     );
@@ -357,16 +359,17 @@ fn channel_model_info_effort_ladders_survive() {
             base_url: "https://cloudcode-pa.googleapis.com".to_string(),
             user_agent: "antigravity/1.23.2 windows/amd64".to_string(),
             effort: None,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential(""),
         model: "gemini-3.7-flash".to_string(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     let info = channel_model_info(&gemini37);
-    assert_eq!(info.protocol, "google");
+    assert_eq!(info.protocol, WireProtocol::GoogleGenerateContent.as_str());
     assert_eq!(info.effort.as_deref(), Some("high"));
     assert_eq!(info.thinking, None);
 }
@@ -472,20 +475,6 @@ fn sync_fitted_model_registry_overlays_fitted_ids() {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
-
-#[test]
-fn transport_for_protocol_maps_wire_labels() {
-    assert_eq!(
-        transport_for_protocol("anthropic"),
-        UserTransport::Anthropic
-    );
-    assert_eq!(transport_for_protocol("google"), UserTransport::Google);
-    assert_eq!(
-        transport_for_protocol("openai-responses"),
-        UserTransport::OpenAiResponses
-    );
-    assert_eq!(transport_for_protocol("openai"), UserTransport::OpenAi);
-}
 
 #[test]
 fn catalog_builds_from_the_state_store_only() {

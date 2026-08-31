@@ -46,6 +46,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
         total_tokens: prompt + c,
         cache_creation_input_tokens: cache_creation,
         cache_read_input_tokens: cache_read,
+        cache_miss_input_tokens: 0,
     })
 }
 
@@ -109,6 +110,7 @@ impl StreamUsage {
             total_tokens: prompt + completion,
             cache_creation_input_tokens: creation,
             cache_read_input_tokens: read,
+            cache_miss_input_tokens: 0,
         })
     }
 }
@@ -440,6 +442,7 @@ mod tests {
                 total_tokens: 526,
                 cache_creation_input_tokens: 100,
                 cache_read_input_tokens: 400,
+                cache_miss_input_tokens: 0,
             })]
         );
 
@@ -468,6 +471,7 @@ mod tests {
                 total_tokens: 537,
                 cache_creation_input_tokens: 100,
                 cache_read_input_tokens: 400,
+                cache_miss_input_tokens: 0,
             })]
         );
     }
@@ -496,6 +500,7 @@ mod tests {
                 total_tokens: 437,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 400,
+                cache_miss_input_tokens: 0,
             })]
         );
     }
@@ -519,6 +524,7 @@ mod tests {
                 total_tokens: 7,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
+                cache_miss_input_tokens: 0,
             })]
         );
     }

@@ -60,8 +60,6 @@ pub struct BodyInput<'a> {
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
-    /// Optional route-approved cache-affinity key.
-    pub prompt_cache_key: Option<&'a str>,
     /// Cache controls resolved against this exact provider route.
     pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
@@ -96,7 +94,6 @@ pub fn body_with_capabilities(
         stream,
         tool_specs,
         reasoning_effort,
-        prompt_cache_key,
         cache_plan,
     } = input;
 
@@ -222,35 +219,7 @@ pub fn body_with_capabilities(
     if let Some(specs) = tool_specs {
         body["tools"] = specs;
     }
-    if let Some(key) = prompt_cache_key
-        && !key.is_empty()
-    {
-        // Moonshot / Kimi: a session-scoped cache key namespaces the server-side
-        // prompt cache so repeated prefixes (system prompt + recent messages) hit
-        // across steps in a session. Relays that don't recognise the field
-        // ignore it harmlessly.
-        body["prompt_cache_key"] = json!(key);
-    }
-    if let muta_contracts::ResolvedCachePlan::Enabled { mode, ttl, .. } = cache_plan
-        && (*mode == muta_contracts::ResolvedCacheMode::ExplicitOnly || ttl.is_some())
-    {
-        let mode = match mode {
-            muta_contracts::ResolvedCacheMode::ExplicitOnly
-            | muta_contracts::ResolvedCacheMode::Explicit => "explicit",
-            muta_contracts::ResolvedCacheMode::Automatic
-            | muta_contracts::ResolvedCacheMode::Implicit => "implicit",
-        };
-        let mut options = json!({ "mode": mode });
-        if let Some(ttl) = ttl {
-            options["ttl"] = json!(match ttl {
-                muta_contracts::CacheTtl::FiveMinutes => "5m",
-                muta_contracts::CacheTtl::ThirtyMinutes => "30m",
-                muta_contracts::CacheTtl::OneHour => "1h",
-                muta_contracts::CacheTtl::TwentyFourHours => "24h",
-            });
-        }
-        body["prompt_cache_options"] = options;
-    }
+    super::super::cache::apply(&mut body, cache_plan, "messages");
     body
 }
 
@@ -353,7 +322,6 @@ mod tests {
                 stream: true,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -371,7 +339,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: Some(Effort::Xhigh),
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -381,6 +348,12 @@ mod tests {
 
     #[test]
     fn request_injects_prompt_cache_key_when_present() {
+        let cache_plan = muta_contracts::ResolvedCachePlan::Enabled {
+            mode: muta_contracts::PromptCacheMode::Implicit,
+            retention: None,
+            routing_key: Some("session-42".into()),
+            max_breakpoints: None,
+        };
         let body = super::body(
             vec![Message::new(Role::User, "hi")],
             BodyInput {
@@ -388,8 +361,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: Some("session-42"),
-                cache_plan: &DEFAULT_CACHE_PLAN,
+                cache_plan: &cache_plan,
             },
         );
         assert_eq!(body["prompt_cache_key"], "session-42");
@@ -404,7 +376,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -467,7 +438,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -511,7 +481,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -536,7 +505,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -571,7 +539,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -599,7 +566,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
@@ -631,7 +597,6 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
-                prompt_cache_key: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );

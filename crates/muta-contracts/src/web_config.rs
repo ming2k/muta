@@ -34,9 +34,6 @@ pub struct WebSearchConfig {
     /// (hosted AI search API, requires a Bocha key; directly reachable from
     /// mainland China without a proxy).
     pub provider: String,
-    /// Fallback backend tried when `provider` fails. Empty string disables it.
-    /// Default `"parallel"`.
-    pub fallback: String,
     /// Optional proxy URL applied to both `webfetch` and `websearch`.
     /// Supports `http://`, `https://`, `socks5://`, and `socks5h://`. Takes
     /// precedence over the `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars.
@@ -100,7 +97,6 @@ impl Default for WebSearchConfig {
     fn default() -> Self {
         Self {
             provider: "exa".to_string(),
-            fallback: "parallel".to_string(),
             proxy: None,
             timeout_secs: 20,
             exa_api_key: None,
@@ -178,10 +174,9 @@ impl WebSearchConfig {
             .unwrap_or_else(|| "-".to_string())
         }
         format!(
-            "v1|provider={}|fallback={}|reader={}|proxy={}|timeout={}|searxng_url={}|\
+            "v1|provider={}|reader={}|proxy={}|timeout={}|searxng_url={}|\
              exa={}|parallel={}|tavily={}|bocha={}|jina={}",
             self.provider,
-            self.fallback,
             self.reader,
             self.proxy.as_deref().unwrap_or("-"),
             self.timeout_secs,

@@ -117,7 +117,9 @@ pub enum CursorInvalidationReason {
 pub enum ProviderCursorState {
     Unsupported,
     Empty,
-    Ready { cursor: ContinuationCursor },
+    Ready {
+        cursor: ContinuationCursor,
+    },
     Stale {
         prior: ContinuationCursor,
         reason: CursorInvalidationReason,
@@ -157,7 +159,10 @@ pub fn request_envelope_fingerprint(
     tools: &[crate::ToolSpec],
 ) -> String {
     let mut digest = Sha256::new();
-    for message in messages.iter().filter(|message| message.role == crate::Role::System) {
+    for message in messages
+        .iter()
+        .filter(|message| message.role == crate::Role::System)
+    {
         digest.update(message.content.as_bytes());
         digest.update([0xff]);
     }
@@ -222,10 +227,7 @@ pub fn read_continuation_cursor(message: &crate::Message) -> Option<Continuation
     .ok()
 }
 
-pub fn write_continuation_cursor(
-    artifacts: &mut ProviderArtifacts,
-    cursor: &ContinuationCursor,
-) {
+pub fn write_continuation_cursor(artifacts: &mut ProviderArtifacts, cursor: &ContinuationCursor) {
     artifacts.insert(
         CONTINUATION_ARTIFACT_KEY.to_string(),
         serde_json::to_value(cursor).expect("continuation cursor serializes"),
@@ -271,9 +273,6 @@ mod tests {
         let state = ProviderCursorState::Ready {
             cursor: cursor.clone(),
         };
-        assert_eq!(
-            state,
-            ProviderCursorState::Ready { cursor }
-        );
+        assert_eq!(state, ProviderCursorState::Ready { cursor });
     }
 }

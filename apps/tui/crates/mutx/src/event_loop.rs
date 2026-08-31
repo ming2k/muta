@@ -772,6 +772,64 @@ pub(crate) fn probe_input_selection_relay(
     }
 }
 
+fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAction> {
+    use crossterm::event::KeyEventKind;
+    use crate::components::dropdown::DropdownEventOutcome;
+
+    if app.config_dropdown.is_none() {
+        return None;
+    }
+
+    let Event::Key(k) = event else {
+        return Some(input::InputAction::None);
+    };
+
+    if !matches!(k.kind, KeyEventKind::Press) {
+        return Some(input::InputAction::None);
+    }
+
+    let (mut dropdown, anchor) = app.config_dropdown.take()?;
+    let outcome = dropdown.handle_key(*k);
+    match outcome {
+        DropdownEventOutcome::Ignored => {
+            app.config_dropdown = Some((dropdown, anchor));
+            None
+        }
+        DropdownEventOutcome::Handled => {
+            app.config_dropdown = Some((dropdown, anchor));
+            Some(input::InputAction::None)
+        }
+        DropdownEventOutcome::Cancelled => {
+            app.config_dropdown = None;
+            Some(input::InputAction::None)
+        }
+        DropdownEventOutcome::Confirmed(payload) => {
+            let ctx = dropdown.context.as_deref().unwrap_or("");
+            match ctx {
+                "websearch_provider" => {
+                    let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                        Box::new(muta_contracts::WebSearchConfigUpdate {
+                            provider: Some(payload),
+                            ..Default::default()
+                        }),
+                    ));
+                }
+                "websearch_reader" => {
+                    let _ = app.tx.send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                        Box::new(muta_contracts::WebSearchConfigUpdate {
+                            reader: Some(payload),
+                            ..Default::default()
+                        }),
+                    ));
+                }
+                _ => {}
+            }
+            app.config_dropdown = None;
+            Some(input::InputAction::None)
+        }
+    }
+}
+
 fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
@@ -2248,9 +2306,10 @@ pub(super) async fn run_app_loop(
             let history_clear_confirm = app.history_clear_confirm;
             let host_prompting = app.host_prompting;
             let config_custom_editing = app.config_custom_editing;
-            let config_websearch_editing = app.websearch_editing.is_some();
 
-            let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
+            let action = if let Some(dropdown_action) = probe_config_dropdown(app, &event) {
+                dropdown_action
+            } else if let Some(overlay_action) = probe_delete_overlay(app, &event) {
                 overlay_action
             } else if let Some(relay) = probe_input_selection_relay(app, &event) {
                 // A whole-input selection is active and the composer owns the
@@ -2297,7 +2356,6 @@ pub(super) async fn run_app_loop(
                         history_clear_confirm,
                         host_prompting,
                         config_custom_editing,
-                        config_websearch_editing,
                         leader_chord: app.leader_chord,
                     },
                     &mut app.drag,
@@ -2391,7 +2449,8 @@ pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
     match name {
         "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url"
         | "webfetch" => crate::phase::ToolVerb::Exploring,
-        "search_text" | "search_web" | "websearch" => crate::phase::ToolVerb::Searching,
+        "search_text" => crate::phase::ToolVerb::Searching,
+        "search_web" | "websearch" => crate::phase::ToolVerb::WebSearching,
         "write_file" | "edit_file" => crate::phase::ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => crate::phase::ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => {

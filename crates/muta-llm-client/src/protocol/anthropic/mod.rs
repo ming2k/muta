@@ -19,7 +19,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    CredentialSource, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent, ResolvedAuth,
+    CredentialSource, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+    ResolvedAuth,
 };
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
@@ -56,10 +57,9 @@ pub struct AnthropicMessagesProvider {
     pub capabilities: muta_contracts::ModelCapabilities,
     /// Use GitHub Copilot's bearer authentication and client headers for its
     /// `/v1/messages` adapter instead of stock Anthropic API-key headers.
-    pub copilot: bool,
-    /// Prompt-cache controls declared by the concrete route.
-    pub prompt_cache: muta_contracts::PromptCacheCapabilities,
-    pub cache_preference: muta_contracts::CachePreference,
+    pub dialect: muta_contracts::AnthropicMessagesDialect,
+    /// Route-scoped prompt-cache capabilities, defaults, and affinity.
+    pub prompt_cache: crate::PromptCacheConfig,
 }
 
 impl AnthropicMessagesProvider {
@@ -91,9 +91,8 @@ impl AnthropicMessagesProvider {
             max_tokens: 8192,
             thinking,
             capabilities,
-            copilot: false,
-            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            dialect: muta_contracts::AnthropicMessagesDialect::Standard,
+            prompt_cache: crate::PromptCacheConfig::default(),
         }
     }
 
@@ -113,9 +112,8 @@ impl AnthropicMessagesProvider {
             max_tokens: 8192,
             thinking,
             capabilities,
-            copilot: false,
-            prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            dialect: muta_contracts::AnthropicMessagesDialect::Standard,
+            prompt_cache: crate::PromptCacheConfig::default(),
         }
     }
 
@@ -140,19 +138,8 @@ impl AnthropicMessagesProvider {
         self
     }
 
-    pub fn with_prompt_cache_capabilities(
-        mut self,
-        capabilities: muta_contracts::PromptCacheCapabilities,
-    ) -> Self {
-        self.prompt_cache = capabilities;
-        self
-    }
-
-    pub fn with_cache_preference(
-        mut self,
-        preference: muta_contracts::CachePreference,
-    ) -> Self {
-        self.cache_preference = preference;
+    pub fn with_prompt_cache(mut self, prompt_cache: crate::PromptCacheConfig) -> Self {
+        self.prompt_cache = prompt_cache;
         self
     }
 
@@ -160,21 +147,11 @@ impl AnthropicMessagesProvider {
         &self,
         request: &ModelRequest,
     ) -> Result<muta_contracts::ResolvedCachePlan, String> {
-        let preference = if request.cache_preference
-            == muta_contracts::CachePreference::ProviderDefault
-        {
-            self.cache_preference
-        } else {
-            request.cache_preference
-        };
-        self.prompt_cache
-            .resolve(preference, None)
-            .map_err(|error| error.to_string())
+        self.prompt_cache.resolve(request)
     }
 
-    /// Enable GitHub Copilot's Anthropic Messages adapter headers.
-    pub fn with_copilot(mut self, copilot: bool) -> Self {
-        self.copilot = copilot;
+    pub fn with_dialect(mut self, dialect: muta_contracts::AnthropicMessagesDialect) -> Self {
+        self.dialect = dialect;
         self
     }
 
@@ -200,12 +177,12 @@ impl AnthropicMessagesProvider {
             auth.token.expose_secret(),
             &self.capabilities,
             self.thinking,
-            self.copilot,
+            self.dialect == muta_contracts::AnthropicMessagesDialect::Copilot,
         ) {
             req = req.header(name, value);
         }
         for (name, value) in self.endpoint.client_identity().headers() {
-            if !self.copilot
+            if self.dialect != muta_contracts::AnthropicMessagesDialect::Copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()
                     .any(|(k, _)| *k == name)
@@ -296,7 +273,6 @@ impl Provider for AnthropicMessagesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, String> {
-        let ephemeral = request.ephemeral;
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -307,7 +283,6 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
-                ephemeral,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
@@ -341,7 +316,6 @@ impl Provider for AnthropicMessagesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        let ephemeral = request.ephemeral;
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -352,7 +326,6 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
-                ephemeral,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
@@ -371,7 +344,6 @@ impl Provider for AnthropicMessagesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        let ephemeral = request.ephemeral;
         let cache_plan = self.resolve_cache_plan(&request)?;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
@@ -382,7 +354,6 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
-                ephemeral,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,

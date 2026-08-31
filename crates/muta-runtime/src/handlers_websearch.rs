@@ -98,16 +98,6 @@ pub async fn update(
         }
         next.provider = provider.to_string();
     }
-    if let Some(fallback) = update.fallback.as_deref().map(str::trim) {
-        // Empty string is meaningful: it disables the fallback.
-        if !fallback.is_empty()
-            && let Err(err) = validate_backend("fallback", fallback)
-        {
-            let _ = resp_tx.send(AgentResponse::Error(err));
-            return;
-        }
-        next.fallback = fallback.to_string();
-    }
     if let Some(reader) = update
         .reader
         .as_deref()
@@ -131,9 +121,9 @@ pub async fn update(
     if let Some(url) = update.searxng_url.as_deref().map(str::trim) {
         next.searxng_url = (!url.is_empty()).then(|| url.to_string());
     }
-    // Cross-field rule: searxng as primary or fallback needs a URL set
+    // Cross-field rule: searxng as provider needs a URL set
     // (now or in this same PATCH).
-    let searxng_in_use = next.provider == "searxng" || next.fallback.trim() == "searxng";
+    let searxng_in_use = next.provider == "searxng";
     if searxng_in_use
         && next
             .searxng_url
@@ -267,7 +257,6 @@ mod tests {
     fn update_patch() -> WebSearchConfigUpdate {
         WebSearchConfigUpdate {
             provider: Some("tavily".to_string()),
-            fallback: Some("duckduckgo".to_string()),
             reader: Some("jina".to_string()),
             proxy: None,
             timeout_secs: Some(30),
@@ -295,7 +284,6 @@ mod tests {
             panic!("expected a WebSearchConfigUpdated reply");
         };
         assert_eq!(view.provider, "tavily");
-        assert_eq!(view.fallback, "duckduckgo");
         assert_eq!(view.reader, "jina");
         assert_eq!(view.timeout_secs, 30);
         assert!(view.tavily_api_key_set);
@@ -438,6 +426,6 @@ mod tests {
         };
         assert_eq!(update.provider.as_deref(), Some("bocha"));
         assert_eq!(update.bocha_api_key.as_deref(), Some("sk-1"));
-        assert!(update.fallback.is_none());
+        assert!(update.reader.is_none());
     }
 }

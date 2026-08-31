@@ -257,7 +257,7 @@ mod tests {
                 effort: Some("medium".into()),
                 thinking: Some(false),
                 capability_overrides: None,
-                cache_preference: None,
+                prompt_cache: None,
             },
             "the cache entry must land in the state store"
         );

@@ -170,22 +170,6 @@ pub struct CliArgs {
     pub mode: Mode,
     /// `--project <path>`: operate on the project at `<path>`.
     pub project: Option<PathBuf>,
-    /// `--home <dir>`: the **instance root** (ADR-0121) — one flag moves
-    /// every directory muta touches (config, credentials, sessions,
-    /// skills, logs, and the daemon's socket/lock/discovery record) under
-    /// `<dir>/muta/`. The CLI form of `MUTA_HOME`; parsed here,
-    /// installed once in `main` before any path is resolved.
-    pub home: Option<PathBuf>,
-    /// `--config-dir` / `--data-dir` / `--state-dir` / `--cache-dir`
-    /// (ADR-0014 §3 tier 1): per-category overrides for setups where only
-    /// one location must move (e.g. a shared config on NFS, data on a big
-    /// disk). Parsed here, installed with the same one-time pre-parse as
-    /// `--home`; each is the CLI form of its `MUTA_*_DIR` env var and a
-    /// category-specific flag **wins** over `--home` for that category.
-    pub config_dir: Option<PathBuf>,
-    pub data_dir: Option<PathBuf>,
-    pub state_dir: Option<PathBuf>,
-    pub cache_dir: Option<PathBuf>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -662,11 +646,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project: Option<PathBuf> = None;
     let mut json = false;
     let mut version = false;
-    let mut home: Option<PathBuf> = None;
-    let mut config_dir: Option<PathBuf> = None;
-    let mut data_dir: Option<PathBuf> = None;
-    let mut state_dir: Option<PathBuf> = None;
-    let mut cache_dir: Option<PathBuf> = None;
     let mut rest: Vec<String> = Vec::new();
 
     let mut iter = args.iter().peekable();
@@ -677,23 +656,16 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 project = Some(PathBuf::from(flag_value("--project", inline, &mut iter)?));
             }
             "--home" => {
-                home = Some(PathBuf::from(flag_value("--home", inline, &mut iter)?));
+                return Err(
+                    "--home was removed: set the MUTA_HOME environment variable instead (e.g. MUTA_HOME=/tmp/dev)"
+                        .into(),
+                );
             }
-            "--config-dir" => {
-                config_dir = Some(PathBuf::from(flag_value(
-                    "--config-dir",
-                    inline,
-                    &mut iter,
-                )?));
-            }
-            "--data-dir" => {
-                data_dir = Some(PathBuf::from(flag_value("--data-dir", inline, &mut iter)?));
-            }
-            "--state-dir" => {
-                state_dir = Some(PathBuf::from(flag_value("--state-dir", inline, &mut iter)?));
-            }
-            "--cache-dir" => {
-                cache_dir = Some(PathBuf::from(flag_value("--cache-dir", inline, &mut iter)?));
+            "--config-dir" | "--data-dir" | "--state-dir" | "--cache-dir" => {
+                return Err(
+                    format!("{name} was removed: use matching MUTA_*_DIR environment variables instead")
+                        .into(),
+                );
             }
             "--json" | "-j" => json = true,
             "--version" | "-V" => version = true,
@@ -711,11 +683,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let base = |mode| CliArgs {
         mode,
         project: project.clone(),
-        home: home.clone(),
-        config_dir: config_dir.clone(),
-        data_dir: data_dir.clone(),
-        state_dir: state_dir.clone(),
-        cache_dir: cache_dir.clone(),
     };
     let ok = |mode| Ok(base(mode));
 
@@ -1145,11 +1112,11 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("\nOptions:\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
-            out.push_str(
-                "      --home <dir>       run as a separate instance rooted at <dir>/muta\n",
-            );
             out.push_str("  -h, --help             print help ('muta help <command>' for more)\n");
             out.push_str("  -V, --version          print the version and exit\n");
+            out.push_str("\nEnvironment:\n");
+            out.push_str("  MUTA_HOME              instance root for isolated execution (<dir>/muta)\n");
+            out.push_str("  MUTA_PORT              override default daemon TCP port (default: 9800)\n");
         }
         Some(topic) => {
             let spec = resolve(topic, COMMANDS)?;
@@ -1256,7 +1223,7 @@ fn bash_completion() -> String {
          \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
          \x20   cmd=\"${{COMP_WORDS[1]}}\"\n\
          \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-         \x20       COMPREPLY=($(compgen -W \"{} --project --home --json -j --help --version\" -- \"$cur\"))\n\
+         \x20       COMPREPLY=($(compgen -W \"{} --project --json -j --help --version\" -- \"$cur\"))\n\
          \x20       return 0\n\
          \x20   fi\n\
          \x20   case \"$cmd\" in\n{}\n\
@@ -1326,8 +1293,7 @@ fn fish_completion() -> String {
         "# fish completion for muta — save to ~/.config/fish/completions/muta.fish\n\
          set -l cmds {}\n\
          complete -c muta -n '__fish_use_subcommand' -f\n\
-         complete -c muta -n '__fish_use_subcommand' -a \"$cmds\"\n\
-         complete -c muta -l home -d 'separate instance root' -r\n",
+         complete -c muta -n '__fish_use_subcommand' -a \"$cmds\"\n",
         cmds.join(" ")
     );
     for spec in COMMANDS {

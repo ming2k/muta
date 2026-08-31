@@ -20,10 +20,9 @@ mod tests {
     }
 
     #[test]
-    fn websearch_config_defaults_to_exa_with_parallel_fallback() {
+    fn websearch_config_defaults_to_exa() {
         let cfg = WebSearchConfig::default();
         assert_eq!(cfg.provider, "exa");
-        assert_eq!(cfg.fallback, "parallel");
         assert!(cfg.proxy.is_none());
         assert_eq!(cfg.timeout_secs, 20);
     }
@@ -32,14 +31,12 @@ mod tests {
     fn websearch_config_round_trips_through_toml() {
         let toml = r#"
             provider = "searxng"
-            fallback = ""
             proxy = "socks5h://127.0.0.1:1080"
             timeout_secs = 8
             searxng_url = "http://localhost:8080/search"
         "#;
         let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.provider, "searxng");
-        assert_eq!(cfg.fallback, "");
         assert_eq!(cfg.proxy.as_deref(), Some("socks5h://127.0.0.1:1080"));
         assert_eq!(cfg.timeout_secs, 8);
         assert_eq!(
@@ -52,7 +49,6 @@ mod tests {
     fn bocha_backend_parses_from_toml_and_builds() {
         let toml = r#"
             provider = "bocha"
-            fallback = "bocha"
             bocha_api_key = "sk-test-bocha"
         "#;
         let cfg: WebSearchConfig = toml::from_str(toml).unwrap();

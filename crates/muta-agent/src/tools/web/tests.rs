@@ -97,7 +97,7 @@ mod shared_config_tests {
     fn websearch_chain_rebuilds_when_shared_config_changes() {
         let shared = SharedWebSearchConfig::new(WebSearchConfig::default());
         let tool = WebSearchTool::with_shared_config(shared.clone());
-        let (primary, _, _) = tool.current_chain().expect("default chain builds");
+        let (primary, _) = tool.current_provider().expect("default provider builds");
         assert_eq!(primary.name(), "Exa");
 
         shared.set(WebSearchConfig {
@@ -105,11 +105,10 @@ mod shared_config_tests {
             tavily_api_key: Some(muta_contracts::SecretString::new("tvly-x")),
             ..WebSearchConfig::default()
         });
-        let (primary, fallback, _) = tool.current_chain().expect("rebuilt chain builds");
+        let (primary, _) = tool.current_provider().expect("rebuilt provider builds");
         assert_eq!(primary.name(), "Tavily");
-        assert_eq!(fallback.expect("default fallback").name(), "Parallel");
 
-        let (again, _, _) = tool.current_chain().expect("cached chain builds");
+        let (again, _) = tool.current_provider().expect("cached provider builds");
         assert_eq!(again.name(), "Tavily");
     }
 

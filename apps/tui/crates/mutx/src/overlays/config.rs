@@ -101,24 +101,11 @@ pub struct ConfigViewProps<'a> {
     /// Latest `[websearch]` snapshot from the harness (`None` while the
     /// query is still in flight — the pane renders a placeholder).
     pub websearch: Option<&'a muta_contracts::WebSearchConfigView>,
-    /// Web-search pane text-editing mode: which field index borrows the
-    /// composer input row (`Some(2)` = SearXNG URL, `Some(3..=6 | 8)` = API
-    /// keys). `None` = browse mode.
-    pub websearch_editing: Option<usize>,
     pub workspace: &'a str,
     pub category_scroll: &'a mut usize,
     pub detail_scroll: &'a mut usize,
     pub breadcrumbs: Option<&'a str>,
     pub theme: &'a Theme,
-}
-
-impl ConfigViewProps<'_> {
-    /// Which web-search field (if any) is capturing composer input. `None`
-    /// means the web-search detail pane is in browse mode. Field indices
-    /// match the rows of [`draw_websearch_detail`].
-    pub fn websearch_editing_field(&self) -> Option<usize> {
-        self.websearch_editing
-    }
 }
 
 /// Draw the full-screen Settings View.
@@ -191,7 +178,6 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
         footer_rect,
         props.focus,
         props.custom_editing,
-        props.websearch_editing,
         props.theme,
     );
 
@@ -226,8 +212,8 @@ fn draw_panels(
         props.theme,
     );
 
-    // Right Panel: Subtle elevated contrast tone
-    let det_bg = mix(props.theme.panel(), props.theme.raised(), 0.35);
+    // Right Panel: Elevated content tone with clear contrast
+    let det_bg = mix(props.theme.panel(), props.theme.surface(), 0.75);
     let det_body = inset_panel(frame, detail_area, det_bg);
     draw_category_detail(frame, det_body, props, category, is_det_focused);
 
@@ -425,10 +411,16 @@ fn draw_appearance_detail(
         && schemes.last().map(|s| s.id == "custom").unwrap_or(false);
     if is_custom_sel || current_norm == "custom" {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "── Custom Palette Fields ──────────────────────────────────────",
-            Style::default().fg(props.theme.dim()),
-        )));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "CUSTOM PALETTE FIELDS",
+                Style::default()
+                    .fg(props.theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
 
         for (f_idx, field) in CUSTOM_COLOR_FIELDS.iter().enumerate() {
             let stored =
@@ -499,10 +491,16 @@ fn draw_appearance_detail(
 
     // Live Preview Box at the bottom
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "── Live Components Preview ─────────────────────────────────────",
-        Style::default().fg(props.theme.dim()),
-    )));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "LIVE COMPONENTS PREVIEW",
+            Style::default()
+                .fg(props.theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
 
     let active_theme = if is_custom_sel {
         Theme::from_color_scheme("custom", props.custom_color_draft)
@@ -769,36 +767,82 @@ fn draw_behavior_detail(
 //   7 Page Reader       — Enter cycles builtin→jina→none
 //   8 Jina Reader Key   — Enter starts/stops inline editing; empty submit clears
 //   9 Timeout           — Enter +5s (min 5s)
-pub const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
-    ("exa", "hosted MCP, anonymous by default (default)"),
-    ("parallel", "hosted MCP, anonymous by default"),
-    ("duckduckgo", "keyless scraping, frequently blocked"),
-    ("searxng", "self-hosted, keyless, needs a URL"),
-    ("tavily", "hosted, needs a Tavily key"),
-    ("bocha", "hosted AI search, needs a key; China-direct"),
-    ("none", "disabled — tool is excluded from model requests"),
-];
+/// Build a floating dropdown picker for Web Search backends.
+pub fn build_websearch_provider_dropdown(
+    current: &str,
+    ws: Option<&muta_contracts::WebSearchConfigView>,
+) -> crate::components::dropdown::DropdownState<String> {
+    use crate::components::dropdown::{DropdownIndicator, DropdownItem, DropdownState};
 
-/// Cycle a backend id through the known list (unknown → exa). Shared by the
-/// Settings pane's activate handler for both primary and fallback rows.
-pub fn cycle_websearch_backend(current: &str) -> &'static str {
-    let idx = WEBSEARCH_BACKENDS.iter().position(|(id, _)| *id == current);
-    let next = match idx {
-        Some(i) => (i + 1) % WEBSEARCH_BACKENDS.len(),
-        None => 0,
-    };
-    WEBSEARCH_BACKENDS[next].0
+    let items = vec![
+        DropdownItem::new("exa", "Exa", "exa".to_string())
+            .with_description("Hosted MCP · Anonymous quota default")
+            .with_badge("Default")
+            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new("parallel", "Parallel", "parallel".to_string())
+            .with_description("Hosted MCP · Anonymous quota default")
+            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new("tavily", "Tavily", "tavily".to_string())
+            .with_description("Hosted API · Requires Tavily key in credentials")
+            .with_indicator(if ws.map(|w| w.tavily_api_key_set).unwrap_or(false) {
+                DropdownIndicator::Ready
+            } else {
+                DropdownIndicator::Warning
+            }),
+        DropdownItem::new("bocha", "Bocha", "bocha".to_string())
+            .with_description("Hosted AI Search · China-direct endpoint")
+            .with_indicator(if ws.map(|w| w.bocha_api_key_set).unwrap_or(false) {
+                DropdownIndicator::Ready
+            } else {
+                DropdownIndicator::Warning
+            }),
+        DropdownItem::new("searxng", "SearXNG", "searxng".to_string())
+            .with_description("Self-Hosted · Requires JSON search endpoint")
+            .with_indicator(if ws.and_then(|w| w.searxng_url.as_ref()).is_some() {
+                DropdownIndicator::Ready
+            } else {
+                DropdownIndicator::Warning
+            }),
+        DropdownItem::new("duckduckgo", "DuckDuckGo", "duckduckgo".to_string())
+            .with_description("Keyless Direct Scraping (Rate limited)")
+            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new("none", "Disabled", "none".to_string())
+            .with_description("Disable web search tool")
+            .with_indicator(DropdownIndicator::Inactive),
+    ];
+
+    let mut state = DropdownState::new(Some("Select Web Search Backend"), items)
+        .with_context("websearch_provider");
+    state.select_by_id(current);
+    state
 }
 
-/// Cycle a reader id through jina → none.
-pub fn cycle_reader(current: &str) -> &'static str {
-    match current.trim() {
-        "jina" => "none",
-        _ => "jina",
-    }
+/// Build a floating dropdown picker for Web Fetch page readers.
+pub fn build_websearch_reader_dropdown(
+    current: &str,
+    _ws: Option<&muta_contracts::WebSearchConfigView>,
+) -> crate::components::dropdown::DropdownState<String> {
+    use crate::components::dropdown::{DropdownIndicator, DropdownItem, DropdownState};
+
+    let items = vec![
+        DropdownItem::new("jina", "Jina Reader", "jina".to_string())
+            .with_description("r.jina.ai · Readability & Markdown extraction")
+            .with_badge("Recommended")
+            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new("builtin", "Built-in", "builtin".to_string())
+            .with_description("Direct HTTP fetch + HTML stripping (no JS)")
+            .with_indicator(DropdownIndicator::Ready),
+        DropdownItem::new("none", "Disabled", "none".to_string())
+            .with_description("Disable web fetch tool")
+            .with_indicator(DropdownIndicator::Inactive),
+    ];
+
+    let mut state = DropdownState::new(Some("Select Web Fetch Backend"), items)
+        .with_context("websearch_reader");
+    state.select_by_id(current);
+    state
 }
 
-#[allow(clippy::too_many_lines)]
 fn draw_websearch_detail(
     frame: &mut Frame,
     body: Rect,
@@ -818,17 +862,17 @@ fn draw_websearch_detail(
     };
 
     lines.push(Line::from(Span::styled(
-        "websearch & webfetch backends. Changes apply live and persist to config.",
+        "Web search & fetch connection presets. Changes apply live and persist to config.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));
 
-    let backend_badge = |id: &str| -> (&'static str, &'static str) {
+    let backend_info = |id: &str| -> (&'static str, &'static str) {
         match id {
             "exa" => ("exa", "● Hosted MCP · Anonymous quota default"),
             "parallel" => ("parallel", "● Hosted MCP · Anonymous quota default"),
             "duckduckgo" => ("duckduckgo", "● Keyless Direct · Scraping"),
-            "searxng" => ("searxng", "● Self-Hosted · JSON endpoint required"),
+            "searxng" => ("searxng", "● Self-Hosted · JSON endpoint"),
             "tavily" => ("tavily", "● Hosted · API Key required"),
             "bocha" => ("bocha", "● Hosted · China-direct AI search"),
             "none" => ("none", "○ Disabled · Excluded from model tools"),
@@ -836,28 +880,16 @@ fn draw_websearch_detail(
         }
     };
 
-    let key_status_badge = |set: bool, required: bool| -> (&'static str, mutx_engine::Color) {
-        if set {
-            ("● Configured", props.theme.ok())
-        } else if required {
-            ("⚠ Key Required", props.theme.warn())
-        } else {
-            ("○ Not set (optional)", props.theme.dim())
+    let reader_info = |id: &str| -> (&'static str, &'static str) {
+        match id {
+            "jina" => ("jina", "● r.jina.ai · Readability & Markdown extraction"),
+            "builtin" => ("builtin", "● Direct fetch + HTML stripping (no JS)"),
+            "none" => ("none", "○ Disabled · Excluded from model tools"),
+            _ => ("custom", "● Custom reader"),
         }
     };
 
-    let editing_field = props.websearch_editing_field();
-
-    // Section 1: Web Search (Breadth)
-    lines.push(Line::from(Span::styled(
-        "── 1. Web Search (Breadth) ───────────────────────────",
-        Style::default()
-            .fg(props.theme.brand())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    // Item 0: Primary Backend
+    // Item 0: Web Search Backend
     {
         let i = 0;
         let is_sel = i == props.detail_index;
@@ -865,7 +897,7 @@ fn draw_websearch_detail(
             selected_line = Some(lines.len());
         }
         let cursor = if is_sel { "›" } else { " " };
-        let (val, desc) = backend_badge(&ws.provider);
+        let (val, desc) = backend_info(&ws.provider);
         let row_style = if is_sel && focused {
             Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
         } else {
@@ -874,7 +906,7 @@ fn draw_websearch_detail(
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled("Primary Backend   ", row_style),
+            Span::styled("Web Search        ", row_style),
             Span::styled(format!("[ {:<10} ]", val), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled(desc, Style::default().fg(if ws.provider == "none" { props.theme.dim() } else { props.theme.ok() })),
@@ -882,14 +914,14 @@ fn draw_websearch_detail(
         if is_sel && focused {
             lines.push(Line::from(vec![
                 Span::raw("     "),
-                Span::styled("Options: exa · parallel · duckduckgo · searxng · tavily · bocha · none", Style::default().fg(props.theme.dim())),
-                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
+                Span::styled("Options: exa · parallel · tavily · bocha · searxng · duckduckgo · none", Style::default().fg(props.theme.dim())),
+                Span::styled("  [Enter to choose]", Style::default().fg(props.theme.muted())),
             ]));
         }
         lines.push(Line::from(""));
     }
 
-    // Item 1: Fallback Backend
+    // Item 1: Web Fetch Reader
     {
         let i = 1;
         let is_sel = i == props.detail_index;
@@ -897,7 +929,7 @@ fn draw_websearch_detail(
             selected_line = Some(lines.len());
         }
         let cursor = if is_sel { "›" } else { " " };
-        let fallback_val = if ws.fallback.trim().is_empty() || ws.fallback == "none" { "(none)" } else { ws.fallback.as_str() };
+        let (val, desc) = reader_info(&ws.reader);
         let row_style = if is_sel && focused {
             Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
         } else {
@@ -906,201 +938,24 @@ fn draw_websearch_detail(
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled("Fallback Backend  ", row_style),
-            Span::styled(format!("[ {:<10} ]", fallback_val), Style::default().fg(props.theme.brand())),
+            Span::styled("Web Fetch         ", row_style),
+            Span::styled(format!("[ {:<10} ]", val), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
-            Span::styled("Automatic fallback when primary query fails", Style::default().fg(props.theme.muted())),
-        ]));
-        if is_sel && focused {
-            lines.push(Line::from(vec![
-                Span::raw("     "),
-                Span::styled("Options: (none) · exa · parallel · duckduckgo · searxng · tavily · bocha", Style::default().fg(props.theme.dim())),
-                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
-            ]));
-        }
-        lines.push(Line::from(""));
-    }
-
-    // Item 2: SearXNG URL
-    {
-        let i = 2;
-        let is_sel = i == props.detail_index;
-        if is_sel {
-            selected_line = Some(lines.len());
-        }
-        let is_editing = editing_field == Some(i);
-        let cursor = if is_sel { "›" } else { " " };
-        let row_style = if is_sel && focused {
-            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
-        };
-
-        let url_display = if is_editing {
-            props.input.to_string()
-        } else {
-            ws.searxng_url.clone().unwrap_or_else(|| "(not configured)".to_string())
-        };
-
-        let mut row_spans = vec![
-            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled("SearXNG URL       ", row_style),
-        ];
-
-        if is_editing {
-            render_inline_input(&mut row_spans, &url_display, props.cursor_position, props.theme);
-        } else {
-            row_spans.push(Span::styled(format!("[ {url_display} ]"), Style::default().fg(if ws.searxng_url.is_some() { props.theme.fg() } else { props.theme.dim() })));
-        }
-
-        lines.push(Line::from(row_spans));
-        lines.push(Line::from(vec![
-            Span::raw("     "),
-            Span::styled("Self-hosted JSON endpoint (e.g. http://localhost:8080)", Style::default().fg(props.theme.muted())),
-            Span::styled(if is_editing { "  [Enter save · Esc cancel]" } else { "  [Enter to edit]" }, Style::default().fg(props.theme.dim())),
-        ]));
-        lines.push(Line::from(""));
-    }
-
-    // Items 3..=6: API Keys (Exa, Parallel, Tavily, Bocha)
-    let key_items = [
-        (3, "Exa API Key", ws.exa_api_key_set, ws.provider == "exa" || ws.fallback == "exa", "Optional key to raise anonymous rate quota"),
-        (4, "Parallel API Key", ws.parallel_api_key_set, ws.provider == "parallel" || ws.fallback == "parallel", "Optional key to raise anonymous rate quota"),
-        (5, "Tavily API Key", ws.tavily_api_key_set, ws.provider == "tavily" || ws.fallback == "tavily", "Required when using Tavily search backend"),
-        (6, "Bocha API Key", ws.bocha_api_key_set, ws.provider == "bocha" || ws.fallback == "bocha", "Required when using Bocha search backend"),
-    ];
-
-    for (i, label, is_set, is_active_provider, hint) in key_items {
-        let is_sel = i == props.detail_index;
-        if is_sel {
-            selected_line = Some(lines.len());
-        }
-        let is_editing = editing_field == Some(i);
-        let cursor = if is_sel { "›" } else { " " };
-        let row_style = if is_sel && focused {
-            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
-        };
-
-        let (status_text, status_color) = key_status_badge(is_set, is_active_provider);
-
-        let mut row_spans = vec![
-            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled(format!("{:<18}", label), row_style),
-        ];
-
-        if is_editing {
-            render_inline_input(&mut row_spans, props.input, props.cursor_position, props.theme);
-        } else {
-            row_spans.push(Span::styled(format!("{:<22}", status_text), Style::default().fg(status_color)));
-        }
-
-        lines.push(Line::from(row_spans));
-        lines.push(Line::from(vec![
-            Span::raw("     "),
-            Span::styled(hint.to_string(), Style::default().fg(props.theme.muted())),
-            Span::styled(if is_editing { "  [Enter save · Empty Enter clear · Esc cancel]" } else { "  [Enter to configure]" }, Style::default().fg(props.theme.dim())),
-        ]));
-        lines.push(Line::from(""));
-    }
-
-    // Section 2: Web Fetch (Depth)
-    lines.push(Line::from(Span::styled(
-        "── 2. Web Fetch (Depth) ───────────────────────────────",
-        Style::default()
-            .fg(props.theme.brand())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    // Item 7: Page Reader
-    {
-        let i = 7;
-        let is_sel = i == props.detail_index;
-        if is_sel {
-            selected_line = Some(lines.len());
-        }
-        let cursor = if is_sel { "›" } else { " " };
-        let reader_val = ws.reader.as_str();
-        let reader_desc = match reader_val {
-            "jina" => "● r.jina.ai: Readability & Markdown extraction",
-            "builtin" => "● Direct fetch + HTML stripping (no JS)",
-            "none" => "○ Disabled · Excluded from model tools",
-            _ => "● Custom page reader",
-        };
-        let row_style = if is_sel && focused {
-            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled("Page Reader       ", row_style),
-            Span::styled(format!("[ {:<10} ]", reader_val), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled(reader_desc, Style::default().fg(if reader_val == "none" { props.theme.dim() } else { props.theme.ok() })),
+            Span::styled(desc, Style::default().fg(if ws.reader == "none" { props.theme.dim() } else { props.theme.ok() })),
         ]));
         if is_sel && focused {
             lines.push(Line::from(vec![
                 Span::raw("     "),
                 Span::styled("Options: jina · builtin · none", Style::default().fg(props.theme.dim())),
-                Span::styled("  [Enter/Space to cycle]", Style::default().fg(props.theme.muted())),
+                Span::styled("  [Enter to choose]", Style::default().fg(props.theme.muted())),
             ]));
         }
         lines.push(Line::from(""));
     }
 
-    // Item 8: Jina Reader Key
+    // Item 2: Timeout
     {
-        let i = 8;
-        let is_sel = i == props.detail_index;
-        if is_sel {
-            selected_line = Some(lines.len());
-        }
-        let is_editing = editing_field == Some(i);
-        let cursor = if is_sel { "›" } else { " " };
-        let row_style = if is_sel && focused {
-            Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)
-        };
-
-        let (status_text, status_color) = key_status_badge(ws.jina_api_key_set, false);
-
-        let mut row_spans = vec![
-            Span::styled(format!(" {cursor} "), Style::default().fg(if is_sel { props.theme.brand() } else { props.theme.dim() })),
-            Span::styled("Jina Reader Key   ", row_style),
-        ];
-
-        if is_editing {
-            render_inline_input(&mut row_spans, props.input, props.cursor_position, props.theme);
-        } else {
-            row_spans.push(Span::styled(format!("{:<22}", status_text), Style::default().fg(status_color)));
-        }
-
-        lines.push(Line::from(row_spans));
-        lines.push(Line::from(vec![
-            Span::raw("     "),
-            Span::styled("Optional key to raise rate limits on r.jina.ai", Style::default().fg(props.theme.muted())),
-            Span::styled(if is_editing { "  [Enter save · Empty Enter clear · Esc cancel]" } else { "  [Enter to configure]" }, Style::default().fg(props.theme.dim())),
-        ]));
-        lines.push(Line::from(""));
-    }
-
-    // Section 3: Shared Network & Timeout
-    lines.push(Line::from(Span::styled(
-        "── 3. Shared Network & Timeout ───────────────────────",
-        Style::default()
-            .fg(props.theme.brand())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    // Item 9: Timeout
-    {
-        let i = 9;
+        let i = 2;
         let is_sel = i == props.detail_index;
         if is_sel {
             selected_line = Some(lines.len());
@@ -1117,7 +972,7 @@ fn draw_websearch_detail(
             Span::styled("Request Timeout   ", row_style),
             Span::styled(format!("[ {:>2} s ]", ws.timeout_secs), Style::default().fg(props.theme.brand()).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
-            Span::styled("Per-request timeout for search and fetch operations", Style::default().fg(props.theme.muted())),
+            Span::styled("Per-request network timeout (seconds)", Style::default().fg(props.theme.muted())),
         ]));
         if is_sel && focused {
             lines.push(Line::from(vec![
@@ -1128,11 +983,6 @@ fn draw_websearch_detail(
         lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(Span::styled(
-        "Keys persist to credentials.toml (never config.toml); empty submit clears a key.",
-        Style::default().fg(props.theme.dim()),
-    )));
-
     render_scrollable(
         frame,
         body,
@@ -1141,35 +991,6 @@ fn draw_websearch_detail(
         selected_line,
         props.theme,
     );
-}
-
-fn render_inline_input(
-    spans: &mut Vec<Span<'static>>,
-    shown: &str,
-    cursor_position: usize,
-    theme: &Theme,
-) {
-    let cursor_pos = cursor_position.min(shown.len());
-    let (left, right) = shown.split_at(cursor_pos);
-    let (mid, right) = if !right.is_empty() {
-        right.split_at(1)
-    } else {
-        (" ", "")
-    };
-    spans.push(Span::styled(
-        format!("[ {left}"),
-        Style::default().fg(theme.brand()),
-    ));
-    spans.push(Span::styled(
-        mid.to_string(),
-        Style::default()
-            .bg(theme.brand())
-            .fg(theme.body()),
-    ));
-    spans.push(Span::styled(
-        format!("{right} ]"),
-        Style::default().fg(theme.brand()),
-    ));
 }
 
 // 5. System Detail Pane
@@ -1228,7 +1049,6 @@ fn draw_footer(
     rect: Rect,
     focus: ConfigFocus,
     custom_editing: bool,
-    websearch_editing: Option<usize>,
     theme: &Theme,
 ) {
     if rect.height == 0 {
@@ -1241,13 +1061,7 @@ fn draw_footer(
     let hint_style = fill.fg(theme.muted());
 
     // Context-sensitive keycap pairs.
-    let pairs: Vec<(&'static str, &'static str)> = if websearch_editing.is_some() {
-        vec![
-            ("Enter", "save"),
-            ("Empty + Enter", "clear"),
-            ("Esc", "cancel"),
-        ]
-    } else if custom_editing {
+    let pairs: Vec<(&'static str, &'static str)> = if custom_editing {
         vec![
             ("↑/↓", "field"),
             ("Enter", "save palette"),
@@ -1340,15 +1154,37 @@ fn render_scrollable(
     let viewport = area.height as usize;
     let (start, max_scroll) = resolve_scroll(scroll, viewport, total, selected_line, SCROLL_EDGE_MARGIN);
 
+    // Reserve 1 column on the right for the scrollbar when scrolling is active
+    let content_width = if max_scroll > 0 {
+        area.width.saturating_sub(1)
+    } else {
+        area.width
+    };
+    let content_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: content_width,
+        height: area.height,
+    };
+
     let visible: Vec<Line<'static>> = lines
         .into_iter()
         .skip(start)
         .take(viewport)
         .collect();
 
-    frame.render_widget(Paragraph::new(visible), area);
+    frame.render_widget(Paragraph::new(visible), content_area);
 
-    if max_scroll > 0 && area.width > 1 {
-        draw_scrollbar(frame, area, start, max_scroll, theme);
+    if max_scroll > 0 && area.width > 2 {
+        // draw_scrollbar places the track at body.x + body.width + SCROLLBAR_GAP (SCROLLBAR_GAP = 1).
+        // Passing width = area.width - 2 puts the track at area.x + (area.width - 2) + 1 = area.x + area.width - 1
+        // (the exact rightmost column of the panel area).
+        let scrollbar_body = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width.saturating_sub(2),
+            height: area.height,
+        };
+        draw_scrollbar(frame, scrollbar_body, start, max_scroll, theme);
     }
 }

@@ -54,17 +54,13 @@ mutx [OPTIONS] <COMMAND>
 | `completions <bash\|zsh\|fish>` | Print a `mutx` shell completion script |
 | `help [command]` | Print top-level or command help |
 
-`mutx showcase <name>` renders one UI component in debug builds only. The
-component playground is
-[Showcase](../dev/showcase.md) in the contributor docs.
+`mutx showcase <name>` renders one UI component in debug builds only.
 
 ## Options
 
 | Option | Surface | Effect |
 |--------|---------|--------|
 | `--project <path>` | Both | Operate on the project at `<path>` |
-| `--home <dir>` | Both | Use the isolated instance rooted at `<dir>/muta/`; the CLI form of `MUTA_HOME` |
-| `--config-dir <dir>` / `--data-dir <dir>` / `--state-dir <dir>` / `--cache-dir <dir>` | Both | Override one XDG category; the category flag wins over `--home` |
 | `--remote <addr>` | `mutx` | Run headless against `host:port` or `ws://host:port`; no local discovery or spawn |
 | `--token <token>` | `mutx` | Supply the bearer token required by `--remote` |
 | `-p`, `--prompt`, `--print <text>` | `mutx` | Run `<text>` as a headless one-shot |

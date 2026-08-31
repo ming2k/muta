@@ -1122,7 +1122,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     expand_auto_scroll: app.expand_auto_scroll,
                     click_outside_dismiss: app.click_outside_dismiss,
                     websearch: app.websearch_config.as_ref(),
-                    websearch_editing: app.websearch_editing,
                     workspace: &app.current_workspace,
                     category_scroll: &mut app.config_scroll,
                     detail_scroll: &mut app.config_detail_scroll,
@@ -1130,6 +1129,15 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     theme: &app.theme,
                 },
             );
+            if let Some((ref mut state, ref anchor)) = app.config_dropdown {
+                crate::components::dropdown::draw_dropdown(
+                    f,
+                    state,
+                    anchor,
+                    &app.theme,
+                    f.area(),
+                );
+            }
             Some(rects.area)
         }
         Modal::Activity => {

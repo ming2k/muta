@@ -537,6 +537,7 @@ impl Agent {
             state.token_usage.completion_tokens += usage.completion_tokens;
             state.token_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
             state.token_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
+            state.token_usage.cache_miss_input_tokens += usage.cache_miss_input_tokens;
             request.settle(
                 muta_contracts::RequestUsageStatus::Completed,
                 Some(usage),

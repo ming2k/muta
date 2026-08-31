@@ -25,6 +25,7 @@ pub struct BodyInput<'a> {
     pub reasoning_effort: Option<Effort>,
     pub delivery: &'a muta_contracts::RequestDelivery,
     pub store: bool,
+    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
 
 /// Build the Responses request body.
@@ -54,6 +55,7 @@ pub fn body_with_capabilities(
         reasoning_effort,
         delivery,
         store,
+        cache_plan,
     } = input;
 
     // Fold system messages into `instructions`, strip images on non-vision
@@ -69,10 +71,8 @@ pub fn body_with_capabilities(
                 instructions.push_str(&m.content);
             }
             _ => {
-                if let muta_contracts::RequestDelivery::RemoteContinuation {
-                    input_start,
-                    ..
-                } = delivery
+                if let muta_contracts::RequestDelivery::RemoteContinuation { input_start, .. } =
+                    delivery
                     && index < *input_start
                 {
                     continue;
@@ -217,6 +217,8 @@ pub fn body_with_capabilities(
         );
     }
     body["reasoning"] = Value::Object(reasoning);
+    super::super::cache::project_responses_instructions_for_explicit_mode(&mut body, cache_plan);
+    super::super::cache::apply(&mut body, cache_plan, "input");
     body
 }
 
@@ -349,6 +351,8 @@ mod tests {
 
     static DEFAULT_DELIVERY: muta_contracts::RequestDelivery =
         muta_contracts::RequestDelivery::FullReplay;
+    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
+        muta_contracts::ResolvedCachePlan::Unsupported;
 
     fn assistant_with_call(call: ToolCall, content: &str) -> Message {
         Message {
@@ -371,6 +375,7 @@ mod tests {
                 reasoning_effort: None,
                 delivery: &DEFAULT_DELIVERY,
                 store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         assert_eq!(body["instructions"], "be concise");
@@ -404,6 +409,7 @@ mod tests {
                 reasoning_effort: None,
                 delivery: &DEFAULT_DELIVERY,
                 store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let input = body["input"].as_array().unwrap();
@@ -434,6 +440,7 @@ mod tests {
                 reasoning_effort: None,
                 delivery: &DEFAULT_DELIVERY,
                 store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         let input = body["input"].as_array().unwrap();
@@ -453,6 +460,7 @@ mod tests {
                 reasoning_effort: Some(Effort::Medium),
                 delivery: &DEFAULT_DELIVERY,
                 store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
         );
         // The most verbose summaries the backend offers — the raw chain of
@@ -549,6 +557,7 @@ mod tests {
                 reasoning_effort: None,
                 delivery: &DEFAULT_DELIVERY,
                 store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
             },
             &caps,
         );

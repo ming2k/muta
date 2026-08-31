@@ -1429,14 +1429,15 @@ mod tests {
                 == 0
             {
                 // First request: ask the runner to run its `read_text` tool.
-                Ok(Box::pin(stream::iter(vec![Ok(
-                    ProviderStreamEvent::ToolCallDelta {
+                Ok(Box::pin(stream::iter(vec![
+                    Ok(ProviderStreamEvent::ToolCallDelta {
                         index: 0,
                         id: Some("runner_inner_1".to_string()),
                         name: Some("read_text".to_string()),
                         arguments: "{}".to_string(),
-                    },
-                )])))
+                    }),
+                    Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+                ])))
             } else {
                 // Second request: tell the test the runner is mid-flight, then
                 // stall forever. The runner's streaming loop races its

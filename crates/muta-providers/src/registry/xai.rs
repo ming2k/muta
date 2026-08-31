@@ -2,7 +2,7 @@
 //! completions (SuperGrok OAuth or `XAI_API_KEY`).
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -22,7 +22,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
     },
@@ -33,7 +33,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
     },
@@ -44,7 +44,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
     },
@@ -55,7 +55,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
     },
@@ -64,12 +64,12 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec::UNSUPPORTED,
+    prompt_cache: super::unsupported_prompt_cache,
     id: "xai-oauth",
     baselines: MODELS,
     base_url: "https://api.x.ai/v1/chat/completions",
     user_agent: None,
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     models: XAI_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

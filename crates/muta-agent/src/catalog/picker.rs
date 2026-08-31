@@ -212,19 +212,30 @@ pub fn prune_stale_models_on_disk() -> bool {
 
 pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
-        Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
-        Transport::OpenAiResponses {
-            base_url, copilot, ..
-        } => {
-            let protocol = if *copilot {
-                "openai"
-            } else {
-                "openai-responses"
-            };
-            (protocol.to_string(), base_url.clone())
-        }
-        Transport::Anthropic { base_url, .. } => ("anthropic".to_string(), base_url.clone()),
-        Transport::Google { base_url, .. } => ("google".to_string(), base_url.clone()),
+        Transport::OpenAi { base_url, .. } => (
+            muta_contracts::WireProtocol::OpenAiChatCompletions
+                .as_str()
+                .to_string(),
+            base_url.clone(),
+        ),
+        Transport::OpenAiResponses { base_url, .. } => (
+            muta_contracts::WireProtocol::OpenAiResponses
+                .as_str()
+                .to_string(),
+            base_url.clone(),
+        ),
+        Transport::Anthropic { base_url, .. } => (
+            muta_contracts::WireProtocol::AnthropicMessages
+                .as_str()
+                .to_string(),
+            base_url.clone(),
+        ),
+        Transport::Google { base_url, .. } => (
+            muta_contracts::WireProtocol::GoogleGenerateContent
+                .as_str()
+                .to_string(),
+            base_url.clone(),
+        ),
     }
 }
 
@@ -240,7 +251,9 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             let thinking_on = matches!(thinking, Some(ThinkingMode::Adaptive));
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: "anthropic".to_string(),
+                protocol: muta_contracts::WireProtocol::AnthropicMessages
+                    .as_str()
+                    .to_string(),
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
                 favorite: false,
@@ -257,7 +270,9 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: "openai".to_string(),
+                protocol: muta_contracts::WireProtocol::OpenAiChatCompletions
+                    .as_str()
+                    .to_string(),
                 effort: effective,
                 thinking: None,
                 favorite: false,
@@ -271,7 +286,9 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: "openai".to_string(),
+                protocol: muta_contracts::WireProtocol::OpenAiResponses
+                    .as_str()
+                    .to_string(),
                 effort: effective,
                 thinking: None,
                 favorite: false,
@@ -290,7 +307,9 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: "google".to_string(),
+                protocol: muta_contracts::WireProtocol::GoogleGenerateContent
+                    .as_str()
+                    .to_string(),
                 effort: effective,
                 thinking: None,
                 favorite: false,

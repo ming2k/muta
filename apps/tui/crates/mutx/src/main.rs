@@ -9,11 +9,6 @@ use cli::{CliArgs, Mode};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Pre-parse for the instance-root flag (ADR-0121) so `--home` can be
-    // installed before *anything* resolves a path — tracing's log dir is
-    // the first consumer. A full re-parse below keeps error handling in one
-    // place; this pass only trusts the flag when the command line is valid.
-    install_home_override(&std::env::args().skip(1).collect::<Vec<_>>());
     let _tracing_guard = muta_runtime::startup::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -21,126 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = runtime.block_on(run());
     runtime.shutdown_background();
     result
-}
-
-/// Install `--home` as the process-wide path override (ADR-0121).
-///
-/// Called from `main` before any `paths::get()` can cache a resolution.
-/// The flag is the CLI form of the instance-root selector and wins over
-/// the `MUTA_HOME` env var; `set_default` is first-wins, so a later
-/// accidental second install is a no-op. Errors are deferred to the real
-/// parser in `run` — this pass stays silent so a malformed command line
-/// reports exactly once.
-fn install_home_override(args: &[String]) {
-    // `--home` plus the per-category flags (ADR-0014 §3 tier 1) resolve in
-    // the same one-time pre-parse; `PathsOverride` defines their precedence
-    // (a category-specific flag wins over the instance root for its own
-    // category only).
-    let mut config_dir: Option<PathBuf> = None;
-    let mut data_dir: Option<PathBuf> = None;
-    let mut state_dir: Option<PathBuf> = None;
-    let mut cache_dir: Option<PathBuf> = None;
-    let mut home: Option<PathBuf> = None;
-    let mut iter = args.iter().peekable();
-    while let Some(arg) = iter.next() {
-        let mut next_value = |flag: &str| -> Option<PathBuf> {
-            if let Some(value) = iter.next() {
-                return Some(PathBuf::from(value));
-            }
-            let _ = flag;
-            None
-        };
-        match arg.as_str() {
-            "--home" => home = next_value("--home").or(home),
-            "--config-dir" => config_dir = next_value("--config-dir").or(config_dir),
-            "--data-dir" => data_dir = next_value("--data-dir").or(data_dir),
-            "--state-dir" => state_dir = next_value("--state-dir").or(state_dir),
-            "--cache-dir" => cache_dir = next_value("--cache-dir").or(cache_dir),
-            _ => {}
-        }
-        if let Some(value) = arg.strip_prefix("--home=").filter(|v| !v.is_empty()) {
-            home = Some(PathBuf::from(value));
-        }
-        for (flag, slot) in [
-            ("--config-dir=", &mut config_dir),
-            ("--data-dir=", &mut data_dir),
-            ("--state-dir=", &mut state_dir),
-            ("--cache-dir=", &mut cache_dir),
-        ] {
-            if let Some(value) = arg.strip_prefix(flag).filter(|v| !v.is_empty()) {
-                *slot = Some(PathBuf::from(value));
-            }
-        }
-    }
-    let any = home.is_some()
-        || config_dir.is_some()
-        || data_dir.is_some()
-        || state_dir.is_some()
-        || cache_dir.is_some();
-    if any {
-        install_override(home, config_dir, data_dir, state_dir, cache_dir);
-        return;
-    }
-    // Absent flag: record the no-op so `installed_home` and the `run`
-    // consistency assertion stay well-defined.
-    let _ = INSTALLED_HOME.set(None);
-
-    fn install_override(
-        home: Option<PathBuf>,
-        config_dir: Option<PathBuf>,
-        data_dir: Option<PathBuf>,
-        state_dir: Option<PathBuf>,
-        cache_dir: Option<PathBuf>,
-    ) {
-        // Restate the flags as their env forms for every child process: the
-        // runtime's auto-spawn (`client::spawn_daemon`) and the detach path
-        // build fresh command lines that cannot inherit a flag, but they do
-        // inherit the environment. This makes `--home X` and
-        // `MUTA_HOME=X` (and each `--*-dir` with its `MUTA_*_DIR`)
-        // indistinguishable to any descendant — the flags are sugar over
-        // the env vars, with identical inheritance semantics.
-        //
-        // SAFETY: called once from `main` before any thread exists, so no
-        // concurrent reader can observe the write (setenv is not thread-safe).
-        if let Some(home) = &home {
-            unsafe { std::env::set_var("MUTA_HOME", home) };
-        }
-        for (dir, var) in [
-            (&config_dir, "MUTA_CONFIG_DIR"),
-            (&data_dir, "MUTA_DATA_DIR"),
-            (&state_dir, "MUTA_STATE_DIR"),
-            (&cache_dir, "MUTA_CACHE_DIR"),
-        ] {
-            if let Some(dir) = dir {
-                unsafe { std::env::set_var(var, dir) };
-            }
-        }
-        let _ = INSTALLED_HOME.set(home.clone());
-        let dirs =
-            muta_persistence::paths::Dirs::resolve(&muta_persistence::paths::PathsOverride {
-                home,
-                config_dir,
-                data_dir,
-                state_dir,
-                cache_dir,
-            });
-        if let Err(previous) = muta_persistence::paths::set_default(dirs) {
-            tracing::debug!(
-                previous = ?previous,
-                "path override already installed; --home ignored"
-            );
-        }
-    }
-}
-
-/// The `--home` value the pre-parser installed, if any, for the
-/// consistency assertion in `run`. Kept separately from `paths::get()`
-/// because the resolver layers env below the flag: `MUTA_HOME` alone
-/// also redirects every path without setting this.
-static INSTALLED_HOME: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-
-fn installed_home() -> Option<PathBuf> {
-    INSTALLED_HOME.get().cloned().flatten()
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -201,27 +76,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         json: _,
         remote,
         token,
-        home,
-        config_dir,
-        data_dir,
-        state_dir,
-        cache_dir,
         ..
     } = parsed;
-
-    // The pre-parser in `main` already installed the override; assert the
-    // two passes agree so the flag can never parse one way and install
-    // another (ADR-0121's single-source rule for path-layer flags). The
-    // per-category flags are consumed by the same pre-parser; binding them
-    // here keeps the two parses honest about all five selectors.
-    debug_assert_eq!(home, installed_home());
-    debug_assert!(
-        config_dir.is_none() && data_dir.is_none() && state_dir.is_none() && cache_dir.is_none()
-            || std::env::var_os("MUTA_CONFIG_DIR").is_some()
-            || std::env::var_os("MUTA_DATA_DIR").is_some()
-            || std::env::var_os("MUTA_STATE_DIR").is_some()
-            || std::env::var_os("MUTA_CACHE_DIR").is_some()
-    );
 
     match mode {
         Mode::Version => {

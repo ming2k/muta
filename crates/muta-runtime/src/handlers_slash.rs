@@ -838,13 +838,8 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
 
             let mut lines = Vec::new();
             lines.push(format!(
-                "Web search: provider {}, fallback {}, reader {}.",
+                "Web tools: provider {}, reader {}.",
                 reloaded.websearch.provider,
-                if reloaded.websearch.fallback.trim().is_empty() {
-                    "disabled"
-                } else {
-                    reloaded.websearch.fallback.trim()
-                },
                 reloaded.websearch.reader,
             ));
             if report.removed.is_empty()

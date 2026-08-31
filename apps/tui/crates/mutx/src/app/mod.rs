@@ -554,9 +554,12 @@ pub struct App {
     /// Refreshed when the Settings view opens (`QueryWebSearchConfig`) and
     /// on every `WebSearchConfigUpdated` ack.
     pub websearch_config: Option<muta_contracts::WebSearchConfigView>,
-    /// Web-search settings pane: which field index borrows the composer
-    /// input row for text entry (SearXNG URL / API keys). `None` = browse.
-    pub websearch_editing: Option<usize>,
+    /// Floating dropdown state and anchor for settings popup selectors (e.g.
+    /// Web Search provider and Web Fetch reader selectors).
+    pub config_dropdown: Option<(
+        crate::components::dropdown::DropdownState<String>,
+        crate::components::dropdown::DropdownAnchor,
+    )>,
     /// Index of the skills-modal row whose detail block is expanded
     /// (`Modal::Skills`), or `None` when every row is collapsed. `Enter`
     /// toggles the selected row; reset to `None` each time the modal opens.

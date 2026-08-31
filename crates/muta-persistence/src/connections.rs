@@ -16,10 +16,9 @@
 //! Stored in `$XDG_STATE_HOME/muta/connections.toml` — a program-managed
 //! state file, separate from the user-edited `config.toml`.
 
-use muta_contracts::{ChannelAuth, ClientIdentity};
+use muta_contracts::{ChannelAuth, ClientIdentity, WireProtocol};
 use serde::{Deserialize, Serialize};
 
-use crate::config::UserTransport;
 use crate::fsutil;
 use crate::paths;
 
@@ -57,7 +56,7 @@ pub struct Connection {
     // ── Pure-custom declaration (only for `preset_id = None`) ─────────────
     /// Wire transport for a custom connection's routes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transport: Option<UserTransport>,
+    pub protocol: Option<WireProtocol>,
     /// Endpoint for a custom connection's routes. `None` falls back to the
     /// transport's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,7 +80,7 @@ impl Default for Connection {
             auth: ChannelAuth::ApiKey,
             api_key_env: None,
             client_identity: ClientIdentity::Native,
-            transport: None,
+            protocol: None,
             base_url: None,
             user_agent: None,
             models: Vec::new(),

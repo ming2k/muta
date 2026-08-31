@@ -14,7 +14,7 @@
 
 use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -41,7 +41,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -52,7 +52,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -63,7 +63,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -74,7 +74,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -82,23 +82,29 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec {
-        activations: &[muta_contracts::CacheActivation::Implicit],
-        supported_ttls: &[],
-        default_ttl: None,
+fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
+    muta_contracts::PromptCacheSpec {
+        modes: &[muta_contracts::PromptCacheMode::Implicit],
+        default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+        supported_retentions: &[],
+        default_retention: None,
         disable_supported: false,
+        routing_key_supported: false,
         max_breakpoints: None,
         min_cacheable_tokens: None,
         reports_reads: true,
         reports_writes: false,
         reports_misses: true,
-    },
+    }
+}
+
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: prompt_cache_for_model,
     id: "deepseek",
     baselines: MODELS,
     base_url: "https://api.deepseek.com/v1/responses",
     user_agent: None,
-    protocol: "openai-responses",
+    protocol: WireProtocol::OpenAiResponses,
     models: DEEPSEEK_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

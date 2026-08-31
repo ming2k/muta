@@ -1,0 +1,172 @@
+{
+  "schema": "docs-governance/manifest",
+  "schema_version": 2,
+  "name": "docs-governance",
+  "description": "Modular documentation governance: micro-core protocol with pluggable domain profiles.",
+  "license": "MIT",
+  "homepage": "https://github.com/ming/docs-governance",
+  "protocol_version": "3.0.0",
+  "protocol_history": [
+    {
+      "version": "3.0.0",
+      "date": "2026-08-24",
+      "status": "current",
+      "summary": "Modular Governance Architecture: micro-core protocol (routing, style, checklists, common patterns, intake SOP) decoupled from pluggable domain profiles (validation, architecture, operations); contract-driven assembly via contracts.md."
+    },
+    {
+      "version": "2.1.0",
+      "date": "2026-08-24",
+      "status": "superseded",
+      "summary": "Product validation standard: acceptance.md (journeys), experience_scenarios.md (experiences), and testing.md (implementation) three-tier model."
+    },
+    {
+      "version": "2.0.0",
+      "date": "2026-08-23",
+      "status": "superseded",
+      "summary": "Three routing gates (time, audience, cognitive mode) with root-files exception; repository contracts split from adoption; knowledge-layers page; postmortem workflow in update/review checklists; manifest for drift detection."
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-06-13",
+      "status": "superseded",
+      "summary": "Flat Diataxis decision list, adoption held repository contracts, common-docs pattern library, AGENTS.md maintainer rule."
+    }
+  ],
+  "update_policy": "Semantic versioning on protocol_version. MAJOR: a repository following the old protocol would be non-compliant without migration work. MINOR: new optional profiles or non-breaking additions; old content stays valid. PATCH: clarifications and typo-level changes that do not alter any rule.",
+  "files": {
+    "AGENTS.md": {
+      "role": "guard",
+      "profile": "core",
+      "editable": false,
+      "sha256": "2a0eb6a9125825e5c5232d35fa41bdbee8c1a192b9843624fe08f666b4b063e9"
+    },
+    "contracts.md": {
+      "role": "template",
+      "profile": "core",
+      "editable": true,
+      "sha256": ""
+    },
+    "core/adoption.md": {
+      "role": "guide",
+      "profile": "core",
+      "editable": false,
+      "sha256": "cfc5206025d6e4d2aef2fd428ce3fcf375058779cd8224a4ceba3f1e0a4af943"
+    },
+    "core/common-patterns.md": {
+      "role": "library",
+      "profile": "core",
+      "editable": false,
+      "sha256": "db8dc1ec7577e10d356aa1348dd34e5db2345378d7873e236290533ea4129766"
+    },
+    "core/index.md": {
+      "role": "guide",
+      "profile": "core",
+      "editable": false,
+      "sha256": "eb5c2b5ec44cbebd83d4e6b01110e169dac606c036367b24b98a51e5fa6f3d8f"
+    },
+    "core/intake-sop.md": {
+      "role": "guide",
+      "profile": "core",
+      "editable": false,
+      "sha256": "a505bcaac4a89f15731305262d418693a2b54c1355c97f772d5ca791cacb2f96"
+    },
+    "core/review-checklist.md": {
+      "role": "checklist",
+      "profile": "core",
+      "editable": false,
+      "sha256": "766b34eb25141c0b603aa0259b340bee946c1a775de6b5cdaf94364c5dfe9be7"
+    },
+    "core/routing.md": {
+      "role": "guide",
+      "profile": "core",
+      "editable": false,
+      "sha256": "abfee378c7d65b46ffebe6dc6a3b2aa6d02303c2a4280a7e5a50d3994ac4eb43"
+    },
+    "core/style-guide.md": {
+      "role": "guide",
+      "profile": "core",
+      "editable": false,
+      "sha256": "714af3d4ae9f5ef0d570a633d92ba1d2f53355c93f281622520a40e2ad71aab2"
+    },
+    "core/update-checklist.md": {
+      "role": "checklist",
+      "profile": "core",
+      "editable": false,
+      "sha256": "f3d580afbc3b36abfeb9afe8088d3e5835c0708e22453807c9ed01f8c01fbf2b"
+    },
+    "profiles/architecture/adr.pattern.md": {
+      "role": "pattern",
+      "profile": "architecture",
+      "editable": false,
+      "sha256": "adf48c8cb7013845a19b77e2c6eee84290c1213f55950fd9dde2fe8fa90b205c"
+    },
+    "profiles/architecture/profile.md": {
+      "role": "guide",
+      "profile": "architecture",
+      "editable": false,
+      "sha256": "dd0258a08ba24b3507d55ba7e8f0d8d2c4efda8a03dd763ef5a8b6c5da04dd7a"
+    },
+    "profiles/operations/postmortem.pattern.md": {
+      "role": "pattern",
+      "profile": "operations",
+      "editable": false,
+      "sha256": "2644bf5b4d41af8b7325856f49ee546fb0a4254001d29b7fe03db2f0f6885f70"
+    },
+    "profiles/operations/profile.md": {
+      "role": "guide",
+      "profile": "operations",
+      "editable": false,
+      "sha256": "124e522036a26dc2f2f1ec1a4cc49c31c61986ebc9318e8dc7afa2f0c4ef3d78"
+    },
+    "profiles/validation/acceptance.pattern.md": {
+      "role": "pattern",
+      "profile": "validation",
+      "editable": false,
+      "sha256": "ba9ce5c4f1b36f0aa68f2ffd48856e0d929863a3f6e78166dda0f0aec603293e"
+    },
+    "profiles/validation/profile.md": {
+      "role": "guide",
+      "profile": "validation",
+      "editable": false,
+      "sha256": "3072b20b1c87eeb278b93445fb1867a4cee9eaa224b77c0d566743262db6313e"
+    },
+    "profiles/validation/scenarios.pattern.md": {
+      "role": "pattern",
+      "profile": "validation",
+      "editable": false,
+      "sha256": "d8eb6a00cd99929374372b95882ca3b5505178f4157e9d7cec10d91623b57365"
+    },
+    "profiles/validation/testing.pattern.md": {
+      "role": "pattern",
+      "profile": "validation",
+      "editable": false,
+      "sha256": "6f265c29944381e4007039e101e5138fd11b9f3f829a748c475bc3377dec4e48"
+    }
+  },
+  "profiles": {
+    "core": {
+      "description": "Universal meta-governance protocol (routing, style, checklists, common patterns, intake SOP)",
+      "required": true
+    },
+    "validation": {
+      "description": "Product validation standard: acceptance, experience scenarios, and testing",
+      "required": false
+    },
+    "architecture": {
+      "description": "Architecture Decision Records (ADRs) and decision lifecycle",
+      "required": false
+    },
+    "operations": {
+      "description": "Operational knowledge layering (runbook triage, postmortems)",
+      "required": false
+    }
+  },
+  "roles": {
+    "guide": "Governance prose; must match standard byte for byte.",
+    "checklist": "Review and update procedures; must match standard byte for byte.",
+    "guard": "Maintainer and AI policy; must match standard byte for byte.",
+    "library": "Reusable document patterns; must match standard byte for byte.",
+    "pattern": "Domain pattern specification; must match standard byte for byte.",
+    "template": "Repository customization template; editable."
+  }
+}

@@ -142,7 +142,7 @@ async fn chatgpt_responses_resolves_credential_source_bearer_before_sending() {
         "gpt-5.6-sol".to_string(),
         &url,
     )
-    .with_chatgpt(true);
+    .with_dialect(muta_contracts::OpenAiResponsesDialect::ChatGpt);
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -562,13 +562,13 @@ async fn factory_publishes_explicit_high_effort() {
             user_agent: "ua".into(),
             effort: Some(Effort::High),
             thinking: None,
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
@@ -591,13 +591,13 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
             user_agent: "ua".into(),
             effort: Some(Effort::Medium),
             thinking: Some(ThinkingMode::Off),
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     // The request publishes the effort override; the absence of a `thinking`
@@ -617,13 +617,13 @@ async fn factory_publishes_thinking_without_output_config() {
             user_agent: "ua".into(),
             effort: None,
             thinking: Some(ThinkingMode::Adaptive),
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
@@ -648,13 +648,13 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
             user_agent: "ua".into(),
             effort: Some(Effort::High),
             thinking: Some(ThinkingMode::Off),
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
@@ -679,13 +679,13 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
             user_agent: "ua".into(),
             effort: Some(Effort::Xhigh),
             thinking: Some(ThinkingMode::Adaptive),
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(
@@ -711,13 +711,13 @@ async fn fable5_always_on_thinking_ignores_off_override() {
             user_agent: "ua".into(),
             effort: None,
             thinking: Some(ThinkingMode::Off),
-            copilot: false,
+            dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
         model: "claude-fable-5".into(),
         remote: None,
         user_overrides: None,
-        cache_preference: muta_contracts::CachePreference::ProviderDefault,
+        prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     assert_factory_body(

@@ -2,7 +2,7 @@
 //! Moonshot AI's Kimi Code coding platform (`api.kimi.com/coding/v1`).
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::{OpenAiProviderSpec, ProviderPresetSpec};
 
@@ -53,7 +53,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
@@ -64,7 +64,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -75,7 +75,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -86,7 +86,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -94,26 +94,29 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec {
-        activations: &[
-            muta_contracts::CacheActivation::Implicit,
-            muta_contracts::CacheActivation::RoutingKey,
-        ],
-        supported_ttls: &[],
-        default_ttl: None,
+fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
+    muta_contracts::PromptCacheSpec {
+        modes: &[muta_contracts::PromptCacheMode::Implicit],
+        default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+        supported_retentions: &[],
+        default_retention: None,
         disable_supported: false,
+        routing_key_supported: false,
         max_breakpoints: None,
         min_cacheable_tokens: None,
         reports_reads: true,
         reports_writes: false,
         reports_misses: false,
-    },
+    }
+}
+
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: prompt_cache_for_model,
     id: "kimi-code",
     baselines: MODELS,
     base_url: "https://api.kimi.com/coding/v1/chat/completions",
     user_agent: Some(crate::OPENCODE_USER_AGENT),
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this preset track the platform's actual model list.
     discovery: true,

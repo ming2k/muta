@@ -890,155 +890,60 @@ pub(super) async fn dispatch_action(
                                 app.save_tui_config();
                             }
                             3 => {
-                                // Web Tools category. Row indices mirror
-                                // `draw_websearch_detail`.
-                                let idx = app.config_detail_index;
-                                if let Some(field) = app.websearch_editing {
-                                    // Editing: Enter submits the drafted value.
-                                    let draft = app.input.trim().to_string();
-                                    app.websearch_editing = None;
-                                    app.input.clear();
-                                    app.set_cursor(0);
-                                    let update = match field {
-                                        2 => muta_contracts::WebSearchConfigUpdate {
-                                            searxng_url: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        3 => muta_contracts::WebSearchConfigUpdate {
-                                            exa_api_key: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        4 => muta_contracts::WebSearchConfigUpdate {
-                                            parallel_api_key: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        5 => muta_contracts::WebSearchConfigUpdate {
-                                            tavily_api_key: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        6 => muta_contracts::WebSearchConfigUpdate {
-                                            bocha_api_key: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        8 => muta_contracts::WebSearchConfigUpdate {
-                                            jina_api_key: Some(draft),
-                                            ..Default::default()
-                                        },
-                                        _ => muta_contracts::WebSearchConfigUpdate::default(),
-                                    };
-                                    let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
-                                        Box::new(update),
-                                    ));
-                                } else {
-                                    match idx {
-                                        // 0: Cycle the primary backend (search).
-                                        0 => {
-                                            let next = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .map(|ws| ws.provider.as_str())
-                                                .map(crate::overlays::cycle_websearch_backend)
-                                                .unwrap_or("exa");
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        provider: Some(next.to_string()),
-                                                        ..Default::default()
-                                                    },
-                                                )),
+                                // Web Tools category:
+                                // 0: Web Search Backend Dropdown
+                                // 1: Web Fetch Reader Dropdown
+                                // 2: Timeout (+5s cycle)
+                                match app.config_detail_index {
+                                    0 => {
+                                        let current = app
+                                            .websearch_config
+                                            .as_ref()
+                                            .map(|ws| ws.provider.as_str())
+                                            .unwrap_or("exa");
+                                        let dropdown =
+                                            crate::overlays::build_websearch_provider_dropdown(
+                                                current,
+                                                app.websearch_config.as_ref(),
                                             );
-                                        }
-                                        // 1: Cycle the fallback backend (search).
-                                        1 => {
-                                            let current = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .map(|ws| ws.fallback.trim().to_string())
-                                                .unwrap_or_default();
-                                            let next = if current.is_empty() || current == "none" {
-                                                "exa".to_string()
-                                            } else {
-                                                let cycled =
-                                                    crate::overlays::cycle_websearch_backend(
-                                                        &current,
-                                                    );
-                                                if cycled == "none"
-                                                    || cycled
-                                                        == app
-                                                            .websearch_config
-                                                            .as_ref()
-                                                            .map(|ws| ws.provider.as_str())
-                                                            .unwrap_or("")
-                                                {
-                                                    // cycle to none wraps to disabled
-                                                    String::new()
-                                                } else {
-                                                    cycled.to_string()
-                                                }
-                                            };
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        fallback: Some(next),
-                                                        ..Default::default()
-                                                    },
-                                                )),
-                                            );
-                                        }
-                                        // 2..=6 | 8: Text/Key fields: start editing.
-                                        2..=6 | 8 => {
-                                            app.websearch_editing = Some(idx);
-                                            let seed = match idx {
-                                                2 => app
-                                                    .websearch_config
-                                                    .as_ref()
-                                                    .and_then(|ws| ws.searxng_url.clone())
-                                                    .unwrap_or_default(),
-                                                _ => String::new(), // keys never echo
-                                            };
-                                            app.input = seed;
-                                            app.set_cursor_end();
-                                        }
-                                        // 7: Cycle the page reader (fetch).
-                                        7 => {
-                                            let current = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .map(|ws| ws.reader.as_str())
-                                                .unwrap_or("jina");
-                                            let next = crate::overlays::cycle_reader(current);
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        reader: Some(next.to_string()),
-                                                        ..Default::default()
-                                                    },
-                                                )),
-                                            );
-                                        }
-                                        // 9: Timeout +5s per press (min 5, max 120).
-                                        9 => {
-                                            let current = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .map(|ws| ws.timeout_secs)
-                                                .unwrap_or(20);
-                                            let next = if current >= 120 {
-                                                5
-                                            } else {
-                                                (current + 5).max(5)
-                                            };
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        timeout_secs: Some(next),
-                                                        ..Default::default()
-                                                    },
-                                                )),
-                                            );
-                                        }
-                                        _ => {}
+                                        let anchor =
+                                            crate::components::dropdown::DropdownAnchor::center_screen();
+                                        app.config_dropdown = Some((dropdown, anchor));
                                     }
+                                    1 => {
+                                        let current = app
+                                            .websearch_config
+                                            .as_ref()
+                                            .map(|ws| ws.reader.as_str())
+                                            .unwrap_or("jina");
+                                        let dropdown =
+                                            crate::overlays::build_websearch_reader_dropdown(
+                                                current,
+                                                app.websearch_config.as_ref(),
+                                            );
+                                        let anchor =
+                                            crate::components::dropdown::DropdownAnchor::center_screen();
+                                        app.config_dropdown = Some((dropdown, anchor));
+                                    }
+                                    2 => {
+                                        let current = app
+                                            .websearch_config
+                                            .as_ref()
+                                            .map(|ws| ws.timeout_secs)
+                                            .unwrap_or(20);
+                                        let next = if current >= 120 {
+                                            5
+                                        } else {
+                                            (current + 5).max(5)
+                                        };
+                                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                timeout_secs: Some(next),
+                                                ..Default::default()
+                                            }),
+                                        ));
+                                    }
+                                    _ => {}
                                 }
                             }
                             _ => {}
@@ -1049,12 +954,8 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::ConfigBack => {
             if app.active_modal() == Modal::Config {
-                if app.websearch_editing.is_some() {
-                    // Cancel the web-search field edit: restore browse mode
-                    // and hand the composer row back unchanged.
-                    app.websearch_editing = None;
-                    app.input.clear();
-                    app.set_cursor(0);
+                if app.config_dropdown.is_some() {
+                    app.config_dropdown = None;
                 } else if app.config_custom_editing {
                     app.config_custom_editing = false;
                     app.theme =
@@ -2466,7 +2367,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
             app.config_custom_editing = false;
             app.config_scroll = 0;
             app.config_detail_scroll = 0;
-            app.websearch_editing = None;
+            app.config_dropdown = None;
             Some(AgentRequest::QueryWebSearchConfig)
         }
         View::Dashboard => {

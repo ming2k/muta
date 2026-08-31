@@ -33,14 +33,12 @@ pub struct OpenAiResponsesProvider {
     pub capabilities: muta_contracts::ModelCapabilities,
     /// When `true`, attach ChatGPT subscription headers (`originator: muta` and
     /// `ChatGPT-Account-Id`).
-    pub chatgpt: bool,
-    /// When `true`, inject GitHub Copilot's required per-request headers
-    /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
-    /// `Copilot-Vision-Request` for vision turns).
-    pub copilot: bool,
+    pub dialect: muta_contracts::OpenAiResponsesDialect,
     /// Whether upstream persists response state and accepts
     /// `previous_response_id`. Subscription backends force this off.
     pub store: bool,
+    /// Route-scoped prompt-cache capabilities, defaults, and affinity.
+    pub prompt_cache: crate::PromptCacheConfig,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
 }
@@ -57,9 +55,9 @@ impl OpenAiResponsesProvider {
             client: Client::new(),
             reasoning_effort: None,
             capabilities,
-            chatgpt: false,
-            copilot: false,
+            dialect: muta_contracts::OpenAiResponsesDialect::Standard,
             store: true,
+            prompt_cache: crate::PromptCacheConfig::default(),
         }
     }
 
@@ -101,19 +99,9 @@ impl OpenAiResponsesProvider {
         self
     }
 
-    /// Enable ChatGPT subscription headers (`originator: muta` and `ChatGPT-Account-Id`).
-    pub fn with_chatgpt(mut self, chatgpt: bool) -> Self {
-        self.chatgpt = chatgpt;
-        if chatgpt {
-            self.store = false;
-        }
-        self
-    }
-
-    /// Flip on Copilot-mode request headers.
-    pub fn with_copilot(mut self, copilot: bool) -> Self {
-        self.copilot = copilot;
-        if copilot {
+    pub fn with_dialect(mut self, dialect: muta_contracts::OpenAiResponsesDialect) -> Self {
+        self.dialect = dialect;
+        if dialect != muta_contracts::OpenAiResponsesDialect::Standard {
             self.store = false;
         }
         self
@@ -124,14 +112,17 @@ impl OpenAiResponsesProvider {
         self
     }
 
+    pub fn with_prompt_cache(mut self, prompt_cache: crate::PromptCacheConfig) -> Self {
+        self.prompt_cache = prompt_cache;
+        self
+    }
+
     /// Human-readable backend label for error messages and logs.
     fn label(&self) -> &'static str {
-        if self.copilot {
-            "Copilot"
-        } else if self.chatgpt {
-            "ChatGPT"
-        } else {
-            "OpenAI Responses"
+        match self.dialect {
+            muta_contracts::OpenAiResponsesDialect::Copilot => "Copilot",
+            muta_contracts::OpenAiResponsesDialect::ChatGpt => "ChatGPT",
+            muta_contracts::OpenAiResponsesDialect::Standard => "OpenAI Responses",
         }
     }
 
@@ -147,12 +138,14 @@ impl OpenAiResponsesProvider {
             .post(self.endpoint.base_url())
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
-        let is_copilot_vision = self.copilot && request::has_input_image(body);
+        let copilot = self.dialect == muta_contracts::OpenAiResponsesDialect::Copilot;
+        let chatgpt = self.dialect == muta_contracts::OpenAiResponsesDialect::ChatGpt;
+        let is_copilot_vision = copilot && request::has_input_image(body);
         for (name, value) in request::headers(
             auth.token.expose_secret(),
             auth.account_id.as_deref(),
-            self.copilot,
-            self.chatgpt,
+            copilot,
+            chatgpt,
         ) {
             req = req.header(name, value);
         }
@@ -160,7 +153,7 @@ impl OpenAiResponsesProvider {
             req = req.header("Copilot-Vision-Request", "true");
         }
         for (name, value) in self.endpoint.client_identity().headers() {
-            if !self.copilot
+            if !copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()
                     .any(|(k, _)| *k == name)
@@ -209,14 +202,15 @@ impl OpenAiResponsesProvider {
         ensure_success(response, self.label()).await
     }
 
-    fn build_body(&self, request: ModelRequest, stream: bool) -> serde_json::Value {
+    fn build_body(&self, request: ModelRequest, stream: bool) -> Result<serde_json::Value, String> {
+        let cache_plan = self.prompt_cache.resolve(&request)?;
         let ModelRequest {
             messages,
             tool_specs,
             delivery,
             ..
         } = request;
-        request::body_with_capabilities(
+        Ok(request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -225,9 +219,10 @@ impl OpenAiResponsesProvider {
                 reasoning_effort: self.reasoning_effort,
                 delivery: &delivery,
                 store: self.store,
+                cache_plan: &cache_plan,
             },
             &self.capabilities,
-        )
+        ))
     }
 }
 
@@ -281,7 +276,7 @@ impl Provider for OpenAiResponsesProvider {
         request: ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, String> {
         let label = self.label();
-        let body = self.build_body(request, false);
+        let body = self.build_body(request, false)?;
         let resp = self.send_request(&body, false).await?;
         let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
@@ -292,13 +287,14 @@ impl Provider for OpenAiResponsesProvider {
             muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
             value["output"].clone(),
         );
-        let continuation = value["id"].as_str().map(|response_id| {
-            muta_contracts::ContinuationCursor {
-                route: self.route_fingerprint(),
-                local_head: String::new(),
-                response_id: response_id.to_string(),
-            }
-        });
+        let continuation =
+            value["id"]
+                .as_str()
+                .map(|response_id| muta_contracts::ContinuationCursor {
+                    route: self.route_fingerprint(),
+                    local_head: String::new(),
+                    response_id: response_id.to_string(),
+                });
         Ok(muta_contracts::ProviderCompletion {
             message: response::message(&value["output"]),
             meta: muta_contracts::ProviderCompletionMeta {
@@ -314,7 +310,7 @@ impl Provider for OpenAiResponsesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let label = self.label();
-        let body = self.build_body(request, true);
+        let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
 
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
@@ -335,7 +331,7 @@ impl Provider for OpenAiResponsesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let label = self.label();
-        let body = self.build_body(request, true);
+        let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
 
         // One stateful parser threads the function-call item state across the

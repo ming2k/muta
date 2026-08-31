@@ -30,6 +30,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: total.unwrap_or(p + c),
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
         (Some(p), None, Some(t)) => Some(TokenUsage {
             prompt_tokens: p,
@@ -37,6 +38,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: t,
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
         _ => {
             // Fall back to total_tokens only.
@@ -46,6 +48,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
                 total_tokens: t,
                 cache_creation_input_tokens: cache.write_tokens,
                 cache_read_input_tokens: cache.read_tokens,
+                cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
             })
         }
     }

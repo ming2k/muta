@@ -17,7 +17,7 @@ pub struct WebSearchPresenter;
 impl ToolPresenter for WebSearchPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("query")
-            .map(|query| format!("Search \"{}\"", truncate(query, 56)))
+            .map(|query| format!("Web search \"{}\"", truncate(query, 52)))
             .unwrap_or_else(|| "Web search".to_string())
     }
 }

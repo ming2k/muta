@@ -671,15 +671,43 @@ impl Agent {
                 }
             }
             request_accounting.mark_stream_end();
-            if completion_meta.is_none() && stream_loop_incident.is_none() {
-                let err_msg = "Provider stream ended without a terminal completion event; response state was not committed."
-                    .to_string();
-                request_accounting.record_error(&err_msg);
-                return Err(HarnessError::Retryable {
-                    message: err_msg,
-                    retry_after_ms: None,
-                });
+
+            // Strict stream finalization (the same discipline praxion's
+            // accumulator enforces at `finish()`): the stream must not end
+            // mid-tool-call. A slot that accumulated id/argument bytes but
+            // never received a name is the residue of a truncated stream —
+            // dropping it silently would mistake a connection failure for
+            // the model's intent. Surface it as retryable so the idempotent
+            // request retry re-runs the turn instead of committing a partial
+            // response. Slots that stayed completely empty (a provider delta
+            // that carried only an index) are still dropped below.
+            for call in &calls {
+                if call.name.is_empty() && (!call.id.is_empty() || !call.arguments.is_empty()) {
+                    let err_msg =
+                        "Provider stream ended mid-tool-call; the response was likely truncated."
+                            .to_string();
+                    request_accounting.record_error(&err_msg);
+                    return Err(HarnessError::Retryable {
+                        message: err_msg,
+                        retry_after_ms: None,
+                    });
+                }
+                if !call.arguments.is_empty()
+                    && serde_json::from_str::<serde_json::Value>(&call.arguments).is_err()
+                {
+                    let err_msg = format!(
+                        "Provider stream ended with truncated arguments for tool \
+                         call `{}`; the response was likely cut off.",
+                        call.name
+                    );
+                    request_accounting.record_error(&err_msg);
+                    return Err(HarnessError::Retryable {
+                        message: err_msg,
+                        retry_after_ms: None,
+                    });
+                }
             }
+
             // A Stream Sentinel consult still in flight when the stream ended
             // naturally still owes a verdict: settling it here (bounded by the
             // consult's own 2s timeout) preserves the blocking consult's
@@ -713,26 +741,15 @@ impl Agent {
                     steward_cleared_candidates.insert(review.candidate_key);
                 }
             }
-            // Strict stream finalization (the same discipline praxion's
-            // accumulator enforces at `finish()`): the stream must not end
-            // mid-tool-call. A slot that accumulated id/argument bytes but
-            // never received a name is the residue of a truncated stream —
-            // dropping it silently would mistake a connection failure for
-            // the model's intent. Surface it as retryable so the idempotent
-            // request retry re-runs the turn instead of committing a partial
-            // response. Slots that stayed completely empty (a provider delta
-            // that carried only an index) are still dropped below.
-            for call in &calls {
-                if call.name.is_empty() && (!call.id.is_empty() || !call.arguments.is_empty()) {
-                    let err_msg =
-                        "Provider stream ended mid-tool-call; the response was likely truncated."
-                            .to_string();
-                    request_accounting.record_error(&err_msg);
-                    return Err(HarnessError::Retryable {
-                        message: err_msg,
-                        retry_after_ms: None,
-                    });
-                }
+
+            if completion_meta.is_none() && stream_loop_incident.is_none() {
+                let err_msg = "Provider stream ended without a terminal completion event; response state was not committed."
+                    .to_string();
+                request_accounting.record_error(&err_msg);
+                return Err(HarnessError::Retryable {
+                    message: err_msg,
+                    retry_after_ms: None,
+                });
             }
 
             // A detected loop cuts this provider stream, but it does not

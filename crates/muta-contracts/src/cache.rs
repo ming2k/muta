@@ -1,83 +1,90 @@
-//! Provider-declared prompt-cache capabilities and request resolution.
+//! Route-scoped prompt-cache capabilities, preferences, and telemetry.
 //!
-//! Prompt caching is a wire-route capability, not a model-family property.
-//! The same model name can be served by the vendor API, a compatibility relay,
-//! or a subscription endpoint with different controls. Callers therefore
-//! resolve a user preference against capabilities reported by the concrete
-//! route. Unsupported controls are errors; they are never silently ignored.
+//! Cache behavior belongs to one concrete provider route: endpoint, wire
+//! protocol, dialect, and model generation together determine which controls
+//! are valid. Protocol resemblance never grants cache support to a relay.
 
 use serde::{Deserialize, Serialize};
 
-/// User intent for one model request.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CachePreference {
-    /// Let the concrete route choose its documented default.
-    #[default]
-    ProviderDefault,
-    /// Prefer the shortest explicitly supported lifetime.
-    Short,
-    /// Prefer the longest explicitly supported lifetime.
-    Long,
-    /// Write only at explicit breakpoints supplied by the request projection.
-    ExplicitOnly,
-    /// Do not write prompt-cache state. Valid only when the route declares an
-    /// actual disable mechanism.
-    Disabled,
-}
-
-/// TTL values that have stable, cross-request semantics in supported routes.
+/// A request-visible cache placement mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CacheTtl {
+pub enum PromptCacheMode {
+    /// The upstream caches eligible prefixes without a request control.
+    Implicit,
+    /// A top-level control advances the cache boundary with the conversation.
+    Automatic,
+    /// The client marks cache boundaries on concrete content blocks.
+    Explicit,
+}
+
+/// An exact provider retention control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheRetention {
+    InMemory,
     FiveMinutes,
     ThirtyMinutes,
     OneHour,
     TwentyFourHours,
 }
 
-/// How a route can activate prompt caching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The requested cache mode for one route.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CacheActivation {
-    /// The upstream caches eligible prefixes without a request field.
+pub enum PromptCacheModePreference {
+    /// Use the route's declared default mode.
+    #[default]
+    ProviderDefault,
     Implicit,
-    /// A top-level request control follows the growing conversation.
     Automatic,
-    /// Content blocks may mark cumulative prefix boundaries.
-    ExplicitBreakpoints,
-    /// A stable routing/namespace key improves prefix affinity.
-    RoutingKey,
-    /// Requests refer to a separately managed cached-content resource.
-    Resource,
+    Explicit,
+    /// Require the route to suppress cache writes.
+    Disabled,
+}
+
+/// User or caller intent for one model request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptCachePreference {
+    pub mode: PromptCacheModePreference,
+    /// `None` keeps the route's declared default retention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention: Option<CacheRetention>,
 }
 
 /// Prompt-cache support of one concrete provider route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptCacheCapabilities {
-    pub activations: Vec<CacheActivation>,
-    pub supported_ttls: Vec<CacheTtl>,
-    pub default_ttl: Option<CacheTtl>,
+    /// Every mode the route accepts. Empty means unsupported.
+    pub modes: Vec<PromptCacheMode>,
+    /// The mode used for `ProviderDefault`. Required when `modes` is nonempty.
+    pub default_mode: Option<PromptCacheMode>,
+    /// Exact retention values accepted by this route.
+    pub supported_retentions: Vec<CacheRetention>,
+    /// Retention used when the request does not choose one.
+    pub default_retention: Option<CacheRetention>,
+    /// Whether an explicit disabled plan can be enforced on the wire.
     pub disable_supported: bool,
+    /// Whether a stable affinity key may accompany the selected mode.
+    pub routing_key_supported: bool,
+    /// Maximum explicit breakpoints accepted per request.
     pub max_breakpoints: Option<u8>,
     pub min_cacheable_tokens: Option<u32>,
-    /// Whether the provider reports cache reads separately from ordinary input.
     pub reports_reads: bool,
-    /// Whether the provider reports newly written cache tokens.
     pub reports_writes: bool,
-    /// Whether the provider reports a distinct uncached/miss count.
     pub reports_misses: bool,
 }
 
-/// Const-friendly declaration embedded in provider route registries. Runtime
-/// channels own the materialized [`PromptCacheCapabilities`] snapshot so a
-/// hot-reloaded catalog never borrows registry storage.
+/// Const-friendly route declaration embedded in provider registries.
 #[derive(Debug, Clone, Copy)]
 pub struct PromptCacheSpec {
-    pub activations: &'static [CacheActivation],
-    pub supported_ttls: &'static [CacheTtl],
-    pub default_ttl: Option<CacheTtl>,
+    pub modes: &'static [PromptCacheMode],
+    pub default_mode: Option<PromptCacheMode>,
+    pub supported_retentions: &'static [CacheRetention],
+    pub default_retention: Option<CacheRetention>,
     pub disable_supported: bool,
+    pub routing_key_supported: bool,
     pub max_breakpoints: Option<u8>,
     pub min_cacheable_tokens: Option<u32>,
     pub reports_reads: bool,
@@ -87,10 +94,12 @@ pub struct PromptCacheSpec {
 
 impl PromptCacheSpec {
     pub const UNSUPPORTED: Self = Self {
-        activations: &[],
-        supported_ttls: &[],
-        default_ttl: None,
+        modes: &[],
+        default_mode: None,
+        supported_retentions: &[],
+        default_retention: None,
         disable_supported: false,
+        routing_key_supported: false,
         max_breakpoints: None,
         min_cacheable_tokens: None,
         reports_reads: false,
@@ -99,28 +108,35 @@ impl PromptCacheSpec {
     };
 
     pub fn materialize(self) -> PromptCacheCapabilities {
-        PromptCacheCapabilities {
-            activations: self.activations.to_vec(),
-            supported_ttls: self.supported_ttls.to_vec(),
-            default_ttl: self.default_ttl,
+        let capabilities = PromptCacheCapabilities {
+            modes: self.modes.to_vec(),
+            default_mode: self.default_mode,
+            supported_retentions: self.supported_retentions.to_vec(),
+            default_retention: self.default_retention,
             disable_supported: self.disable_supported,
+            routing_key_supported: self.routing_key_supported,
             max_breakpoints: self.max_breakpoints,
             min_cacheable_tokens: self.min_cacheable_tokens,
             reports_reads: self.reports_reads,
             reports_writes: self.reports_writes,
             reports_misses: self.reports_misses,
-        }
+        };
+        capabilities
+            .validate()
+            .expect("invalid static prompt-cache route declaration");
+        capabilities
     }
 }
 
 impl PromptCacheCapabilities {
-    /// A conservative route that accepts no cache-control claims.
     pub const fn unsupported() -> Self {
         Self {
-            activations: Vec::new(),
-            supported_ttls: Vec::new(),
-            default_ttl: None,
+            modes: Vec::new(),
+            default_mode: None,
+            supported_retentions: Vec::new(),
+            default_retention: None,
             disable_supported: false,
+            routing_key_supported: false,
             max_breakpoints: None,
             min_cacheable_tokens: None,
             reports_reads: false,
@@ -129,81 +145,80 @@ impl PromptCacheCapabilities {
         }
     }
 
-    pub fn has(&self, activation: CacheActivation) -> bool {
-        self.activations.contains(&activation)
+    pub fn validate(&self) -> Result<(), CacheResolutionError> {
+        match (self.modes.is_empty(), self.default_mode) {
+            (true, None) => {}
+            (true, Some(_)) => return Err(CacheResolutionError::InvalidCapabilities),
+            (false, Some(mode)) if self.modes.contains(&mode) => {}
+            (false, _) => return Err(CacheResolutionError::InvalidCapabilities),
+        }
+        if self
+            .default_retention
+            .is_some_and(|value| !self.supported_retentions.contains(&value))
+        {
+            return Err(CacheResolutionError::InvalidCapabilities);
+        }
+        if self.modes.contains(&PromptCacheMode::Explicit)
+            && self.max_breakpoints.is_none_or(|value| value == 0)
+        {
+            return Err(CacheResolutionError::InvalidCapabilities);
+        }
+        Ok(())
     }
 
-    /// Resolve request intent without inventing unsupported behavior.
     pub fn resolve(
         &self,
-        preference: CachePreference,
+        preference: PromptCachePreference,
         routing_key: Option<String>,
     ) -> Result<ResolvedCachePlan, CacheResolutionError> {
-        if self.activations.is_empty() {
+        self.validate()?;
+        if self.modes.is_empty() {
             return match preference {
-                CachePreference::ProviderDefault => Ok(ResolvedCachePlan::Unsupported),
+                PromptCachePreference {
+                    mode: PromptCacheModePreference::ProviderDefault,
+                    retention: None,
+                } => Ok(ResolvedCachePlan::Unsupported),
                 _ => Err(CacheResolutionError::CachingUnsupported),
             };
         }
 
-        if preference == CachePreference::Disabled {
-            return self
-                .disable_supported
-                .then_some(ResolvedCachePlan::Disabled)
-                .ok_or(CacheResolutionError::DisableUnsupported);
+        if preference.mode == PromptCacheModePreference::Disabled {
+            return if self.disable_supported {
+                Ok(ResolvedCachePlan::Disabled)
+            } else {
+                Err(CacheResolutionError::DisableUnsupported)
+            };
         }
 
-        if preference == CachePreference::ExplicitOnly
-            && !self.has(CacheActivation::ExplicitBreakpoints)
+        let mode = match preference.mode {
+            PromptCacheModePreference::ProviderDefault => self
+                .default_mode
+                .ok_or(CacheResolutionError::InvalidCapabilities)?,
+            PromptCacheModePreference::Implicit => PromptCacheMode::Implicit,
+            PromptCacheModePreference::Automatic => PromptCacheMode::Automatic,
+            PromptCacheModePreference::Explicit => PromptCacheMode::Explicit,
+            PromptCacheModePreference::Disabled => unreachable!("handled above"),
+        };
+        if !self.modes.contains(&mode) {
+            return Err(CacheResolutionError::ModeUnsupported { mode });
+        }
+
+        let retention = preference.retention.or(self.default_retention);
+        if let Some(value) = retention
+            && !self.supported_retentions.contains(&value)
         {
-            return Err(CacheResolutionError::ExplicitBreakpointsUnsupported);
+            return Err(CacheResolutionError::RetentionUnsupported { retention: value });
         }
-
-        let ttl = match preference {
-            CachePreference::ProviderDefault | CachePreference::ExplicitOnly => self.default_ttl,
-            CachePreference::Short => Some(
-                self.supported_ttls
-                    .first()
-                    .copied()
-                    .ok_or(CacheResolutionError::TtlUnsupported { preference })?,
-            ),
-            CachePreference::Long => Some(
-                self.supported_ttls
-                    .last()
-                    .copied()
-                    .ok_or(CacheResolutionError::TtlUnsupported { preference })?,
-            ),
-            CachePreference::Disabled => unreachable!("handled above"),
-        };
-
-        let mode = if preference == CachePreference::ExplicitOnly {
-            ResolvedCacheMode::ExplicitOnly
-        } else if self.has(CacheActivation::Automatic) {
-            ResolvedCacheMode::Automatic
-        } else if self.has(CacheActivation::ExplicitBreakpoints) {
-            ResolvedCacheMode::Explicit
-        } else {
-            ResolvedCacheMode::Implicit
-        };
 
         Ok(ResolvedCachePlan::Enabled {
             mode,
-            ttl,
-            routing_key: self
-                .has(CacheActivation::RoutingKey)
-                .then_some(routing_key)
+            retention,
+            routing_key: self.routing_key_supported.then_some(routing_key).flatten(),
+            max_breakpoints: (mode == PromptCacheMode::Explicit)
+                .then_some(self.max_breakpoints)
                 .flatten(),
         })
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolvedCacheMode {
-    Implicit,
-    Automatic,
-    Explicit,
-    ExplicitOnly,
 }
 
 /// Fully validated cache instructions consumed by a protocol encoder.
@@ -213,36 +228,38 @@ pub enum ResolvedCachePlan {
     Unsupported,
     Disabled,
     Enabled {
-        mode: ResolvedCacheMode,
-        ttl: Option<CacheTtl>,
+        mode: PromptCacheMode,
+        retention: Option<CacheRetention>,
         routing_key: Option<String>,
+        max_breakpoints: Option<u8>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheResolutionError {
+    InvalidCapabilities,
     CachingUnsupported,
     DisableUnsupported,
-    ExplicitBreakpointsUnsupported,
-    TtlUnsupported { preference: CachePreference },
+    ModeUnsupported { mode: PromptCacheMode },
+    RetentionUnsupported { retention: CacheRetention },
 }
 
 impl std::fmt::Display for CacheResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidCapabilities => write!(f, "invalid prompt-cache route capabilities"),
             Self::CachingUnsupported => {
                 write!(f, "this provider route exposes no prompt-cache controls")
             }
             Self::DisableUnsupported => {
                 write!(f, "this provider route cannot disable prompt caching")
             }
-            Self::ExplicitBreakpointsUnsupported => write!(
+            Self::ModeUnsupported { mode } => {
+                write!(f, "this provider route does not support {mode:?} caching")
+            }
+            Self::RetentionUnsupported { retention } => write!(
                 f,
-                "this provider route does not support explicit cache breakpoints"
-            ),
-            Self::TtlUnsupported { preference } => write!(
-                f,
-                "this provider route does not support the requested {preference:?} cache lifetime"
+                "this provider route does not support {retention:?} cache retention"
             ),
         }
     }
@@ -294,25 +311,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn unknown_route_rejects_claimed_controls() {
-        let caps = PromptCacheCapabilities::unsupported();
-        assert_eq!(
-            caps.resolve(CachePreference::ProviderDefault, None),
-            Ok(ResolvedCachePlan::Unsupported)
-        );
-        assert_eq!(
-            caps.resolve(CachePreference::Long, None),
-            Err(CacheResolutionError::CachingUnsupported)
-        );
-    }
-
-    #[test]
-    fn resolves_longest_declared_ttl_and_routing_key() {
+    fn provider_default_uses_the_declared_default_not_feature_order() {
         let caps = PromptCacheCapabilities {
-            activations: vec![CacheActivation::Automatic, CacheActivation::RoutingKey],
-            supported_ttls: vec![CacheTtl::FiveMinutes, CacheTtl::OneHour],
-            default_ttl: Some(CacheTtl::FiveMinutes),
+            modes: vec![PromptCacheMode::Implicit, PromptCacheMode::Explicit],
+            default_mode: Some(PromptCacheMode::Implicit),
+            supported_retentions: vec![CacheRetention::ThirtyMinutes],
+            default_retention: Some(CacheRetention::ThirtyMinutes),
             disable_supported: false,
+            routing_key_supported: true,
             max_breakpoints: Some(4),
             min_cacheable_tokens: Some(1024),
             reports_reads: true,
@@ -320,11 +326,60 @@ mod tests {
             reports_misses: false,
         };
         assert_eq!(
-            caps.resolve(CachePreference::Long, Some("session-42".into())),
+            caps.resolve(PromptCachePreference::default(), Some("session-42".into())),
             Ok(ResolvedCachePlan::Enabled {
-                mode: ResolvedCacheMode::Automatic,
-                ttl: Some(CacheTtl::OneHour),
+                mode: PromptCacheMode::Implicit,
+                retention: Some(CacheRetention::ThirtyMinutes),
                 routing_key: Some("session-42".into()),
+                max_breakpoints: None,
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_route_rejects_claimed_controls() {
+        let caps = PromptCacheCapabilities::unsupported();
+        assert_eq!(
+            caps.resolve(PromptCachePreference::default(), None),
+            Ok(ResolvedCachePlan::Unsupported)
+        );
+        assert_eq!(
+            caps.resolve(
+                PromptCachePreference {
+                    mode: PromptCacheModePreference::Explicit,
+                    retention: None,
+                },
+                None
+            ),
+            Err(CacheResolutionError::CachingUnsupported)
+        );
+    }
+
+    #[test]
+    fn rejects_unadvertised_retention() {
+        let caps = PromptCacheCapabilities {
+            modes: vec![PromptCacheMode::Automatic],
+            default_mode: Some(PromptCacheMode::Automatic),
+            supported_retentions: vec![CacheRetention::FiveMinutes],
+            default_retention: Some(CacheRetention::FiveMinutes),
+            disable_supported: true,
+            routing_key_supported: false,
+            max_breakpoints: None,
+            min_cacheable_tokens: None,
+            reports_reads: true,
+            reports_writes: true,
+            reports_misses: false,
+        };
+        assert_eq!(
+            caps.resolve(
+                PromptCachePreference {
+                    mode: PromptCacheModePreference::ProviderDefault,
+                    retention: Some(CacheRetention::OneHour),
+                },
+                None
+            ),
+            Err(CacheResolutionError::RetentionUnsupported {
+                retention: CacheRetention::OneHour
             })
         );
     }

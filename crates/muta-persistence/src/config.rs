@@ -251,31 +251,6 @@ fn default_scope() -> String {
     "*".to_string()
 }
 
-/// `Provider` implementation the catalog builds. Mirrors the built-in
-/// `muta_contracts::catalog::Transport` variants but stays a plain serializable
-/// enum so it round-trips through TOML.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
-pub enum UserTransport {
-    #[default]
-    #[serde(alias = "OpenAiCompat", alias = "openai")]
-    OpenAi,
-    /// OpenAI **Responses** API (`/responses` endpoint) over an ordinary API
-    /// key — e.g. DeepSeek V4's native surface. Distinct from
-    /// [`OpenAi`](Self::OpenAi) (chat completions) in transport only. OAuth
-    /// Responses channels (ChatGPT) resolve their transport from
-    /// [`muta_contracts::ChannelAuth`] instead.
-    #[serde(alias = "openai-responses", alias = "openai_responses")]
-    OpenAiResponses,
-    /// Anthropic-compatible `/messages` endpoint. Used by opencode-go's
-    /// MiniMax/Qwen models and any Anthropic-format relay.
-    Anthropic,
-    /// Google native API — speaks the official `/v1beta` REST surface
-    /// (`generateContent`/`streamGenerateContent`). Use for Google's own API or
-    /// a relay that forwards model ids verbatim.
-    #[serde(alias = "GeminiNative", alias = "gemini")]
-    Google,
-}
-
 /// Capability metadata fitted from a provider's live `GET /models` response
 /// for one model id the client registry does not know. Persisted in the
 /// discovery cache (`models_discovery.json`) so the metadata survives
@@ -307,6 +282,7 @@ pub struct FittedModelInfo {
 /// presence opts the model in to reasoning on Anthropic-protocol routes,
 /// `thinking` defaulting **on** unless explicitly `false` (ADR-0046).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RouteSettings {
     /// Reasoning depth: `"none"`/`"minimal"`/`"low"`/`"medium"`/`"high"`/
     /// `"xhigh"`/`"max"`, clamped at request time to the model's levels.
@@ -324,9 +300,10 @@ pub struct RouteSettings {
     /// user's own per-route choices and are never rebuilt from an endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_overrides: Option<muta_contracts::CapabilityOverrides>,
-    /// Prompt-cache behavior requested for this concrete route.
+    /// Prompt-cache behavior requested for this concrete route. The exact
+    /// mode and retention must be advertised by the resolved route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_preference: Option<muta_contracts::CachePreference>,
+    pub prompt_cache: Option<muta_contracts::PromptCachePreference>,
 }
 
 impl RouteSettings {
@@ -341,6 +318,7 @@ impl RouteSettings {
                 .capability_overrides
                 .as_ref()
                 .is_none_or(muta_contracts::CapabilityOverrides::is_empty)
+            && self.prompt_cache.is_none()
     }
 }
 
@@ -1724,21 +1702,21 @@ name = "DeepSeek"
             effort: None,
             thinking: None,
             capability_overrides: None,
-            cache_preference: None,
+            prompt_cache: None,
         };
         assert!(bare.is_empty());
         let with_effort = RouteSettings {
             effort: Some("high".to_string()),
             thinking: None,
             capability_overrides: None,
-            cache_preference: None,
+            prompt_cache: None,
         };
         assert!(!with_effort.is_empty());
         let with_thinking = RouteSettings {
             effort: None,
             thinking: Some(false),
             capability_overrides: None,
-            cache_preference: None,
+            prompt_cache: None,
         };
         assert!(!with_thinking.is_empty());
     }

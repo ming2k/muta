@@ -204,6 +204,10 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
         "websearch.jina_api_key",
         "secrets moved to `credentials.toml [websearch]`",
     ),
+    (
+        "websearch.fallback",
+        "removed; web search uses a direct backend connection without fallback",
+    ),
 ];
 
 /// Walk a parsed table against the known key set, reporting unknown leaves

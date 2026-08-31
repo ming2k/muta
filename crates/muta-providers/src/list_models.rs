@@ -46,12 +46,12 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use muta_contracts::{RemoteModelEndpoint, RemoteModelMetadata, SecretString, ThinkingSupport};
+use muta_contracts::{RemoteModelMetadata, SecretString, ThinkingSupport, WireProtocol};
 use serde_json::Value;
 
-/// The protocol a discovery request speaks. Kept as a string (not the
-/// `muta_persistence::UserTransport` enum) so this module has zero dependency on
-/// `muta-persistence` — the calling layer maps its transport to one of these.
+/// The protocol a discovery request speaks. Model-catalog APIs are related to,
+/// but distinct from, inference protocols (for example both OpenAI inference
+/// protocols discover models through the same `/models` shape).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveryProtocol {
     /// OpenAI-compatible chat completions → `GET /v1/models`.
@@ -65,16 +65,13 @@ pub enum DiscoveryProtocol {
 }
 
 impl DiscoveryProtocol {
-    /// Parse a preset registry protocol string into a discovery protocol.
-    /// Unknown values fall back to [`DiscoveryProtocol::OpenAi`] (the most
-    /// common relay shape) rather than erroring, so a future protocol label
-    /// degrades to "best effort" discovery.
-    pub fn from_preset_protocol(protocol: &str) -> Self {
+    /// Map an inference protocol to its model-catalog discovery surface.
+    pub fn from_wire_protocol(protocol: muta_contracts::WireProtocol) -> Self {
         match protocol {
-            "anthropic" => Self::Anthropic,
-            "google" | "gemini" => Self::Google,
-            "codex" => Self::Codex,
-            _ => Self::OpenAi,
+            muta_contracts::WireProtocol::AnthropicMessages => Self::Anthropic,
+            muta_contracts::WireProtocol::GoogleGenerateContent => Self::Google,
+            muta_contracts::WireProtocol::OpenAiChatCompletions
+            | muta_contracts::WireProtocol::OpenAiResponses => Self::OpenAi,
         }
     }
 
@@ -82,12 +79,12 @@ impl DiscoveryProtocol {
     pub fn for_connection(
         preset_id: Option<&str>,
         auth: muta_contracts::ChannelAuth,
-        protocol: &str,
+        protocol: muta_contracts::WireProtocol,
     ) -> Self {
         if auth == muta_contracts::ChannelAuth::ChatGptOAuth || preset_id == Some("chatgpt-oauth") {
             Self::Codex
         } else {
-            Self::from_preset_protocol(protocol)
+            Self::from_wire_protocol(protocol)
         }
     }
 }
@@ -206,7 +203,7 @@ pub struct DiscoveredModel {
     /// Exact API surface advertised for the model. This is provider-scoped: a
     /// Copilot model can use Messages, Responses, or Chat Completions while the
     /// same id elsewhere uses another route.
-    pub endpoint: Option<RemoteModelEndpoint>,
+    pub protocol: Option<WireProtocol>,
     /// Provider model family, when advertised.
     pub family: Option<String>,
     /// Advertised context window in tokens (Kimi's `context_length`, or
@@ -239,7 +236,7 @@ impl DiscoveredModel {
     /// provide a conservative fallback for fields the endpoint does not expose.
     pub fn remote_metadata(&self) -> RemoteModelMetadata {
         RemoteModelMetadata {
-            endpoint: self.endpoint,
+            protocol: self.protocol,
             family: self.family.clone(),
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -555,7 +552,7 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                 DiscoveredModel {
                     id,
                     picker_enabled: Some(listed),
-                    endpoint: Some(RemoteModelEndpoint::Responses),
+                    protocol: Some(WireProtocol::OpenAiResponses),
                     family: None,
                     context_window,
                     max_output_tokens: None,
@@ -620,7 +617,7 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
     Some(DiscoveredModel {
         id,
         picker_enabled: None,
-        endpoint: None,
+        protocol: None,
         family: None,
         context_window: entry
             .get("context_length")
@@ -696,11 +693,11 @@ fn copilot_model_from_capabilities(
             }
         })
     };
-    let endpoint = copilot_endpoint(entry.get("supported_endpoints"));
+    let protocol = copilot_protocol(entry.get("supported_endpoints"));
     Some(DiscoveredModel {
         id,
         picker_enabled: entry.get("model_picker_enabled").and_then(Value::as_bool),
-        endpoint,
+        protocol,
         family: capabilities
             .get("family")
             .and_then(Value::as_str)
@@ -729,15 +726,15 @@ fn copilot_model_from_capabilities(
 /// is checked first because it requires a distinct wire format; Responses is
 /// next; Chat Completions is the explicit final route. Missing or unfamiliar
 /// entries leave the channel's configured fallback untouched.
-fn copilot_endpoint(value: Option<&Value>) -> Option<RemoteModelEndpoint> {
+fn copilot_protocol(value: Option<&Value>) -> Option<WireProtocol> {
     let endpoints = value?.as_array()?;
     let has = |needle| endpoints.iter().any(|value| value.as_str() == Some(needle));
     if has("/v1/messages") {
-        Some(RemoteModelEndpoint::Messages)
+        Some(WireProtocol::AnthropicMessages)
     } else if has("/responses") {
-        Some(RemoteModelEndpoint::Responses)
+        Some(WireProtocol::OpenAiResponses)
     } else if has("/chat/completions") {
-        Some(RemoteModelEndpoint::ChatCompletions)
+        Some(WireProtocol::OpenAiChatCompletions)
     } else {
         None
     }
@@ -822,7 +819,7 @@ fn parse_antigravity_models_map(
         out.push(DiscoveredModel {
             id: model_id.clone(),
             picker_enabled: Some(true),
-            endpoint: None,
+            protocol: None,
             family: Some("google".to_string()),
             context_window,
             max_output_tokens,
@@ -839,7 +836,7 @@ fn parse_antigravity_models_map(
         out.push(DiscoveredModel {
             id: "gemini-3.7-flash".to_string(),
             picker_enabled: Some(true),
-            endpoint: None,
+            protocol: None,
             family: Some("google".to_string()),
             context_window: Some(1_000_000),
             max_output_tokens: Some(64_000),
@@ -1063,7 +1060,7 @@ mod tests {
         assert_eq!(models[0].picker_enabled, Some(false));
         assert_eq!(models[1].id, "gpt-codex");
         assert_eq!(models[1].picker_enabled, Some(true));
-        assert_eq!(models[1].endpoint, Some(RemoteModelEndpoint::Responses));
+        assert_eq!(models[1].protocol, Some(WireProtocol::OpenAiResponses));
         assert_eq!(models[1].context_window, Some(272_000));
         assert_eq!(models[1].thinking, Some(ThinkingSupport::ReasoningSummary));
         assert_eq!(models[1].vision, Some(true));
@@ -1254,14 +1251,14 @@ mod tests {
             .find(|model| model.id == "claude-opus-4.7")
             .unwrap();
         assert_eq!(claude.picker_enabled, Some(true));
-        assert_eq!(claude.endpoint, Some(RemoteModelEndpoint::Messages));
+        assert_eq!(claude.protocol, Some(WireProtocol::AnthropicMessages));
         assert_eq!(claude.family.as_deref(), Some("claude-opus"));
         assert_eq!(claude.thinking, Some(ThinkingSupport::AnthropicAdaptive));
         assert_eq!(claude.tool_call, Some(true));
         assert_eq!(claude.max_output_tokens, Some(64_000));
 
         let remote = claude.remote_metadata();
-        assert_eq!(remote.endpoint, Some(RemoteModelEndpoint::Messages));
+        assert_eq!(remote.protocol, Some(WireProtocol::AnthropicMessages));
         assert_eq!(
             remote.effort_levels,
             Some(vec![
@@ -1277,7 +1274,7 @@ mod tests {
             .find(|model| model.id == "internal-title-model")
             .unwrap();
         assert_eq!(internal.picker_enabled, Some(false));
-        assert_eq!(internal.endpoint, Some(RemoteModelEndpoint::Responses));
+        assert_eq!(internal.protocol, Some(WireProtocol::OpenAiResponses));
     }
 
     #[test]
@@ -1367,33 +1364,21 @@ mod tests {
     }
 
     #[test]
-    fn discovery_protocol_maps_template_strings() {
+    fn discovery_protocol_maps_wire_protocols() {
         assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("anthropic"),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::AnthropicMessages),
             DiscoveryProtocol::Anthropic
         );
         assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("google"),
-            DiscoveryProtocol::Google
-        );
-        // Legacy "gemini" protocol string still maps to Google (backward
-        // compat for old registries/configs).
-        assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("gemini"),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::GoogleGenerateContent),
             DiscoveryProtocol::Google
         );
         assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("openai"),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::OpenAiChatCompletions),
             DiscoveryProtocol::OpenAi
         );
-        // Responses-API templates discover over the same OpenAI GET /models.
         assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("openai-responses"),
-            DiscoveryProtocol::OpenAi
-        );
-        // Unknown → OpenAI (most common relay shape), never an error.
-        assert_eq!(
-            DiscoveryProtocol::from_preset_protocol("future"),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::OpenAiResponses),
             DiscoveryProtocol::OpenAi
         );
     }

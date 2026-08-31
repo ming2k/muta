@@ -10,7 +10,7 @@
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
-use muta_contracts::{ChannelAuth, WireFormat};
+use muta_contracts::{ChannelAuth, WireProtocol};
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
@@ -269,8 +269,8 @@ pub fn sync_fitted_model_registry() {
             let fitted_map = cache.fitted_models.get(&connection.id);
             fitted_map.map(|map| {
                 let (format, family) = match spec {
-                    Some(spec) => (wire_format_for_protocol(spec.protocol), spec.id.to_string()),
-                    None => (WireFormat::OpenAi, connection.id.clone()),
+                    Some(spec) => (spec.protocol, spec.id.to_string()),
+                    None => (WireProtocol::OpenAiChatCompletions, connection.id.clone()),
                 };
                 map.iter()
                     .map(move |(id, info)| muta_contracts::model::FittedModel {
@@ -279,7 +279,7 @@ pub fn sync_fitted_model_registry() {
                         context_window: info.context_window,
                         reasoning: info.reasoning,
                         vision: info.vision,
-                        format,
+                        protocol: format,
                         effort_levels: info
                             .efforts
                             .iter()
@@ -305,22 +305,9 @@ pub fn sync_fitted_model_registry() {
     muta_contracts::model::register_fitted_models(fitted);
 }
 
-/// The model ids a preset serves over its protocol's wire format.
+/// The model ids explicitly owned by a preset.
 fn supported_models_for_preset(spec: &ProviderPresetSpec) -> Vec<&'static str> {
-    spec.baselines
-        .iter()
-        .filter(|model| {
-            matches!(
-                (spec.protocol, model.format),
-                ("openai", WireFormat::OpenAi)
-                    | ("openai-responses", WireFormat::OpenAi)
-                    | ("anthropic", WireFormat::AnthropicCompat)
-                    | ("google", WireFormat::Google)
-                    | ("gemini", WireFormat::Google)
-            )
-        })
-        .map(|model| model.id)
-        .collect()
+    spec.baselines.iter().map(|model| model.id).collect()
 }
 
 /// Preserve `supported` order, keeping only ids present in `available`.
@@ -339,13 +326,5 @@ fn fitted_model_info(model: &muta_providers::DiscoveredModel) -> FittedModelInfo
         reasoning: model.reasoning.unwrap_or(false),
         vision: model.vision.unwrap_or(false),
         efforts: model.effort_levels.clone().unwrap_or_default(),
-    }
-}
-
-fn wire_format_for_protocol(protocol: &str) -> WireFormat {
-    match protocol {
-        "anthropic" => WireFormat::AnthropicCompat,
-        "google" | "gemini" => WireFormat::Google,
-        _ => WireFormat::OpenAi,
     }
 }

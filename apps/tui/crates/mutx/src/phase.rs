@@ -57,6 +57,7 @@ pub enum Phase {
 pub enum ToolVerb {
     Exploring,
     Searching,
+    WebSearching,
     Editing,
     Running,
     UpdatingTasks,
@@ -70,6 +71,7 @@ impl ToolVerb {
         [
             Self::Exploring,
             Self::Searching,
+            Self::WebSearching,
             Self::Editing,
             Self::Running,
             Self::UpdatingTasks,
@@ -84,6 +86,7 @@ impl ToolVerb {
         match self {
             Self::Exploring => "exploring",
             Self::Searching => "searching codebase",
+            Self::WebSearching => "searching web",
             Self::Editing => "making edits",
             Self::Running => "running command",
             Self::UpdatingTasks => "updating tasks",
@@ -153,7 +156,8 @@ fn tool_verb(name: &str) -> ToolVerb {
     match name {
         "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url"
         | "webfetch" => ToolVerb::Exploring,
-        "search_text" | "search_web" | "websearch" => ToolVerb::Searching,
+        "search_text" => ToolVerb::Searching,
+        "search_web" | "websearch" => ToolVerb::WebSearching,
         "write_file" | "edit_file" => ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => ToolVerb::UpdatingTasks,
@@ -187,6 +191,7 @@ mod tests {
             ("awaiting permission", Phase::AwaitingUser),
             ("exploring", Phase::Tool(ToolVerb::Exploring)),
             ("searching codebase", Phase::Tool(ToolVerb::Searching)),
+            ("searching web", Phase::Tool(ToolVerb::WebSearching)),
             ("making edits", Phase::Tool(ToolVerb::Editing)),
             ("running command", Phase::Tool(ToolVerb::Running)),
             ("updating tasks", Phase::Tool(ToolVerb::UpdatingTasks)),

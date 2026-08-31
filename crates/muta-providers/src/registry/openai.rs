@@ -2,7 +2,7 @@
 //! one key (`OPENAI_API_KEY`).
 
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -42,7 +42,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -53,7 +53,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -64,7 +64,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -75,7 +75,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -91,7 +91,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -102,7 +102,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -113,7 +113,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -127,7 +127,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::None,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -138,7 +138,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::None,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -149,7 +149,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -160,7 +160,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -171,7 +171,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -182,7 +182,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -190,27 +190,92 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
+const OPENAI_GPT_56_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::PromptCacheSpec {
+    modes: &[
+        muta_contracts::PromptCacheMode::Implicit,
+        muta_contracts::PromptCacheMode::Explicit,
+    ],
+    default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+    supported_retentions: &[muta_contracts::CacheRetention::ThirtyMinutes],
+    default_retention: Some(muta_contracts::CacheRetention::ThirtyMinutes),
+    disable_supported: false,
+    routing_key_supported: true,
+    max_breakpoints: Some(4),
+    min_cacheable_tokens: Some(1024),
+    reports_reads: true,
+    reports_writes: true,
+    reports_misses: false,
+};
+
+const OPENAI_24H_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::PromptCacheSpec {
+    modes: &[muta_contracts::PromptCacheMode::Implicit],
+    default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+    supported_retentions: &[muta_contracts::CacheRetention::TwentyFourHours],
+    default_retention: None,
+    disable_supported: false,
+    routing_key_supported: true,
+    max_breakpoints: None,
+    min_cacheable_tokens: Some(2048),
+    reports_reads: true,
+    reports_writes: false,
+    reports_misses: false,
+};
+
+const OPENAI_LEGACY_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::PromptCacheSpec {
+    modes: &[muta_contracts::PromptCacheMode::Implicit],
+    default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+    supported_retentions: &[
+        muta_contracts::CacheRetention::InMemory,
+        muta_contracts::CacheRetention::TwentyFourHours,
+    ],
+    default_retention: None,
+    disable_supported: false,
+    routing_key_supported: true,
+    max_breakpoints: None,
+    min_cacheable_tokens: Some(2048),
+    reports_reads: true,
+    reports_writes: false,
+    reports_misses: false,
+};
+
+const OPENAI_IN_MEMORY_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::PromptCacheSpec {
+    modes: &[muta_contracts::PromptCacheMode::Implicit],
+    default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+    supported_retentions: &[muta_contracts::CacheRetention::InMemory],
+    default_retention: None,
+    disable_supported: false,
+    routing_key_supported: true,
+    max_breakpoints: None,
+    min_cacheable_tokens: Some(2048),
+    reports_reads: true,
+    reports_writes: false,
+    reports_misses: false,
+};
+
+fn prompt_cache_for_model(model: &str) -> muta_contracts::PromptCacheSpec {
+    if model == "gpt-5.6" || model.starts_with("gpt-5.6-") {
+        OPENAI_GPT_56_CACHE
+    } else if model == "gpt-5.5" || model.starts_with("gpt-5.5-") {
+        OPENAI_24H_CACHE
+    } else if matches!(
+        model,
+        "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.2" | "gpt-5.2-chat-latest" | "gpt-5.2-pro"
+    ) {
+        OPENAI_LEGACY_CACHE
+    } else if matches!(model, "gpt-4o" | "gpt-4o-mini" | "gpt-5.3-codex-spark") {
+        OPENAI_IN_MEMORY_CACHE
+    } else {
+        muta_contracts::PromptCacheSpec::UNSUPPORTED
+    }
+}
+
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec {
-        activations: &[
-            muta_contracts::CacheActivation::Implicit,
-            muta_contracts::CacheActivation::ExplicitBreakpoints,
-            muta_contracts::CacheActivation::RoutingKey,
-        ],
-        supported_ttls: &[muta_contracts::CacheTtl::ThirtyMinutes],
-        default_ttl: Some(muta_contracts::CacheTtl::ThirtyMinutes),
-        disable_supported: false,
-        max_breakpoints: Some(4),
-        min_cacheable_tokens: Some(1024),
-        reports_reads: true,
-        reports_writes: true,
-        reports_misses: false,
-    },
+    prompt_cache: prompt_cache_for_model,
     id: "openai",
     baselines: MODELS,
     base_url: "https://api.openai.com/v1/chat/completions",
     user_agent: None,
-    protocol: "openai",
+    protocol: WireProtocol::OpenAiChatCompletions,
     models: OPENAI_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

@@ -95,7 +95,7 @@ impl App {
                 && (self.telemetry_detail || self.telemetry_turn.is_some()))
             && !(view == View::Settings
                 && (self.config_custom_editing
-                    || self.websearch_editing.is_some()
+                    || self.config_dropdown.is_some()
                     || self.config_focus == crate::overlays::ConfigFocus::Detail))
     }
 
@@ -391,7 +391,7 @@ impl App {
                 self.host_preview_scroll = 0;
             }
             crate::surfaces::View::Settings => {
-                self.websearch_editing = None;
+                self.config_dropdown = None;
                 if self.config_custom_editing {
                     self.theme =
                         Theme::from_color_scheme(&self.color_scheme, &self.custom_color_scheme);
@@ -556,10 +556,8 @@ impl App {
     /// stops: the view itself stays up).
     pub(crate) fn pop_sublayer(&mut self) -> bool {
         match self.active_modal() {
-            Modal::Config if self.websearch_editing.is_some() => {
-                self.websearch_editing = None;
-                self.input.clear();
-                self.set_cursor(0);
+            Modal::Config if self.config_dropdown.is_some() => {
+                self.config_dropdown = None;
                 true
             }
             Modal::Config if self.config_custom_editing => {

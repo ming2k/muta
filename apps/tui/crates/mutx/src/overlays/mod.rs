@@ -38,8 +38,8 @@ pub mod view_switcher;
 
 pub use activity::{ActivityModalView, draw_activity_modal};
 pub use config::{
-    ConfigCategory, ConfigFocus, ConfigViewProps, cycle_reader, cycle_websearch_backend,
-    draw_config_view,
+    ConfigCategory, ConfigFocus, ConfigViewProps, build_websearch_provider_dropdown,
+    build_websearch_reader_dropdown, draw_config_view,
 };
 pub use dashboard::{
     ConsoleCommand, ConsoleLine, ConsoleVerb, DashboardFocus, creation_order, draw_dashboard,

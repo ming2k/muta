@@ -109,9 +109,6 @@ pub struct InputContext {
     pub host_prompting: bool,
     /// Whether the custom color scheme hex editor in Settings is actively editing.
     pub config_custom_editing: bool,
-    /// Whether a Web Search settings field (SearXNG URL / API key) in
-    /// Settings is actively editing. Mirrors `App::websearch_editing`.
-    pub config_websearch_editing: bool,
     /// Active Emacs-style two-stroke leader chord state. Mirrors `App::leader_chord`.
     pub leader_chord: crate::app::LeaderChord,
 }
@@ -135,7 +132,7 @@ impl InputContext {
 fn edits_input_field(context: &InputContext) -> bool {
     match context.active_modal {
         super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
-        super::Modal::Config => context.config_custom_editing || context.config_websearch_editing,
+        super::Modal::Config => context.config_custom_editing,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
         // The provider editor edits the composer line on every visible field
@@ -1757,8 +1754,6 @@ pub fn process_event(
                         // Tab cycles focus between the editor's API-key and
                         // model-id fields.
                         InputAction::ModelEditorNextField
-                    } else if context.active_modal == super::Modal::Config {
-                        InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::CustomProvider {
                         // Tab advances through the editor's visible fields.
                         InputAction::CustomProviderNextField
@@ -1792,8 +1787,6 @@ pub fn process_event(
                     // uses Ctrl+Up/Ctrl-Down, not Tab).
                     if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
-                    } else if context.active_modal == super::Modal::Config {
-                        InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionPrevious
                     } else if context.active_modal == super::Modal::Telemetry {

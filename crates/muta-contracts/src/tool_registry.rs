@@ -1173,7 +1173,7 @@ mod tests {
             thinking: crate::thinking::ThinkingSupport::None,
             tool_call: true,
             vision,
-            format: crate::WireFormat::OpenAi,
+            protocol: crate::WireProtocol::OpenAiChatCompletions,
             model_guidance: "",
             effort_levels: &[],
         }

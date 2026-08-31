@@ -68,7 +68,8 @@ pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
         | Modal::Models
         | Modal::Connections
         | Modal::ModelEditor
-        | Modal::CustomProvider => apply_modal_field_paste(app, read),
+        | Modal::CustomProvider
+        | Modal::Config => apply_modal_field_paste(app, read),
         Modal::Question => apply_question_other_paste(app, read),
         _ => {}
     }

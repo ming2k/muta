@@ -7,15 +7,18 @@
 use super::request::{self, BodyInput};
 use super::response;
 use super::*;
-use muta_contracts::{Effort, Message, ResolvedCacheMode, ResolvedCachePlan, Role, ThinkingMode, Tool};
+use muta_contracts::{
+    Effort, Message, PromptCacheMode, ResolvedCachePlan, Role, ThinkingMode, Tool,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 static DEFAULT_UNSUPPORTED_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Unsupported;
 static DEFAULT_EXPLICIT_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Enabled {
-    mode: ResolvedCacheMode::Explicit,
-    ttl: Some(muta_contracts::CacheTtl::FiveMinutes),
+    mode: PromptCacheMode::Explicit,
+    retention: Some(muta_contracts::CacheRetention::FiveMinutes),
     routing_key: None,
+    max_breakpoints: Some(4),
 };
 
 // ── request body shape ────────────────────────────────────────────────────
@@ -27,7 +30,6 @@ fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> Body
         tool_specs: None,
         max_tokens: provider.max_tokens,
         thinking: provider.thinking,
-        ephemeral: false,
         cache_plan: &DEFAULT_UNSUPPORTED_CACHE_PLAN,
     }
 }
@@ -132,7 +134,6 @@ fn request_body_includes_tools_in_anthropic_shape() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
-            ephemeral: false,
             cache_plan: &DEFAULT_UNSUPPORTED_CACHE_PLAN,
         },
     );
@@ -198,7 +199,6 @@ fn cache_breakpoints_hit_all_four_zones() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
-            ephemeral: false,
             cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
         },
     );
@@ -215,7 +215,7 @@ fn cache_breakpoints_hit_all_four_zones() {
 }
 
 #[test]
-fn ephemeral_request_disables_cache_breakpoints() {
+fn disabled_cache_plan_omits_cache_breakpoints() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
@@ -235,8 +235,7 @@ fn ephemeral_request_disables_cache_breakpoints() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
-            ephemeral: true,
-            cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
+            cache_plan: &muta_contracts::ResolvedCachePlan::Disabled,
         },
     );
     assert_eq!(count_cache_breakpoints(&body), 0);
@@ -265,7 +264,6 @@ fn cache_breakpoints_never_exceed_four_cap() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
-            ephemeral: false,
             cache_plan: &DEFAULT_EXPLICIT_CACHE_PLAN,
         },
     );

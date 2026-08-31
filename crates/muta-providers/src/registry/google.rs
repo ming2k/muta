@@ -2,7 +2,7 @@
 
 use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
@@ -44,7 +44,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -55,7 +55,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -66,7 +66,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -77,7 +77,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -88,7 +88,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -100,7 +100,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_LEVEL,
     },
@@ -111,7 +111,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_BUDGET,
     },
@@ -122,7 +122,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: EFFORT_GEMINI_BUDGET,
     },
@@ -133,7 +133,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::None,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -144,7 +144,7 @@ pub const MODELS: &[Model] = &[
         thinking: ThinkingSupport::None,
         tool_call: true,
         vision: true,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: &[],
     },
@@ -152,26 +152,29 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: muta_contracts::PromptCacheSpec {
-        activations: &[
-            muta_contracts::CacheActivation::Implicit,
-            muta_contracts::CacheActivation::Resource,
-        ],
-        supported_ttls: &[muta_contracts::CacheTtl::OneHour],
-        default_ttl: Some(muta_contracts::CacheTtl::OneHour),
+fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
+    muta_contracts::PromptCacheSpec {
+        modes: &[muta_contracts::PromptCacheMode::Implicit],
+        default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+        supported_retentions: &[],
+        default_retention: None,
         disable_supported: false,
+        routing_key_supported: false,
         max_breakpoints: None,
         min_cacheable_tokens: None,
         reports_reads: true,
         reports_writes: false,
         reports_misses: false,
-    },
+    }
+}
+
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+    prompt_cache: prompt_cache_for_model,
     id: "google",
     baselines: MODELS,
     base_url: "https://generativelanguage.googleapis.com/v1beta",
     user_agent: None,
-    protocol: "google",
+    protocol: WireProtocol::GoogleGenerateContent,
     models: GOOGLE_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

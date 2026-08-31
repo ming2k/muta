@@ -104,7 +104,7 @@ Connection *instances* (the "who I connect to" records) live in the state store
 `$XDG_STATE_HOME/muta/connections.toml`; secrets in
 `$XDG_CONFIG_HOME/muta/credentials.toml`; `config.toml` holds only the
 *selection* (`default_connection` / `default_model`, which reference instance
-ids). The routes a model actually travels (per-model transport/endpoint/
+ids). The routes a model actually travels (per-model protocol/dialect/endpoint/
 reasoning) are **derived at runtime** from each instance's preset and the
 discovery cache — never persisted, so two instances of the same preset can
 never duplicate or drift a route set. See [Providers](providers.md) for the
@@ -117,12 +117,12 @@ An instance is declared as one `[[connections]]` table in `connections.toml`:
 [[connections]]
 id = "acme"
 name = "Acme Relay"          # display name; defaults to the id
-preset_id = "custom-openai"   # optional: derive routes from a preset
 auth = "ApiKey"              # ApiKey | XaiOAuth | ChatGptOAuth | CopilotOAuth | AntigravityOAuth
 # api_key_env = "ACME_API_KEY"  # optional env var holding the credential
 
 # Pure-custom instance only (no preset_id):
-transport = "OpenAi"         # OpenAi | OpenAiResponses | Anthropic | Google
+protocol = "openai-chat-completions"
+# Also valid: openai-responses | anthropic-messages | google-generate-content
 base_url = "https://relay.example.com/v1/chat/completions"
 models = ["acme-7b", "acme-13b"]
 ```
@@ -223,10 +223,10 @@ covers storage only.
 OpenAI (Responses and chat), Anthropic, xAI Grok, Kimi K3, DeepSeek, GLM-5.2,
 and Gemini. Valid values are clamped to the model's supported levels at
 request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
-GPT models expose a subset). Settings are stored per `(instance, model)` in the
-discovery cache (`$XDG_CACHE_HOME/muta/models_discovery.json`) under
-`route_settings`, written by the model `e` editor in the picker — they are
-user-set route facts, not `config.toml` behavior.
+GPT models expose a subset). Settings are stored per `(instance, model)` in
+`$XDG_STATE_HOME/muta/route_settings.json`, written by the model `e` editor in
+the picker — they are user-set route facts, not disposable discovery data or
+`config.toml` behavior.
 
 Anthropic extended thinking is **opt-in** (ADR-0046). A model does not reason
 unless you have configured it to.
@@ -245,6 +245,36 @@ The legacy `[model_reasoning."<model-id>"]` table and the flat
 `anthropic_effort` / `anthropic_thinking` fields are **deprecated** and no
 longer read; a one-shot migration folds their values into `route_settings` for
 the instances that serve the model.
+
+### Per-route prompt caching
+
+The same route-settings record may contain `prompt_cache`:
+
+```json
+{
+  "connections": {
+    "openai-work": {
+      "gpt-5.6-sol": {
+        "prompt_cache": {
+          "mode": "explicit",
+          "retention": "thirty_minutes"
+        }
+      }
+    }
+  },
+  "migrated_from_cache": true
+}
+```
+
+`mode` is `provider_default`, `implicit`, `automatic`, `explicit`, or
+`disabled`. `retention`, when present, is `in_memory`, `five_minutes`,
+`thirty_minutes`, `one_hour`, or `twenty_four_hours`.
+
+These values are requests, not feature flags. The selected provider route and
+model must explicitly advertise the mode and retention; unsupported values
+fail before network dispatch. Omitting `prompt_cache` uses the route's declared
+provider default. Unknown fields are rejected rather than ignored. See
+[Providers](providers.md#prompt-cache-capability-matrix).
 
 ## TUI presentation
 

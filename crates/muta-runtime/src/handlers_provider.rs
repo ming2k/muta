@@ -12,9 +12,9 @@ use muta_agent::catalog;
 use muta_agent::orchestration::round_response;
 use muta_contracts::{
     AgentNotice, AgentResponse, ClientIdentity, CommandRecord, CommandResult, Provider, RoundEvent,
-    SecretString,
+    SecretString, WireProtocol,
 };
-use muta_persistence::config::{Config, Credentials, DiscoveryCache, UserTransport};
+use muta_persistence::config::{Config, Credentials, DiscoveryCache};
 use muta_persistence::connection_usage::ConnectionUsage;
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
@@ -51,7 +51,7 @@ pub(crate) struct ProviderEnv<'a> {
 
 pub(crate) struct AddProviderParams {
     pub name: String,
-    pub protocol: String,
+    pub protocol: WireProtocol,
     pub base_url: String,
     pub api_key: SecretString,
     pub user_agent: Option<String>,
@@ -185,7 +185,6 @@ pub(crate) async fn add(
     } = params;
     let mut connections = Connections::load();
     let id = connections.unique_id(&name);
-    let transport = transport_for_protocol(&protocol);
     let trimmed_key = api_key.expose_secret().trim();
     // Pasted API key on an OAuth preset → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
@@ -236,7 +235,7 @@ pub(crate) async fn add(
         auth,
         api_key_env: None,
         client_identity,
-        transport: if is_preset { None } else { Some(transport) },
+        protocol: if is_preset { None } else { Some(protocol) },
         base_url: if is_preset { None } else { base_url },
         user_agent: if is_preset { None } else { user_agent },
         models: if is_preset {
@@ -321,13 +320,12 @@ pub(crate) async fn edit(
     }: ProviderEnv<'_>,
     id: String,
     name: String,
-    protocol: String,
+    protocol: WireProtocol,
     base_url: String,
     api_key: SecretString,
     client_identity: Option<ClientIdentity>,
 ) {
     let mut connections = Connections::load();
-    let transport = transport_for_protocol(&protocol);
     let trimmed_url = base_url.trim();
     let trimmed_key = api_key.expose_secret().trim();
     let trimmed_name = name.trim();
@@ -348,7 +346,7 @@ pub(crate) async fn edit(
             if !trimmed_url.is_empty() {
                 instance.base_url = Some(trimmed_url.to_string());
             }
-            instance.transport = Some(transport);
+            instance.protocol = Some(protocol);
         }
         // An empty key keeps whatever the instance already had.
         if !trimmed_key.is_empty() {
@@ -1196,18 +1194,6 @@ pub async fn refresh_models(
     )));
 }
 
-/// Map a wire-protocol label from the TUI to the persisted transport enum.
-fn transport_for_protocol(protocol: &str) -> UserTransport {
-    match protocol {
-        "anthropic" => UserTransport::Anthropic,
-        "google" | "gemini" => UserTransport::Google,
-        // The OpenAI Responses API over an API key (e.g. DeepSeek V4).
-        "openai-responses" => UserTransport::OpenAiResponses,
-        // Default (and explicit "openai"): the OpenAI-compatible chat surface.
-        _ => UserTransport::OpenAi,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,18 +1225,17 @@ mod tests {
     }
 
     #[test]
-    fn transport_for_protocol_maps_known_labels() {
+    fn wire_protocol_parser_is_exact_and_rejects_unknown_labels() {
         assert_eq!(
-            transport_for_protocol("anthropic"),
-            UserTransport::Anthropic
+            "anthropic-messages".parse::<WireProtocol>(),
+            Ok(WireProtocol::AnthropicMessages)
         );
-        assert_eq!(transport_for_protocol("google"), UserTransport::Google);
         assert_eq!(
-            transport_for_protocol("openai-responses"),
-            UserTransport::OpenAiResponses
+            "openai-responses".parse::<WireProtocol>(),
+            Ok(WireProtocol::OpenAiResponses)
         );
-        assert_eq!(transport_for_protocol("openai"), UserTransport::OpenAi);
-        assert_eq!(transport_for_protocol("future"), UserTransport::OpenAi);
+        assert!("openai".parse::<WireProtocol>().is_err());
+        assert!("future".parse::<WireProtocol>().is_err());
     }
 
     #[test]

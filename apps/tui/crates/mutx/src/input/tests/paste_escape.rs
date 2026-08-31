@@ -45,7 +45,6 @@ fn esc_closes_slash_completion_menu() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -97,7 +96,6 @@ fn esc_closes_path_completion_menu() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -148,7 +146,6 @@ fn esc_falls_through_when_no_completion_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -197,7 +194,6 @@ fn escape_returns_from_always_confirmation() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -243,7 +239,6 @@ fn esc_in_models_browse_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -288,7 +283,6 @@ fn esc_in_connections_browse_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -383,7 +377,6 @@ fn escape_in_btw_modal_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -464,4 +457,22 @@ fn bracketed_paste_routes_in_free_text_modals() {
         InputAction::None,
         "bracketed paste should be dropped in Help"
     );
+
+    // Modal::Config with custom theme editing active accepts bracketed paste
+    let config_context = InputContext {
+        active_modal: crate::Modal::Config,
+        config_custom_editing: true,
+        ..Default::default()
+    };
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = crate::model::selection::SelectionDrag::default();
+    let action = crate::input::process_event(
+        crossterm::event::Event::Paste(payload.to_string()),
+        &mut input,
+        &mut cursor,
+        config_context,
+        &mut drag,
+    );
+    assert!(matches!(action, InputAction::BracketedPaste(t) if t == payload));
 }

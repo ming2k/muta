@@ -317,7 +317,7 @@ fn custom_provider_editor_opens_empty_on_name_field() {
         "Name field borrows an empty input line"
     );
     // The preset seeds the protocol and OpenAI model list.
-    assert_eq!(app.custom_protocol_wire, "openai");
+    assert_eq!(app.custom_protocol_wire, "openai-chat-completions");
     assert!(app.custom_models.iter().any(|m| m == "gpt-5.5"));
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
@@ -326,7 +326,7 @@ fn custom_provider_editor_opens_empty_on_name_field() {
 fn anthropic_preset_seeds_the_claude_family_without_a_model_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(anthropic_preset());
-    assert_eq!(app.custom_protocol_wire, "anthropic");
+    assert_eq!(app.custom_protocol_wire, "anthropic-messages");
     // The Claude family is seeded as the provider's model list…
     assert!(app.custom_models.len() > 1, "seeds multiple Claude models");
     assert!(app.custom_models.iter().any(|m| m.starts_with("claude-")));
@@ -338,7 +338,7 @@ fn anthropic_preset_seeds_the_claude_family_without_a_model_field() {
 fn antigravity_preset_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(antigravity_preset());
-    assert_eq!(app.custom_protocol_wire, "google");
+    assert_eq!(app.custom_protocol_wire, "google-generate-content");
     assert_eq!(
         app.custom_base_url,
         "https://daily-cloudcode-pa.googleapis.com"
@@ -444,7 +444,7 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
     });
     assert_eq!(payload["models"][0], "GLM-5.2");
     assert!(payload["preset_id"].is_null());
-    assert_eq!(payload["protocol"], "openai");
+    assert_eq!(payload["protocol"], "openai-chat-completions");
     assert_eq!(
         payload["base_url"],
         "https://chatapi.weixin.qq.com/openai/v1/chat/completions"

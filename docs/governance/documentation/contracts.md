@@ -1,47 +1,46 @@
 # Repository Contracts
 
-Reference data about the documentation surfaces this repository uses. Read
-this when a rule depends on an optional file or directory and you need to
-know whether this repository has it.
+Reference data and bindings for documentation surfaces adopted by this
+repository.
 
-For the one-time process of installing this governance in a new repository,
-see [Adoption](adoption.md).
+For adoption procedures, see [Adoption](core/adoption.md).
 
-## Required layout
+---
 
-This guide routes documentation through four gates plus a root-file
-exception (see [Routing](routing.md)). Each gate maps to a location:
+## 1. Activated Profiles
 
-| Gate | Path | Required | Purpose |
-|------|------|----------|---------|
-| Time | `docs/adr/` | Optional | Architecture Decision Records (immutable) |
-| Governance | `docs/governance/` | Yes | Repository & Architecture Governance (Top-Level) |
-| Governance | `docs/governance/documentation/` | Yes | Documentation governance (this directory) |
-| Audience | `docs/dev/` | Yes | Contributor-only documentation (the firewall) |
-| Cognitive mode | `docs/tutorials/` | Optional | Learning-oriented walkthroughs |
-| Cognitive mode | `docs/how-to/` | Recommended | Task-oriented user guides |
-| Cognitive mode | `docs/reference/` | Recommended | API, CLI, configuration, and schema lookup |
-| Cognitive mode | `docs/explanation/` | Recommended | Conceptual background and design explanation |
-| Root | `README.md` | Yes | Project pitch and shortest successful start path |
-| Root | `docs/index.md` | Yes | Documentation entry point |
+Declare the domain profiles active in this repository. `tools/sync.sh` and
+`tools/verify.sh` use this list to assemble and verify documentation surfaces.
 
-If the target repository does not use this layout, either adapt
-[Routing](routing.md) first or keep this directory out of the repository.
+- [x] `core` (Mandatory: universal routing, writing style, checklists, patterns)
+- [x] `validation` (Product validation: acceptance, experience scenarios, testing)
+- [x] `architecture` (Architecture decision records: ADR lifecycle)
+- [ ] `operations` (Operational knowledge layering: runbook triage, postmortems)
 
-## Repository contracts
+---
 
-Some rules refer to common files that not every repository has. Treat them
-as contracts:
+## 2. Directory Layout Bindings
 
-| Contract | If present | If absent |
-|----------|------------|-----------|
-| `CHANGELOG.md` | User-visible changes update it in the same commit | Omit changelog checks from review |
-| `CONTRIBUTING.md` | Contributor workflow links to `docs/dev/` | Add one before expecting outside contributions |
-| `docs/adr/index.md` | ADRs are registered there | Create the index before writing ADRs, or disable ADR workflow |
-| `docs/adr/template.md` | New ADRs start from the template | Create a template before requiring ADRs |
-| `docs/reference/glossary.md` | New canonical terms update it | Keep terminology local to the relevant doc |
-| `docs/reference/api.md` | Public API changes update it | Use the project's equivalent reference surface |
-| `docs/tutorials/01-getting-started.md` | Setup changes update it with the README | Update the closest getting-started tutorial instead |
+| Surface | Path | Required | Purpose |
+|---------|------|----------|---------|
+| Core Governance | `docs/governance/documentation/` | Yes | Mirrored governance standard |
+| Top-level Governance | `docs/governance/` | Yes | Repository charters and guidelines |
+| Contributor Firewall | `docs/dev/` | Yes | Developer setup, testing, and procedures |
+| Architecture Records | `docs/adr/` | If `architecture` active | Immutable Architecture Decision Records |
+| Incident Records | `docs/dev/postmortems/` | If `operations` active | Post-incident analysis records |
+| Root Entry | `README.md` | Yes | Pitch and shortest successful start path |
+| Documentation Entry | `docs/index.md` | Yes | Documentation entry point |
 
-Do not silently assume an optional contract exists. Either add it, link to
-the repository's equivalent, or mark that rule as not used by the project.
+---
+
+## 3. Optional Document Contracts
+
+| Contract | Active Condition | If Present | If Absent |
+|----------|------------------|------------|-----------|
+| `CHANGELOG.md` | Universal | User-visible changes update it in the same PR | Omit changelog checks from review |
+| `CONTRIBUTING.md` | Universal | Contributor workflow links to `docs/dev/` | Add before accepting outside contributions |
+| `docs/dev/acceptance.md` | Profile `validation` | User journey changes update it | Rely on developer testing guides |
+| `docs/dev/experience_scenarios.md` | Profile `validation` | Visible state additions update scenario catalog | Rely on manual acceptance |
+| `docs/dev/testing.md` | Profile `validation` | Test command or suite changes update it | Document testing in setup guide |
+| `docs/adr/index.md` | Profile `architecture` | New ADRs registered upon acceptance | Create index before adding ADRs |
+| `docs/reference/glossary.md` | Universal | New canonical terms update it | Keep definitions local to document |

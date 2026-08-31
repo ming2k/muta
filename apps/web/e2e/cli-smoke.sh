@@ -30,7 +30,9 @@ if [ ! -x "$MUTX" ]; then
 fi
 ROOT=$(mktemp -d /tmp/mutx-smoke.XXXXXX)
 PORT=${PORT:-9809}
-cleanup() { "$MUTA" --home "$ROOT" daemon stop >/dev/null 2>&1; rm -rf "$ROOT"; }
+export MUTA_HOME="$ROOT"
+export MUTA_PORT="$PORT"
+cleanup() { "$MUTA" daemon stop >/dev/null 2>&1; rm -rf "$ROOT"; }
 trap cleanup EXIT
 
 pass=0
@@ -70,13 +72,15 @@ expect_out   "mcp ls" "mcp teaches ls" "$MUTA" mcp
 expect_status 2 "bare skill errors" "$MUTA" skill
 expect_out   "skill ls" "skill teaches ls" "$MUTA" skill
 expect_status 2 "serve is unrecognized" "$MUTA" serve
+expect_status 2 "--home flag errors with MUTA_HOME guidance" "$MUTA" --home /tmp/dev
+expect_status 2 "mutx --home flag errors with MUTA_HOME guidance" "$MUTX" --home /tmp/dev
 
 echo "== noun-verb shapes parse =="
 expect_status 0 "mcp ls runs" "$MUTA" mcp ls
 expect_status 0 "skill ls runs" "$MUTA" skill ls
 expect_status 2 "session rm needs an id" "$MUTA" session rm
-expect_status 0 "top-level stop runs" "$MUTA" --home "$ROOT" stop
-expect_status 0 "top-level status runs" "$MUTA" --home "$ROOT" status
+expect_status 0 "top-level stop runs" "$MUTA" stop
+expect_status 0 "top-level status runs" "$MUTA" status
 
 echo "== core and terminal app have disjoint surfaces =="
 expect_status 2 "core rejects terminal run command" "$MUTA" run ping
@@ -95,12 +99,12 @@ echo "== mutx auto-starts muta; remote connects to that daemon =="
 # No daemon exists yet. Reaching the daemon's provider error proves mutx found
 # and launched the core binary before attempting the run.
 expect_out "provider" "mutx auto-starts the sibling muta core" \
-  env MUTA_BIN="$MUTA" MUTA_PORT="$PORT" "$MUTX" --home "$ROOT" run "ping"
+  env MUTA_BIN="$MUTA" "$MUTX" run "ping"
 for _ in $(seq 1 50); do
   [ -s "$ROOT/muta/instance/daemon.json" ] && break
   sleep 0.2
 done
-TOKEN=$("$MUTA" --home "$ROOT" daemon token)
+TOKEN=$("$MUTA" daemon token)
 # The handshake must complete over TCP+bearer: with no provider configured
 # the daemon's own reply is the "no provider" error — proof the remote
 # path reached a live daemon rather than failing to connect.

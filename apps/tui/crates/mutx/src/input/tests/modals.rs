@@ -41,7 +41,6 @@ fn star_in_models_modal_toggles_model_favorite() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -88,7 +87,6 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -135,7 +133,6 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
-            config_websearch_editing: false,
             leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
@@ -178,7 +175,6 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         history_clear_confirm: false,
         host_prompting: false,
         config_custom_editing: false,
-        config_websearch_editing: false,
         leader_chord: crate::app::LeaderChord::None,
     };
     let letter = process_event(
@@ -261,8 +257,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 history_clear_confirm: false,
                 host_prompting: false,
                 config_custom_editing: false,
-                config_websearch_editing: false,
-                leader_chord: crate::app::LeaderChord::None,
+                    leader_chord: crate::app::LeaderChord::None,
             },
             &mut drag,
         )

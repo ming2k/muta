@@ -4,7 +4,7 @@ Top-level governance charter, decision hierarchy, review gates, and documentatio
 
 | Section | Purpose |
 |---------|---------|
-| [Documentation Governance](documentation/index.md) | Standardized 4-gate routing, knowledge layers, style guide, and review checklist |
+| [Documentation Governance](documentation/core/index.md) | Standardized 4-gate routing, micro-core protocol, writing style, and review checklist |
 
 ## Governance Structure & Decision Hierarchy
 

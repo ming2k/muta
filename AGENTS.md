@@ -1,4 +1,4 @@
-Before writing, modifying, or archiving any documentation, please read and follow `docs/governance/documentation/index.md` in the project root. AI assistants may read `docs/governance/documentation/` and suggest changes, but must not directly modify files in that directory.
+Before writing, modifying, or archiving any documentation, please read and follow `docs/governance/documentation/core/index.md` in the project root. AI assistants may read `docs/governance/documentation/` and suggest changes, but must not directly modify files in that directory.
 
 ## Testing Rules & AI Behavioral Boundaries
 - **Runner Tool**: Always use `cargo nextest run` instead of `cargo test` for unit and integration tests.

@@ -168,7 +168,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         config_detail_scroll: 0,
         config_custom_editing: false,
         websearch_config: None,
-        websearch_editing: None,
+        config_dropdown: None,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,

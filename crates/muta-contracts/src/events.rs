@@ -116,7 +116,7 @@ pub enum AgentRequest {
     /// (`EditProviderModel`). New channels start with thinking off.
     AddProvider {
         name: String,
-        protocol: String,
+        protocol: crate::WireProtocol,
         base_url: String,
         api_key: crate::SecretString,
         user_agent: Option<String>,
@@ -149,7 +149,7 @@ pub enum AgentRequest {
     EditProvider {
         id: String,
         name: String,
-        protocol: String,
+        protocol: crate::WireProtocol,
         base_url: String,
         api_key: crate::SecretString,
         #[serde(default)]
@@ -388,10 +388,6 @@ pub struct WebSearchConfigUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub provider: Option<String>,
-    /// Fallback backend tried when the primary fails; empty string disables.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub fallback: Option<String>,
     /// Page-content reader used by `webfetch` (`builtin` | `jina`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -441,7 +437,6 @@ pub struct WebSearchConfigUpdate {
 #[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct WebSearchConfigView {
     pub provider: String,
-    pub fallback: String,
     pub reader: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -471,7 +466,6 @@ impl From<&crate::WebSearchConfig> for WebSearchConfigView {
         };
         Self {
             provider: cfg.provider.clone(),
-            fallback: cfg.fallback.clone(),
             reader: cfg.reader.clone(),
             proxy: cfg.proxy.clone(),
             timeout_secs: cfg.timeout_secs,

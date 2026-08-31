@@ -18,6 +18,39 @@
 
 use std::fmt;
 
+/// Provider-specific behavior layered on the OpenAI Chat Completions protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpenAiChatDialect {
+    #[default]
+    Standard,
+    Copilot,
+}
+
+/// Provider-specific behavior layered on the OpenAI Responses protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpenAiResponsesDialect {
+    #[default]
+    Standard,
+    ChatGpt,
+    Copilot,
+}
+
+/// Provider-specific behavior layered on the Anthropic Messages protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnthropicMessagesDialect {
+    #[default]
+    Standard,
+    Copilot,
+}
+
+/// Provider-specific behavior layered on Google's generateContent protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GoogleGenerateContentDialect {
+    #[default]
+    GenerativeLanguage,
+    Antigravity,
+}
+
 /// How a [`Channel`] speaks to its model. Determines which `Provider`
 /// implementation is constructed for it (in `muta-providers`).
 ///
@@ -36,7 +69,7 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
-        copilot: bool,
+        dialect: OpenAiChatDialect,
     },
     /// Anthropic-compatible `/messages` endpoint at `base_url` (the full URL).
     /// Auth uses the `x-api-key` header plus `anthropic-version`. Models served
@@ -64,7 +97,7 @@ pub enum Transport {
         thinking: Option<crate::ThinkingMode>,
         /// GitHub Copilot's `/v1/messages` adapter uses a bearer and the
         /// Copilot client headers rather than Anthropic's `x-api-key` auth.
-        copilot: bool,
+        dialect: AnthropicMessagesDialect,
     },
     /// Google native API (`generativelanguage.googleapis.com`). The model
     /// id and API key are read from the owning [`Channel`]. `base_url` is the
@@ -82,6 +115,7 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
+        dialect: GoogleGenerateContentDialect,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
     /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by
@@ -97,8 +131,7 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
-        chatgpt: bool,
-        copilot: bool,
+        dialect: OpenAiResponsesDialect,
     },
 }
 
@@ -151,7 +184,7 @@ pub struct Channel {
     /// relay speaking the same wire protocol may expose none of them.
     pub prompt_cache: crate::PromptCacheCapabilities,
     /// User-selected cache intent for this route.
-    pub cache_preference: crate::CachePreference,
+    pub prompt_cache_preference: crate::PromptCachePreference,
 }
 
 impl fmt::Debug for Channel {
@@ -165,7 +198,7 @@ impl fmt::Debug for Channel {
             .field("remote", &self.remote)
             .field("user_overrides", &self.user_overrides)
             .field("prompt_cache", &self.prompt_cache)
-            .field("cache_preference", &self.cache_preference)
+            .field("prompt_cache_preference", &self.prompt_cache_preference)
             .finish()
     }
 }
@@ -242,7 +275,7 @@ impl ProviderEntry {
 
     /// The channel carrying `model_id`, if any. A multi-model provider (e.g.
     /// `opencode-go`) exposes one channel per model — each with the transport
-    /// matching that model's [`crate::model::WireFormat`] — so selecting a
+    /// matching that model's [`crate::model::WireProtocol`] — so selecting a
     /// model is selecting a channel. Returns `None` when the entry does not
     /// serve that model id.
     pub fn channel_for_model(&self, model_id: &str) -> Option<&Channel> {
@@ -274,7 +307,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         ),
         // OpenCode Go — opencode.ai's low-cost relay. One provider id hosts many
         // models (GLM/Kimi/DeepSeek/MiMo via OpenAI format, MiniMax/Qwen via
-        // Anthropic /messages format); the per-model [`WireFormat`] in the model
+        // Anthropic /messages protocol); the per-model [`WireProtocol`] in the model
         // registry selects the transport. Both formats share one
         // `OPENCODE_API_KEY`.
         "opencode-go" => ("OpenCode Go", "opencode.ai relay (multi-model)"),
@@ -291,7 +324,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CachePreference, PromptCacheCapabilities};
+    use crate::{PromptCacheCapabilities, PromptCachePreference};
 
     #[test]
     fn catalog_lookup_is_exact_match() {
@@ -306,13 +339,13 @@ mod tests {
                     base_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
                     effort: None,
-                    copilot: false,
+                    dialect: Default::default(),
                 },
                 credentials: crate::static_credential("k"),
                 model: "deepseek-v4-flash".to_string(),
                 remote: None,
                 user_overrides: None,
-                cache_preference: CachePreference::ProviderDefault,
+                prompt_cache_preference: PromptCachePreference::default(),
                 prompt_cache: PromptCacheCapabilities::unsupported(),
             }],
             default_channel: 0,
@@ -341,13 +374,13 @@ mod tests {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: crate::static_credential("   "),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: CachePreference::ProviderDefault,
+            prompt_cache_preference: PromptCachePreference::default(),
             prompt_cache: PromptCacheCapabilities::unsupported(),
         };
         assert!(!channel.key_ready());
@@ -362,7 +395,7 @@ mod tests {
             user_agent: "agent".to_string(),
             effort: None,
             thinking: None,
-            copilot: false,
+            dialect: Default::default(),
         }
         .needs_api_key();
         assert!(needs_key, "Anthropic transport must require an API key");
@@ -375,13 +408,13 @@ mod tests {
                 user_agent: "agent".to_string(),
                 effort: None,
                 thinking: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: crate::static_credential("  "),
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: CachePreference::ProviderDefault,
+            prompt_cache_preference: PromptCachePreference::default(),
             prompt_cache: PromptCacheCapabilities::unsupported(),
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
@@ -404,13 +437,13 @@ mod tests {
                         base_url: "https://opencode.ai/zen/go/v1/chat/completions".to_string(),
                         user_agent: "agent".to_string(),
                         effort: None,
-                        copilot: false,
+                        dialect: Default::default(),
                     },
                     credentials: crate::static_credential("k"),
                     model: "glm-5.2".to_string(),
                     remote: None,
                     user_overrides: None,
-                    cache_preference: CachePreference::ProviderDefault,
+                    prompt_cache_preference: PromptCachePreference::default(),
                     prompt_cache: PromptCacheCapabilities::unsupported(),
                 },
                 Channel {
@@ -421,13 +454,13 @@ mod tests {
                         user_agent: "agent".to_string(),
                         effort: None,
                         thinking: None,
-                        copilot: false,
+                        dialect: Default::default(),
                     },
                     credentials: crate::static_credential("k"),
                     model: "minimax-m3".to_string(),
                     remote: None,
                     user_overrides: None,
-                    cache_preference: CachePreference::ProviderDefault,
+                    prompt_cache_preference: PromptCachePreference::default(),
                     prompt_cache: PromptCacheCapabilities::unsupported(),
                 },
             ],
@@ -481,13 +514,13 @@ mod tests {
                     base_url: "https://example.com/v1/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
                     effort: None,
-                    copilot: false,
+                    dialect: Default::default(),
                 },
                 credentials: crate::static_credential("k"),
                 model: "fixture-alpha".to_string(),
                 remote: None,
                 user_overrides: None,
-                cache_preference: CachePreference::ProviderDefault,
+                prompt_cache_preference: PromptCachePreference::default(),
                 prompt_cache: PromptCacheCapabilities::unsupported(),
             }],
             default_channel: 0,

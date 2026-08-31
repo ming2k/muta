@@ -24,9 +24,9 @@ pub use color_scheme_config::{
 };
 pub mod cache;
 pub use cache::{
-    CacheActivation, CachePreference, CacheResolutionError, CacheTtl, PromptCacheCapabilities,
-    PromptCacheSpec, PromptCacheUsage, ResolvedCacheMode, ResolvedCachePlan,
-    read_prompt_cache_usage,
+    CacheResolutionError, CacheRetention, PromptCacheCapabilities, PromptCacheMode,
+    PromptCacheModePreference, PromptCachePreference, PromptCacheSpec, PromptCacheUsage,
+    ResolvedCachePlan, read_prompt_cache_usage,
 };
 pub mod repeat;
 pub use repeat::{
@@ -66,10 +66,10 @@ pub use auth::{CredentialSource, ResolvedAuth, StaticCredentialSource, static_cr
 pub mod tool_validation;
 
 pub mod capability;
-pub mod provider_state;
 pub mod catalog;
 pub mod channel_auth;
 pub mod client_identity;
+pub mod provider_state;
 pub use client_identity::ClientIdentity;
 pub mod effort;
 pub use effort::{
@@ -144,15 +144,10 @@ pub use capability::{
     CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints, ProviderStreamEvent,
     ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
 };
-pub use provider_state::{
-    CONTINUATION_ARTIFACT_KEY, ContinuationMode, ContextRelation, ContextRevision,
-    ContinuationCursor, CursorInvalidationReason, EnvelopeRevision,
-    OPENAI_RESPONSE_ID_ARTIFACT_KEY, OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY, ProviderArtifacts, ProviderCompletion,
-    ProviderCompletionMeta, ProviderCursorState, RequestDelivery, RouteFingerprint,
-    read_continuation_cursor, request_envelope_fingerprint, select_request_delivery,
-    semantic_context_head, write_continuation_cursor,
+pub use catalog::{
+    AnthropicMessagesDialect, Channel, GoogleGenerateContentDialect, OpenAiChatDialect,
+    OpenAiResponsesDialect, ProviderEntry, Transport,
 };
-pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink, DynamicToolSource};
@@ -167,6 +162,14 @@ pub use events::{
     SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest,
     ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
     WebSearchConfigUpdate, WebSearchConfigView,
+};
+pub use provider_state::{
+    CONTINUATION_ARTIFACT_KEY, ContextRelation, ContextRevision, ContinuationCursor,
+    ContinuationMode, CursorInvalidationReason, EnvelopeRevision, OPENAI_RESPONSE_ID_ARTIFACT_KEY,
+    OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY, ProviderArtifacts, ProviderCompletion,
+    ProviderCompletionMeta, ProviderCursorState, RequestDelivery, RouteFingerprint,
+    read_continuation_cursor, request_envelope_fingerprint, select_request_delivery,
+    semantic_context_head, write_continuation_cursor,
 };
 pub use runner::{
     RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset,
@@ -187,8 +190,8 @@ pub use master::{
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities,
-    RemoteModelEndpoint, RemoteModelMetadata, WireFormat, baseline_models, model_by_id,
-    register_fitted_models, resolve as resolve_model, sanitize_model_id,
+    RemoteModelMetadata, WireProtocol, baseline_models, model_by_id, register_fitted_models,
+    resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,

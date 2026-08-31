@@ -19,7 +19,7 @@ mod anthropic;
 mod antigravity_oauth;
 mod chatgpt;
 mod copilot;
-mod custom_openai;
+mod custom_baselines;
 mod deepseek;
 mod google;
 mod kimi;
@@ -111,8 +111,6 @@ pub struct ProviderPresetSpec {
     /// between a connection and its preset.
     pub id: &'static str,
     /// The connection-level default endpoint this preset's routes reach.
-    /// `""` for presets that need a user-supplied endpoint
-    /// (`custom-openai`) — [`route_for_model`] returns `None` for those.
     pub base_url: &'static str,
     /// The `User-Agent` header this preset's routes must send, when the
     /// provider requires a specific one (the coding-plan endpoints validate
@@ -123,13 +121,8 @@ pub struct ProviderPresetSpec {
     /// `muta_contracts`'s baseline registry at link time; the reconciliation
     /// layer intersects live-discovered ids against this local table.
     pub baselines: &'static [muta_contracts::Model],
-    /// Wire protocol the preset's channels speak: `"openai"` |
-    /// `"openai-responses"` | `"anthropic"` | `"google"` (the legacy `"gemini"`
-    /// label is still accepted). `"openai-responses"` is the OpenAI Responses
-    /// API (`/responses` endpoint) over an ordinary API key — distinct from
-    /// `"openai"` (chat completions) in transport only; model metadata and
-    /// live discovery stay on the OpenAI shape.
-    pub protocol: &'static str,
+    /// Exact inference protocol spoken by the preset's default route.
+    pub protocol: muta_contracts::WireProtocol,
     /// The model ids the preset initially seeds, in display/activation order.
     /// Fixed connections continue to mirror this list.
     pub models: &'static [&'static str],
@@ -157,9 +150,14 @@ pub struct ProviderPresetSpec {
     /// context window or claim vision support the model lacks. When `false`,
     /// discovery keeps only registry-known ids (the historical behavior).
     pub fitting: bool,
-    /// Prompt-cache behavior verified for this exact preset route. Protocol
-    /// compatibility alone never grants cache controls.
-    pub prompt_cache: muta_contracts::PromptCacheSpec,
+    /// Resolve prompt-cache behavior for one exact preset route and model.
+    /// Protocol compatibility and provider identity alone never grant cache
+    /// controls; model generations may expose different wire fields.
+    pub prompt_cache: fn(&str) -> muta_contracts::PromptCacheSpec,
+}
+
+pub(crate) const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptCacheSpec {
+    muta_contracts::PromptCacheSpec::UNSUPPORTED
 }
 
 /// The single registry of provider presets offered when adding a connection.
@@ -180,10 +178,6 @@ pub const PROVIDER_PRESET_SPECS: &[ProviderPresetSpec] = &[
     zai::PRESET_SPEC,
     opencode_go::PRESET_SPEC,
     antigravity_oauth::PRESET_SPEC,
-    // The generic escape hatch: no seeded models — the Model field supplies
-    // the one id, so an arbitrary OpenAI-compatible endpoint (third-party
-    // relay, self-hosted gateway) works without a curated preset.
-    custom_openai::PRESET_SPEC,
 ];
 
 /// Look up a preset spec by its stable id. Exact match only.
@@ -199,26 +193,33 @@ pub fn provider_preset_spec(id: &str) -> Option<&'static ProviderPresetSpec> {
 /// `"google"`. Most presets serve every model over one endpoint; the
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
-/// protocol vary per model. `None` for presets with no built-in endpoint
-/// (`custom-openai`), where the connection declaration must supply one.
+/// protocol vary per model. `None` means the preset id is unknown.
 pub fn route_for_model(
     preset_id: &str,
     model_id: &str,
-) -> Option<(&'static str, &'static str, Option<&'static str>)> {
+) -> Option<(
+    muta_contracts::WireProtocol,
+    &'static str,
+    Option<&'static str>,
+)> {
     let spec = provider_preset_spec(preset_id)?;
     if spec.id == "opencode-go" {
-        let format = muta_contracts::model::resolve(model_id).format;
-        let (protocol, base_url) = match format {
-            muta_contracts::WireFormat::AnthropicCompat => {
-                ("anthropic", "https://opencode.ai/zen/go/v1/messages")
+        let protocol = muta_contracts::model::resolve(model_id).protocol;
+        let base_url = match protocol {
+            muta_contracts::WireProtocol::AnthropicMessages => {
+                "https://opencode.ai/zen/go/v1/messages"
             }
-            muta_contracts::WireFormat::Google => ("google", "https://opencode.ai/zen/go/v1beta"),
-            _ => ("openai", "https://opencode.ai/zen/go/v1/chat/completions"),
+            muta_contracts::WireProtocol::GoogleGenerateContent => {
+                "https://opencode.ai/zen/go/v1beta"
+            }
+            muta_contracts::WireProtocol::OpenAiResponses => {
+                "https://opencode.ai/zen/go/v1/responses"
+            }
+            muta_contracts::WireProtocol::OpenAiChatCompletions => {
+                "https://opencode.ai/zen/go/v1/chat/completions"
+            }
         };
         return Some((protocol, base_url, spec.user_agent));
-    }
-    if spec.base_url.is_empty() {
-        return None;
     }
     Some((spec.protocol, spec.base_url, spec.user_agent))
 }
@@ -264,19 +265,25 @@ impl OpenAiProviderSpec {
 /// attributed to the logical model even after a mid-session switch.
 ///
 /// `session_id` is offered as a routing key only when this exact channel
-/// declares [`muta_contracts::CacheActivation::RoutingKey`]. A protocol or
-/// model-family resemblance never grants that capability to a relay.
+/// declares routing-key support. A protocol or model-family resemblance never
+/// grants that capability to a relay.
 pub fn build_provider_for_channel(
     channel: &Channel,
     entry_id: &str,
     session_id: Option<&str>,
 ) -> Arc<dyn Provider> {
     let credentials = channel.credentials_source();
+    let prompt_cache = muta_llm_client::PromptCacheConfig::new(
+        channel.prompt_cache.clone(),
+        channel.prompt_cache_preference,
+        session_id.map(str::to_string),
+    );
     match &channel.transport {
         Transport::Google {
             base_url,
             user_agent,
             effort,
+            dialect,
         } => {
             let capabilities = channel.capabilities();
             let provider = GoogleProvider::with_credentials(
@@ -287,6 +294,8 @@ pub fn build_provider_for_channel(
             )
             .with_reasoning_effort(*effort)
             .with_model_capabilities(capabilities)
+            .with_prompt_cache(prompt_cache)
+            .with_dialect(*dialect)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -295,7 +304,7 @@ pub fn build_provider_for_channel(
             user_agent,
             effort,
             thinking,
-            copilot,
+            dialect,
         } => {
             let mut provider = AnthropicMessagesProvider::with_credentials(
                 credentials,
@@ -332,30 +341,17 @@ pub fn build_provider_for_channel(
             provider = provider
                 .with_thinking(cfg)
                 .with_model_capabilities(capabilities)
-                .with_prompt_cache_capabilities(channel.prompt_cache.clone())
-                .with_copilot(*copilot);
+                .with_prompt_cache(prompt_cache)
+                .with_dialect(*dialect);
             Arc::new(provider)
         }
         Transport::OpenAi {
             base_url,
             user_agent,
             effort,
-            copilot,
+            dialect,
         } => {
             let capabilities = channel.capabilities();
-            let cache_plan = channel
-                .prompt_cache
-                .resolve(
-                    muta_contracts::CachePreference::ProviderDefault,
-                    session_id.map(str::to_string),
-                )
-                .expect("provider-default cache resolution cannot fail");
-            let cache_key = match &cache_plan {
-                muta_contracts::ResolvedCachePlan::Enabled { routing_key, .. } => {
-                    routing_key.clone()
-                }
-                _ => None,
-            };
             // For OpenAI-family transports the effort knob IS the reasoning
             // control: a model that advertises a ladder (GLM-5.x — always-on
             // thinking gated only by `reasoning_effort`) must never send an
@@ -372,10 +368,9 @@ pub fn build_provider_for_channel(
                 user_agent,
             )
             .with_reasoning_effort(effective_effort)
-            .with_prompt_cache_key(cache_key)
-            .with_cache_plan(cache_plan)
+            .with_prompt_cache(prompt_cache)
             .with_model_capabilities(capabilities)
-            .with_copilot(*copilot)
+            .with_dialect(*dialect)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -383,8 +378,7 @@ pub fn build_provider_for_channel(
             base_url,
             user_agent,
             effort,
-            chatgpt,
-            copilot,
+            dialect,
         } => {
             let capabilities = channel.capabilities();
             // Same wire-level default as the chat-completions arm above —
@@ -398,8 +392,8 @@ pub fn build_provider_for_channel(
             .with_user_agent(user_agent)
             .with_reasoning_effort(effective_effort)
             .with_model_capabilities(capabilities)
-            .with_chatgpt(*chatgpt)
-            .with_copilot(*copilot)
+            .with_prompt_cache(prompt_cache)
+            .with_dialect(*dialect)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -451,22 +445,10 @@ mod spec_tests {
     fn provider_preset_spec_resolves_each_known_id() {
         // The reconciliation layer resolves a connection's preset_id back to a
         // spec here; every id in the table must round-trip.
-        // `custom-openai` is the one preset allowed to seed no models: the
-        // free-text Model field supplies the one id at create time, so there
-        // is no snapshot to mirror.
-        const NO_SEED_PRESETS: &[&str] = &["custom-openai"];
         for spec in PROVIDER_PRESET_SPECS {
             let resolved = provider_preset_spec(spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
-            if NO_SEED_PRESETS.contains(&spec.id) {
-                assert!(
-                    resolved.models.is_empty(),
-                    "{} is a no-seed preset and must stay empty",
-                    spec.id
-                );
-            } else {
-                assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
-            }
+            assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
         }
         // Unknown ids resolve to None (graceful: an unknown preset_id leaves
         // the connection untouched).
@@ -490,7 +472,7 @@ mod spec_tests {
                 m.thinking,
                 m.tool_call,
                 m.vision,
-                m.format,
+                m.protocol,
                 m.model_guidance,
                 m.effort_levels,
             )
@@ -561,13 +543,13 @@ mod build_tests {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: muta_contracts::static_credential("k"),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
             prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
@@ -590,13 +572,13 @@ mod build_tests {
                     .to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: muta_contracts::static_credential("k"),
             model: "glm-5.3".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
             prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "zai-code", None);
@@ -623,13 +605,13 @@ mod build_tests {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: muta_contracts::static_credential("k"),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
             prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
@@ -649,13 +631,13 @@ mod build_tests {
                 user_agent: "agent".to_string(),
                 effort: None,
                 thinking: None,
-                copilot: false,
+                dialect: Default::default(),
             },
             credentials: muta_contracts::static_credential("go-key"),
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
-            cache_preference: muta_contracts::CachePreference::ProviderDefault,
+            prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
             prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
@@ -665,67 +647,67 @@ mod build_tests {
 
     #[test]
     fn builtin_provider_models_resolve_with_expected_wire_formats() {
-        use muta_contracts::WireFormat;
+        use muta_contracts::WireProtocol;
         // Every model a multi-model built-in serves must exist in the model
         // registry (so metadata resolves) and carry the wire format its provider
         // speaks.
         for (&id, expected) in crate::ANTHROPIC_BUILTIN_MODELS
             .iter()
-            .map(|id| (id, WireFormat::AnthropicCompat))
+            .map(|id| (id, WireProtocol::AnthropicMessages))
             .chain(
                 crate::GOOGLE_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::Google)),
+                    .map(|id| (id, WireProtocol::GoogleGenerateContent)),
             )
             .chain(
                 crate::DEEPSEEK_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::OPENAI_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::XAI_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::CHATGPT_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::COPILOT_SEED_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::KIMI_CODE_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::ZAI_CODE_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::OPENCODE_GO_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
+                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
             )
             .chain(
                 crate::ANTIGRAVITY_OAUTH_MODELS
                     .iter()
-                    .map(|id| (id, WireFormat::Google)),
+                    .map(|id| (id, WireProtocol::GoogleGenerateContent)),
             )
         {
             let model = muta_contracts::model::resolve(id);
             assert_eq!(model.id, id, "model {id} must be registered");
-            assert_eq!(model.format, expected, "{id} wire format");
+            assert_eq!(model.protocol, expected, "{id} wire format");
         }
     }
 }

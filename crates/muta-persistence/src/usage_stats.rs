@@ -489,6 +489,7 @@ mod tests {
                 total_tokens: 1_500,
                 cache_creation_input_tokens: 200,
                 cache_read_input_tokens: 500,
+                cache_miss_input_tokens: 0,
             }),
             0,
             4_000,

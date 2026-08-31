@@ -79,9 +79,9 @@ pub struct ModelRequest {
     /// adapters translate these into their own wire format.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_specs: Vec<ToolSpec>,
-    /// Whether this is a one-off ephemeral request (e.g. title generation, summarization compaction).
-    /// When true, provider protocol encoders should avoid writing prompt cache breakpoints
-    /// to prevent polluting the persistent session KV-cache.
+    /// Whether this is a one-off request (for example title generation or
+    /// summarization compaction). Prompt-cache intent is independent and must
+    /// be expressed through `prompt_cache_preference`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// Explicit wire delivery plan selected from the conversation state and
@@ -94,7 +94,7 @@ pub struct ModelRequest {
     /// Request-envelope version (instructions/tools/controls).
     pub envelope_revision: crate::EnvelopeRevision,
     /// Per-request prompt-cache intent. Ephemeral requests default to disabled.
-    pub cache_preference: crate::CachePreference,
+    pub prompt_cache_preference: crate::PromptCachePreference,
 }
 
 impl ModelRequest {
@@ -108,7 +108,7 @@ impl ModelRequest {
             context_revision: crate::ContextRevision::empty(),
             context_relation: crate::ContextRelation::Initial,
             envelope_revision: crate::EnvelopeRevision::ephemeral(),
-            cache_preference: crate::CachePreference::ProviderDefault,
+            prompt_cache_preference: crate::PromptCachePreference::default(),
         }
         .with_recomputed_revisions()
     }
@@ -123,7 +123,7 @@ impl ModelRequest {
             context_revision: crate::ContextRevision::empty(),
             context_relation: crate::ContextRelation::Initial,
             envelope_revision: crate::EnvelopeRevision::ephemeral(),
-            cache_preference: crate::CachePreference::ProviderDefault,
+            prompt_cache_preference: crate::PromptCachePreference::default(),
         }
         .with_recomputed_revisions()
     }
@@ -151,7 +151,7 @@ impl ModelRequest {
             context_revision: crate::ContextRevision::empty(),
             context_relation: crate::ContextRelation::Initial,
             envelope_revision: crate::EnvelopeRevision::ephemeral(),
-            cache_preference: crate::CachePreference::ProviderDefault,
+            prompt_cache_preference: crate::PromptCachePreference::default(),
         }
         .with_recomputed_revisions()
     }
@@ -166,8 +166,7 @@ impl ModelRequest {
         route: &crate::RouteFingerprint,
         mode: crate::ContinuationMode,
     ) -> Self {
-        let (delivery, relation) =
-            crate::select_request_delivery(&self.messages, route, mode);
+        let (delivery, relation) = crate::select_request_delivery(&self.messages, route, mode);
         self.delivery = delivery;
         self.context_relation = relation;
         self
@@ -189,8 +188,11 @@ impl ModelRequest {
         self
     }
 
-    pub fn with_cache_preference(mut self, preference: crate::CachePreference) -> Self {
-        self.cache_preference = preference;
+    pub fn with_prompt_cache_preference(
+        mut self,
+        preference: crate::PromptCachePreference,
+    ) -> Self {
+        self.prompt_cache_preference = preference;
         self
     }
 
@@ -357,7 +359,6 @@ pub trait Provider: Send + Sync {
     fn usage_supported(&self) -> bool {
         false
     }
-
 }
 
 #[async_trait]

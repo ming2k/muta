@@ -1,6 +1,6 @@
 # ADR-0067: Modular prompt-cache control policy
 
-- Status: Accepted
+- Status: Superseded by ADR-0161
 - Date: 2026-07-17
 
 ## Context

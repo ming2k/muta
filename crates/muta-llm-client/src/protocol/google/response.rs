@@ -29,7 +29,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let completion = usage["candidatesTokenCount"].as_i64();
     let total = usage["totalTokenCount"].as_i64();
     // Route cache-read accounting through the shared helper so the cache
-    // policy is enforced in one place (ADR-0067). Google hides the discount in
+    // policy is enforced in one place (ADR-0161). Google hides the discount in
     // `cachedContentTokenCount`, which the helper reads.
     let cache = muta_contracts::read_prompt_cache_usage(usage);
     match (prompt, completion, total) {
@@ -39,6 +39,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: total.unwrap_or(p + c),
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: prompt.unwrap_or(0),
@@ -46,6 +47,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             total_tokens: t,
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
+            cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
         }),
     }
 }

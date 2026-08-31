@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced duplicate transport/wire/endpoint representations with four canonical inference protocols and typed provider dialects; unknown and legacy protocol labels now fail instead of falling back to OpenAI.
+- Reworked prompt caching as an exact per-route and per-model capability contract covering mode, retention, affinity, breakpoint limits, disabling, and telemetry.
+
+### Fixed
+
+- Encode OpenAI implicit/explicit cache options and explicit breakpoints consistently across Chat Completions and Responses, honor saved route cache preferences, and stop claiming unimplemented Google cached-content resources.
+- Preserve provider prompt-cache read, write, and miss counters through normalized per-turn usage accounting.
+
 ## [0.37.21] - 2026-08-31
 
 ### Added

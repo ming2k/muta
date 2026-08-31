@@ -21,7 +21,10 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
         // Commit the focused text field's live value first.
         app.stash_custom_field();
         let name = app.custom_name.trim().to_string();
-        let protocol = app.custom_protocol_wire.clone();
+        let protocol = app
+            .custom_protocol_wire
+            .parse::<muta_contracts::WireProtocol>()
+            .expect("provider editor must carry a registered wire protocol");
         let base_url = app.custom_base_url.trim().to_string();
         let api_key = muta_contracts::SecretString::from(app.custom_token.trim());
         if let Some(id) = app.custom_edit_id.clone() {
@@ -520,7 +523,9 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     }
                     if app.config_category == 0 {
                         let schemes = crate::view::Theme::available_color_schemes();
-                        if let Some(scheme) = schemes.get(app.config_detail_index % schemes.len().max(1)) {
+                        if let Some(scheme) =
+                            schemes.get(app.config_detail_index % schemes.len().max(1))
+                        {
                             app.theme = crate::view::Theme::from_color_scheme(
                                 &scheme.id,
                                 &app.custom_color_scheme,
@@ -689,7 +694,9 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     }
                     if app.config_category == 0 {
                         let schemes = crate::view::Theme::available_color_schemes();
-                        if let Some(scheme) = schemes.get(app.config_detail_index % schemes.len().max(1)) {
+                        if let Some(scheme) =
+                            schemes.get(app.config_detail_index % schemes.len().max(1))
+                        {
                             app.theme = crate::view::Theme::from_color_scheme(
                                 &scheme.id,
                                 &app.custom_color_scheme,

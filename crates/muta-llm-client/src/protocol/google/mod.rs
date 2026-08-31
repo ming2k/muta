@@ -30,9 +30,7 @@ pub mod response;
 /// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
 pub const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
-fn google_completion(
-    response_json: &Value,
-) -> Result<muta_contracts::ProviderCompletion, String> {
+fn google_completion(response_json: &Value) -> Result<muta_contracts::ProviderCompletion, String> {
     let root = response_json.get("response").unwrap_or(response_json);
     let mut message = response::message(response_json)?;
     let artifacts = message.provider_meta.take();
@@ -67,6 +65,10 @@ pub struct GoogleProvider {
     /// When set, the provider routes requests in `v1internal` envelope shape with
     /// `Authorization: Bearer` authentication to the Antigravity backend.
     pub project_id: Option<String>,
+    /// Route-scoped prompt-cache capabilities and defaults. The public Google
+    /// route currently advertises only implicit caching, so resolution
+    /// validates user intent without inventing resource-cache lifecycle.
+    pub prompt_cache: crate::PromptCacheConfig,
     /// Sticky, channel-scoped flag: this upstream has refused our
     /// `thinkingConfig` at least once (INVALID_ARGUMENT naming the field), so
     /// the thinking-disclosure surface is unavailable on this route. Reasoning
@@ -74,6 +76,7 @@ pub struct GoogleProvider {
     /// cannot be disclosed and requests stop asking for it. See
     /// [`Self::note_thinking_rejected`].
     thinking_rejected: Arc<Mutex<bool>>,
+    pub dialect: muta_contracts::GoogleGenerateContentDialect,
 }
 
 impl GoogleProvider {
@@ -109,7 +112,9 @@ impl GoogleProvider {
             capabilities,
             reasoning_effort: None,
             project_id: None,
+            prompt_cache: crate::PromptCacheConfig::default(),
             thinking_rejected: Arc::new(Mutex::new(false)),
+            dialect: muta_contracts::GoogleGenerateContentDialect::GenerativeLanguage,
         }
     }
 
@@ -133,7 +138,9 @@ impl GoogleProvider {
             capabilities,
             reasoning_effort: None,
             project_id: None,
+            prompt_cache: crate::PromptCacheConfig::default(),
             thinking_rejected: Arc::new(Mutex::new(false)),
+            dialect: muta_contracts::GoogleGenerateContentDialect::GenerativeLanguage,
         }
     }
 
@@ -163,6 +170,16 @@ impl GoogleProvider {
         self
     }
 
+    pub fn with_prompt_cache(mut self, prompt_cache: crate::PromptCacheConfig) -> Self {
+        self.prompt_cache = prompt_cache;
+        self
+    }
+
+    pub fn with_dialect(mut self, dialect: muta_contracts::GoogleGenerateContentDialect) -> Self {
+        self.dialect = dialect;
+        self
+    }
+
     /// Attach the Antigravity project ID (`cloudaicompanionProject`).
     pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
         self.project_id = Some(project_id.into());
@@ -171,11 +188,7 @@ impl GoogleProvider {
 
     /// Whether this provider is configured for Google Antigravity `v1internal` protocol.
     pub fn is_antigravity(&self) -> bool {
-        self.project_id.is_some()
-            || self
-                .endpoint
-                .base_url
-                .contains("cloudcode-pa.googleapis.com")
+        self.dialect == muta_contracts::GoogleGenerateContentDialect::Antigravity
     }
 
     /// Build the thinkingless streaming request for a channel whose upstream
@@ -200,6 +213,7 @@ impl GoogleProvider {
         omit_thinking: bool,
         timeout: Option<std::time::Duration>,
     ) -> Result<reqwest::Response, String> {
+        let _cache_plan = self.prompt_cache.resolve(request)?;
         let client = self.client.http();
         let auth = self.endpoint.resolve_auth().await?;
         let (url, headers, body) =
@@ -746,6 +760,7 @@ mod tests {
             "https://daily-cloudcode-pa.googleapis.com/v1internal",
             "ua",
         )
+        .with_dialect(muta_contracts::GoogleGenerateContentDialect::Antigravity)
         .with_project_id("proj-1");
         let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), true, false);
         assert_eq!(body["model"], "gemini-3.7-flash-tiered");
@@ -769,6 +784,7 @@ mod tests {
                 "https://daily-cloudcode-pa.googleapis.com/v1internal",
                 "ua",
             )
+            .with_dialect(muta_contracts::GoogleGenerateContentDialect::Antigravity)
             .with_project_id("proj-1");
             let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), false, false);
             assert_eq!(

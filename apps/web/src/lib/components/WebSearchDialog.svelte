@@ -44,7 +44,7 @@
     keyDrafts[id] = value;
   }
 
-  let searxngRequired = $derived(cfg?.provider === "searxng" || cfg?.fallback === "searxng");
+  let searxngRequired = $derived(cfg?.provider === "searxng");
 
   let searxngInvalid = $derived(
     searxngRequired && effectiveSearxngUrl().trim() === "",
@@ -108,34 +108,6 @@
               >
                 <span class="option-label">{b.label}</span>
                 <span class="option-desc">{b.desc}</span>
-              </button>
-            {/each}
-          </div>
-        </section>
-
-        <section>
-          <h4>Fallback backend</h4>
-          <p class="section-hint">
-            Tried automatically when the primary fails. “None” disables the fallback.
-          </p>
-          <div class="option-grid">
-            <button
-              class="option"
-              class:active={cfg.fallback.trim() === ""}
-              onclick={() => daemon.updateWebSearchConfig({ fallback: "" })}
-              title="disable the fallback"
-            >
-              <span class="option-label">None</span>
-              <span class="option-desc">no automatic failover</span>
-            </button>
-            {#each BACKENDS as b (b.id)}
-              <button
-                class="option"
-                class:active={cfg.fallback === b.id}
-                onclick={() => daemon.updateWebSearchConfig({ fallback: b.id })}
-                title={b.desc}
-              >
-                <span class="option-label">{b.label}</span>
               </button>
             {/each}
           </div>
@@ -249,7 +221,7 @@
 
     <div class="modal-footer">
       <span class="footer-note">
-        Backend/reader/fallback/timeout apply immediately; text fields need Save.
+        Backend/reader/timeout apply immediately; text fields need Save.
       </span>
       <button class="btn-secondary" onclick={onclose}>Close</button>
       <button class="btn-primary" disabled={saveDisabled} onclick={save}>Save</button>

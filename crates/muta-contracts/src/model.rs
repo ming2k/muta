@@ -8,38 +8,58 @@
 //! endpoint, account entitlement, and serving runtime can change a model's
 //! available API surface and capabilities.
 //!
-//! The [`WireFormat`] on each model is the baseline wire protocol when no live
+//! The [`WireProtocol`] on each model is the baseline wire protocol when no live
 //! provider metadata supplies a more specific endpoint. A remote catalogue can
 //! legitimately route the same model id through a different surface.
 
 use crate::thinking::ThinkingSupport;
 
-/// The baseline wire protocol used when a provider has no live endpoint
-/// metadata. A remote catalogue may select a different route for the same model
-/// id, so this is not an invariant of a model id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WireFormat {
-    /// OpenAI chat-completions (`/v1/chat/completions`). The common case.
+/// The exact inference wire protocol used by a route. Provider dialects alter
+/// authentication and envelopes without changing this protocol identity.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+)]
+pub enum WireProtocol {
     #[default]
-    OpenAi,
-    /// Anthropic Messages (`/v1/messages`). Used by opencode-go for
-    /// MiniMax/Qwen, and by any Anthropic-compatible relay.
-    AnthropicCompat,
-    /// Google native (`generativelanguage.googleapis.com`).
-    Google,
+    #[serde(rename = "openai-chat-completions")]
+    OpenAiChatCompletions,
+    #[serde(rename = "openai-responses")]
+    OpenAiResponses,
+    #[serde(rename = "anthropic-messages")]
+    AnthropicMessages,
+    #[serde(rename = "google-generate-content")]
+    GoogleGenerateContent,
 }
 
-/// A provider-selected inference surface from a trusted remote model catalogue.
-///
-/// This deliberately lives beside provider-scoped metadata rather than
-/// [`WireFormat`]: a single model id can be exposed through different APIs by
-/// different providers, plans, or accounts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RemoteModelEndpoint {
-    ChatCompletions,
-    Responses,
-    Messages,
+impl WireProtocol {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "openai-chat-completions",
+            Self::OpenAiResponses => "openai-responses",
+            Self::AnthropicMessages => "anthropic-messages",
+            Self::GoogleGenerateContent => "google-generate-content",
+        }
+    }
+}
+
+impl std::fmt::Display for WireProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for WireProtocol {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "openai-chat-completions" => Ok(Self::OpenAiChatCompletions),
+            "openai-responses" => Ok(Self::OpenAiResponses),
+            "anthropic-messages" => Ok(Self::AnthropicMessages),
+            "google-generate-content" => Ok(Self::GoogleGenerateContent),
+            _ => Err(format!("unsupported inference protocol `{value}`")),
+        }
+    }
 }
 
 /// A canonical baseline model definition.
@@ -68,8 +88,8 @@ pub struct Model {
     /// `inline_data`). When `false`, images attached to messages are
     /// silently stripped before the request hits the wire.
     pub vision: bool,
-    /// Wire protocol used to reach this model. See [`WireFormat`].
-    pub format: WireFormat,
+    /// Baseline wire protocol used to reach this model.
+    pub protocol: WireProtocol,
     /// Model-specific prompt guidance injected into the system prompt as a
     /// `ModelGuidance` section. Because each model behaves differently,
     /// this is the per-model hook for any behavioral nudge a model needs.
@@ -110,7 +130,7 @@ pub struct RemoteModelMetadata {
     /// Exact API surface advertised for this model by the provider. When absent,
     /// the channel's configured transport remains authoritative.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<RemoteModelEndpoint>,
+    pub protocol: Option<WireProtocol>,
     /// Provider's model-family label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
@@ -389,7 +409,7 @@ pub fn fallback_model(_id: &str) -> Model {
         thinking: ThinkingSupport::None,
         tool_call: true,
         vision: false,
-        format: WireFormat::OpenAi,
+        protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     }
@@ -455,7 +475,7 @@ pub struct FittedModel {
     /// The endpoint advertises image inputs.
     pub vision: bool,
     /// Wire protocol the feeding provider speaks for this model.
-    pub format: WireFormat,
+    pub protocol: WireProtocol,
     /// Advertised reasoning-effort levels (any order; stored ascending via
     /// [`Effort::ORDER`](crate::effort::Effort::ORDER)).
     pub effort_levels: Vec<crate::effort::Effort>,
@@ -525,7 +545,7 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
                 // model is assumed capable (same assumption as the fallback).
                 tool_call: true,
                 vision: fitted.vision,
-                format: fitted.format,
+                protocol: fitted.protocol,
                 model_guidance: "",
                 effort_levels: Box::leak(levels.into_boxed_slice()),
             },
@@ -638,7 +658,7 @@ mod tests {
             thinking: ThinkingSupport::ReasoningContent,
             tool_call: true,
             vision: true,
-            format: WireFormat::OpenAi,
+            protocol: WireProtocol::OpenAiChatCompletions,
             model_guidance: "",
             effort_levels: crate::effort::EFFORT_COMMON,
         },
@@ -649,7 +669,7 @@ mod tests {
             thinking: ThinkingSupport::None,
             tool_call: true,
             vision: false,
-            format: WireFormat::AnthropicCompat,
+            protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
             effort_levels: &[],
         },
@@ -661,7 +681,7 @@ mod tests {
         thinking: ThinkingSupport::None,
         tool_call: false,
         vision: false,
-        format: WireFormat::Google,
+        protocol: WireProtocol::GoogleGenerateContent,
         model_guidance: "",
         effort_levels: &[],
     }];
@@ -675,7 +695,7 @@ mod tests {
         assert_eq!(m.context_window, 111_000);
         assert!(m.reasoning());
         assert!(m.vision);
-        assert_eq!(m.format, WireFormat::OpenAi);
+        assert_eq!(m.protocol, WireProtocol::OpenAiChatCompletions);
         // `fitted_overlay_never_overrides_a_registered_baseline` may have
         // already run in this process and refreshed the ladder (overlay
         // writes are process-global), so assert the baseline value only when
@@ -688,7 +708,7 @@ mod tests {
         );
 
         let g = resolve("fixture-gamma");
-        assert_eq!(g.format, WireFormat::Google);
+        assert_eq!(g.protocol, WireProtocol::GoogleGenerateContent);
         assert!(!g.tool_call);
     }
 
@@ -727,7 +747,7 @@ mod tests {
             context_window: 2_000_000,
             reasoning: true,
             vision: true,
-            format: WireFormat::OpenAi,
+            protocol: WireProtocol::OpenAiChatCompletions,
             // Unsorted input with a duplicate: stored ascending, deduped.
             effort_levels: vec![
                 crate::effort::Effort::Max,
@@ -754,7 +774,7 @@ mod tests {
             context_window: 1,
             reasoning: false,
             vision: false,
-            format: WireFormat::Google,
+            protocol: WireProtocol::GoogleGenerateContent,
             effort_levels: vec![crate::effort::Effort::Max],
         }]);
         // The vetted baseline entry wins on every field except the effort
@@ -763,7 +783,7 @@ mod tests {
         // identity, context, format, and vision stay vetted.
         let m = resolve("fixture-alpha");
         assert_eq!(m.context_window, 111_000);
-        assert_eq!(m.format, WireFormat::OpenAi);
+        assert_eq!(m.protocol, WireProtocol::OpenAiChatCompletions);
         assert!(m.vision);
         assert_eq!(m.effort_levels, [crate::effort::Effort::Max].as_slice());
     }
@@ -779,7 +799,7 @@ mod tests {
             context_window: 0,
             reasoning: false,
             vision: false,
-            format: WireFormat::OpenAi,
+            protocol: WireProtocol::OpenAiChatCompletions,
             effort_levels: Vec::new(),
         }]);
         // fixture-beta's baseline ladder is empty already, so check through
@@ -791,7 +811,10 @@ mod tests {
 
     #[test]
     fn fallback_format_is_openai_compat() {
-        assert_eq!(fallback_model("anything").format, WireFormat::OpenAi);
+        assert_eq!(
+            fallback_model("anything").protocol,
+            WireProtocol::OpenAiChatCompletions
+        );
     }
 
     #[test]

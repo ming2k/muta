@@ -40,7 +40,6 @@ pub struct BodyInput<'a> {
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
-    pub ephemeral: bool,
     pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
 
@@ -64,7 +63,6 @@ pub fn body_with_capabilities(
         tool_specs,
         max_tokens,
         thinking,
-        ephemeral,
         cache_plan,
     } = input;
 
@@ -139,19 +137,19 @@ pub fn body_with_capabilities(
         body["system"] = json!(system_text);
     }
 
-    if !ephemeral
-        && let muta_contracts::ResolvedCachePlan::Enabled { mode, ttl, .. } = cache_plan
+    if let muta_contracts::ResolvedCachePlan::Enabled {
+        mode, retention, ..
+    } = cache_plan
     {
-        let control = cache_control(*ttl);
+        let control = cache_control(*retention);
         match mode {
-            muta_contracts::ResolvedCacheMode::Automatic => {
+            muta_contracts::PromptCacheMode::Automatic => {
                 body["cache_control"] = control;
             }
-            muta_contracts::ResolvedCacheMode::Explicit
-            | muta_contracts::ResolvedCacheMode::ExplicitOnly => {
+            muta_contracts::PromptCacheMode::Explicit => {
                 stamp_caching_breakpoints(&mut body, &system_text, &control);
             }
-            muta_contracts::ResolvedCacheMode::Implicit => {}
+            muta_contracts::PromptCacheMode::Implicit => {}
         }
     }
     stamp_thinking(&mut body, capabilities, max_tokens, thinking);
@@ -219,9 +217,7 @@ fn stamp_caching_breakpoints(body: &mut Value, system_text: &str, control: &Valu
     let mut breakpoints = 0usize;
 
     if !body["tools"].is_null() {
-        if breakpoints < MAX_BREAKPOINTS
-            && stamp_last_array_element(&mut body["tools"], control)
-        {
+        if breakpoints < MAX_BREAKPOINTS && stamp_last_array_element(&mut body["tools"], control) {
             breakpoints += 1;
         }
     }
@@ -245,14 +241,15 @@ fn stamp_caching_breakpoints(body: &mut Value, system_text: &str, control: &Valu
     );
 }
 
-fn cache_control(ttl: Option<muta_contracts::CacheTtl>) -> Value {
+fn cache_control(retention: Option<muta_contracts::CacheRetention>) -> Value {
     let mut control = json!({"type": "ephemeral"});
-    if let Some(ttl) = ttl {
-        control["ttl"] = json!(match ttl {
-            muta_contracts::CacheTtl::FiveMinutes => "5m",
-            muta_contracts::CacheTtl::OneHour => "1h",
-            muta_contracts::CacheTtl::ThirtyMinutes
-            | muta_contracts::CacheTtl::TwentyFourHours => {
+    if let Some(retention) = retention {
+        control["ttl"] = json!(match retention {
+            muta_contracts::CacheRetention::FiveMinutes => "5m",
+            muta_contracts::CacheRetention::OneHour => "1h",
+            muta_contracts::CacheRetention::InMemory
+            | muta_contracts::CacheRetention::ThirtyMinutes
+            | muta_contracts::CacheRetention::TwentyFourHours => {
                 unreachable!("cache plan was resolved against Anthropic capabilities")
             }
         });

@@ -2,14 +2,11 @@
 
 | Page | Purpose |
 |------|---------|
-| [Build and test workflow](build-and-test.md) | Fast local loops, optional feature boundaries, and full-workspace verification |
-| [Manual verification](manual-verification.md) | Fast interactive runs, acceptance scenarios, and sandbox verification |
+| [Acceptance](acceptance.md) | Authentic end-to-end user journeys without shortcuts |
 | [Testing](testing.md) | Running, interpreting, and extending automated unit, integration, and snapshot test suites |
-| [Dev and test isolation](dev-and-test-isolation.md) | Running the checkout's builds and tests without touching the installed muta (`--home`, `MUTA_HOME`) |
 | [Workspace layout](workspace-layout.md) | Product families, shared package groups, and placement rules |
-| [Release process](release.md) | Versioning, the pre-tag CI checklist, and the tag/publish workflow |
-| [Documentation governance](../governance/documentation/index.md) | Standardized rules for organizing, writing, and reviewing docs |
-| [TUI component showcase](showcase.md) | Interactive playground for rendering and testing individual TUI modals in isolation |
+| [Release process](release.md) | Versioning, pre-tag verification checklist, and tag/publish workflow |
+| [Documentation governance](../governance/documentation/core/index.md) | Standardized rules for organizing, writing, and reviewing docs |
 
 ## Architecture
 

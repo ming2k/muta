@@ -1,155 +1,133 @@
 # Prompt caching and cost control
 
-> Companion to [ADR-0067](../../adr/0067-modular-prompt-cache-control.md)
-> (the *decision*) and [Token accounting](token-accounting.md) (how tokens are
-> *counted*). This page is about how caching *saves* them — and the one rule
-> that keeps the savings honest.
+> Companion to [ADR-0161](../../adr/0161-route-scoped-inference-protocols-and-prompt-cache-contracts.md)
+> and [Token accounting](token-accounting.md).
 
-Prompt caching is the dominant cost lever for a multi-round agent session. A cached
-prefix is billed at roughly **0.1× input** (Anthropic) or folded into a
-discount (OpenAI, Gemini, Moonshot). On a long coding session the stable
-prefix — system prompt, tool schemas, recent rounds — is the bulk of every
-request, so whether that bulk is read from cache or re-billed at full price is
-the difference between a cheap session and an expensive one.
+Prompt caching reuses a stable request prefix such as the system prompt, tool
+schemas, and earlier conversation turns. It can reduce latency and input cost,
+but “supports caching” is not one portable API feature. Different providers
+decide where the boundary lives, how long an entry survives, whether an
+affinity key is accepted, and which counters are returned.
 
-The catch: every provider exposes caching through a *different* surface, and a
-missed cache field is a **missed discount** — a direct billing error. This page
-documents the three strategies, where each provider hides its numbers, and the
-single rule that prevents drift.
+The key design rule is:
 
-## The three strategies
+> Cache behavior belongs to a concrete provider route and model, not to a
+> model family and not to protocol compatibility alone.
 
-A model family's caching strategy is classified once, in pure domain code, by
-`CachePolicy::for_family(family)` in `muta-contracts::cache`:
+A third-party endpoint that accepts an OpenAI-shaped request is not thereby
+guaranteed to accept every OpenAI cache extension. Muta enables a control only
+when that exact preset and model declare it. Custom and undocumented relays
+start unsupported.
 
-| `CachePolicy` | Who | What the client does | What the response reports |
-|---------------|-----|----------------------|---------------------------|
-| `Breakpoints` | Anthropic | Stamps explicit `cache_control: {"type":"ephemeral"}` breakpoints (≤4) across tools → system → messages | Separate `cache_creation_input_tokens` (write, premium) and `cache_read_input_tokens` (read, ~0.1×) |
-| `SessionKey` | Moonshot / Kimi | Sends a session-scoped `prompt_cache_key` so the server cache namespaces per conversation | A single read count (`cached_tokens`) |
-| `Automatic` | OpenAI, Gemini, and everything else | Nothing — the server auto-caches | A single read count, wherever the provider hides it |
+## Four separate questions
 
-The classifier is the only place that knows "kimi means session key, claude
-means breakpoints". Request builders and the token ledger branch on its
-predicates (`stamps_breakpoints`, `injects_session_key`) and never hard-code
-provider names.
+Caching becomes easier to reason about when four concerns stay separate:
 
-## How each provider surfaces its cache count
+1. **Protocol encoding** defines where a standard field belongs in a request.
+2. **Provider capability** says whether this route and model accept that field.
+3. **Request preference** selects among capabilities the route actually has.
+4. **Telemetry normalization** reads the provider's hit, write, and miss
+   counters without changing request behavior.
 
-The read side is the billing-critical one. Each OpenAI-compatible relay / API
-puts the cached count in a slightly different JSON path:
+The API protocol owns syntax. The provider capability owns availability and
+defaults. A response counter never proves that a matching request control is
+available.
 
-| Provider / API | JSON path | Notes |
-|----------------|-----------|-------|
-| Anthropic | `cache_read_input_tokens` (+ `cache_creation_input_tokens`) | The only provider with a separate *write* counter; `input_tokens` is the uncached suffix and must be folded in. |
-| OpenAI chat-completions | `prompt_tokens_details.cached_tokens` | Auto-cache; no write counter. |
-| OpenAI Responses API | `input_tokens_details.cached_tokens` | **Different key** from chat-completions — easy to miss. |
-| Moonshot / Kimi | `cached_tokens` (top-level, proprietary) | Surfaces under the OpenAI-compat shape. |
-| Google Gemini | `cachedContentTokenCount` (under `usageMetadata`) | Gemini's "context caching" surface. |
+## Cache modes
 
-All of these collapse to one field on the harness's shared per-turn type:
-`TokenUsage::cache_read_input_tokens` (`cache_creation_input_tokens` stays `0`
-for everyone except Anthropic, which is the only one with an explicit write
-tier). From there the value flows into the
-[token-source ledger](token-accounting.md#the-token-source-ledger) and the
-Context Usage modal's "Cache hit (with parenthesized hit-rate)" /
-"Cache populate" display.
+| Mode | Boundary owner | Client behavior |
+|------|----------------|-----------------|
+| `implicit` | Provider | Send no boundary marker; the provider caches eligible prefixes. Optional protocol controls such as retention or affinity are sent only when declared. |
+| `automatic` | Provider API | Ask the API to advance its cache boundary automatically. Anthropic represents this with top-level `cache_control`. |
+| `explicit` | Client | Mark concrete stable content boundaries. OpenAI and Anthropic use different block fields, so each protocol encoder owns its projection. |
+| `disabled` | Client, when enforceable | Omit or send the provider's disabling control. It is valid only when the route declares that disabling can actually be enforced. |
 
-## The one rule (and why it exists)
+`provider_default` is a preference, not a fifth mode. It resolves to the
+default explicitly declared by the route. Declaration order has no semantic
+effect.
 
-> **Every per-protocol `usage()` parser in the SDK layer MUST route its
-> cache-read count through `muta_contracts::cache::read_cached_tokens()`, never
-> read the field inline.**
+Request ephemerality is also independent. A title or compaction request does
+not silently override cache policy; callers that require no cache writes must
+request `disabled`, and resolution fails when the provider cannot guarantee
+it.
 
-This is not a style preference. It is the single structural lever against
-**billing drift**, and it exists because the alternative already cost money
-once.
+## Retention and affinity
 
-### The drift that almost shipped
+Retention values are exact provider controls, not approximate durations. Muta
+models in-memory, 5-minute, 30-minute, 1-hour, and 24-hour values separately
+and rejects a value the route does not advertise.
 
-When multi-provider cache accounting was first added, the three response
-parsers were inconsistent:
+An affinity or routing key is another independent capability. It may group
+similar prefixes or isolate conversations, but it does not itself enable
+caching. A route receives the session key only when it explicitly supports the
+corresponding wire field.
 
-```
-openai/response.rs         → called read_cached_tokens()            ✓
-responses/response.rs      → inlined input_tokens_details inline    ✗
-google/response.rs         → inlined cachedContentTokenCount        ✗
-read_cached_tokens() itself → did not know about input_tokens_details
-```
+## Protocol-standard versus provider-specific
 
-The Responses API's `input_tokens_details.cached_tokens` is a *different key*
-from chat-completions' `prompt_tokens_details.cached_tokens`. Because the
-Responses parser forked its own read and the helper didn't list that key, the
-discount was being read — but only by luck of the inline path, and any future
-policy change in the helper (coefficient folding, zero-count-as-miss auditing,
-a new relay field) would have silently skipped the Responses path. A missed
-field is a missed discount, which is a direct cost error.
+The distinction the implementation uses is:
 
-The fix was to (a) teach the helper the missing key and (b) route all three
-parsers through it — plus a regression test
-(`reads_openai_responses_input_tokens_details`) that fails if the key is ever
-dropped from the helper again.
+- OpenAI cache options, retention, affinity keys, explicit breakpoints, and
+  cached-token response fields are part of OpenAI API generations. Which model
+  generation supports which subset is provider/model capability data.
+- Anthropic `cache_control`, its TTL values, breakpoint limit, and read/write
+  counters are Anthropic Messages API semantics. A compatible relay does not
+  inherit them automatically.
+- Google implicit caching and explicit cached-content resources are Gemini API
+  semantics. Muta currently declares only implicit caching because it does not
+  implement the explicit resource lifecycle end to end.
+- DeepSeek's automatic disk cache and hit/miss counters are provider-specific
+  behavior on its API, even when the surrounding request is OpenAI-shaped.
+- Moonshot/Kimi's top-level cached-token counter is provider-specific
+  telemetry. It does not justify an undocumented affinity control.
 
-### Why centralizing prevents the whole class
+Provider dialects are separate again: ChatGPT/Copilot headers and Antigravity's
+envelope affect authentication and framing, but do not become generic cache
+standards for the underlying protocol.
 
-Cache accounting is policy, not parsing. If the policy ever needs to change —
-say, to fold a provider-specific discount coefficient, or to treat a zero
-count as a billable cache-miss for auditing — it must change in **one place**.
-Letting each protocol read its own field means a change touches N call sites,
-and forgetting one is both likely (they're in different files/crates) and
-invisible (no test catches "this protocol quietly stopped applying the new
-policy"). Routing through `read_cached_tokens()` collapses that to a single
-edit point with a single test surface.
+## Resolution and failure behavior
 
-## Where the strategies act (request side)
+For every request, Muta merges the request preference over the saved route
+preference, then validates the result against the route capability contract.
+The result is one of unsupported, disabled, or a fully specified enabled plan.
 
-The write/control side is per-strategy and lives in the provider construction
-layer (`build_provider_for_channel` in `muta-providers`), which already holds
-the concrete provider type and the model family:
+Invalid requests fail before network dispatch. There is no fallback from
+explicit to implicit, from a requested TTL to a provider default, or from an
+unknown protocol to OpenAI. This makes configuration errors observable and
+prevents accidental billing or payload changes.
 
-- **`Breakpoints`** — the Anthropic request builder stamps up to four
-  `cache_control: {"type":"ephemeral"}` breakpoints (last tool → last system
-  block → two newest messages). This was already correct before ADR-0067 and is
-  untouched.
-- **`SessionKey`** — `OpenAiChatCompletionsProvider` carries an optional
-  `prompt_cache_key`; the construction layer sets it to the **session id** when
-  the family resolves to `SessionKey`. The session id is read from
-  `Agent::thread_id()` inside the model-switch path, so no new parameter
-  ripples through the dispatch arms. The key namespaces the server-side cache
-  per conversation so repeated prefixes hit.
-- **`Automatic`** — nothing is stamped; the server decides.
+## Telemetry
 
-## Extending: adding a provider or a new field
+Provider response fields normalize into three independent counters:
 
-**A new OpenAI-compatible relay** (DeepSeek, Qwen, …) almost always reuses the
-existing `openai/response.rs` parser, so its `cached_tokens` is covered with
-**zero code**. Just confirm the relay reports the field under one of the known
-paths.
+| Counter | Meaning |
+|---------|---------|
+| Cache read | Input tokens served from a cache. |
+| Cache write | Input tokens used to populate a cache when the provider reports them. |
+| Cache miss | Provider-reported input tokens that missed. This is diagnostic and already part of prompt input, not additional usage. |
 
-**A genuinely new JSON path** (some provider invents `cache_stats.hit`) is a
-one-line addition to `read_cached_tokens()`'s key list — and every protocol
-benefits immediately. Add a matching case to the helper's test module.
+Known response locations include OpenAI Chat Completions
+`prompt_tokens_details.cached_tokens`, OpenAI Responses
+`input_tokens_details.cached_tokens`, Anthropic read/write fields, Google
+`cachedContentTokenCount`, Moonshot/Kimi `cached_tokens`, and DeepSeek's
+hit/miss fields. One normalization point handles these shapes so a new
+provider-specific path cannot quietly diverge across protocol adapters.
 
-**A new model family with a different strategy** is a one-line addition to
-`CachePolicy::for_family()`'s match. If the strategy is genuinely new (not
-breakpoints / session-key / automatic), that's an ADR, not a quick edit — the
-three-strategy partition is load-bearing.
+## Extending safely
 
-## What is deliberately *not* here
+When adding a provider or model generation:
 
-- **No monetary cost layer.** muta tracks tokens, not dollars. There is no
-  per-model price field and no `$` anywhere in the ledger; the cache savings
-  are realized as fewer tokens, surfaced as a hit rate. (Adding pricing is an
-  open extension point, intentionally deferred.)
-- **No client-side cache invalidation logic.** Each provider owns its cache
-  TTL (Anthropic's is 5 minutes by default); the harness only decides *where*
-  to place breakpoints / keys, not *when* they expire.
+1. Select one exact inference protocol and, if necessary, one typed dialect.
+2. Verify cache behavior from first-party provider documentation.
+3. Declare only the modes, retention values, limits, affinity control, and
+   counters that route supports.
+4. Add encoder tests for every declared request control and parser tests for
+   every declared counter.
+5. Leave caching unsupported when evidence or end-to-end implementation is
+   incomplete.
 
 ## See also
 
-- [ADR-0067](../../adr/0067-modular-prompt-cache-control.md) — the decision
-  record for the modular policy.
-- [Token accounting](token-accounting.md) — how tokens (cached or not) are
-  counted, attributed as reported vs estimated, and surfaced in the report
-  modal. The cache fields defined here feed that ledger.
-- [Model context assembly](model-context.md) — why the system prompt is a
-  single, stable, rank-ordered block (the shape that maximizes cache hits).
+- [Providers](../../reference/providers.md)
+- [Configuration](../../reference/configuration.md)
+- [Token accounting](token-accounting.md)
+- [Model context assembly](model-context.md)

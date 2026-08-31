@@ -115,11 +115,13 @@ impl Provider for StreamingToolProvider {
                     name: Some("read".to_string()),
                     arguments: "1}".to_string(),
                 }),
+                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
             ]
         } else {
             vec![
                 Ok(ProviderStreamEvent::TextDelta("do".to_string())),
                 Ok(ProviderStreamEvent::TextDelta("ne".to_string())),
+                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
             ]
         };
         Ok(Box::pin(stream::iter(events)))
@@ -1003,9 +1005,10 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
             &self,
             _request: muta_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-            Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::ReasoningDelta("let me think...".to_string()),
-            )])))
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::ReasoningDelta("let me think...".to_string())),
+                Ok(ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default())),
+            ])))
         }
     }
 
@@ -1264,14 +1267,17 @@ impl Provider for GatedRunnerProvider {
     ) -> Result<BoxStream<'static, Result<muta_contracts::ProviderStreamEvent, String>>, String>
     {
         if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(Box::pin(stream::iter(vec![Ok(
-                muta_contracts::ProviderStreamEvent::ToolCallDelta {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(muta_contracts::ProviderStreamEvent::ToolCallDelta {
                     index: 0,
                     id: Some("inner_1".to_string()),
                     name: Some("read_text".to_string()),
                     arguments: "{}".to_string(),
-                },
-            )])))
+                }),
+                Ok(muta_contracts::ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ])))
         } else {
             let _ = self.gate.send(true);
             Ok(Box::pin(stream::pending()))

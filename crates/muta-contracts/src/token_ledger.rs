@@ -251,6 +251,8 @@ pub struct RequestUsageRecord {
     pub total_tokens: i64,
     pub cache_write_tokens: i64,
     pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_miss_tokens: i64,
     /// Milliseconds the provider spent *generating* this attempt — measured
     /// from request dispatch to a validated assistant response, so it excludes
     /// tool execution and human-decision pauses. Together with
@@ -371,6 +373,7 @@ impl RequestUsageRecord {
                 completion_tokens: self.completion_tokens,
                 cache_write_tokens: self.cache_write_tokens,
                 cache_read_tokens: self.cache_read_tokens,
+                cache_miss_tokens: self.cache_miss_tokens,
                 ..Default::default()
             },
             RequestUsageSource::Estimated => TokenSourceTotals {
@@ -391,6 +394,7 @@ impl RequestUsageRecord {
             total_tokens: self.total_tokens,
             cache_write_tokens: self.cache_write_tokens,
             cache_read_tokens: self.cache_read_tokens,
+            cache_miss_tokens: self.cache_miss_tokens,
         }
     }
 }
@@ -417,6 +421,10 @@ pub struct TokenSourceTotals {
     /// billed at a ~0.1× discount). A subset of `reported_tokens`, broken out
     /// so the report can show cache hit volume (the payoff of caching).
     pub cache_read_tokens: i64,
+    /// Provider-reported prompt-cache misses. A diagnostic subset of prompt
+    /// input, not additional billable tokens.
+    #[serde(default)]
+    pub cache_miss_tokens: i64,
 }
 
 impl TokenSourceTotals {
@@ -433,6 +441,7 @@ impl TokenSourceTotals {
         self.completion_tokens += other.completion_tokens;
         self.cache_write_tokens += other.cache_write_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_miss_tokens += other.cache_miss_tokens;
     }
 }
 
@@ -459,6 +468,8 @@ pub struct TokenTurn {
     pub cache_write_tokens: i64,
     /// Anthropic `cache_read_input_tokens` for this turn.
     pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_miss_tokens: i64,
 }
 
 /// Internal per-key accumulator: running totals plus the ordered line items.
@@ -721,6 +732,7 @@ impl TokenSourceLedger {
             record.total_tokens = usage.total_tokens.max(0);
             record.cache_write_tokens = usage.cache_creation_input_tokens.max(0);
             record.cache_read_tokens = usage.cache_read_input_tokens.max(0);
+            record.cache_miss_tokens = usage.cache_miss_input_tokens.max(0);
         } else {
             record.source = RequestUsageSource::Estimated;
             record.prompt_tokens = record.projected_prompt_tokens.max(0);
@@ -811,6 +823,7 @@ impl TokenSourceLedger {
             completion_tokens: turn.completion_tokens.max(0),
             cache_write_tokens: turn.cache_write_tokens.max(0),
             cache_read_tokens: turn.cache_read_tokens.max(0),
+            cache_miss_tokens: turn.cache_miss_tokens.max(0),
             ..turn
         };
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -821,6 +834,7 @@ impl TokenSourceLedger {
             entry.totals.completion_tokens += turn.completion_tokens;
             entry.totals.cache_write_tokens += turn.cache_write_tokens;
             entry.totals.cache_read_tokens += turn.cache_read_tokens;
+            entry.totals.cache_miss_tokens += turn.cache_miss_tokens;
         } else {
             entry.totals.estimated_tokens += turn.total_tokens;
         }
@@ -1458,6 +1472,7 @@ mod tests {
                 total_tokens: 1200,
                 cache_write_tokens: 800,
                 cache_read_tokens: 0,
+                cache_miss_tokens: 0,
             },
         );
         ledger.record("anthropic", "claude", 50, false);
