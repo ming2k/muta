@@ -435,6 +435,16 @@ export type CrateThemeConfig = { fg: string | null, badge_bg: string | null, };
  */
 export type DiffThemeConfig = { add_bg: string | null, del_bg: string | null, add_hl: string | null, del_hl: string | null, };
 
+/**
+ * Structured feedback notification theme container.
+ */
+export type FeedbackThemeConfig = { info: FeedbackToneConfig | null, warning: FeedbackToneConfig | null, error: FeedbackToneConfig | null, success: FeedbackToneConfig | null, };
+
+/**
+ * Feedback tone container and border colors (Info / Warning / Error / Success).
+ */
+export type FeedbackToneConfig = { container: string | null, border: string | null, text: string | null, };
+
 export type HarnessSnapshot = { loop_status: LoopStatus, 
 /**
  * Monotonic session round counter. For a running snapshot this is the
@@ -705,6 +715,11 @@ timestamp?: number,
 sent_at_ms?: number, };
 
 /**
+ * Modal surface overrides (Layer 2: Center-anchored dialogs).
+ */
+export type ModalThemeConfig = { surface: string | null, border: string | null, backdrop: string | null, dim_factor: number | null, };
+
+/**
  * Handshake action selecting a daemon-observability stream instead of a
  * session attach (ADR-0093 §2). Sent as the first frame:
  * `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
@@ -826,6 +841,11 @@ export type NoticeSeverity = "info" | "warning" | "error";
 export type NoticeSource = "agent" | "turn_guard" | "todo" | "review" | "harness";
 
 export type NoticeSurface = "inline" | "toast" | "banner";
+
+/**
+ * Overlay surface overrides (Layer 3: Corner floats, toasts, popups).
+ */
+export type OverlayThemeConfig = { toast_bg: string | null, shadow: string | null, };
 
 /**
  * Kind of file change in a [`ToolOutput::Patch`].
@@ -1530,6 +1550,11 @@ digest: SessionDigest | null, };
 export type SessionStatus = "idle" | "running" | "needs_approval" | "needs_input" | "interrupted" | "failed";
 
 /**
+ * Sheet surface overrides (Layer 1: Edge-anchored drawers like Permission).
+ */
+export type SheetThemeConfig = { surface: string | null, border: string | null, };
+
+/**
  * One captured line of shell output with its source stream tagged. The TUI
  * renders [`ToolOutput::Shell`]'s `lines` verbatim in order (the source tag
  * only picks the colour), which preserves stdout/stderr interleaving. The
@@ -1584,9 +1609,14 @@ secret: boolean, };
 export type StreamTokenSource = "unknown" | "provider" | "cl100k";
 
 /**
- * Full standalone theme file loaded from `$XDG_CONFIG_HOME/muta/themes/<id>.toml`.
+ * Spatial 4-layer surface theme overrides container.
  */
-export type ThemeFile = { id: string, name: string, description: string, author: string | null, version: string | null, colors: ColorSchemeConfig, components: ComponentThemesConfig | null, };
+export type SurfacesThemeConfig = { view: ViewThemeConfig | null, sheet: SheetThemeConfig | null, modal: ModalThemeConfig | null, overlay: OverlayThemeConfig | null, };
+
+/**
+ * Full standalone theme file loaded from `$XDG_CONFIG_HOME/mutx/themes/<id>.toml`.
+ */
+export type ThemeFile = { id: string, name: string, description: string, author: string | null, version: string | null, colors: ColorSchemeConfig, surfaces: SurfacesThemeConfig | null, feedback: FeedbackThemeConfig | null, components: ComponentThemesConfig | null, };
 
 /**
  * Stable, monotonic identifier for a single todo item. Opaque to callers —
@@ -1815,6 +1845,11 @@ export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>,
  * Origin label identifying which runner produced this request (ADR-0138).
  */
 origin?: string | null, };
+
+/**
+ * View/canvas surface overrides (Layer 0: Full-screen destinations).
+ */
+export type ViewThemeConfig = { canvas: string | null, header_bg: string | null, header_fg: string | null, };
 
 /**
  * A persisted Web Reader Connection record (`reader_connections` in `web_connections.toml`).

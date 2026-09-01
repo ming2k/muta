@@ -269,7 +269,7 @@ impl Agent {
 
     /// Run or resume a streaming round from its last provider-request boundary.
     ///
-    /// A [`HarnessError::Retryable`] leaves `round` reusable. If the failed
+    /// A retryable [`HarnessError::Provider`] leaves `round` reusable. If the failed
     /// request followed completed tool calls, their messages and the complete
     /// per-round state are already present, so the next invocation sends the
     /// same pending provider request instead of executing those tools again.

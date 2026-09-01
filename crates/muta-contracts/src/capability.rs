@@ -358,11 +358,11 @@ pub trait Provider: Send + Sync {
 
     /// Whether this provider surfaces real token usage from the upstream API.
     ///
-    /// The harness uses this (together with [`Provider::take_last_usage`]) to
-    /// decide whether a turn's token accounting is **reported** (authoritative)
-    /// or **estimated** (local heuristic). The token-source report modal
-    /// surfaces this distinction so the user can see which turns are measured
-    /// and which are guessed.
+    /// The harness uses this (together with [`ProviderStreamEvent::Usage`] or
+    /// [`crate::ProviderCompletionMeta::usage`]) to decide whether a turn's
+    /// token accounting is **reported** (authoritative) or **estimated** (local
+    /// heuristic). The token-source report modal surfaces this distinction so
+    /// the user can see which turns are measured and which are guessed.
     ///
     /// Defaults to `false`; concrete providers override it once they actually
     /// parse usage from their HTTP responses.

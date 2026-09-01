@@ -37,10 +37,8 @@ pub fn detect_runtime_environment() -> &'static str {
         return "Container environment";
     }
 
-    if let Some(c) = std::env::var_os("container") {
-        if !c.is_empty() {
-            return "Container environment";
-        }
+    if std::env::var_os("container").is_some_and(|c| !c.is_empty()) {
+        return "Container environment";
     }
 
     #[cfg(target_os = "linux")]

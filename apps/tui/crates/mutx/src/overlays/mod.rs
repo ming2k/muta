@@ -10,7 +10,7 @@
 //! - [`permission`] — permission sheet + question modal
 //! - [`history`] — history search modal
 //! - [`help`] — help / keybindings modal
-//! - [`config`] — full-screen dual-pane settings view
+//! - [`crate::views::settings`] — full-screen dual-pane settings view
 //! - [`toast`] — copy / armed-action notice bubbles
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
 

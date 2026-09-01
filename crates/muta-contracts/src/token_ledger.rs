@@ -1,7 +1,7 @@
 //! Token-source accounting: how many tokens came from authoritative upstream
 //! usage reports vs. local estimates.
 //!
-//! When a provider reports real `usage` ([`crate::Provider::take_last_usage`] or
+//! When a provider reports real `usage` ([`crate::ProviderCompletionMeta::usage`] or
 //! a [`crate::ProviderStreamEvent::Usage`]), the harness books those tokens as
 //! **reported**. When it does not, the harness falls back to the local
 //! char-class estimator ([`crate::estimate_tokens`]) and books them as

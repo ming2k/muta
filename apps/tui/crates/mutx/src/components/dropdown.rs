@@ -62,7 +62,7 @@ impl<T> DropdownItem<T> {
         self
     }
 
-    /// Attach a tag/badge (e.g. "[default]", "[active]").
+    /// Attach a tag/badge (e.g. `"[default]"`, `"[active]"`).
     pub fn with_badge(mut self, badge: impl Into<String>) -> Self {
         self.badge = Some(badge.into());
         self
