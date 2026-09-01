@@ -1,35 +1,14 @@
 //! Workspace security attestation, trusted asset reloading, and trust command handlers.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::commands::CustomCommand;
 use muta_agent::Agent;
 use muta_contracts::TrustDomain;
 use muta_mcp::McpRuntime;
 use muta_persistence::config::Config;
 use muta_persistence::workspace_security::WorkspaceSecurityStore;
 use muta_skills::SkillRegistry;
-
-pub(crate) fn runtime_workspace_security(
-    store: &WorkspaceSecurityStore,
-    root: &Path,
-) -> muta_contracts::WorkspaceSecuritySnapshot {
-    store.snapshot(root)
-}
-
-pub(crate) fn live_custom_commands(
-    store: &WorkspaceSecurityStore,
-    root: &Path,
-) -> HashMap<String, CustomCommand> {
-    let rules_state = runtime_workspace_security(store, root).rules;
-    crate::commands::discover_commands_with_trust(root, rules_state)
-        .commands
-        .into_iter()
-        .map(|command| (command.name.clone(), command))
-        .collect()
-}
 
 pub(crate) struct AssetReloadReport {
     pub snapshot: muta_contracts::WorkspaceSecuritySnapshot,
@@ -44,6 +23,7 @@ pub(crate) async fn reload_trusted_assets(
     workspace_security: &WorkspaceSecurityStore,
     project_root: &Path,
     skills_registry: &SkillRegistry,
+    shared_additional_roots: &muta_contracts::SharedAdditionalRoots,
 ) -> Result<AssetReloadReport, String> {
     let snapshot = workspace_security.snapshot(project_root);
     let mut effective = Config::load();
@@ -53,11 +33,15 @@ pub(crate) async fn reload_trusted_assets(
     if snapshot.hooks.is_trusted() {
         effective.merge_project_hooks(Config::load_project_hooks(project_root));
     }
+    if snapshot.ex_workspace.is_trusted() {
+        effective.merge_project_additional_roots(Config::load_project_additional_roots(project_root));
+    }
+    super::session_ops::apply_additional_roots(shared_additional_roots, &effective, project_root);
 
     let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
     agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, agent));
     skills_registry.reload().await;
-    let rules = if snapshot.rules.is_trusted() {
+    let rules = if snapshot.instructions.is_trusted() {
         crate::project::load_project_rules(project_root)?
     } else {
         String::new()
@@ -82,9 +66,12 @@ pub(crate) fn parse_trust_domain(sub: &str) -> Result<TrustDomain, String> {
         "mcp" => Ok(TrustDomain::Mcp),
         "skills" => Ok(TrustDomain::Skills),
         "hooks" => Ok(TrustDomain::Hooks),
-        "rules" => Ok(TrustDomain::Rules),
+        "instructions" | "agents" | "rules" => Ok(TrustDomain::Instructions),
+        "ex-workspace" | "ex-workspaces" | "externals" | "workspace" | "roots" => {
+            Ok(TrustDomain::ExWorkspace)
+        }
         other => Err(format!(
-            "Unknown trust domain `{other}`. Valid domains: `mcp`, `skills`, `hooks`, `rules`, or `all`."
+            "Unknown trust domain `{other}`. Valid domains: `instructions`, `ex-workspace`, `mcp`, `skills`, `hooks`, or `all`."
         )),
     }
 }
@@ -110,12 +97,19 @@ pub(crate) fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, Stri
         Some("mcp") => Ok(TrustRoute::Grant(TrustDomain::Mcp)),
         Some("skills") => Ok(TrustRoute::Grant(TrustDomain::Skills)),
         Some("hooks") => Ok(TrustRoute::Grant(TrustDomain::Hooks)),
-        Some("rules") => Ok(TrustRoute::Grant(TrustDomain::Rules)),
+        Some("instructions") | Some("agents") | Some("rules") => {
+            Ok(TrustRoute::Grant(TrustDomain::Instructions))
+        }
+        Some("ex-workspace")
+        | Some("ex-workspaces")
+        | Some("externals")
+        | Some("workspace")
+        | Some("roots") => Ok(TrustRoute::Grant(TrustDomain::ExWorkspace)),
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(
-            "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust mcp`, \
-             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust status`, or `/trust revoke`."
+            "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust instructions`, \
+             `/trust ex-workspace`, `/trust mcp`, `/trust skills`, `/trust hooks`, `/trust status`, or `/trust revoke`."
         )),
     }
 }

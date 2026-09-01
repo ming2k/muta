@@ -56,9 +56,10 @@ fn workspace_trust_notice(
         event,
     };
     let changed = [
-        ("rules (AGENTS.md / rules)", snapshot.rules),
-        ("skills (custom skills)", snapshot.skills),
+        ("instructions (AGENTS.md / rules)", snapshot.instructions),
+        ("ex-workspace (external workspace roots)", snapshot.ex_workspace),
         ("mcp (MCP servers)", snapshot.mcp),
+        ("skills (custom skills)", snapshot.skills),
         ("hooks (lifecycle hooks)", snapshot.hooks),
     ]
     .into_iter()
@@ -78,7 +79,7 @@ fn workspace_trust_notice(
             .with_surface(muta_contracts::NoticeSurface::Banner)
             .with_body(format!(
                 "Changed on disk: {changed_desc} — quarantined pending review.\n\n\
-                 /trust re-trusts all; /trust <domain> (e.g. /trust rules) re-trusts one.",
+                 /trust re-trusts all; /trust <domain> (e.g. /trust instructions) re-trusts one.",
             )),
     ))
 }

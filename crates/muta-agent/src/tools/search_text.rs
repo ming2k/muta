@@ -16,7 +16,7 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
 const SEARCH_MAX_BYTES: usize = 32 * 1024;
 const SEARCH_MAX_MATCHES_PER_FILE: usize = 50;
 
-/// Regex or literal search over file contents.
+/// Literal text or regex search over file contents.
 pub struct SearchTextTool {
     env: Arc<dyn ExecutionEnvironment>,
 }
@@ -36,7 +36,7 @@ impl SearchTextTool {
 #[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchTextArgs {
-    #[tool(desc = "Regex to search for, or exact text when literal is true")]
+    #[tool(desc = "Exact text to search for, or regex pattern when regex is true")]
     query: String,
     #[tool(
         desc = "File or directory to search; relative paths use the primary workspace (default '.')"
@@ -46,8 +46,8 @@ struct SearchTextArgs {
     include: Option<Vec<String>>,
     #[tool(desc = "File globs to exclude from the search")]
     exclude: Option<Vec<String>>,
-    #[tool(desc = "Treat query as exact text instead of regex (default false)")]
-    literal: Option<bool>,
+    #[tool(desc = "Treat query as a regular expression instead of literal text (default false)")]
+    regex: Option<bool>,
     #[tool(desc = "Context lines around each match (default 0)")]
     context: Option<u64>,
     #[tool(desc = "Maximum returned lines (default 200)")]
@@ -61,7 +61,7 @@ impl Tool for SearchTextTool {
     }
 
     fn description(&self) -> &str {
-        "Search text in files with a regex or literal query. Returns path:line:content matches."
+        "Search text in files with exact text (default) or regex pattern. Returns path:line:content matches."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -92,7 +92,7 @@ impl Tool for SearchTextTool {
         let query = args.query;
         let include = args.include.unwrap_or_default();
         let exclude = args.exclude.unwrap_or_default();
-        let literal = args.literal.unwrap_or(false);
+        let is_regex = args.regex.unwrap_or(false);
         tokio::task::spawn_blocking(move || {
             native_search(NativeSearchParams {
                 workspace: &workspace,
@@ -100,7 +100,7 @@ impl Tool for SearchTextTool {
                 query: &query,
                 include: &include,
                 exclude: &exclude,
-                literal,
+                regex: is_regex,
                 context,
                 limit,
                 deadline: Instant::now() + SEARCH_TIMEOUT,
@@ -133,7 +133,7 @@ struct NativeSearchParams<'a> {
     query: &'a str,
     include: &'a [String],
     exclude: &'a [String],
-    literal: bool,
+    regex: bool,
     context: usize,
     limit: usize,
     deadline: Instant,
@@ -146,15 +146,15 @@ fn native_search(params: NativeSearchParams<'_>) -> Result<String, String> {
         query,
         include,
         exclude,
-        literal,
+        regex,
         context,
         limit,
         deadline,
     } = params;
-    let expression = if literal {
-        regex::escape(query)
-    } else {
+    let expression = if regex {
         query.to_string()
+    } else {
+        regex::escape(query)
     };
     let regex = regex::Regex::new(&expression)
         .map_err(|error| format!("Invalid regular expression: {error}"))?;
@@ -266,7 +266,7 @@ mod tests {
             query: "hit",
             include: &[],
             exclude: &[],
-            literal: false,
+            regex: false,
             context: 0,
             limit: 3,
             deadline: Instant::now() + SEARCH_TIMEOUT,
@@ -280,19 +280,82 @@ mod tests {
     }
 
     #[test]
-    fn native_search_supports_file_globs_and_literal_queries() {
+    fn native_search_defaults_to_literal_and_supports_code_symbols() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
-        std::fs::write(tmp.path().join("src/main.rs"), "fn hello.world() {}\n").unwrap();
-        std::fs::write(tmp.path().join("src/main.py"), "hello.world\n").unwrap();
+        std::fs::write(
+            tmp.path().join("src/main.rs"),
+            "pub fn load(config: &Config) {\n    hello.world();\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("src/other.rs"),
+            "hello_world();\n",
+        )
+        .unwrap();
+
+        // Default literal matching: unclosed parenthesis in code works cleanly
+        let output = native_search(NativeSearchParams {
+            workspace: tmp.path(),
+            search_root: tmp.path(),
+            query: "pub fn load(",
+            include: &[],
+            exclude: &[],
+            regex: false,
+            context: 0,
+            limit: 20,
+            deadline: Instant::now() + SEARCH_TIMEOUT,
+        })
+        .unwrap();
+        assert!(output.contains("src/main.rs:1:pub fn load("));
+
+        // Literal dot does not match underscore
+        let output_dot = native_search(NativeSearchParams {
+            workspace: tmp.path(),
+            search_root: tmp.path(),
+            query: "hello.world",
+            include: &[],
+            exclude: &[],
+            regex: false,
+            context: 0,
+            limit: 20,
+            deadline: Instant::now() + SEARCH_TIMEOUT,
+        })
+        .unwrap();
+        assert!(output_dot.contains("src/main.rs:2:"));
+        assert!(!output_dot.contains("other.rs"));
+
+        // Regex opt-in works
+        let output_regex = native_search(NativeSearchParams {
+            workspace: tmp.path(),
+            search_root: tmp.path(),
+            query: r"hello.*world",
+            include: &[],
+            exclude: &[],
+            regex: true,
+            context: 0,
+            limit: 20,
+            deadline: Instant::now() + SEARCH_TIMEOUT,
+        })
+        .unwrap();
+        assert!(output_regex.contains("src/main.rs:2:"));
+        assert!(output_regex.contains("src/other.rs:1:"));
+    }
+
+    #[test]
+    fn native_search_supports_file_globs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/main.rs"), "fn hello_world() {}\n").unwrap();
+        std::fs::write(tmp.path().join("src/main.py"), "fn hello_world()\n").unwrap();
 
         let output = native_search(NativeSearchParams {
             workspace: tmp.path(),
             search_root: tmp.path(),
-            query: "hello.world",
+            query: "hello_world",
             include: &["*.rs".to_string()],
             exclude: &[],
-            literal: true,
+            regex: false,
             context: 0,
             limit: 20,
             deadline: Instant::now() + SEARCH_TIMEOUT,
@@ -310,12 +373,29 @@ mod tests {
         std::fs::write(tmp.path().join("src/main.py"), "needle.value\n").unwrap();
         let tool = SearchTextTool::new(Some(tmp.path().to_path_buf()));
 
+        // Exact literal match with file filter
         let output = tool
-            .call(r#"{"query":"needle.value","include":["*.rs"],"literal":true}"#)
+            .call(r#"{"query":"needle.value","include":["*.rs"]}"#)
             .await
             .unwrap();
         assert!(output.contains("src/main.rs:1:"), "{output}");
         assert!(!output.contains("main.py"), "{output}");
+
+        // Regex opt-in mode
+        let output_regex = tool
+            .call(r#"{"query":"needle\\..*","regex":true}"#)
+            .await
+            .unwrap();
+        assert!(output_regex.contains("src/main.rs:1:"), "{output_regex}");
+        assert!(output_regex.contains("main.py:1:"), "{output_regex}");
+
+        // Code symbols like `(` without regex flag work seamlessly
+        std::fs::write(tmp.path().join("src/fn.rs"), "pub fn load(config: &Config)").unwrap();
+        let output_code = tool
+            .call(r#"{"query":"pub fn load("}"#)
+            .await
+            .unwrap();
+        assert!(output_code.contains("src/fn.rs:1:pub fn load("), "{output_code}");
 
         let exclude_only = tool
             .call(r#"{"query":"needle","exclude":["*.py"]}"#)

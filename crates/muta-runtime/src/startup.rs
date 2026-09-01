@@ -242,13 +242,11 @@ define_builtin_commands! {
     },
     Settings = "/settings" : {
         summary: "Open Settings overlay (theme, appearance)",
-        usage: ["/settings", "/settings reload"],
-        examples: [("/settings", "Open Settings overlay"), ("/settings reload", "Re-read and apply config.toml live")],
-        intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf"],
+        usage: ["/settings"],
+        examples: [("/settings", "Open Settings overlay")],
+        intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "conf"],
         category: Config,
-        subcommands: [
-            ("reload", "Re-read and apply config.toml live"),
-        ],
+        subcommands: [],
     },
     Delegate = "/delegate" : {
         summary: "Toggle delegated autonomous execution mode",
@@ -419,13 +417,14 @@ define_builtin_commands! {
     },
     Trust = "/trust" : {
         summary: "Trust project-authored asset domains",
-        usage: ["/trust", "/trust [all|mcp|skills|hooks|rules|status|revoke]"],
+        usage: ["/trust", "/trust [all|instructions|ex-workspace|mcp|skills|hooks|status|revoke]"],
         examples: [
             ("/trust", "Trust every present project asset domain"),
+            ("/trust instructions", "Trust project instructions and AGENTS.md"),
+            ("/trust ex-workspace", "Trust project external workspace roots"),
             ("/trust mcp", "Trust project MCP definitions only"),
             ("/trust skills", "Trust project skills only"),
             ("/trust hooks", "Trust project hooks only"),
-            ("/trust rules", "Trust project rules only"),
             ("/trust status", "Show trust state for every asset domain"),
             ("/trust revoke", "Revoke every asset-domain grant for this workspace"),
         ],
@@ -433,10 +432,11 @@ define_builtin_commands! {
         category: Project,
         subcommands: [
             ("all", "Trust every present project asset domain"),
+            ("instructions", "Trust project instructions and AGENTS.md"),
+            ("ex-workspace", "Trust project external workspace roots"),
             ("mcp", "Trust project MCP definitions only"),
             ("skills", "Trust project skills only"),
             ("hooks", "Trust project hooks only"),
-            ("rules", "Trust project rules only"),
             ("status", "Show trust state for every asset domain"),
             ("revoke", "Revoke every asset-domain grant"),
         ],
@@ -515,11 +515,6 @@ impl BuiltinCmd {
             "/session" => Some(BuiltinCmd::Sessions),
             // `/config` was renamed to `/settings`; the legacy alias keeps old invocations working.
             "/config" => Some(BuiltinCmd::Settings),
-            // `/reload` was a misleading name for what it does — re-read
-            // config.toml and apply the diff live (ADR-0085 §6). The action is
-            // config-scoped, so it now lives under `/settings reload`; the bare
-            // old spelling keeps working.
-            "/reload" => Some(BuiltinCmd::Settings),
             // `/yolo`, `/auto`, `/autopilot` are aliases for `/delegate` (delegated autonomous execution).
             "/yolo" | "/auto" | "/autopilot" => Some(BuiltinCmd::Delegate),
             _ => None,
@@ -662,7 +657,6 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/resume", "/sessions"),
             ("/session", "/sessions"),
             ("/config", "/settings"),
-            ("/reload", "/settings"),
             ("/yolo", "/delegate"),
             ("/auto", "/delegate"),
             ("/autopilot", "/delegate"),
@@ -686,15 +680,6 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             )
             .collect(),
     }
-}
-
-/// Split `/<name> <arguments>` into `(name_without_slash, arguments_trimmed)`.
-/// A bare `/name` with no arguments yields an empty arguments string.
-pub fn split_custom_command(input: &str) -> (&str, &str) {
-    let input = input.trim();
-    let split_at = input.find(char::is_whitespace).unwrap_or(input.len());
-    let (name, arguments) = input.split_at(split_at);
-    (name.trim_start_matches('/'), arguments.trim())
 }
 
 /// Initialise file-based tracing for the process.

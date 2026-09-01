@@ -35,7 +35,7 @@ pub fn load_project_rules(base: &Path) -> Result<String, String> {
 /// paths (existing files are left untouched and not reported).
 pub fn init_muta_config(base: &Path) -> Result<Vec<String>, String> {
     let mut created = Vec::new();
-    let dirs = ["skills", "commands", "agents"];
+    let dirs = ["skills", "agents"];
     for dir in dirs {
         let path = base.join(".muta").join(dir);
         if !path.exists() {

@@ -23,8 +23,7 @@ const SKILLS_PATHS: &[&str] = &[".muta/skills", ".agents/skills", ".claude/skill
 
 const HOOK_PATHS: &[&str] = &[".muta/hooks"];
 
-const RULE_PATHS: &[&str] = &[
-    ".muta/commands",
+const INSTRUCTION_PATHS: &[&str] = &[
     "AGENTS.md",
     ".cursorrules",
     ".windsurfrules",
@@ -101,8 +100,8 @@ impl WorkspaceSecurityStore {
             mcp: state_for(TrustDomain::Mcp),
             skills: state_for(TrustDomain::Skills),
             hooks: state_for(TrustDomain::Hooks),
-            rules: state_for(TrustDomain::Rules),
-            roots: state_for(TrustDomain::Roots),
+            instructions: state_for(TrustDomain::Instructions),
+            ex_workspace: state_for(TrustDomain::ExWorkspace),
         }
     }
 
@@ -254,8 +253,8 @@ fn domain_paths(domain: TrustDomain) -> &'static [&'static str] {
         TrustDomain::Mcp => MCP_PATHS,
         TrustDomain::Skills => SKILLS_PATHS,
         TrustDomain::Hooks => HOOK_PATHS,
-        TrustDomain::Rules => RULE_PATHS,
-        TrustDomain::Roots => &[],
+        TrustDomain::Instructions => INSTRUCTION_PATHS,
+        TrustDomain::ExWorkspace => &[],
     }
 }
 
@@ -269,8 +268,8 @@ fn domain_digest(workspace: &Path, domain: TrustDomain) -> Result<Option<String>
     let config_projection = match domain {
         TrustDomain::Mcp => project_config_projection(workspace, "mcp")?,
         TrustDomain::Hooks => project_config_projection(workspace, "hooks")?,
-        TrustDomain::Roots => project_config_projection(workspace, "workspace")?,
-        TrustDomain::Skills | TrustDomain::Rules => None,
+        TrustDomain::ExWorkspace => project_config_projection(workspace, "workspace")?,
+        TrustDomain::Skills | TrustDomain::Instructions => None,
     };
 
     if files.is_empty() && config_projection.is_none() {
@@ -499,7 +498,7 @@ mod tests {
         assert_eq!(snap.mcp, WorkspaceTrustState::Quarantined);
         assert_eq!(snap.skills, WorkspaceTrustState::Quarantined);
         assert_eq!(snap.hooks, WorkspaceTrustState::Quarantined);
-        assert_eq!(snap.rules, WorkspaceTrustState::Absent);
+        assert_eq!(snap.instructions, WorkspaceTrustState::Absent);
 
         assert!(store.trust_domain(root, TrustDomain::Mcp).unwrap());
         let snap = store.snapshot(root);
@@ -552,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn roots_domain_projection_tracks_workspace_table() {
+    fn ex_workspace_domain_projection_tracks_workspace_table() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         std::fs::create_dir_all(root.join(".muta")).unwrap();
@@ -560,11 +559,11 @@ mod tests {
         std::fs::write(&config, "[workspace]\nadditional_roots = [\"../optics\"]\n").unwrap();
         let store = WorkspaceSecurityStore::load_from(root.join("state/workspace_security.json"));
         let snap = store.snapshot(root);
-        assert_eq!(snap.roots, WorkspaceTrustState::Quarantined);
+        assert_eq!(snap.ex_workspace, WorkspaceTrustState::Quarantined);
 
-        store.trust_domain(root, TrustDomain::Roots).unwrap();
+        store.trust_domain(root, TrustDomain::ExWorkspace).unwrap();
         let snap = store.snapshot(root);
-        assert_eq!(snap.roots, WorkspaceTrustState::Trusted);
+        assert_eq!(snap.ex_workspace, WorkspaceTrustState::Trusted);
 
         std::fs::write(
             &config,
@@ -572,6 +571,6 @@ mod tests {
         )
         .unwrap();
         let snap = store.snapshot(root);
-        assert_eq!(snap.roots, WorkspaceTrustState::Changed);
+        assert_eq!(snap.ex_workspace, WorkspaceTrustState::Changed);
     }
 }

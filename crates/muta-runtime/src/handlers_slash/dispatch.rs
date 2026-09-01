@@ -10,16 +10,12 @@ use super::schedule_ops::{
     SessionRoute, add_scheduled_job, cancel_scheduled_job, list_scheduled_jobs, parse_delegate_arg,
     parse_jail_arg, session_route, split_schedule_spec,
 };
-use super::security_ops::{
-    TrustRoute, live_custom_commands, reload_trusted_assets, runtime_workspace_security,
-    trust_route,
-};
+use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
-    apply_additional_roots, fork_current_session, restore_session_runtime, start_fresh_session,
+    fork_current_session, restore_session_runtime, start_fresh_session,
     supersede_for_session_switch, teardown_sides_for_session_switch,
 };
 use crate::agent_setup::active_context_window;
-use crate::commands::expand_command;
 use crate::project::init_muta_config;
 use crate::session_view::{build_sessions_overview, short_session_id};
 use crate::side::{
@@ -27,7 +23,7 @@ use crate::side::{
     start_active_turn,
 };
 use crate::slash_handler::SlashContext;
-use crate::startup::{BuiltinCmd, split_custom_command};
+use crate::startup::BuiltinCmd;
 
 use muta_agent::orchestration::{
     ContextProjectionSettings, RoundInput, compact_round_history, round_response, send_compaction,
@@ -37,7 +33,6 @@ use muta_contracts::{
     AgentRequest, AgentResponse, CommandResult, CronExpr, LoopStatus, Message, RoundEvent,
     ScheduledJob, Tool, TrustDomain, estimate_tokens, repeat::parse_schedule_arg,
 };
-use muta_persistence::config::Config;
 use muta_skills::{ListSkillsTool, UseSkillTool};
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
@@ -59,14 +54,13 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         ref mut provider_usage,
         ref skills_registry,
         skills_registry_for_commands,
-        _commands_for_task,
         embedding_store_for_commands,
         req_tx_for_commands,
         project_root_for_side,
         startup,
         ui,
         extra_commands,
-        websearch_shared,
+        websearch_shared: _,
         background_jobs,
     } = env;
     let parts: Vec<&str> = cmd.split_whitespace().collect();
@@ -85,143 +79,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
     let name = parts[0].trim_start_matches('/');
     let args = cmd.strip_prefix(parts[0]).unwrap_or("").trim();
     match BuiltinCmd::from_slash(parts[0]) {
-        Some(BuiltinCmd::Models) | Some(BuiltinCmd::Connections) => {
-            // Handled in TUI
-        }
-        Some(BuiltinCmd::Settings) => {
-            // Bare `/settings` (and `/config`) is handled in the TUI: it opens the
-            // settings manager modal locally for presentation settings (intercepted in
-            // input.rs as `InputAction::OpenConfig`), so it never arrives
-            // here. What does arrive is `/settings reload` (and the legacy
-            // `/config reload` / `/reload` aliases): re-read config.toml and apply the diff live
-            // (ADR-0085 §6) — MCP servers (diff + reconnect), project
-            // MCP/hooks (trust-gated), bash policy, hooks registry,
-            // permissions, master settings, tool variants, and the prune
-            // threshold. User-triggered, no fs-watch.
-            if parts.get(1) != Some(&"reload") {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "Unknown /settings command. Use /settings reload to re-read config.toml and \
-                     apply it live.",
-                )
-                .await;
-                return;
-            }
-
-            // ADR-0085 §6: re-read config.toml and apply the diff live, so
-            // editing the MCP servers / permissions / bash policy / hooks no
-            // longer requires a restart. Reload is user-triggered (not
-            // fs-watch): only the user knows when their edit is complete, and
-            // a half-written file would otherwise tear down live sessions.
-            let mut reloaded = Config::load();
-            // Re-apply project assets from one domain-specific trust snapshot.
-            // No aggregate extension flag exists: each consumer checks only
-            // the content it is about to load.
-            let security_snapshot =
-                runtime_workspace_security(workspace_security, project_root_for_side);
-            let project_mcp = Config::load_project_mcp(project_root_for_side);
-            if security_snapshot.mcp.is_trusted() && !project_mcp.is_empty() {
-                reloaded.merge_project_mcp(project_mcp);
-            }
-            let project_hooks = Config::load_project_hooks(project_root_for_side);
-            if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
-                reloaded.merge_project_hooks(project_hooks);
-            }
-            apply_additional_roots(shared_additional_roots, &reloaded, project_root_for_side);
-
-            // MCP: diff + (re)connect/disconnect. The next request picks up the
-            // new tool set automatically (visible_tools recomputes each turn).
-            let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-
-            // Re-apply the agent-scoped config sections that are otherwise
-            // seeded only at startup. Each setter is replace-style and safe to
-            // re-run; permissions seeding is additive (new allow-rules take
-            // effect; removed rules are noted but not revoked this session).
-            agent.set_bash_policy(&reloaded.bash_policy);
-            agent.set_hard_stop_turns(reloaded.master.hard_stop_turns);
-            agent.set_doom_guard_config(reloaded.master.doom_guard);
-            agent.set_allow_model_stdin(reloaded.master.allow_model_stdin);
-            agent.set_skip_interactive_input(reloaded.master.skip_interactive_input);
-            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks, agent));
-            skills_registry.reload().await;
-            let project_rules = if security_snapshot.rules.is_trusted() {
-                crate::project::load_project_rules(project_root_for_side).unwrap_or_else(|err| {
-                    tracing::warn!(error = %err, "project rules reload failed; unloading rules");
-                    String::new()
-                })
-            } else {
-                String::new()
-            };
-            agent.set_project_rules(project_rules);
-            agent.set_workspace_security(security_snapshot);
-            agent.seed_permissions_from_config(&reloaded.permissions.allow);
-            crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
-            crate::agent_setup::reseed_tool_variants(agent, &reloaded);
-            // `[websearch]` is hot-reloadable too: push the re-read table
-            // (already merged with credentials.toml by `Config::load`)
-            // through the shared handle so the web tools pick up backend /
-            // reader / proxy changes on their next call.
-            crate::handlers_websearch::apply_reloaded(websearch_shared, &reloaded);
-
-            let mut lines = Vec::new();
-            lines.push(format!(
-                "Web tools: provider {}, reader {}.",
-                reloaded.websearch.provider, reloaded.websearch.reader,
-            ));
-            if report.removed.is_empty()
-                && report.connected.is_empty()
-                && report.unchanged.is_empty()
-            {
-                lines.push("No MCP servers configured.".to_string());
-            } else {
-                if !report.unchanged.is_empty() {
-                    lines.push(format!("MCP unchanged: {}", report.unchanged.join(", ")));
-                }
-                if !report.connected.is_empty() {
-                    let ok: Vec<&str> = report
-                        .connected
-                        .iter()
-                        .filter(|(_, ok)| *ok)
-                        .map(|(n, _)| n.as_str())
-                        .collect();
-                    let fail: Vec<&str> = report
-                        .connected
-                        .iter()
-                        .filter(|(_, ok)| !*ok)
-                        .map(|(n, _)| n.as_str())
-                        .collect();
-                    if !ok.is_empty() {
-                        lines.push(format!("MCP connected: {}", ok.join(", ")));
-                    }
-                    if !fail.is_empty() {
-                        lines.push(format!("MCP failed to connect: {}", fail.join(", ")));
-                    }
-                }
-                if !report.removed.is_empty() {
-                    lines.push(format!("MCP removed: {}", report.removed.join(", ")));
-                }
-            }
-            lines.push("Re-applied bash policy, hooks, master, and permissions.".to_string());
-            record_command_with_duration(
-                session,
-                resp_tx,
-                name,
-                args,
-                CommandResult::ConfigReload { details: lines },
-                Some(start_instant.elapsed().as_millis() as u64),
-            )
-            .await;
-            send_harness_state_for_session(
-                resp_tx,
-                &session.id().await,
-                agent,
-                session,
-                LoopStatus::Idle,
-            )
-            .await;
+        Some(BuiltinCmd::Models) | Some(BuiltinCmd::Connections) | Some(BuiltinCmd::Settings) => {
+            // Handled in client UI / overlay
         }
         Some(BuiltinCmd::Tools) => {
             // Handled in TUI (`/tools` opens the tools manager modal
@@ -519,7 +378,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         base_tools_for_side: env.base_tools_for_side,
                         skills_registry: env.skills_registry.clone(),
                         skills_registry_for_commands: env.skills_registry_for_commands,
-                        _commands_for_task: env._commands_for_task,
                         embedding_store_for_commands: env.embedding_store_for_commands,
                         req_tx_for_commands: env.req_tx_for_commands,
                         project_root_for_side: env.project_root_for_side,
@@ -1260,17 +1118,19 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     let message = format!(
                         "Workspace Asset Trust\n\
                          - Root: {}\n\
+                         - Instructions: {}\n\
+                         - Ex-Workspace: {}\n\
                          - MCP: {}\n\
                          - Skills: {}\n\
                          - Hooks: {}\n\
-                         - Rules: {}\n\
                          - Aggregate: {}\n\
-                         Asset trust does not grant filesystem scope or runtime execution permission.",
+                         Asset trust does not grant runtime execution permission.",
                         snapshot.root,
+                        snapshot.instructions.as_str(),
+                        snapshot.ex_workspace.as_str(),
                         snapshot.mcp.as_str(),
                         snapshot.skills.as_str(),
                         snapshot.hooks.as_str(),
-                        snapshot.rules.as_str(),
                         snapshot.aggregate().as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1296,6 +1156,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         workspace_security,
                         project_root_for_side,
                         skills_registry_for_commands,
+                        shared_additional_roots,
                     )
                     .await
                     {
@@ -1323,13 +1184,14 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         "Project asset trust recorded.\n\
                          - Root: {}\n\
                          - Granted: {}\n\
-                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
+                         - Instructions: {}; Ex-Workspace: {}; MCP: {}; Skills: {}; Hooks: {}{}",
                         report.snapshot.root,
                         granted,
+                        report.snapshot.instructions.as_str(),
+                        report.snapshot.ex_workspace.as_str(),
                         report.snapshot.mcp.as_str(),
                         report.snapshot.skills.as_str(),
                         report.snapshot.hooks.as_str(),
-                        report.snapshot.rules.as_str(),
                         mcp,
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1349,6 +1211,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         workspace_security,
                         project_root_for_side,
                         skills_registry_for_commands,
+                        shared_additional_roots,
                     )
                     .await
                     {
@@ -1365,7 +1228,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     };
                     let message = if revoked {
                         format!(
-                            "Project asset trust revoked. MCP, skills, hooks, rules, and project commands were unloaded.{removed}"
+                            "Project asset trust revoked. Instructions, external workspaces, MCP, skills, and hooks were unloaded.{removed}"
                         )
                     } else {
                         "No project asset grants were recorded for this workspace.".to_string()
@@ -1911,28 +1774,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             .await;
         }
         Some(BuiltinCmd::Help) => {
-            let live_commands = live_custom_commands(workspace_security, project_root_for_side);
-            let custom_help = if live_commands.is_empty() {
-                String::new()
-            } else {
-                let mut commands = live_commands.values().collect::<Vec<_>>();
-                commands.sort_by(|left, right| left.name.cmp(&right.name));
-                format!(
-                    "\n\nCustom commands:\n{}",
-                    commands
-                        .into_iter()
-                        .map(|command| format!(
-                            "/{} — {}",
-                            command.name,
-                            command
-                                .description
-                                .as_deref()
-                                .unwrap_or("Run project command")
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
-            };
             let extra_help = if extra_commands.is_empty() {
                 String::new()
             } else {
@@ -1955,7 +1796,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 resp_tx,
                 name,
                 args,
-                CommandResult::Text(format!("{}\n{custom_help}{extra_help}", lines.join("\n\n"))),
+                CommandResult::Text(format!("{}\n{extra_help}", lines.join("\n\n"))),
             )
             .await;
         }
@@ -1964,14 +1805,9 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             let _ = resp_tx.send(AgentResponse::Exit);
         }
         None => {
-            // Rebuild from the live content-bound state on every dispatch.
-            // This makes `/trust`, `/untrust`, and a digest mismatch take
-            // effect without a restart or stale cache.
-            let live_commands = live_custom_commands(workspace_security, project_root_for_side);
             // Application-registered Rust handlers (extension point): try the
-            // extra-commands registry before the markdown-template path. A
-            // handler that returns `true` fully handled it; `false` falls
-            // through to the markdown template / unknown-command path below.
+            // extra-commands registry. A handler that returns `true` fully handled
+            // it; otherwise fall through to the unknown-command path.
             let name_no_slash = parts[0].strip_prefix('/').unwrap_or(parts[0]);
             if let Some(handler) = extra_commands.get(name_no_slash) {
                 let ctx = SlashContext {
@@ -1987,7 +1823,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     provider_holder: provider_for_task,
                     provider_usage,
                     skills_registry: skills_registry_for_commands,
-                    commands: &live_commands,
                     embedding_store: embedding_store_for_commands,
                     req_tx: req_tx_for_commands,
                     project_root: project_root_for_side,
@@ -1998,37 +1833,12 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     return;
                 }
             }
-            let (command_name, arguments) = split_custom_command(&cmd);
-            let command = live_commands.get(command_name).cloned();
-            let Some(command) = command else {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    format!("Unknown command: {}", parts[0]),
-                )
-                .await;
-                return;
-            };
-            record_invocation(session, name, args).await;
-            start_active_turn(
-                SideEnv {
-                    side,
-                    master: agent,
-                    primary_session: session,
-                    primary_lifecycle: lifecycle,
-                    tx: resp_tx,
-                    config,
-                },
-                RoundInput {
-                    prompt: expand_command(&command, arguments),
-                    hidden: false,
-                    display_prompt: Some(cmd),
-                    sent_at_ms: None,
-                    images: Vec::new(),
-                    driver: muta_agent::orchestration::RoundDriver::Fresh,
-                },
+            record_error(
+                session,
+                resp_tx,
+                name,
+                args,
+                format!("Unknown command: {}", parts[0]),
             )
             .await;
         }

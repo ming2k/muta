@@ -691,10 +691,11 @@ mod tests {
             labels,
             vec![
                 "/trust all",
+                "/trust instructions",
+                "/trust ex-workspace",
                 "/trust mcp",
                 "/trust skills",
                 "/trust hooks",
-                "/trust rules",
                 "/trust status",
                 "/trust revoke"
             ]

@@ -56,10 +56,11 @@ pub enum TrustDomain {
     Skills,
     /// Trust project-level lifecycle hook definitions and hook assets.
     Hooks,
-    /// Trust project-authored instructions and slash-command templates.
-    Rules,
-    /// Trust project-level linked workspace roots (`[workspace].additional_roots`).
-    Roots,
+    /// Trust project-authored instructions and rules (`AGENTS.md`, rules).
+    Instructions,
+    /// Trust project-level external workspace roots (`[workspace].additional_roots`).
+    #[serde(rename = "ex_workspace", alias = "ex-workspace", alias = "roots")]
+    ExWorkspace,
 }
 
 impl TrustDomain {
@@ -67,8 +68,8 @@ impl TrustDomain {
         Self::Mcp,
         Self::Skills,
         Self::Hooks,
-        Self::Rules,
-        Self::Roots,
+        Self::Instructions,
+        Self::ExWorkspace,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -76,8 +77,8 @@ impl TrustDomain {
             Self::Mcp => "mcp",
             Self::Skills => "skills",
             Self::Hooks => "hooks",
-            Self::Rules => "rules",
-            Self::Roots => "roots",
+            Self::Instructions => "instructions",
+            Self::ExWorkspace => "ex-workspace",
         }
     }
 }
@@ -97,12 +98,12 @@ pub struct WorkspaceSecuritySnapshot {
     /// Trust status for lifecycle hooks.
     #[serde(default)]
     pub hooks: WorkspaceTrustState,
-    /// Trust status for project instructions and slash commands.
-    #[serde(default)]
-    pub rules: WorkspaceTrustState,
-    /// Trust status for project-declared linked workspace roots.
-    #[serde(default)]
-    pub roots: WorkspaceTrustState,
+    /// Trust status for project instructions (AGENTS.md).
+    #[serde(default, alias = "rules")]
+    pub instructions: WorkspaceTrustState,
+    /// Trust status for project-declared external workspace roots.
+    #[serde(default, alias = "roots")]
+    pub ex_workspace: WorkspaceTrustState,
 }
 
 impl WorkspaceSecuritySnapshot {
@@ -112,8 +113,8 @@ impl WorkspaceSecuritySnapshot {
             mcp: WorkspaceTrustState::Absent,
             skills: WorkspaceTrustState::Absent,
             hooks: WorkspaceTrustState::Absent,
-            rules: WorkspaceTrustState::Absent,
-            roots: WorkspaceTrustState::Absent,
+            instructions: WorkspaceTrustState::Absent,
+            ex_workspace: WorkspaceTrustState::Absent,
         }
     }
 
@@ -122,8 +123,8 @@ impl WorkspaceSecuritySnapshot {
             TrustDomain::Mcp => self.mcp,
             TrustDomain::Skills => self.skills,
             TrustDomain::Hooks => self.hooks,
-            TrustDomain::Rules => self.rules,
-            TrustDomain::Roots => self.roots,
+            TrustDomain::Instructions => self.instructions,
+            TrustDomain::ExWorkspace => self.ex_workspace,
         }
     }
 
@@ -133,7 +134,13 @@ impl WorkspaceSecuritySnapshot {
 
     /// Aggregate state for display only. It never participates in admission.
     pub fn aggregate(&self) -> WorkspaceTrustState {
-        let states = [self.mcp, self.skills, self.hooks, self.rules, self.roots];
+        let states = [
+            self.mcp,
+            self.skills,
+            self.hooks,
+            self.instructions,
+            self.ex_workspace,
+        ];
         let present = states
             .into_iter()
             .filter(|state| *state != WorkspaceTrustState::Absent)

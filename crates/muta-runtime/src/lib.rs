@@ -68,7 +68,6 @@ pub mod agent_setup;
 pub mod background_jobs;
 pub mod bootstrap;
 pub mod client;
-pub mod commands;
 pub mod export;
 pub mod handlers_chat;
 pub mod handlers_permission;

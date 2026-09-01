@@ -18,7 +18,6 @@
 //! (or client-side) short-circuits and must be dispatched by the caller
 //! before invoking [`assemble`].
 
-use crate::commands::{CustomCommand, discover_commands_with_trust};
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use muta_agent::{Agent, AgentIdentity, MasterPreset, RoundLifecycle, RunnerTool};
@@ -34,10 +33,9 @@ use muta_persistence::{
 };
 use muta_skills::{SkillCatalog, SkillRegistry};
 
-use crate::startup::{BuiltinCmd, SessionStart};
+use crate::startup::SessionStart;
 use crate::{SessionDriver, UiBridge};
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -361,11 +359,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // self-register and are assembled explicitly below. MCP tools are
     // discovered at runtime and published directly to the master Agent;
     // they are not part of this static capability set.
-    // Asset trust is computed independently from the filesystem boundary.
-    // It controls only project-authored assets (MCP, skills, hooks, rules).
+    // Spatial admission resolves global and trusted project-declared roots.
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
     let security_snapshot = workspace_security.snapshot(&project_root);
-    // Spatial admission resolves global user-owned roots.
+    if security_snapshot.ex_workspace.is_trusted() {
+        config.merge_project_additional_roots(Config::load_project_additional_roots(&project_root));
+    }
     let additional_roots: Vec<std::path::PathBuf> =
         match config.resolve_workspace_additional_roots(&project_root) {
             Ok(roots) => roots,
@@ -517,7 +516,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
         config.merge_project_hooks(project_hooks);
     }
-    if security_snapshot.rules.is_trusted() {
+    if security_snapshot.instructions.is_trusted() {
         match crate::project::load_project_rules(&project_root) {
             Ok(rules) => agent.set_project_rules(rules),
             Err(error) => tracing::warn!(%error, "trusted project rules could not be loaded"),
@@ -527,7 +526,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ("mcp", security_snapshot.mcp),
         ("skills", security_snapshot.skills),
         ("hooks", security_snapshot.hooks),
-        ("rules", security_snapshot.rules),
+        ("instructions", security_snapshot.instructions),
+        ("ex-workspace", security_snapshot.ex_workspace),
     ]
     .into_iter()
     .filter_map(|(domain, state)| {
@@ -545,77 +545,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 AgentNotice::trust_changed("Project assets are quarantined")
                     .with_surface(NoticeSurface::Banner)
                     .with_body(format!(
-                        "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust rules`).",
+                        "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust instructions`).",
                         gated.join(", ")
                     )),
             ),
         ));
     }
-    // Project-local slash commands (`.muta/commands/`) are prompt-text
-    // templates: a malicious repo must not inject `/<name>` commands just
-    // because the directory was opened. Only the user-global commands dir
-    // loads while project rule assets are quarantined; project commands join
-    // only when their exact current content is trusted.
-    let command_discovery = discover_commands_with_trust(&project_root, security_snapshot.rules);
-    // Shadowing alert: a project command that reuses a user command's name
-    // wins by priority — warn once per shadowed name so the override cannot
-    // happen silently. Built-in-named entries are skipped: built-ins always
-    // win at dispatch, so those project files override nothing.
-    for shadow in &command_discovery.shadowed {
-        if BuiltinCmd::ALL
-            .iter()
-            .any(|(name, _)| name.trim_start_matches('/') == shadow.name)
-        {
-            continue;
-        }
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Notice(
-                AgentNotice::trust_changed(format!(
-                    "Project command '/{}' overrides the user command of the same name",
-                    shadow.name
-                ))
-                .with_body(format!(
-                    "Running /{} uses {}. Project-local commands win by priority; \
-                     if this is unexpected, inspect the project's .muta/commands \
-                     directory or `/untrust`.",
-                    shadow.name,
-                    shadow.winner_source.display()
-                )),
-            ),
-        ));
-    }
-    let custom_commands = command_discovery
-        .commands
-        .into_iter()
-        .filter(|command| {
-            // ALL holds slash-prefixed names ("/workspace"); command names are
-            // slash-less — compare against the stripped form.
-            !BuiltinCmd::ALL
-                .iter()
-                .any(|(name, _)| name.trim_start_matches('/') == command.name)
-        })
-        .map(|command| (command.name.clone(), command))
-        .collect::<HashMap<String, CustomCommand>>();
-    let custom_command_suggestions = {
-        let mut suggestions = custom_commands
-            .values()
-            .map(|command| {
-                (
-                    format!("/{}", command.name),
-                    command
-                        .summary
-                        .as_ref()
-                        .or(command.description.as_ref())
-                        .cloned()
-                        .unwrap_or_else(|| "Run project command".to_string()),
-                )
-            })
-            .collect::<Vec<_>>();
-        suggestions.sort_by(|left, right| left.0.cmp(&right.0));
-        suggestions
-    };
-    let command_catalog = crate::startup::command_catalog(&custom_command_suggestions);
+    let command_catalog = crate::startup::command_catalog(&[]);
     // Connect every configured MCP server in the BACKGROUND so a slow/unreachable
     // server (8s connect timeout each) never delays the first frame. The
     // runtime is ready immediately with every enabled server in `Connecting`;
@@ -811,7 +747,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Primary round lifecycle: at most one active round, superseded by the
     // next begin (replaces the old token-slot + generation-counter pair).
     let lifecycle = Arc::new(RoundLifecycle::new());
-    let commands_for_task = Arc::new(custom_commands);
     let embedding_store_for_commands = embedding_store.clone();
     let req_tx_for_commands = req_tx.clone();
     // `/btw` aside state (ADR-0017, lifted to a multi-slot registry by
@@ -890,7 +825,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         workspace_security: workspace_security.clone(),
         shared_additional_roots: shared_additional_roots.clone(),
         shared_unconfined: shared_unconfined.clone(),
-        commands: commands_for_task,
         command_catalog: command_catalog.clone(),
         embedding_store: embedding_store_for_commands,
         lifecycle,

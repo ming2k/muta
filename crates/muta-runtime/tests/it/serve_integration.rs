@@ -2025,7 +2025,7 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
         };
         match event {
             RoundEvent::HarnessState(snapshot)
-                if snapshot.workspace_security.rules
+                if snapshot.workspace_security.instructions
                     == muta_contracts::WorkspaceTrustState::Quarantined =>
             {
                 saw_quarantined_snapshot = true;
@@ -2072,7 +2072,7 @@ async fn changed_workspace_keeps_banner_escalation_on_attach() {
         security_file.clone(),
     );
     security
-        .trust_domains(tmp.path(), &[muta_contracts::TrustDomain::Rules])
+        .trust_domains(tmp.path(), &[muta_contracts::TrustDomain::Instructions])
         .unwrap();
     std::fs::write(tmp.path().join("AGENTS.md"), "project instructions v2").unwrap();
     let (mut ws, _server) = attach_trust_workspace(&tmp, &security_file).await;

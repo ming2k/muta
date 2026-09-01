@@ -132,11 +132,11 @@ pub fn doom_signature(name: &str, args: &str) -> String {
             .map(normalize_path_locator)
             .unwrap_or_else(|| ".".to_string());
         return format!(
-            "{name}|{query}|{path}|include={}|exclude={}|literal={}",
+            "{name}|{query}|{path}|include={}|exclude={}|regex={}",
             normalized_string_array(&value, "include", false),
             normalized_string_array(&value, "exclude", false),
             value
-                .get("literal")
+                .get("regex")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         );

@@ -101,21 +101,11 @@ fn completions_settings_triggers_and_subcommands() {
         Some("/settings")
     );
 
-    // Typing /settings suggests /settings reload
+    // Typing /settings has no subcommands (it is a pure view overlay)
     app.input = "/settings ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
-    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/settings reload"]);
-
-    // Legacy /config <space> completes against /settings' verbs but keeps
-    // the alias spelling the user typed — alias rewriting happens only at
-    // dispatch, never in the completion popup.
-    app.input = "/config ".to_string();
-    app.cursor_position = app.input.chars().count();
-    let completions = app.completions();
-    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/config reload"]);
+    assert!(completions.is_empty());
 }
 
 #[test]
@@ -256,10 +246,11 @@ fn completions_expose_only_canonical_trust_subcommands() {
         labels,
         vec![
             "/trust all",
+            "/trust instructions",
+            "/trust ex-workspace",
             "/trust mcp",
             "/trust skills",
             "/trust hooks",
-            "/trust rules",
             "/trust status",
             "/trust revoke"
         ]

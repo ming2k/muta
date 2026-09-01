@@ -253,16 +253,6 @@ pub async fn update(
     let _ = resp_tx.send(AgentResponse::WebSearchConfigUpdated(view));
 }
 
-/// Hot-apply a freshly (re)loaded config's `[websearch]` table to the live
-/// web tools. Called by `/settings reload` so an out-of-band `config.toml`
-/// edit reaches the tools without a restart, mirroring what
-/// [`update`] does after a wire PATCH. Reads the keys from
-/// `credentials.toml` through `Config::load`'s merge — callers pass the
-/// already-merged config.
-pub fn apply_reloaded(shared: &Arc<muta_contracts::SharedWebSearchConfig>, reloaded: &Config) {
-    shared.set(reloaded.websearch.clone());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

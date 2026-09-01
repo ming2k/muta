@@ -9,11 +9,9 @@ pub mod session_ops;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
-use crate::commands::CustomCommand;
 use crate::side::SideRegistry;
 use crate::slash_handler::SlashCommandRegistry;
 use crate::startup::SessionStart;
@@ -47,7 +45,6 @@ pub struct SlashEnv<'a> {
     pub provider_usage: &'a mut ConnectionUsage,
     pub skills_registry: Arc<SkillRegistry>,
     pub skills_registry_for_commands: &'a Arc<SkillRegistry>,
-    pub _commands_for_task: &'a HashMap<String, CustomCommand>,
     pub embedding_store_for_commands: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     pub req_tx_for_commands: &'a mpsc::UnboundedSender<AgentRequest>,
     pub project_root_for_side: &'a std::path::Path,

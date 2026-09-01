@@ -164,8 +164,28 @@ mod trust_route_tests {
             Ok(TrustRoute::Grant(TrustDomain::Hooks))
         );
         assert_eq!(
+            trust_route("trust", &parts("/trust instructions")),
+            Ok(TrustRoute::Grant(TrustDomain::Instructions))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust agents")),
+            Ok(TrustRoute::Grant(TrustDomain::Instructions))
+        );
+        assert_eq!(
             trust_route("trust", &parts("/trust rules")),
-            Ok(TrustRoute::Grant(TrustDomain::Rules))
+            Ok(TrustRoute::Grant(TrustDomain::Instructions))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust ex-workspace")),
+            Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust externals")),
+            Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust roots")),
+            Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
         );
         assert_eq!(
             trust_route("trust", &parts("/trust status")),
@@ -278,7 +298,12 @@ mod trust_domain_tests {
         assert_eq!(parse_trust_domain("mcp"), Ok(TrustDomain::Mcp));
         assert_eq!(parse_trust_domain("skills"), Ok(TrustDomain::Skills));
         assert_eq!(parse_trust_domain("hooks"), Ok(TrustDomain::Hooks));
-        assert_eq!(parse_trust_domain("rules"), Ok(TrustDomain::Rules));
+        assert_eq!(parse_trust_domain("instructions"), Ok(TrustDomain::Instructions));
+        assert_eq!(parse_trust_domain("agents"), Ok(TrustDomain::Instructions));
+        assert_eq!(parse_trust_domain("rules"), Ok(TrustDomain::Instructions));
+        assert_eq!(parse_trust_domain("ex-workspace"), Ok(TrustDomain::ExWorkspace));
+        assert_eq!(parse_trust_domain("externals"), Ok(TrustDomain::ExWorkspace));
+        assert_eq!(parse_trust_domain("roots"), Ok(TrustDomain::ExWorkspace));
     }
 
     #[test]
@@ -288,5 +313,91 @@ mod trust_domain_tests {
             err.contains("Unknown trust domain `unknown`"),
             "unexpected error message: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn reload_trusted_assets_updates_roots_on_trust() {
+        use std::sync::Arc;
+        use crate::handlers_slash::security_ops;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let external = tmp.path().join("extra");
+        std::fs::create_dir_all(&root.join(".muta")).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            "[workspace]\nadditional_roots = [\"../extra\"]\n",
+        )
+        .unwrap();
+
+        let sec_file = tmp.path().join("state/security.json");
+        let store =
+            muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(sec_file);
+        let agent = Arc::new(muta_agent::Agent::new(
+            Arc::new(muta_agent::NoProvider),
+            vec![],
+            muta_contracts::AgentIdentity::default(),
+        ));
+        let mcp = Arc::new(muta_mcp::McpRuntime::start_background(
+            Default::default(),
+            agent.dynamic_tool_sink(),
+        ));
+        let skills = muta_skills::SkillRegistry::empty();
+        let shared_roots = muta_contracts::SharedAdditionalRoots::empty();
+
+        // Initially untrusted: roots should remain quarantined and empty
+        let report = security_ops::reload_trusted_assets(
+            &agent,
+            &mcp,
+            &store,
+            &root,
+            &skills,
+            &shared_roots,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            report.snapshot.ex_workspace,
+            muta_contracts::WorkspaceTrustState::Quarantined
+        );
+        assert!(shared_roots.snapshot().is_empty());
+
+        // Trust ex-workspace domain: additional roots are dynamically resolved and stored in shared_roots
+        store.trust_domain(&root, TrustDomain::ExWorkspace).unwrap();
+        let report = security_ops::reload_trusted_assets(
+            &agent,
+            &mcp,
+            &store,
+            &root,
+            &skills,
+            &shared_roots,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            report.snapshot.ex_workspace,
+            muta_contracts::WorkspaceTrustState::Trusted
+        );
+        let canonical_extra = std::fs::canonicalize(&external).unwrap();
+        assert_eq!(shared_roots.snapshot(), vec![canonical_extra]);
+
+        // Revoke trust: roots quarantined and shared_roots cleared again
+        store.revoke_workspace(&root).unwrap();
+        let report = security_ops::reload_trusted_assets(
+            &agent,
+            &mcp,
+            &store,
+            &root,
+            &skills,
+            &shared_roots,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            report.snapshot.ex_workspace,
+            muta_contracts::WorkspaceTrustState::Quarantined
+        );
+        assert!(shared_roots.snapshot().is_empty());
     }
 }

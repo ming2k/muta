@@ -11,7 +11,6 @@
 //! by the original inline task. This keeps the dispatch body unchanged while
 //! making its ownership boundary explicit.
 
-use crate::commands::CustomCommand;
 use crate::handlers_slash::SlashEnv;
 use crate::side::SideEnv;
 use muta_agent::catalog;
@@ -25,7 +24,6 @@ use muta_persistence::{
 };
 use muta_skills::SkillRegistry;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
@@ -77,8 +75,6 @@ pub struct SessionDriver {
     pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
     /// Live handle for toggling session-level workspace confinement (jail).
     pub shared_unconfined: muta_contracts::SharedUnconfined,
-    /// User-defined `/<name>` commands (`commands_for_task` in the old code).
-    pub commands: Arc<HashMap<String, CustomCommand>>,
     /// Backend-owned command vocabulary used by both attach metadata and the
     /// composer completion engine.
     pub command_catalog: muta_contracts::CommandCatalog,
@@ -149,7 +145,6 @@ impl SessionDriver {
             workspace_security,
             shared_additional_roots,
             shared_unconfined,
-            commands: commands_for_task,
             command_catalog,
             embedding_store: embedding_store_for_commands,
             lifecycle,
@@ -813,7 +808,6 @@ impl SessionDriver {
                             provider_usage: &mut provider_usage,
                             skills_registry: skills_registry.clone(),
                             skills_registry_for_commands: &skills_registry_for_commands,
-                            _commands_for_task: &commands_for_task,
                             embedding_store_for_commands: &embedding_store_for_commands,
                             req_tx_for_commands: &req_tx_for_commands,
                             project_root_for_side: &project_root_for_side,

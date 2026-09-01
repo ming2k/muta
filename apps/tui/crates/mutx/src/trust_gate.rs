@@ -50,8 +50,8 @@ fn quarantined_domains(snapshot: &WorkspaceSecuritySnapshot) -> Vec<TrustDomain>
         (TrustDomain::Mcp, snapshot.mcp),
         (TrustDomain::Skills, snapshot.skills),
         (TrustDomain::Hooks, snapshot.hooks),
-        (TrustDomain::Rules, snapshot.rules),
-        (TrustDomain::Roots, snapshot.roots),
+        (TrustDomain::Instructions, snapshot.instructions),
+        (TrustDomain::ExWorkspace, snapshot.ex_workspace),
     ]
     .into_iter()
     .filter(|(_, state)| *state != WorkspaceTrustState::Absent)
@@ -150,11 +150,11 @@ pub fn answer_to_command(answers: &[Vec<String>]) -> Option<String> {
 
 fn domain_label(domain: TrustDomain) -> &'static str {
     match domain {
-        TrustDomain::Mcp => "MCP servers (.muta/mcp or project MCP config)",
-        TrustDomain::Skills => "Skills (.agents/skills)",
+        TrustDomain::Mcp => "MCP servers (.muta/mcp.json or project MCP config)",
+        TrustDomain::Skills => "Skills (.muta/skills or .agents/skills)",
         TrustDomain::Hooks => "Hooks (project hook config)",
-        TrustDomain::Rules => "Rules (AGENTS.md / project rules)",
-        TrustDomain::Roots => "Linked workspace roots (.muta/config.toml [workspace])",
+        TrustDomain::Instructions => "Instructions (AGENTS.md / project rules)",
+        TrustDomain::ExWorkspace => "External workspaces (.muta/config.toml [workspace].additional_roots)",
     }
 }
 
@@ -166,15 +166,15 @@ mod tests {
         mcp: WorkspaceTrustState,
         skills: WorkspaceTrustState,
         hooks: WorkspaceTrustState,
-        rules: WorkspaceTrustState,
+        instructions: WorkspaceTrustState,
     ) -> WorkspaceSecuritySnapshot {
         WorkspaceSecuritySnapshot {
             root: "/tmp/proj".to_string(),
             mcp,
             skills,
             hooks,
-            rules,
-            roots: WorkspaceTrustState::Absent,
+            instructions,
+            ex_workspace: WorkspaceTrustState::Absent,
         }
     }
 
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(q.options.len(), 3);
         assert!(q.question.contains("MCP servers"));
         assert!(q.question.contains("Skills"));
-        assert!(q.question.contains("Rules"));
+        assert!(q.question.contains("Instructions"));
         assert!(!q.question.contains("Hooks"));
         assert!(!q.multi_select);
     }

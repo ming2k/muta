@@ -71,15 +71,15 @@ prunes repository metadata, dependency, and build-output directories.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `query` | string | yes | — | Regular expression, or exact text with `literal` |
+| `query` | string | yes | — | Exact text to search for, or regex pattern when `regex` is true |
 | `path` | string | no | `.` | File or directory to search |
 | `include` | string array | no | `[]` | File globs relative to `path`; alternatives are separate array items (OR) |
 | `exclude` | string array | no | `[]` | File globs to exclude |
-| `literal` | boolean | no | `false` | Disable regular-expression parsing |
+| `regex` | boolean | no | `false` | Treat query as regular expression instead of literal text |
 | `context` | integer | no | `0` | Context lines per match; maximum `10` |
 | `limit` | integer | no | `200` | Returned-line cap; maximum `1000` |
 
-Runs in-process with Rust's `regex` engine and ripgrep's `ignore` traversal
+Runs in-process with Rust's `regex` engine (escaped by default for safe literal matching) and ripgrep's `ignore` traversal
 library; it does not spawn an `rg` executable. Output is capped at about 32 KB,
 and each file contributes at most 50 matches.
 
