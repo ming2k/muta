@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.28] - 2026-09-01
+
+### Added
+
+- Reactive skills architecture with decoupled security, quarantine tracking, and ADR-0165 specification.
+- Native `skill-creator` vendored skill asset.
+- CLI subcommands: `muta skill ls`, `muta skill show`, `muta skill info`, and `muta skill init`.
+
+### Changed
+
+- Aligned trust security domains: categorized project rules under `instructions` and additional roots under `ex-workspace`.
+- Retired legacy prompt-template slash commands in favor of skills.
+- Defaulted `search_text` tool to literal string queries with optional `regex` flag.
+
+### Fixed
+
+- Avoided overwriting discovery records on startup race conditions in `discover`.
+- Resolved compiler warnings and documentation intra-links.
+
 ## [0.37.27] - 2026-09-01
 
 ### Fixed
@@ -5836,7 +5855,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.27...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.28...HEAD
+[0.37.28]: https://github.com/ming2k/muta/compare/v0.37.27...v0.37.28
 [0.37.27]: https://github.com/ming2k/muta/compare/v0.37.26...v0.37.27
 [0.37.26]: https://github.com/ming2k/muta/compare/v0.37.25...v0.37.26
 [0.37.25]: https://github.com/ming2k/muta/compare/v0.37.24...v0.37.25
