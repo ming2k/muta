@@ -1406,18 +1406,51 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         }
                     }
                 }
-                "reload" => {
-                    skills_registry_for_commands.reload().await;
-                    let count = skills_registry_for_commands.lock().list().len();
+                "status" => {
+                    let status_lines = {
+                        let guard = skills_registry_for_commands.lock();
+                        let list = guard.list();
+                        let total = list.len();
+                        let quarantined = list.iter().filter(|s| s.quarantined).count();
+                        let enabled = list.iter().filter(|s| s.enabled && !s.quarantined).count();
+                        let user_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::User).count();
+                        let repo_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Repo).count();
+                        let extra_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Extra).count();
+                        let remote_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Remote).count();
+
+                        let mut lines = vec![
+                            format!("Skills Status: {total} total ({enabled} enabled, {quarantined} quarantined)"),
+                            format!("  • User: {user_count}"),
+                            format!("  • Repo: {repo_count}"),
+                            format!("  • Extra: {extra_count}"),
+                            format!("  • Remote: {remote_count}"),
+                        ];
+                        if quarantined > 0 {
+                            lines.push("\nNote: Quarantined skills require authorization. Run `/trust skills` or `/trust` to enable them.".to_string());
+                        }
+                        lines.join("\n")
+                    };
                     record_command(
                         session,
                         resp_tx,
                         name,
                         args,
-                        CommandResult::Text(format!(
-                            "Skills reloaded. {} skill(s) available.",
-                            count
-                        )),
+                        CommandResult::Text(status_lines),
+                    )
+                    .await;
+                }
+                "reload" => {
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(
+                            "Manual `/skills reload` has been retired (ADR-0165).\n\
+                             Skills update automatically via reactive file watching.\n\
+                             To authorize project skills in a new workspace, run `/trust skills`."
+                                .to_string(),
+                        ),
                     )
                     .await;
                 }
@@ -1428,7 +1461,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         name,
                         args,
                         format!(
-                            "Unknown skills command '{}'. Use 'list' or 'reload'.",
+                            "Unknown skills command '{}'. Use 'list' or 'status'.",
                             other
                         ),
                     )
@@ -1437,11 +1470,100 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             }
         }
         Some(BuiltinCmd::Skill) => {
-            let skill_name = cmd.strip_prefix("/skill").unwrap_or("").trim();
-            if skill_name.is_empty() {
-                record_error(session, resp_tx, name, args, "Usage: /skill <name>").await;
+            let rest = cmd.strip_prefix("/skill").unwrap_or("").trim();
+            let mut iter = rest.split_whitespace();
+            let first = iter.next().unwrap_or("");
+            let (action, target_skill) = match first {
+                "show" => ("show", iter.next().unwrap_or("")),
+                "info" => ("info", iter.next().unwrap_or("")),
+                "run" => ("run", iter.next().unwrap_or("")),
+                other => ("run", other),
+            };
+
+            if target_skill.is_empty() {
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    "Usage: /skill <name> | /skill show <name> | /skill info <name>",
+                )
+                .await;
+            } else if action == "info" {
+                let info_opt = {
+                    let guard = skills_registry_for_commands.lock();
+                    guard.get(target_skill).map(|skill| {
+                        let version = skill.version.as_deref().unwrap_or("–");
+                        let status = if skill.quarantined {
+                            "Quarantined (run /trust skills to enable)"
+                        } else if skill.enabled {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        };
+                        let tags = if skill.tags.is_empty() {
+                            "none".to_string()
+                        } else {
+                            skill.tags.join(", ")
+                        };
+                        format!(
+                            "Skill: {}\n\
+                             Scope: {}\n\
+                             Version: {}\n\
+                             Status: {}\n\
+                             Tags: {}\n\
+                             Source: {}\n\
+                             Description: {}",
+                            skill.name,
+                            skill.scope,
+                            version,
+                            status,
+                            tags,
+                            skill.source.display(),
+                            skill.description
+                        )
+                    })
+                };
+                if let Some(info) = info_opt {
+                    record_command(session, resp_tx, name, args, CommandResult::Text(info)).await;
+                } else {
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!("Skill '{target_skill}' not found. Use `/skills` to see available skills."),
+                    )
+                    .await;
+                }
+            } else if action == "show" {
+                let show_opt = {
+                    let guard = skills_registry_for_commands.lock();
+                    guard.get(target_skill).map(|skill| {
+                        let body = skill.load_body().unwrap_or_default();
+                        format!(
+                            "# Skill: {} ({})\n\n{}\n\n---\n\n{}",
+                            skill.name,
+                            skill.scope,
+                            skill.description,
+                            body
+                        )
+                    })
+                };
+                if let Some(output) = show_opt {
+                    record_command(session, resp_tx, name, args, CommandResult::Text(output)).await;
+                } else {
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!("Skill '{target_skill}' not found. Use `/skills` to see available skills."),
+                    )
+                    .await;
+                }
             } else {
-                let args_json = serde_json::json!({ "name": skill_name }).to_string();
+                let args_json = serde_json::json!({ "name": target_skill }).to_string();
                 let tool = UseSkillTool {
                     registry: (*skills_registry_for_commands).clone(),
                 };

@@ -134,9 +134,8 @@ Two paths take a discovered skill into context:
   `policy.allow_implicit_invocation` is true. A plain name occurrence does not
   trigger loading.
 
-Newly added, removed, or edited skill files are picked up without a restart:
-run `/skills reload` (also bound to the `r` key in the `/skills` modal) to
-rescan every source and rebuild the registry in place.
+Newly added, removed, or edited skill files are picked up automatically without a restart
+via the daemon's reactive file watching. For project-local skills in new workspaces, run `/trust skills` to authorize them.
 
 ## See also
 

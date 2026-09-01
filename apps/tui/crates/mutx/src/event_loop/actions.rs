@@ -828,14 +828,6 @@ pub(super) async fn dispatch_action(
             };
             app.session_modal_follow = true;
         }
-        input::InputAction::SkillsReload => {
-            // Reload the skill registry. The harness replies with a fresh
-            // snapshot reflecting the reloaded skills.
-            let _ = app
-                .tx
-                .send(AgentRequest::SlashCommand("/skills reload".to_string()));
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
-        }
         input::InputAction::OpenConfig => {
             enter_view(app, crate::surfaces::View::Settings, runtime);
         }
@@ -1382,12 +1374,16 @@ pub(super) async fn dispatch_action(
                 providers.get(app.modal_index.min(providers.len().saturating_sub(1)))
             {
                 app.connection_info_detail = true;
+                app.connection_info_standalone = false;
                 app.connection_detail = None;
                 app.connection_info_scroll = 0;
                 let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
                     id: ranked.id.clone(),
                 });
             }
+        }
+        input::InputAction::OpenActiveConnectionDetail => {
+            open_active_connection_detail(app, runtime, viewed_session_id);
         }
         input::InputAction::CloseModal => {
             modals::handle_close_modal(app, viewed_session_id);
@@ -2335,6 +2331,36 @@ pub(super) async fn dispatch_action(
 /// initialization, then applies the panel's refresh-on-show and enter-hook
 /// policy. Dedicated shortcuts, mouse targets, backend open signals and the
 /// quick switcher all route here. Full-screen views use [`enter_view`].
+pub(crate) fn open_active_connection_detail(
+    app: &mut App,
+    runtime: &UiRuntime,
+    viewed_session_id: &str,
+) {
+    enter_panel(
+        app,
+        crate::surfaces::PanelId::Connections,
+        runtime,
+        viewed_session_id,
+    );
+    let target_id = if !app.current_provider.is_empty() {
+        app.current_provider.clone()
+    } else {
+        app.providers_filtered()
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_default()
+    };
+    app.connection_info_detail = true;
+    app.connection_info_standalone = true;
+    app.connection_detail = None;
+    app.connection_info_scroll = 0;
+    if !target_id.is_empty() {
+        let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
+            id: target_id,
+        });
+    }
+}
+
 pub(super) fn enter_panel(
     app: &mut App,
     id: crate::surfaces::PanelId,

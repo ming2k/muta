@@ -221,6 +221,13 @@ pub(super) async fn handle_selection_start(
             runtime,
             viewed_session_id,
         );
+    } else if app.active_modal() == Modal::None
+        && app
+            .hint_connection_rect
+            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
+    {
+        // Click on model / connection in the model bar → active connection detail modal.
+        super::open_active_connection_detail(app, runtime, viewed_session_id);
     } else if app.sticky_rect.is_some_and(|r| {
         // Sticky pinned step header: collapse it on click.
         r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height

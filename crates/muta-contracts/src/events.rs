@@ -2053,6 +2053,8 @@ pub struct SkillInfo {
     pub enabled: bool,
     pub source: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub quarantined: bool,
 }
 
 /// One MCP server, shown in the modal's MCP pane. The connection tri-state

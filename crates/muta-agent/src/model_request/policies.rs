@@ -314,7 +314,7 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
 }
 
 /// Guidance and metadata for available skills (progressive disclosure).
-/// Injected when skills are present and a file reading tool is admitted.
+/// Injected when skills are present in the catalog.
 struct SkillsGuidance;
 
 impl SystemPromptSection for SkillsGuidance {
@@ -326,10 +326,6 @@ impl SystemPromptSection for SkillsGuidance {
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.available_skills.is_empty()
-            && ctx
-                .tool_names
-                .iter()
-                .any(|name| name == "read_text" || name == "read_file")
     }
     fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
         if ctx.available_skills.is_empty() {

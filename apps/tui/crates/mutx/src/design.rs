@@ -122,8 +122,9 @@ pub(crate) const MODEL_BAR_INNER_PADDING: usize = 1;
 /// stream rate) and the right-pinned model-identity cluster.
 pub(crate) const MODEL_BAR_GAP_MIN: usize = 2;
 /// Gap between adjacent gauge segments (context usage, stream rate) in the
-/// row's left cluster.
-pub(crate) const MODEL_BAR_SEGMENT_GAP: usize = 2;
+/// row's left cluster. These metrics are peers in the telemetry cluster, so
+/// their gap sits at 1 column, tighter than or equal to the separation before the keycap hint.
+pub(crate) const MODEL_BAR_SEGMENT_GAP: usize = 1;
 /// Gap *inside* the model-identity group (`model effort @instance`) — these
 /// three tokens read as one identity, so they sit tighter than the gap
 /// between the identity group and the context-usage segment.

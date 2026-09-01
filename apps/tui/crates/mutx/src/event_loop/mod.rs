@@ -28,7 +28,7 @@ pub(crate) use actions::host_test_shims;
 #[allow(unused_imports)]
 pub(crate) use actions::{
     handle_close_modal, handle_ctrl_c, handle_esc_interrupt, handle_modal_down, handle_modal_up,
-    handle_send_slash,
+    handle_send_slash, open_active_connection_detail,
 };
 
 use std::io;

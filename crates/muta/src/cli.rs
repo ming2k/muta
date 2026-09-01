@@ -83,6 +83,12 @@ pub enum McpAction {
 pub enum SkillAction {
     /// `muta skill ls` — list discovered skills.
     List,
+    /// `muta skill show <name>` — print one skill's full markdown instructions.
+    Show { name: String },
+    /// `muta skill info <name>` — print one skill's diagnostics and metadata.
+    Info { name: String },
+    /// `muta skill init <name> [--user]` — scaffold a new skill folder with standard templates.
+    Init { name: String, user: bool },
 }
 
 /// `muta session …`
@@ -944,8 +950,12 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         "skill" => {
             let extra_str: Vec<&str> = extra.iter().map(String::as_str).collect();
             match extra_str.as_slice() {
-                [] => return Err("muta skill needs a subcommand: `muta skill ls`".into()),
+                [] => return Err("muta skill needs a subcommand: `muta skill ls`, `muta skill show <name>`, `muta skill info <name>`, `muta skill init <name>`".into()),
                 ["ls"] | ["list"] => Mode::Skill(SkillAction::List),
+                ["show", name] => Mode::Skill(SkillAction::Show { name: (*name).to_string() }),
+                ["info", name] => Mode::Skill(SkillAction::Info { name: (*name).to_string() }),
+                ["init", name] => Mode::Skill(SkillAction::Init { name: (*name).to_string(), user: false }),
+                ["init", name, "--user"] | ["init", "--user", name] => Mode::Skill(SkillAction::Init { name: (*name).to_string(), user: true }),
                 [bad, ..] => return unexpected(bad),
             }
         }

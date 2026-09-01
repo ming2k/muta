@@ -117,15 +117,24 @@ Two flags govern visibility:
 A skill participates in implicit invocation only when it is both enabled and
 allows it.
 
-## Reloading
+## Workspace Trust and Quarantine Transparency
 
-The `/skills reload` slash command rescans every source — local directories and
-remote repositories — and rebuilds the registry in place. It is the way to pick
-up newly added, removed, or edited skill files without restarting muta. (It
-is also bound to the `r` key in the `/skills` modal.)
+Project-local skills (`.muta/skills/`, `skills/`) belong to the workspace's project asset domain (ADR-0145).
+Discovery scans project directories regardless of trust state:
+- When the workspace skills domain is **Trusted**, project skills are enabled and available for invocation.
+- When the workspace skills domain is **Quarantined** (e.g. fresh clone or modified project files), project skills are recorded as `Quarantined` and remain disabled from model invocation.
+- Quarantined skills are displayed in the TUI `/skills` modal and `muta skill ls` with an explicit `Quarantined` badge and remediation guidance (`Run /trust skills to enable`).
+
+## Reactive State and Trust Lifecycle
+
+Skill discovery is event-driven and reactive:
+- **Filesystem Changes**: The daemon watches skill roots with platform-native, kernel-level file watchers (Linux inotify, macOS FSEvents, Windows IOCP/ReadDirectoryChangesW) and updates the in-memory registry automatically.
+- **Trust Authorization**: Authorizing project assets via `/trust skills` or `/trust` triggers security re-attestation and updates skill admission state.
+- **No Manual Reload**: Manual reload commands (`/skills reload`) are eliminated in favor of continuous, reactive synchronization.
 
 ## Decision history
 
+- [ADR-0165](../../adr/0165-reactive-skills-architecture-and-decoupled-security.md) — reactive skills architecture, decoupled security, and transparent quarantine.
 - [ADR-0058](../../adr/0058-remove-bundled-skill-tier.md) — retain XDG skill
   paths while removing the unused bundled-system tier.
 - [ADR-0014](../../adr/0014-xdg-persistence-architecture.md) — the unified XDG

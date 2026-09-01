@@ -97,12 +97,15 @@ pub struct Skill {
     /// through `use_skill` so the model can explain why nothing happened.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Whether the skill is in quarantine (e.g. workspace skills domain is untrusted).
+    #[serde(default)]
+    pub quarantined: bool,
 }
 
 impl Skill {
     /// True when the skill may be auto-loaded on mention.
     pub fn allows_implicit_invocation(&self) -> bool {
-        self.enabled && self.policy.allow_implicit_invocation
+        self.enabled && !self.quarantined && self.policy.allow_implicit_invocation
     }
 
     /// Read and return this skill's body text on demand.
@@ -201,6 +204,7 @@ pub fn parse_skill_from_str(
         tags: meta.tags,
         version: meta.version.filter(|s| !s.is_empty()),
         enabled,
+        quarantined: false,
     })
 }
 

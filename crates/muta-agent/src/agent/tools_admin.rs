@@ -266,6 +266,7 @@ impl Agent {
                 enabled: skill.enabled,
                 source: skill.scope.to_string(),
                 tags: skill.tags.clone(),
+                quarantined: skill.quarantined,
             })
             .collect()
     }

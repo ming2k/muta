@@ -46,11 +46,11 @@ pub struct DiscoveryResult {
 /// Sources are scanned from lowest to highest priority so that higher-priority
 /// skills override lower-priority skills with the same name.
 ///
-/// Project-local sources (`.muta/skills`, `skills/`) are admitted only while the
-/// workspace's skills-domain state is [`WorkspaceTrustState::Trusted`]. A cloned
-/// or vendored workspace's `SKILL.md` files are prompt content, so merely opening
-/// the directory must not load them. The state is read at scan time, which gives
-/// startup, background refresh, and `/skills reload` the same boundary.
+/// Project-local sources (`.muta/skills`, `skills/`) are discovered transparently in
+/// all trust states (ADR-0165). While the workspace's skills-domain state is
+/// [`WorkspaceTrustState::Quarantined`], project skills are marked `quarantined: true`
+/// and `enabled: false`, surfaced in TUI and CLI with actionable `/trust skills` guidance
+/// without being injected into model context.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
     let trust_state = WorkspaceSecurityStore::load()
         .snapshot(&resolve_project_root(config))
@@ -74,14 +74,26 @@ pub async fn discover_all_with_trust_state(
 
     for source in skill_sources(config, trust_state).await {
         match source {
-            SkillSource::Local { root, scope } => {
-                discover_local_skills(&root, scope, config, &mut index, &mut result);
+            SkillSource::Local {
+                root,
+                scope,
+                quarantined,
+            } => {
+                discover_local_skills(
+                    &root,
+                    scope,
+                    quarantined,
+                    config,
+                    &mut index,
+                    &mut result,
+                );
             }
             SkillSource::Remote { roots } => {
                 for root in roots {
                     discover_local_skills(
                         &root,
                         SkillScope::Remote,
+                        false,
                         config,
                         &mut index,
                         &mut result,
@@ -95,8 +107,14 @@ pub async fn discover_all_with_trust_state(
 }
 
 enum SkillSource {
-    Local { root: PathBuf, scope: SkillScope },
-    Remote { roots: Vec<PathBuf> },
+    Local {
+        root: PathBuf,
+        scope: SkillScope,
+        quarantined: bool,
+    },
+    Remote {
+        roots: Vec<PathBuf>,
+    },
 }
 
 async fn skill_sources(
@@ -136,6 +154,7 @@ async fn skill_sources(
     sources.push(SkillSource::Local {
         root: dirs.user_skills_dir(),
         scope: SkillScope::User,
+        quarantined: false,
     });
 
     // 3. Configured extra paths.
@@ -144,25 +163,24 @@ async fn skill_sources(
         sources.push(SkillSource::Local {
             root: expanded,
             scope: SkillScope::Extra,
+            quarantined: false,
         });
     }
 
-    // 4. Project-local skills (highest priority). Only the exact content
-    //    represented by a Trusted skills-domain state is scanned. The project
-    //    root comes from the config when session bootstrap designated one;
-    //    otherwise discovery falls back to the process cwd for embeddings
-    //    without a designated workspace.
-    if trust_state.is_trusted() {
-        let project_root = resolve_project_root(config);
-        sources.push(SkillSource::Local {
-            root: project_root.join(PROJECT_MUTA_SKILLS_DIR),
-            scope: SkillScope::Repo,
-        });
-        sources.push(SkillSource::Local {
-            root: project_root.join(PROJECT_GENERIC_SKILLS_DIR),
-            scope: SkillScope::Repo,
-        });
-    }
+    // 4. Project-local skills (highest priority).
+    //    Discovered transparently in all trust states; flagged as quarantined when untrusted (ADR-0165).
+    let project_root = resolve_project_root(config);
+    let is_quarantined = !trust_state.is_trusted();
+    sources.push(SkillSource::Local {
+        root: project_root.join(PROJECT_MUTA_SKILLS_DIR),
+        scope: SkillScope::Repo,
+        quarantined: is_quarantined,
+    });
+    sources.push(SkillSource::Local {
+        root: project_root.join(PROJECT_GENERIC_SKILLS_DIR),
+        scope: SkillScope::Repo,
+        quarantined: is_quarantined,
+    });
 
     sources
 }
@@ -230,6 +248,7 @@ fn upsert_skill(
 fn discover_local_skills(
     root: &Path,
     scope: SkillScope,
+    quarantined: bool,
     config: &SkillsConfig,
     index: &mut HashMap<String, usize>,
     result: &mut DiscoveryResult,
@@ -259,9 +278,11 @@ fn discover_local_skills(
         {
             let source = entry.path();
             let skill_root = source.parent().unwrap_or(root).to_path_buf();
-            match parse_skill_metadata(source, &skill_root, scope, true) {
+            let enabled = !quarantined;
+            match parse_skill_metadata(source, &skill_root, scope, enabled) {
                 Ok(mut skill) => {
-                    if config.is_disabled(&skill.name) {
+                    skill.quarantined = quarantined;
+                    if config.is_disabled(&skill.name) || quarantined {
                         skill.enabled = false;
                     }
                     if let Some(shadowed) = upsert_skill(&mut result.skills, index, skill) {
@@ -320,6 +341,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format_skills_for_prompt;
 
     #[test]
     fn project_root_detects_git() {
@@ -378,10 +400,10 @@ mod tests {
         );
     }
 
-    /// Repo-scope sources are invisible until their exact content has been
-    /// admitted by workspace skills-domain security.
+    /// Repo-scope sources are discovered transparently in all trust states, but
+    /// flagged as quarantined: true and enabled: false when untrusted (ADR-0165).
     #[tokio::test]
-    async fn quarantined_skills_skip_every_repo_scoped_source() {
+    async fn quarantined_skills_discovered_as_disabled_and_quarantined() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         for dir in [".muta/skills/evil", "skills/evil2"] {
@@ -401,25 +423,18 @@ mod tests {
         };
 
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Quarantined).await;
-        assert!(
-            !result
-                .skills
-                .iter()
-                .any(|skill| skill.scope == SkillScope::Repo),
-            "quarantined domain must contribute no repo skills"
-        );
-        assert!(
-            !result
-                .skills
-                .iter()
-                .any(|s| s.name == "evil" || s.name == "evil2"),
-            "quarantined skills must not load"
-        );
-        assert!(result.shadowed.is_empty());
+        let evil = result.skills.iter().find(|s| s.name == "evil").expect("evil should be discovered");
+        assert!(evil.quarantined, "untrusted repo skill must be marked quarantined");
+        assert!(!evil.enabled, "quarantined skill must be disabled");
+        assert!(!evil.allows_implicit_invocation(), "quarantined skill must not allow implicit invocation");
+
+        let prompt_skills = format_skills_for_prompt(&result.skills);
+        assert!(!prompt_skills.contains("evil"), "quarantined skills must not appear in prompt");
 
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
-        assert!(result.skills.iter().any(|s| s.name == "evil"));
-        assert!(result.skills.iter().any(|s| s.name == "evil2"));
+        let evil_trusted = result.skills.iter().find(|s| s.name == "evil").expect("evil should be discovered");
+        assert!(!evil_trusted.quarantined, "trusted repo skill must not be quarantined");
+        assert!(evil_trusted.enabled, "trusted repo skill must be enabled");
     }
 
     #[test]
@@ -452,8 +467,8 @@ mod tests {
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
         // User scope first (lower priority), then Repo (higher priority).
-        discover_local_skills(&low, SkillScope::User, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, &config, &mut index, &mut result);
+        discover_local_skills(&low, SkillScope::User, false, &config, &mut index, &mut result);
+        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
 
         assert_eq!(result.skills.len(), 1, "collision should not duplicate");
         let skill = &result.skills[0];
@@ -487,8 +502,8 @@ mod tests {
         };
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&low, SkillScope::User, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, &config, &mut index, &mut result);
+        discover_local_skills(&low, SkillScope::User, false, &config, &mut index, &mut result);
+        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
 
         assert_eq!(result.skills.len(), 1);
         assert!(
@@ -523,8 +538,8 @@ mod tests {
         let config = SkillsConfig::default();
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&user, SkillScope::User, &config, &mut index, &mut result);
-        discover_local_skills(&repo, SkillScope::Repo, &config, &mut index, &mut result);
+        discover_local_skills(&user, SkillScope::User, false, &config, &mut index, &mut result);
+        discover_local_skills(&repo, SkillScope::Repo, false, &config, &mut index, &mut result);
 
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].scope, SkillScope::Repo);
@@ -556,8 +571,8 @@ mod tests {
         let config = SkillsConfig::default();
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&low, SkillScope::Repo, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, &config, &mut index, &mut result);
+        discover_local_skills(&low, SkillScope::Repo, false, &config, &mut index, &mut result);
+        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
         assert_eq!(result.skills.len(), 1);
         assert!(
             result.shadowed.is_empty(),

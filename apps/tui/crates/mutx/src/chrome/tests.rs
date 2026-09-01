@@ -401,8 +401,8 @@ fn model_bar_orders_context_speed_then_model() {
             .collect::<String>()
     };
 
-    // Wide enough for everything: `ctx  rate Ctrl+O` left,
-    // `model effort @instance` right, in that left-to-right order.
+    // Wide enough for everything: `ctx rate Ctrl+O` left,
+    // `model effort @instance Ctrl+N` right, in that left-to-right order.
     let wide = row_text(80, Some(47.8));
     let ctx_pos = wide.find("(0%)").expect("context meter shown");
     let rate_pos = wide.find("47.8 tok/s").expect("stream rate shown");
@@ -419,10 +419,15 @@ fn model_bar_orders_context_speed_then_model() {
         rate_pos < telemetry_key,
         "keycap trails the gauges: {wide:?}"
     );
+    let conn_key = wide.find("Ctrl+N").expect("connection keycap hint shown");
+    assert!(
+        inst_pos < conn_key,
+        "connection keycap trails the identity cluster: {wide:?}"
+    );
     // Justified split: the identity cluster pins flush to the row's
     // right edge (mirrored `inner` indent).
     assert!(
-        wide.trim_end().ends_with("kimi-k2.7-code max @kimi-code"),
+        wide.trim_end().ends_with("kimi-k2.7-code max @kimi-code Ctrl+N"),
         "identity must end at the right edge: {wide:?}"
     );
 
@@ -539,6 +544,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
     });
     let ctx = captured.context.expect("context rect present");
     let perf = captured.performance.expect("performance rect present");
+    let conn = captured.connection.expect("connection rect present");
     assert!(
         ctx.x + ctx.width <= perf.x,
         "context meter must sit left of the stream-rate segment"
@@ -556,6 +562,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
     };
     assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
     assert_eq!(slice(perf), "47.8 tok/s Ctrl+O", "rate rect mismatch");
+    assert_eq!(slice(conn), "kimi-k2.7-code Ctrl+N", "connection rect mismatch");
     // The identity cluster sits right of the gauges, pinned to the row's
     // right edge (one trailing indent cell).
     let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
@@ -565,8 +572,8 @@ fn model_bar_click_rects_follow_context_speed_order() {
         "identity must sit right of the gauges: {row:?}"
     );
     assert_eq!(
-        &row[80 - 1 - "kimi-k2.7-code".len()..80 - 1],
-        "kimi-k2.7-code",
+        &row[80 - 1 - "kimi-k2.7-code Ctrl+N".len()..80 - 1],
+        "kimi-k2.7-code Ctrl+N",
         "model must end at the right indent: {row:?}"
     );
 }

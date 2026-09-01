@@ -127,6 +127,7 @@ fn redesigned_components_render_without_panicking() {
             None,
             &mut 0,
             0,
+            false,
         );
         draw_models_modal(
             f,

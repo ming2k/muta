@@ -163,6 +163,7 @@ fn chord_token(code: KeyCode) -> &'static str {
             'k' => "k",
             'l' => "l",
             'm' => "m",
+            'n' => "n",
             'o' => "o",
             'p' => "p",
             'q' => "q",
@@ -220,6 +221,7 @@ fn display_token(code: KeyCode) -> &'static str {
             'k' => "K",
             'l' => "L",
             'm' => "M",
+            'n' => "N",
             'o' => "O",
             'p' => "P",
             'q' => "Q",
@@ -310,6 +312,7 @@ fn chord_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("ctrl+", "k") => "ctrl+k",
         ("ctrl+", "l") => "ctrl+l",
         ("ctrl+", "m") => "ctrl+m",
+        ("ctrl+", "n") => "ctrl+n",
         ("ctrl+", "o") => "ctrl+o",
         ("ctrl+", "p") => "ctrl+p",
         ("ctrl+", "q") => "ctrl+q",
@@ -354,6 +357,7 @@ fn display_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("Ctrl+", "K") => "Ctrl+K",
         ("Ctrl+", "L") => "Ctrl+L",
         ("Ctrl+", "M") => "Ctrl+M",
+        ("Ctrl+", "N") => "Ctrl+N",
         ("Ctrl+", "O") => "Ctrl+O",
         ("Ctrl+", "P") => "Ctrl+P",
         ("Ctrl+", "Q") => "Ctrl+Q",
@@ -498,6 +502,12 @@ impl Key {
         modifiers: KeyModifiers::CONTROL,
         code: KeyCode::Char('o'),
     };
+    /// Ctrl+N (open active connection detail) — the keyboard twin of
+    /// clicking the model bar's model / connection cluster.
+    pub const CTRL_N: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('n'),
+    };
     /// Ctrl+S (open the latest-turn performance report) — the keyboard twin
     /// of clicking the model bar's stream-rate gauge. "s" for "speed".
     pub const CTRL_S: Key = Key {
@@ -537,6 +547,8 @@ pub enum Action {
     OpenHistory,
     /// Open the flat model picker.
     OpenModels,
+    /// Open the active connection detail modal (`Ctrl+N`).
+    OpenConnectionDetail,
     /// Open the Todos modal.
     OpenTodos,
     /// Open the queue overview modal.
@@ -639,6 +651,15 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             gate: Gate::NoModal,
             action: Action::OpenModels,
             description: "switch model (kitty-protocol chord; /models always works)",
+        },
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('n'),
+            },
+            gate: Gate::NoModal,
+            action: Action::OpenConnectionDetail,
+            description: "active connection detail",
         },
         Binding {
             key: Key {
@@ -769,6 +790,7 @@ impl Registry {
                 Action::OpenHelp => InputAction::OpenHelp,
                 Action::OpenHistory => InputAction::OpenHistory,
                 Action::OpenModels => InputAction::OpenModels,
+                Action::OpenConnectionDetail => InputAction::OpenActiveConnectionDetail,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
                 Action::OpenTelemetry => InputAction::OpenTelemetry,
@@ -877,6 +899,18 @@ mod tests {
         // Inside a modal the gate swallows the chord.
         let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(ctx, None);
+    }
+
+    #[test]
+    fn ctrl_n_opens_connection_detail_from_top_level() {
+        // Ctrl+N opens the active connection detail modal.
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::Char('n'), KeyModifiers::CONTROL), Modal::None);
+        assert_eq!(action, Some(InputAction::OpenActiveConnectionDetail));
+
+        // Inside a modal the gate swallows the chord.
+        let action = registry.resolve(key(KeyCode::Char('n'), KeyModifiers::CONTROL), Modal::Help);
+        assert_eq!(action, None);
     }
 
     #[test]

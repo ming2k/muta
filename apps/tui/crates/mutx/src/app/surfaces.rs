@@ -419,6 +419,7 @@ impl App {
         }
         if id == crate::surfaces::PanelId::Connections {
             self.connection_info_detail = false;
+            self.connection_info_standalone = false;
             self.connection_detail = None;
             self.connection_info_scroll = 0;
         }
@@ -598,10 +599,12 @@ impl App {
                 true
             }
             Modal::Connections if self.connection_info_detail => {
+                let standalone = self.connection_info_standalone;
                 self.connection_info_detail = false;
+                self.connection_info_standalone = false;
                 self.connection_detail = None;
                 self.connection_info_scroll = 0;
-                true
+                !standalone
             }
             _ => false,
         }

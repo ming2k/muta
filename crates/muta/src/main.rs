@@ -11,7 +11,7 @@ mod status;
 /// Lives here (not in `muta-agent`) so the engine stays identity-agnostic
 /// and a different frontend could reuse it as another agent.
 use crate::identity::{DaemonUiBridge, master_code, muta_identity};
-use cli::{CliArgs, DaemonAction, McpAction, Mode, SkillAction};
+use cli::{CliArgs, DaemonAction, McpAction, Mode};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Auth(action) => commands::auth::run(action),
         Mode::Mcp(McpAction::Probe { name }) => commands::mcp::probe(&name).await,
         Mode::Mcp(action) => commands::mcp::run(action),
-        Mode::Skill(SkillAction::List) => commands::skill::run().await,
+        Mode::Skill(action) => commands::skill::run(action).await,
         Mode::Session(action) => commands::session::run(action, project_override).await,
         Mode::Daemon(action) => run_daemon_action(action, project_override).await,
     }

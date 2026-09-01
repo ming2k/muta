@@ -2,10 +2,9 @@
 //!
 //! Opened via the `/skills` slash command (intercepted locally in `input.rs`,
 //! never sent to the backend). Each row shows the skill name, a short hint, and
-//! its enabled state. `Enter` toggles a detail expansion (full description,
-//! version, source, tags); `r` reloads the skill registry via a slash command.
-//! This replaces the Skills tab that previously lived inside the `/session`
-//! modal, giving skills their own dedicated surface.
+//! its status (enabled / disabled / quarantined). `Enter` toggles a detail
+//! expansion (full description, version, source, tags, and quarantine action if
+//! unverified).
 
 use mutx_engine::{
     Frame, Style, {Line, Span},
@@ -50,15 +49,23 @@ pub fn draw_skills_modal(
         ));
     } else {
         for (i, skill) in skills.iter().enumerate() {
-            // The selectable row: name + description hint + enabled badge.
+            let (state_badge, mark_enabled) = if skill.quarantined {
+                ("quarantined", false)
+            } else if skill.enabled {
+                ("enabled", true)
+            } else {
+                ("disabled", false)
+            };
+
+            // The selectable row: name + description hint + status badge.
             body.push(selectable_row(
                 i,
                 modal_index,
                 &skill.name,
                 &skill.description,
-                skill.enabled,
-                "enabled",
-                "disabled",
+                mark_enabled,
+                state_badge,
+                state_badge,
                 body_w,
                 theme,
             ));
@@ -68,6 +75,19 @@ pub fn draw_skills_modal(
                 let detail_indent = "    ";
                 let muted = Style::default().fg(theme.muted());
                 let fg = Style::default().fg(theme.fg());
+
+                if skill.quarantined {
+                    let warn = Style::default().fg(theme.warn());
+                    body.push(Line::from(Span::styled(
+                        format!("{}[Quarantined] Project skill requires authorization.", detail_indent),
+                        warn,
+                    )));
+                    body.push(Line::from(Span::styled(
+                        format!("{}Action: Run `/trust skills` or `/trust` to enable.", detail_indent),
+                        warn,
+                    )));
+                    body.push(Line::from(""));
+                }
 
                 // Full description (may be long — that's the point of the
                 // detail view; the row hint is truncated, this is not).
@@ -126,15 +146,11 @@ pub fn draw_skills_modal(
     // ── Footer ──
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if skills.is_empty() {
-            &[
-                FooterHint::secondary("r", "reload"),
-                FooterHint::always(keyvocab::ESC, "close"),
-            ]
+            &[FooterHint::always(keyvocab::ESC, "close")]
         } else {
             &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary(keyvocab::ENTER, "detail"),
-                FooterHint::secondary("r", "reload"),
                 FooterHint::always(keyvocab::ESC, "close"),
             ]
         };

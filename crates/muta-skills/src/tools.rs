@@ -41,7 +41,7 @@ impl Tool for UseSkillTool {
 
         // Snapshot only the metadata we need (name, root) under the read lock,
         // then release it before reading the body — keeps lock scope tight.
-        let (skill_name, skill_root, scope) = {
+        let (skill_name, skill_root, scope, quarantined) = {
             let registry = self.registry.lock();
             let Some(skill) = registry.get(name) else {
                 return Err(format!(
@@ -49,8 +49,14 @@ impl Tool for UseSkillTool {
                     name
                 ));
             };
-            (skill.name.clone(), skill.root.clone(), skill.scope)
+            (skill.name.clone(), skill.root.clone(), skill.scope, skill.quarantined)
         };
+
+        if quarantined {
+            return Err(format!(
+                "Skill '{name}' is quarantined (workspace skills domain is untrusted). Review it and run `/trust skills` to enable.",
+            ));
+        }
 
         // A repo skill may have changed since the last discovery scan. Check
         // the live domain digest before reading any filenames or body bytes;

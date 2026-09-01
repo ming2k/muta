@@ -3,6 +3,7 @@
 use mutx_engine::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
+use crate::components::keycap::keycap_style;
 use crate::design::{
     MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP, MODEL_BAR_SEGMENT_GAP,
 };
@@ -43,6 +44,7 @@ impl<'a> Default for ModelBarView<'a> {
 pub struct ModelBarRects {
     pub performance: Option<Rect>,
     pub context: Option<Rect>,
+    pub connection: Option<Rect>,
 }
 
 /// Format token count into SI abbreviation (e.g. `120k`, `1.2M`, `3.2B`).
@@ -191,9 +193,10 @@ pub fn draw_model_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    let keycap_dim =
-        |text: &str| Span::styled(text.to_string(), Style::default().fg(theme.muted()).bg(bg));
+    let keycap_badge =
+        |text: &str| Span::styled(text.to_string(), keycap_style(theme).bg(bg));
     let telemetry_keycap_width = Key::CTRL_O.display().width() + 1;
+    let connection_keycap_width = Key::CTRL_N.display().width() + 1;
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
@@ -201,13 +204,18 @@ pub fn draw_model_bar(
     let mut show_performance = performance_width > 0;
     let mut show_context = context_seg_width > 0;
     let mut show_telemetry_keycap = show_context || show_performance;
+    let mut show_connection_keycap = show_model || show_instance;
 
-    let identity_width_for = |model: bool, reasoning: bool, instance: bool| {
+    let identity_width_for = |model: bool, reasoning: bool, instance: bool, show_keycap: bool| {
         let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
-        usize::from(model) * model_width
+        let mut width = usize::from(model) * model_width
             + usize::from(reasoning) * reasoning_width
             + usize::from(instance) * instance_width
-            + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP
+            + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP;
+        if (model || instance) && show_keycap {
+            width += connection_keycap_width;
+        }
+        width
     };
     let gauges_width_for = |performance: bool, context: bool, show_keycap: bool| {
         let mut width = 0;
@@ -232,19 +240,43 @@ pub fn draw_model_bar(
     };
 
     let mut gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
-    let mut identity_width = identity_width_for(show_model, show_reasoning, show_instance);
+    let mut identity_width = identity_width_for(
+        show_model,
+        show_reasoning,
+        show_instance,
+        show_connection_keycap,
+    );
 
     if !fits(gauges_width, identity_width) && show_telemetry_keycap {
         show_telemetry_keycap = false;
         gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
     }
+    if !fits(gauges_width, identity_width) && show_connection_keycap {
+        show_connection_keycap = false;
+        identity_width = identity_width_for(
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_connection_keycap,
+        );
+    }
     if !fits(gauges_width, identity_width) && show_instance {
         show_instance = false;
-        identity_width = identity_width_for(show_model, show_reasoning, show_instance);
+        identity_width = identity_width_for(
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_connection_keycap,
+        );
     }
     if !fits(gauges_width, identity_width) && show_reasoning {
         show_reasoning = false;
-        identity_width = identity_width_for(show_model, show_reasoning, show_instance);
+        identity_width = identity_width_for(
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_connection_keycap,
+        );
     }
     if !fits(gauges_width, identity_width) && show_performance {
         show_performance = false;
@@ -257,9 +289,15 @@ pub fn draw_model_bar(
     }
     if !fits(gauges_width, identity_width) && show_model {
         show_model = false;
+        show_connection_keycap = false;
     }
 
-    let label_budget = identity_width_for(show_model, show_reasoning, show_instance);
+    let label_budget = identity_width_for(
+        show_model,
+        show_reasoning,
+        show_instance,
+        show_connection_keycap,
+    );
     let label_spans = ignition_elapsed_ms
         .and_then(|ms| crate::effort_ignition::label_cluster(label_budget, ms, bg, theme));
     let ignition_label_active = label_spans.is_some();
@@ -279,7 +317,7 @@ pub fn draw_model_bar(
     }
     if (show_context || show_performance) && show_telemetry_keycap {
         left_spans.push(Span::styled(" ", Style::default().bg(bg)));
-        left_spans.push(keycap_dim(Key::CTRL_O.display()));
+        left_spans.push(keycap_badge(Key::CTRL_O.display()));
     }
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
@@ -302,6 +340,10 @@ pub fn draw_model_bar(
             }
             identity_started = true;
             right_spans.extend(segment);
+        }
+        if (show_model || show_instance) && show_connection_keycap {
+            right_spans.push(Span::styled(" ", Style::default().bg(bg)));
+            right_spans.push(keycap_badge(Key::CTRL_N.display()));
         }
     }
 
@@ -329,6 +371,7 @@ pub fn draw_model_bar(
 
     let mut performance_rect: Option<Rect> = None;
     let mut context_rect: Option<Rect> = None;
+    let mut connection_rect: Option<Rect> = None;
     if !ignition_label_active {
         let mut x = inner as u16;
         let mut any_rendered = false;
@@ -364,9 +407,19 @@ pub fn draw_model_bar(
                 any_rendered,
             );
         }
+        if right_rendered_width > 0 {
+            let right_x = (inner + left_rendered_width + gap) as u16;
+            connection_rect = Some(Rect::new(
+                rect.x + right_x,
+                rect.y,
+                right_rendered_width as u16,
+                rect.height,
+            ));
+        }
     }
     ModelBarRects {
         performance: performance_rect,
         context: context_rect,
+        connection: connection_rect,
     }
 }

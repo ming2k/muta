@@ -408,9 +408,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         );
         app.hint_performance_rect = model_bar_rects.performance;
         app.hint_context_rect = model_bar_rects.context;
+        app.hint_connection_rect = model_bar_rects.connection;
     } else {
         app.hint_context_rect = None;
         app.hint_performance_rect = None;
+        app.hint_connection_rect = None;
     }
 
     // The input box is only shown when no overlay modal is open. The
@@ -757,6 +759,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.connection_detail.as_ref(),
                 &mut app.connection_info_scroll,
                 spinner_phase,
+                app.connection_info_standalone,
             ))
         }
         Modal::Models => {

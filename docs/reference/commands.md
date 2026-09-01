@@ -239,15 +239,17 @@ recalling earlier decisions inside one long session; cross-session recall is
 
 | Form | Effect |
 |------|--------|
-| `/skills` | List available skills (alias for `/skills list`) |
-| `/skills list` | List available skills |
-| `/skills reload` | Rescan local skill directories and refetch remote repositories |
+| `/skills` | Browse skills modal in TUI, or list all skills (with scope and trust status) in CLI |
+| `/skills list` | List available skills with scope, version, and status |
+| `/skills status` | Show aggregate health, trust state, and source distribution |
 
 ### `/skill`
 
 | Form | Effect |
 |------|--------|
-| `/skill <name>` | Load a skill by name into the conversation context |
+| `/skill <name>` / `/skill run <name>` | Load and run a skill by name into the conversation context |
+| `/skill show <name>` | Display the full content and structure of a skill |
+| `/skill info <name>` | Show detailed diagnostics (source path, scope, trust status) |
 
 ### `/init`
 

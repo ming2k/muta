@@ -27,7 +27,7 @@ pub fn format_skill_list(skills: &[Skill]) -> String {
 pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
     let visible: Vec<&Skill> = skills
         .iter()
-        .filter(|s| s.enabled && s.allows_implicit_invocation())
+        .filter(|s| s.enabled && !s.quarantined && s.allows_implicit_invocation())
         .collect();
     if visible.is_empty() {
         return String::new();
@@ -191,6 +191,7 @@ mod tests {
             tags: vec![],
             version: None,
             enabled: true,
+            quarantined: false,
         }
     }
 

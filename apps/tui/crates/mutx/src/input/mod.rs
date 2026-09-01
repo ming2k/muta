@@ -242,6 +242,8 @@ pub enum InputAction {
     ProviderPickerActivate,
     /// Drill into the connection detail sub-view for the highlighted connection row in Connections modal.
     OpenConnectionDetail,
+    /// Open the connection detail modal directly for the active connection (via click or Ctrl+N).
+    OpenActiveConnectionDetail,
     /// Toggle the favorite flag on the highlighted Models row (model-level,
     /// ADR-0046). The Connections list has no favorite concept.
     ProviderPickerToggleFavorite,
@@ -373,17 +375,14 @@ pub enum InputAction {
     /// backend). The request is never forwarded — it only opens the overlay.
     OpenMcp,
     /// Open the skills modal: a centered, selectable list of every loaded
-    /// skill with a per-row detail expansion and an `r` reload. Reached via
+    /// skill with a per-row detail expansion. Reached via
     /// the `/skills` slash command (intercepted locally, never sent to the
-    /// backend; `/skills list` / `/skills reload` with args still forward).
+    /// backend; `/skills list` with args still forward).
     /// The request is never forwarded — it only opens the overlay.
     OpenSkills,
     /// Toggle the detail expansion of the selected skill row in the skills
     /// modal. Bound to `Enter`.
     SkillsToggleDetail,
-    /// Reload the skill registry from the skills modal by forwarding
-    /// `/skills reload` to the backend. Bound to `r`.
-    SkillsReload,
     /// Open the config manager modal: a centered list of configurable
     /// categories (Appearance and Layout). Reached via the `/config` slash command
     /// (intercepted locally, never sent to the backend). `Enter` / `Space`
@@ -2065,10 +2064,6 @@ pub fn process_event(
                         return InputAction::SelectPresetWithOauthMethod {
                             method: muta_contracts::LoginMethod::Device,
                         };
-                    }
-                    // `r` in the skills modal reloads the skill registry.
-                    if context.active_modal == super::Modal::Skills && c == 'r' {
-                        return InputAction::SkillsReload;
                     }
                     // Space inside the permissions manager revokes the
                     // selected rule.

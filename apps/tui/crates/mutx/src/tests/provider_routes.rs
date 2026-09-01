@@ -715,3 +715,34 @@ fn custom_connection_submits_with_multiple_comma_separated_models() {
         _ => panic!("Expected AddProvider request"),
     }
 }
+
+#[tokio::test]
+async fn open_active_connection_detail_opens_standalone_and_closes_to_none() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_provider = "anthropic-prod".to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    crate::event_loop::open_active_connection_detail(&mut app, &runtime, "s1");
+
+    assert_eq!(app.active_modal(), Modal::Connections);
+    assert!(app.connection_info_detail);
+    assert!(app.connection_info_standalone);
+
+    let req = rx.try_recv().expect("should query connection detail");
+    match req {
+        muta_contracts::AgentRequest::QueryConnectionDetail { id } => {
+            assert_eq!(id, "anthropic-prod");
+        }
+        _ => panic!("Expected QueryConnectionDetail request"),
+    }
+
+    // Esc in standalone connection detail closes directly to None (no drill-down backout)
+    crate::event_loop::handle_close_modal(&mut app, "s1");
+    assert_eq!(app.active_modal(), Modal::None);
+    assert!(!app.connection_info_detail);
+    assert!(!app.connection_info_standalone);
+}

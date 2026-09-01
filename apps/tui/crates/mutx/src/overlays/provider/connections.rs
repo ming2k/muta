@@ -42,6 +42,7 @@ pub fn draw_connections_modal(
     connection_detail: Option<&muta_contracts::ConnectionDetail>,
     connection_info_scroll: &mut usize,
     spinner_phase: usize,
+    connection_info_standalone: bool,
 ) -> mutx_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -97,16 +98,31 @@ pub fn draw_connections_modal(
     }
 
     if connection_info_detail {
-        let conn_title = connection_detail
-            .map(|d| format!("Details [{}]", d.name))
-            .unwrap_or_else(|| "Details".to_string());
-        let header = breadcrumb_parts("Connections", &conn_title);
-        modal_header_parts(frame, f.header, &header, theme);
-        let detail_footer: [FooterHint; 3] = [
-            FooterHint::always(keyvocab::ESC, "list"),
-            FooterHint::secondary("r", "refresh"),
-            FooterHint::secondary("e", "edit"),
-        ];
+        if connection_info_standalone {
+            let conn_title = connection_detail
+                .map(|d| format!("Connection Details [{}]", d.name))
+                .unwrap_or_else(|| "Connection Details".to_string());
+            modal_header(frame, f.header, &conn_title, theme);
+        } else {
+            let conn_title = connection_detail
+                .map(|d| format!("Details [{}]", d.name))
+                .unwrap_or_else(|| "Details".to_string());
+            let header = breadcrumb_parts("Connections", &conn_title);
+            modal_header_parts(frame, f.header, &header, theme);
+        }
+        let detail_footer: [FooterHint; 3] = if connection_info_standalone {
+            [
+                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::secondary("r", "refresh"),
+                FooterHint::secondary("e", "edit"),
+            ]
+        } else {
+            [
+                FooterHint::always(keyvocab::ESC, "list"),
+                FooterHint::secondary("r", "refresh"),
+                FooterHint::secondary("e", "edit"),
+            ]
+        };
         let body = match connection_detail {
             None => {
                 const SPINNER_FRAMES: [&str; 10] =

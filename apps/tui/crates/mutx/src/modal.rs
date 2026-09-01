@@ -98,11 +98,10 @@ pub enum Modal {
     /// session-context snapshot (its `mcp` pane).
     Mcp,
     /// Skills modal: a centered, dismissable, selectable list of every loaded
-    /// skill, each with a short hint and its enabled state. Opened with the
+    /// skill, each with a short hint and its status badge. Opened with the
     /// `/skills` slash command (intercepted locally, never sent to the
     /// backend). `Enter` toggles a per-row detail expansion (full description,
-    /// version, source, tags) tracked in `App::skills_expanded`; `r` reloads
-    /// the skill registry by sending `/skills reload` to the backend.
+    /// version, source, tags, quarantine guidance) tracked in `App::skills_expanded`.
     /// `App::modal_index` is its selection cursor; data comes from the
     /// session-context snapshot (its `skills` pane).
     Skills,

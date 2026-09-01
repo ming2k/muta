@@ -349,6 +349,9 @@ pub struct App {
     /// Screen rect of the last-turn stream-rate segment in the hint bar.
     /// Clicking it opens the Telemetry modal.
     pub hint_performance_rect: Option<mutx_engine::Rect>,
+    /// Screen rect of the active model / connection segment in the model bar.
+    /// Clicking it opens the connection detail modal directly.
+    pub hint_connection_rect: Option<mutx_engine::Rect>,
     /// Shared token-source ledger (reported vs. estimated token accounting),
     /// read by the Telemetry modal. `Some` in the standalone path (the
     /// in-process harness shares this ledger); `None` in attach mode, where
@@ -543,6 +546,10 @@ pub struct App {
     /// sub-view (Enter). The detail body renders from [`Self::connection_detail`];
     /// Esc backs out to the list.
     pub connection_info_detail: bool,
+    /// `true` while the connection detail sub-view is opened directly (standalone)
+    /// from the model bar (click or hotkey) rather than drilled in from the Connections list.
+    /// In standalone mode, the modal header has a single level and Esc closes the modal directly.
+    pub connection_info_standalone: bool,
     /// Full detail and usage for the connection under the detail sub-view. Populated by
     /// an on-demand `QueryConnectionDetail` round-trip when the sub-view opens (Enter).
     /// `None` while the round-trip is in flight.

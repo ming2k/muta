@@ -853,6 +853,7 @@ fn connections_modal_empty_state_centered_copy_and_footer() {
             None,
             &mut 0,
             0,
+            false,
         );
     });
     let text = buffer_text(&terminal);
@@ -889,6 +890,7 @@ fn connections_modal_search_empty_state() {
             None,
             &mut 0,
             0,
+            false,
         );
     });
     let text = buffer_text(&terminal);
@@ -965,6 +967,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
             Some(&detail),
             &mut 0,
             0,
+            false,
         );
     });
 
@@ -1003,6 +1006,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
             Some(&detail),
             &mut 8,
             0,
+            false,
         );
     });
 
@@ -1095,6 +1099,7 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
             Some(&detail),
             &mut 8,
             0,
+            false,
         );
     });
 
@@ -1153,6 +1158,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
             Some(&detail),
             &mut 0,
             2,
+            false,
         );
     });
 
@@ -1183,6 +1189,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
             Some(&detail),
             &mut 6,
             2,
+            false,
         );
     });
 
@@ -1327,6 +1334,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
             Some(&detail),
             &mut 0,
             0,
+            false,
         );
     });
 
@@ -1363,6 +1371,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
             Some(&detail),
             &mut info_scroll,
             0,
+            false,
         );
     });
 
@@ -1376,4 +1385,63 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
     assert!(scrolled_text.contains("▸ Chat Models (Gemini)"));
     assert!(scrolled_text.contains("0% used (100% remaining)"));
     assert!(scrolled_text.contains("Within each group, models share a weekly limit"));
+}
+
+#[test]
+fn connections_modal_standalone_detail_renders_single_level_header() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+    let detail = muta_contracts::ConnectionDetail {
+        id: "anthropic-prod".to_string(),
+        name: "Anthropic".to_string(),
+        preset_id: Some("anthropic".to_string()),
+        preset_label: Some("Anthropic".to_string()),
+        protocol: "anthropic".to_string(),
+        base_url: "https://api.anthropic.com".to_string(),
+        auth_type: "API Key".to_string(),
+        api_key_masked: Some("sk-ant-...1234".to_string()),
+        api_key_source: "credentials.toml".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Native,
+        user_agent: "muta/0.37.21".to_string(),
+        models: vec!["claude-3-7-sonnet".to_string()],
+        model_info: Vec::new(),
+        active_model: Some("claude-3-7-sonnet".to_string()),
+        active_model_effort: Some("high".to_string()),
+        active_model_thinking: Some(true),
+        usage: muta_contracts::ConnectionUsageState::Fetching,
+    };
+
+    terminal.draw(|f| {
+        let mut lm = crate::model::layout::LayoutMap::new();
+        let mut scroll = 0;
+        let selection = crate::model::selection::SelectionState::None;
+        draw_connections_modal(
+            f,
+            &mut lm,
+            &[],
+            "",
+            0,
+            "",
+            0,
+            &mut scroll,
+            false,
+            false,
+            false,
+            &theme,
+            &selection,
+            true,
+            Some(&detail),
+            &mut 0,
+            0,
+            true, // standalone = true
+        );
+    });
+
+    let text = buffer_text(&terminal);
+    // Header should be single level, NOT "Connections › Details"
+    assert!(text.contains("Connection Details [Anthropic]"));
+    assert!(!text.contains("Connections ›"));
+    // Footer hint should say "close" instead of "list"
+    assert!(text.contains("close"));
+    assert!(!text.contains("list"));
 }
