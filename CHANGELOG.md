@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.26] - 2026-09-01
+
+### Added
+
+- Added ADR-0163: Unified SQLite event-sourced ledger, CAS blob storage, and single-writer multi-reader architecture (`docs/adr`).
+- Added ADR-0164: First-class client profiles and connection emulation contracts (`docs/adr`).
+- Added client profiles and composer architecture documentation (`docs/explanation`).
+- Added environment detection module in `muta-platform` (`muta-platform`).
+
+### Changed
+
+- Implemented unified SQLite event-sourced ledger with CAS blob storage, WAL mode, and FTS indexing in `muta-persistence` (`muta-persistence`).
+- Unified client identification into authoritative `ClientProfile`, `ClientPreset`, and `ClientCapabilities` type hierarchy, propagating directly to protocol request builders (`muta-contracts`, `muta-llm-client`, `muta-providers`).
+- Enhanced Mutx provider configuration overlays, delete confirmation modal, and UI primitives (`mutx`).
+- Removed legacy standalone UI launcher scripts and updated release packaging (`.github`).
+
 ## [0.37.25] - 2026-09-01
 
 ### Added
@@ -5809,7 +5825,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.25...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.26...HEAD
+[0.37.26]: https://github.com/ming2k/muta/compare/v0.37.25...v0.37.26
 [0.37.25]: https://github.com/ming2k/muta/compare/v0.37.24...v0.37.25
 [0.37.24]: https://github.com/ming2k/muta/compare/v0.37.23...v0.37.24
 [0.37.23]: https://github.com/ming2k/muta/compare/v0.37.22...v0.37.23
