@@ -34,6 +34,6 @@ pub use registry::{
     route_for_model,
 };
 pub use usage::{
-    DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher, ProviderUsageFetcher,
-    SiliconFlowUsageFetcher, fetch_provider_usage,
+    AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,
+    ProviderUsageFetcher, SiliconFlowUsageFetcher, fetch_provider_usage,
 };

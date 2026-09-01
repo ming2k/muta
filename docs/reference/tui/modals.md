@@ -268,7 +268,7 @@ by the preset.
 │  Anthropic                                                        │
 │    Anthropic's official API for flagship Claude models with       │
 │    advanced reasoning; sign in with an Anthropic API key.         │
-│  ChatGPT subscription                                             │
+│  ChatGPT Subscription                                             │
 │  Antigravity OAuth                                                │
 │  …                                                                │
 │                                                                   │
@@ -285,7 +285,7 @@ by the preset.
 | `Esc` | Back to the Connections list |
 
 OAuth presets pick their default method from the client registration:
-ChatGPT subscription and Google Antigravity open the browser PKCE flow on
+ChatGPT Subscription and Google Antigravity open the browser PKCE flow on
 `Enter` (the full `auth.openai.com/oauth/authorize` URL with loopback
 callback, opened automatically), while xAI and GitHub Copilot default to the
 device-code flow. `b` / `d` override the choice for the highlighted preset —

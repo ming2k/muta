@@ -1,12 +1,12 @@
 //! The `chatgpt-oauth` provider preset: GPT-5.x over the ChatGPT
-//! subscription backend (the Codex Responses API).
+//! Subscription backend (the Codex Responses API).
 
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
-/// Entitlement-neutral seed for the ChatGPT subscription backend. Live Codex
+/// Entitlement-neutral seed for the ChatGPT Subscription backend. Live Codex
 /// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
 /// signed-in account; the static seed never guesses plan-specific access.
 pub const CHATGPT_BUILTIN_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];

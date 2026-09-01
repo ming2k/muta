@@ -123,7 +123,7 @@ layers:
   results as `functionResponse` parts.
 - **ChatGPT Responses** (`OpenAiResponsesProvider`) speaks the OpenAI Responses
   API (`/responses` endpoint, `response.*` SSE events) used by the ChatGPT
-  subscription backend.
+  Subscription backend.
 
 The practical consequence: OpenAI-compatible, Anthropic, and Google providers
 can use native structured tool calls. On any provider that omits native tool

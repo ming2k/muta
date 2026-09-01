@@ -882,7 +882,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         )),
         Modal::OauthPending => {
             let title: &'static str = match app.custom_auth {
-                muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT subscription",
+                muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
                 muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
                 muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
                 muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",

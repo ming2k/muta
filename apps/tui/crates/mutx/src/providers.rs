@@ -153,7 +153,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
     },
     ProviderPreset {
         id: "chatgpt-oauth",
-        label: "ChatGPT subscription",
+        label: "ChatGPT Subscription",
         description: "Uses your ChatGPT Plus or Pro subscription for Codex and flagship GPT models; authorizes in the browser, no API key.",
         protocol: WireProtocol::OpenAiResponses,
         models: muta_providers::CHATGPT_BUILTIN_MODELS,
@@ -317,7 +317,7 @@ pub fn connection_definition(id: &str) -> Option<&'static ProviderPreset> {
 /// preset the flow was seeded from, falling back to a generic header. The
 /// lookup is by **preset id**, not wire protocol: several presets share the
 /// `openai` protocol, and a first-match-by-protocol lookup would mislabel
-/// the editor (e.g. "ChatGPT subscription" for the ChatGPT OAuth preset).
+/// the editor (e.g. "ChatGPT Subscription" for the ChatGPT OAuth preset).
 pub fn preset_label_for(preset_id: Option<&str>) -> String {
     preset_id
         .and_then(connection_definition)
@@ -1167,7 +1167,7 @@ mod tests {
             "Google AI Studio",
             "DeepSeek",
             "xAI",
-            "ChatGPT subscription",
+            "ChatGPT Subscription",
             "GitHub Copilot",
             "Google Antigravity",
             "Kimi Code",
@@ -1381,7 +1381,7 @@ mod tests {
     #[test]
     fn openai_platform_preset_is_labeled_to_distinguish_chatgpt() {
         // The `openai` preset is the platform/API-key billing plan, distinct
-        // from the ChatGPT subscription preset that shares its wire protocol.
+        // from the ChatGPT Subscription preset that shares its wire protocol.
         // The label must say so — a bare "OpenAI" reads as the company and
         // matches the subscription plan users actually have.
         let openai = PROVIDER_PRESETS.iter().find(|t| t.id == "openai").unwrap();
@@ -1403,11 +1403,11 @@ mod tests {
         // Several presets share the `openai` wire protocol (chatgpt-oauth is
         // declared first). A create-mode editor title must resolve from the
         // seeded preset id, otherwise every openai-protocol flow would be
-        // headed "ChatGPT subscription".
+        // headed "ChatGPT Subscription".
         assert_eq!(preset_label_for(Some("openai")), "OpenAI Platform");
         assert_eq!(
             preset_label_for(Some("chatgpt-oauth")),
-            "ChatGPT subscription"
+            "ChatGPT Subscription"
         );
         assert_eq!(preset_label_for(Some("custom-openai")), "Custom connection");
         assert_eq!(preset_label_for(Some("deepseek")), "DeepSeek");

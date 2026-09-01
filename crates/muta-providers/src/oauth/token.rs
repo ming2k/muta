@@ -546,6 +546,42 @@ pub async fn resolve_antigravity_project(
     Ok(String::new())
 }
 
+/// Retrieve user quota summary from Google Antigravity CodeAssist backend.
+pub async fn retrieve_antigravity_quota_summary(
+    client: &reqwest::Client,
+    access_token: &str,
+    project: Option<&str>,
+) -> Result<crate::usage::AntigravityQuotaSummaryResponse, crate::oauth::AuthError> {
+    let req_body = serde_json::json!({
+        "project": project.unwrap_or("")
+    });
+
+    let resp = client
+        .post(ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+        .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
+        .header("Content-Type", "application/json")
+        .json(&req_body)
+        .send()
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("retrieveUserQuotaSummary failed: {e}")))?;
+
+    if resp.status().is_success() {
+        let quota = resp
+            .json::<crate::usage::AntigravityQuotaSummaryResponse>()
+            .await
+            .map_err(|e| crate::oauth::AuthError::Decode(format!("retrieveUserQuotaSummary parse failed: {e}")))?;
+        Ok(quota)
+    } else {
+        let status = resp.status().as_u16();
+        Err(crate::oauth::AuthError::TokenEndpoint {
+            status,
+            body: read_response_text(resp, "retrieveUserQuotaSummary error response").await?,
+        })
+    }
+}
+
 /// Extract the Antigravity `cloudaicompanionProject` ID / name from any Google CodeAssist JSON response.
 pub fn extract_cloudaicompanion_project(val: &serde_json::Value) -> Option<String> {
     let target = val.get("response").unwrap_or(val);

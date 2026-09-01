@@ -104,7 +104,7 @@ impl App {
     }
 
     /// After OAuth succeeds: name-only editor (default name derived from the
-    /// in-flight auth — "xAI" for SuperGrok, "ChatGPT subscription" for the
+    /// in-flight auth — "xAI" for SuperGrok, "ChatGPT Subscription" for the
     /// ChatGPT plan).
     pub fn open_oauth_instance_name_editor(&mut self) {
         self.awaiting_oauth_add = false;
@@ -118,7 +118,7 @@ impl App {
         self.custom_field = 0;
         self.custom_edit_id = None;
         let default_name = match self.custom_auth {
-            muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT subscription",
+            muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
             muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
             muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
             _ => "xAI",

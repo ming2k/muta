@@ -5,7 +5,7 @@
 //! array of typed items (`message`, `function_call`, `function_call_output`),
 //! plus optional `tools`/`reasoning`. No `reqwest`, no `async`, no I/O.
 //!
-//! Responses wire shape (ChatGPT subscription backend):
+//! Responses wire shape (ChatGPT Subscription backend):
 //! - URL: the `/responses` endpoint (e.g. `https://chatgpt.com/backend-api/codex/responses`).
 //! - Auth: `Authorization: Bearer <oauth access_token>` plus the optional
 //!   `ChatGPT-Account-Id` header (applied by the provider, not here).
@@ -179,7 +179,7 @@ pub fn body_with_capabilities(
         "input": input_items,
         "stream": stream,
         // Responses persistence mode:
-        // - On ChatGPT subscription backend (`chatgpt.com/backend-api/codex/responses`),
+        // - On ChatGPT Subscription backend (`chatgpt.com/backend-api/codex/responses`),
         //   the backend requires `store: false`.
         // - On the OpenAI platform Responses API (`api.openai.com`), `store: false`
         //   disables response retention on the server, while `store: true` retains

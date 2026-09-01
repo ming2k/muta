@@ -6,7 +6,7 @@
 //!   (`/v1/chat/completions`), served by OpenAI itself, OpenAI-compatible
 //!   relays, and GitHub Copilot's chat channel ([`OpenAiChatCompletionsProvider`]).
 //! - [`responses`] — the OpenAI **Responses API** surface, spoken by the
-//!   ChatGPT subscription backend and the Copilot Responses channel
+//!   ChatGPT Subscription backend and the Copilot Responses channel
 //!   ([`OpenAiResponsesProvider`]).
 
 pub(crate) mod cache;

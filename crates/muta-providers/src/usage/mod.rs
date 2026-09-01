@@ -13,11 +13,16 @@
 use muta_contracts::async_trait;
 use muta_contracts::{ConnectionUsageState, ProviderUsage};
 
+mod antigravity;
 mod deepseek;
 mod kimi;
 mod openrouter;
 mod siliconflow;
 
+pub use antigravity::{
+    AntigravityQuotaBucket, AntigravityQuotaGroup, AntigravityQuotaSummaryResponse,
+    AntigravityUsageFetcher,
+};
 pub use deepseek::DeepSeekUsageFetcher;
 pub use kimi::KimiUsageFetcher;
 pub use openrouter::OpenRouterUsageFetcher;
@@ -41,6 +46,7 @@ pub trait ProviderUsageFetcher: Send + Sync {
 /// Registry of built-in provider usage fetchers.
 pub fn registered_fetchers() -> &'static [&'static dyn ProviderUsageFetcher] {
     &[
+        &AntigravityUsageFetcher,
         &DeepSeekUsageFetcher,
         &KimiUsageFetcher,
         &OpenRouterUsageFetcher,

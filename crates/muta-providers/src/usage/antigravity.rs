@@ -1,0 +1,224 @@
+//! Google Antigravity CodeAssist quota and usage fetcher.
+//!
+//! Query endpoint: `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+
+use muta_contracts::async_trait;
+use muta_contracts::{ProviderUsage, UsageMetric};
+use serde::{Deserialize, Serialize};
+
+use super::ProviderUsageFetcher;
+use crate::oauth::token::{
+    ANTIGRAVITY_API_CLIENT_HEADER, ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL, ANTIGRAVITY_USER_AGENT,
+};
+
+/// Individual Antigravity model/feature quota bucket (QuotaSummaryBucket in internal proto).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AntigravityQuotaBucket {
+    #[serde(default, alias = "bucketId")]
+    pub bucket_id: String,
+    #[serde(default, alias = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub window: Option<String>,
+    #[serde(default, alias = "remainingFraction")]
+    pub remaining_fraction: Option<f32>,
+    #[serde(default, alias = "remainingAmount")]
+    pub remaining_amount: Option<i64>,
+    #[serde(default)]
+    pub disabled: Option<bool>,
+    #[serde(default, alias = "resetTime")]
+    pub reset_time: Option<String>,
+}
+
+/// Logical grouping of Antigravity quota buckets (QuotaSummaryGroup in internal proto).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AntigravityQuotaGroup {
+    #[serde(default, alias = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub buckets: Vec<AntigravityQuotaBucket>,
+}
+
+/// Full Antigravity user quota summary (RetrieveUserQuotaSummaryResponse in internal proto).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AntigravityQuotaSummaryResponse {
+    #[serde(default)]
+    pub buckets: Vec<AntigravityQuotaBucket>,
+    #[serde(default)]
+    pub groups: Vec<AntigravityQuotaGroup>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+pub struct AntigravityUsageFetcher;
+
+#[async_trait]
+impl ProviderUsageFetcher for AntigravityUsageFetcher {
+    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
+        preset_id == Some("antigravity-oauth") || base_url.contains("cloudcode-pa.googleapis.com")
+    }
+
+    async fn fetch_usage(
+        &self,
+        client: &reqwest::Client,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<ProviderUsage, String> {
+        let endpoint = if base_url.contains("cloudcode-pa.googleapis.com") {
+            let base = base_url.trim_end_matches('/');
+            let base = base.strip_suffix("/v1internal").unwrap_or(base);
+            format!("{base}/v1internal:retrieveUserQuotaSummary")
+        } else {
+            ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL.to_string()
+        };
+
+        let req_body = serde_json::json!({
+            "project": ""
+        });
+
+        let resp = client
+            .post(&endpoint)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+            .header(reqwest::header::USER_AGENT, ANTIGRAVITY_USER_AGENT)
+            .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&req_body)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {text}"));
+        }
+
+        let body: AntigravityQuotaSummaryResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse Antigravity quota response: {e}"))?;
+
+        parse_antigravity_quota(body)
+    }
+}
+
+pub(crate) fn parse_antigravity_quota(
+    body: AntigravityQuotaSummaryResponse,
+) -> Result<ProviderUsage, String> {
+    let mut all_buckets = body.buckets;
+    for group in body.groups {
+        all_buckets.extend(group.buckets);
+    }
+
+    if all_buckets.is_empty() {
+        return Ok(ProviderUsage {
+            plan: Some("Antigravity Quota Active".to_string()),
+            primary_balance: Some("100%".to_string()),
+            metrics: Vec::new(),
+            updated_at_ms: now_epoch_ms(),
+        });
+    }
+
+    let mut metrics = Vec::new();
+    let mut min_fraction: Option<f32> = None;
+
+    for bucket in all_buckets {
+        let label = bucket
+            .display_name
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(bucket.bucket_id);
+
+        let value_str = if let Some(frac) = bucket.remaining_fraction {
+            min_fraction = Some(min_fraction.map_or(frac, |m| m.min(frac)));
+            let pct = (frac * 100.0).round() as u32;
+            if let Some(reset) = bucket.reset_time.as_deref().filter(|s| !s.trim().is_empty()) {
+                format!("{pct}% (Resets: {reset})")
+            } else {
+                format!("{pct}%")
+            }
+        } else if let Some(amt) = bucket.remaining_amount {
+            if let Some(reset) = bucket.reset_time.as_deref().filter(|s| !s.trim().is_empty()) {
+                format!("{amt} (Resets: {reset})")
+            } else {
+                format!("{amt}")
+            }
+        } else if bucket.disabled.unwrap_or(false) {
+            "Disabled".to_string()
+        } else {
+            "Available".to_string()
+        };
+
+        metrics.push(UsageMetric {
+            label,
+            value: value_str,
+            unit: bucket.window,
+        });
+    }
+
+    let primary_balance = min_fraction.map(|frac| {
+        let pct = (frac * 100.0).round() as u32;
+        format!("{pct}% Quota")
+    }).or_else(|| Some("Active".to_string()));
+
+    Ok(ProviderUsage {
+        plan: Some(body.description.unwrap_or_else(|| "Google Antigravity".to_string())),
+        primary_balance,
+        metrics,
+        updated_at_ms: now_epoch_ms(),
+    })
+}
+
+fn now_epoch_ms() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_antigravity_quota_response_json() {
+        let json = r#"{
+            "description": "Google One AI Premium Tier",
+            "groups": [
+                {
+                    "displayName": "Chat Models",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-3.7-flash",
+                            "displayName": "Gemini 3.7 Flash",
+                            "window": "DAY",
+                            "remainingFraction": 0.85,
+                            "resetTime": "2026-09-01T12:00:00Z"
+                        },
+                        {
+                            "bucketId": "gemini-3.1-pro",
+                            "displayName": "Gemini 3.1 Pro",
+                            "window": "DAY",
+                            "remainingFraction": 0.60
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let parsed: AntigravityQuotaSummaryResponse = serde_json::from_str(json).unwrap();
+        let usage = parse_antigravity_quota(parsed).unwrap();
+
+        assert_eq!(usage.plan.as_deref(), Some("Google One AI Premium Tier"));
+        assert_eq!(usage.primary_balance.as_deref(), Some("60% Quota"));
+        assert_eq!(usage.metrics.len(), 2);
+        assert_eq!(usage.metrics[0].label, "Gemini 3.7 Flash");
+        assert_eq!(usage.metrics[0].value, "85% (Resets: 2026-09-01T12:00:00Z)");
+        assert_eq!(usage.metrics[0].unit.as_deref(), Some("DAY"));
+        assert_eq!(usage.metrics[1].label, "Gemini 3.1 Pro");
+        assert_eq!(usage.metrics[1].value, "60%");
+    }
+}

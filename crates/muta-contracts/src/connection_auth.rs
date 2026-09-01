@@ -18,7 +18,7 @@ pub enum ConnectionAuth {
     /// xAI SuperGrok subscription. The exact connection id owns its token set,
     /// which is resolved and refreshed on demand.
     XaiOAuth,
-    /// ChatGPT/Codex subscription. The exact connection id owns its token set
+    /// ChatGPT/Codex Subscription. The exact connection id owns its token set
     /// and ChatGPT account id; inference uses the Codex Responses backend.
     ChatGptOAuth,
     /// GitHub Copilot subscription. The exact connection id owns its token set;

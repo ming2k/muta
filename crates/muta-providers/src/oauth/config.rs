@@ -554,7 +554,7 @@ pub fn xai_preset() -> OAuthConfig {
     }
 }
 
-/// ChatGPT / OpenAI Codex subscription OAuth client preset.
+/// ChatGPT / OpenAI Codex Subscription OAuth client preset.
 pub fn chatgpt_preset() -> OAuthConfig {
     OAuthConfig {
         provider_id: Cow::Borrowed("chatgpt"),

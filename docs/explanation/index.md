@@ -62,4 +62,6 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Tool-call wire formats](tool-call-wire-formats.md) | How OpenAI Chat Completions and Anthropic Messages serialize tool declarations and tool-call arguments |
 | [Interrupt semantics](interrupt-semantics.md) | Why muta is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, the billing reality of an interrupted round, and the durable round-interrupt record (reason + timestamp, projected back on resume) |
 | [Provider capabilities](provider-capabilities.md) | Where tool calling and reasoning actually live across model weights, serving runtime, and client |
+| [Provider multi-strategy architecture](provider-strategy-architecture.md) | The six core strategy dimensions adapting muta across heterogeneous model providers and inference protocols |
+| [OAuth2 subscription providers](oauth-subscription-providers.md) | Architecture, PKCE lifecycle, token rotation, and internal protocols for subscription integrations (Antigravity, Codex, Copilot) |
 | [Guided decoding](guided-decoding.md) | Constrained decoding, FSM compilation, and chat templates — the layer that guarantees valid tool calls |

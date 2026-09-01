@@ -60,7 +60,7 @@ pub enum DiscoveryProtocol {
     Anthropic,
     /// Google native → `GET /v1beta/models?key=`.
     Google,
-    /// ChatGPT subscription Codex backend → `GET /backend-api/codex/models`.
+    /// ChatGPT Subscription Codex backend → `GET /backend-api/codex/models`.
     Codex,
 }
 

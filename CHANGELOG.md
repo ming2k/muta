@@ -383,23 +383,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel exposes `a` for **Add preset connection** and `c` for **Add custom
   connection**; custom endpoints no longer appear as a preset row. The former
   `Add Provider` breadcrumb is consistently connection-oriented. The ChatGPT
-  OAuth preset is labeled **ChatGPT subscription** and now includes
+  OAuth preset is labeled **ChatGPT Subscription** and now includes
   `gpt-5.3-codex-spark` over the Codex Responses backend.
 - **OAuth logins share one two-phase session foundation, and ChatGPT
-  subscription defaults to browser PKCE.** `OAuth::begin_login` starts either
+  Subscription defaults to browser PKCE.** `OAuth::begin_login` starts either
   login family — browser PKCE/loopback or device code (RFC 8628 and the
   ChatGPT JSON variant) — and returns a common pending session
   (`OAuthLoginSession`) whose prompt carries the URL, optional user code, and
   message; `complete()` waits and exchanges the grant. Per-provider
   registrations now declare which methods they support (`browser_login`,
-  `default_login_method` on `OAuthConfig`): ChatGPT subscription and Google
+  `default_login_method` on `OAuthConfig`): ChatGPT Subscription and Google
   Antigravity open the full `auth.openai.com/oauth/authorize`/Google consent
   URL automatically (the earlier ChatGPT default showed only the fixed
   `auth.openai.com/codex/device` page), xAI and Copilot stay device-first, and
   Copilot rejects browser login explicitly instead of hanging on an
   unregistered callback. The preset chooser adds `b`/`d` to pick the login
   method explicitly for OAuth presets.
-- **ChatGPT subscription now tracks the live Codex model catalog.** Model
+- **ChatGPT Subscription now tracks the live Codex model catalog.** Model
   discovery learns the Codex protocol (`GET
   `chatgpt.com/backend-api/codex/models?client_version=…`): bearer + account
   id + `originator` headers, `{models:[…]}` parsing with per-model priority,
@@ -770,7 +770,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still on the old layout must re-add their connections.
 - **OpenAI preset relabeled:** the `openai` connection preset is now labeled
   **OpenAI Platform** (chooser row, editor header, Connections provider-type
-  column) to disambiguate it from the ChatGPT subscription preset. The preset
+  column) to disambiguate it from the ChatGPT Subscription preset. The preset
   id and stored `preset_id` values are unchanged, so existing connections and
   configs are unaffected.
 - **Connections › Add Provider chooser restyle:** the trailing `⚿ oauth`/`⚿

@@ -1,10 +1,10 @@
 //! OpenAI **Responses** API provider — the wire format spoken by the ChatGPT
-//! subscription backend (`chatgpt.com/backend-api/codex/responses`).
+//! Subscription backend (`chatgpt.com/backend-api/codex/responses`).
 //!
 //! Unlike the chat-completions [`OpenAiChatCompletionsProvider`](crate::OpenAiChatCompletionsProvider),
 //! this provider:
 //! - sends dynamic OAuth credentials or static tokens,
-//! - attaches the optional `ChatGPT-Account-Id` header for ChatGPT subscriptions,
+//! - attaches the optional `ChatGPT-Account-Id` header for ChatGPT Subscriptions,
 //! - builds a Responses request (`instructions` + `input` items) and parses
 //!   `response.*` streaming events,
 //! - supports self-healing reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
@@ -59,14 +59,14 @@ fn models_etag(headers: &reqwest::header::HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-/// OpenAI Responses-API provider (ChatGPT subscription backend).
+/// OpenAI Responses-API provider (ChatGPT Subscription backend).
 pub struct OpenAiResponsesProvider {
     pub endpoint: Endpoint,
     pub reasoning_effort: Option<Effort>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: muta_contracts::ModelCapabilities,
-    /// When `true`, attach ChatGPT subscription headers (`originator: muta` and
+    /// When `true`, attach ChatGPT Subscription headers (`originator: muta` and
     /// `ChatGPT-Account-Id`).
     pub dialect: muta_contracts::OpenAiResponsesDialect,
     /// Whether upstream persists response state and accepts
