@@ -132,9 +132,20 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
         return Some(info);
     }
 
+    let lock_path = discovery::global_lock_path();
+    if muta_persistence::lock::ProcessLock::is_locked(&lock_path) {
+        // If the instance lock is held, the daemon may be in the middle of startup
+        // writing daemon.json. Retry briefly before falling back.
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(20));
+            if let Some(info) = discover_at(&global_path) {
+                return Some(info);
+            }
+        }
+    }
+
     // Self-healing fallback: if daemon.json is missing or unlinked,
     // but a live daemon holds the instance lock and is responsive on UDS/TCP:
-    let lock_path = discovery::global_lock_path();
     if muta_persistence::lock::ProcessLock::is_locked(&lock_path)
         && let Some(pid) = muta_persistence::lock::ProcessLock::probe_holder(&lock_path)
         && is_process_alive(pid)
@@ -165,11 +176,9 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
                 grace_secs: None,
                 protocol: Some(muta_contracts::PROTOCOL_VERSION),
             };
-            // Restore discovery file so future lookups are immediate
-            let _ = discovery::write_global(&recovered);
             tracing::info!(
                 pid,
-                "discover: recovered discovery record from live lock holder"
+                "discover: recovered in-memory discovery record from live lock holder"
             );
             return Some(recovered);
         }
