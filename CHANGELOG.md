@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.29] - 2026-09-01
+
 ### Added
 
 - Added ADR-0166 for lossless, fail-closed stateless Responses replay.
@@ -5869,7 +5871,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.28...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.29...HEAD
+[0.37.29]: https://github.com/ming2k/muta/compare/v0.37.28...v0.37.29
 [0.37.28]: https://github.com/ming2k/muta/compare/v0.37.27...v0.37.28
 [0.37.27]: https://github.com/ming2k/muta/compare/v0.37.26...v0.37.27
 [0.37.26]: https://github.com/ming2k/muta/compare/v0.37.25...v0.37.26
