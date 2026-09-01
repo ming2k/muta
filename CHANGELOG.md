@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.37.23] - 2026-08-31
+## [0.37.24] - 2026-09-01
+
+### Added
+
+- Added Google Antigravity CodeAssist quota summary retrieval and usage fetcher (`muta-providers`).
+- Added OAuth2 subscription provider lifecycle and multi-strategy adaptation architecture documentation (`docs/explanation`).
+- Added cross-process `FileLock` protection for `auth.toml` and model discovery cache mutations (`muta-providers`).
+- Added transactional write ordering and rollback between `LockedAuthStore` and connections (`muta-runtime`).
+- Added OIDC nonce validation in browser OAuth callback handler (`muta-providers`).
+
+### Changed
+
+- Strictly isolated OAuth credentials by connection ID, eliminating shared provider fallback ambiguity (`muta-providers`, `muta-runtime`).
+- Standardized ChatGPT subscription connection branding to "ChatGPT Subscription" across TUI modals and docs (`mutx`, `docs`).
+- Implemented single-flight token rotation with rejected access token comparison on 401 retry (`muta-providers`).
+- Dispatched `AgentEvent::CatalogInvalidated` on ETag model catalog updates for immediate UI synchronization (`muta-agent`, `mutx`).
+- Updated ChatGPT model seeds to Sol, Terra, and Luna (`muta-providers`).
+
 
 ### Added
 
@@ -5778,7 +5795,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.23...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.24...HEAD
+[0.37.24]: https://github.com/ming2k/muta/compare/v0.37.23...v0.37.24
 [0.37.23]: https://github.com/ming2k/muta/compare/v0.37.22...v0.37.23
 [0.37.22]: https://github.com/ming2k/muta/compare/v0.37.21...v0.37.22
 [0.37.21]: https://github.com/ming2k/muta/compare/v0.37.20...v0.37.21
