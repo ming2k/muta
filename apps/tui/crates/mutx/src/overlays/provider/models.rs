@@ -49,21 +49,21 @@ pub fn draw_models_modal(
     let browse_hints: [FooterHint; 7] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary(keyvocab::ENTER, "activate"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "activate"),
         FooterHint::secondary("*", "favorite"),
         FooterHint::secondary("e", "settings"),
         FooterHint::secondary("r", "refresh"),
-        FooterHint::always(keyvocab::ESC, "close"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let search_hints: [FooterHint; 4] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "activate"),
-        FooterHint::always(keyvocab::ESC, "clear search"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "activate"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "clear search"),
     ];
     let empty_hints: [FooterHint; 2] = [
         FooterHint::primary("a", "add connection"),
-        FooterHint::always(keyvocab::ESC, "close"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
         (&search_hints, &[])

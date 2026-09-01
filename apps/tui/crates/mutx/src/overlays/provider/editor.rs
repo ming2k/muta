@@ -370,9 +370,9 @@ pub fn draw_model_editor(
 
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(6);
-        hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
+        hints.push(FooterHint::key_primary(crate::keymap::Key::ENTER, "save"));
         if effort.is_some() || thinking.is_some() {
-            hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
+            hints.push(FooterHint::key_secondary(crate::keymap::Key::TAB, "field"));
         }
         if overrides.is_some() {
             hints.push(FooterHint::secondary(keyvocab::SPACE, "override"));
@@ -384,7 +384,7 @@ pub fn draw_model_editor(
         if thinking.is_some() {
             hints.push(FooterHint::secondary(keyvocab::SPACE, "thinking"));
         }
-        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
+        hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
 
@@ -502,13 +502,13 @@ pub fn draw_preset_chooser(
         .is_some_and(|preset| preset.auth.is_oauth());
     let mut hints: Vec<FooterHint> = vec![
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "select"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "select"),
     ];
     if oauth_preset {
         hints.push(FooterHint::secondary("b", "browser"));
         hints.push(FooterHint::secondary("d", "device"));
     }
-    hints.push(FooterHint::always(keyvocab::ESC, "back"));
+    hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "back"));
     if let Some(fo) = f.footer {
         render_modal_footer(frame, fo, &hints, theme);
     }
@@ -671,7 +671,7 @@ pub fn draw_custom_provider_editor(
     );
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
-        hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
+        hints.push(FooterHint::key_secondary(crate::keymap::Key::TAB, "field"));
         let choice_focused = matches!(
             fields.get(field as usize),
             Some(CustomField::Protocol | CustomField::ClientIdentity)
@@ -681,8 +681,8 @@ pub fn draw_custom_provider_editor(
         } else {
             hints.push(FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"));
         }
-        hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
-        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
+        hints.push(FooterHint::key_primary(crate::keymap::Key::ENTER, "save"));
+        hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
 

@@ -23,7 +23,6 @@ use mutx_engine::{
     Block as RtBlock, Clear, Constraint, Direction, Frame, Layout, Line, Modifier, Paragraph, Rect,
     Span, Style, Wrap,
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
 use crate::view::Theme;
@@ -126,7 +125,7 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
 
     // Fill full background with canvas tone
     frame.render_widget(
-        RtBlock::default().style(Style::default().bg(props.theme.body())),
+        RtBlock::default().style(Style::default().bg(props.theme.surface())),
         area,
     );
 
@@ -167,20 +166,30 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
     };
     draw_view_header_hints(frame, subhead_rect, &view_hints, props.theme);
 
-    // 3. Center Body (Dual-Pane Master-Detail Split with Contrasting Tones)
+    // 3. Center Body (Dual-Pane Master-Detail Split with Contrasting Tones & Divider)
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(26), Constraint::Min(40)])
+        .constraints([
+            Constraint::Length(24),
+            Constraint::Length(1),
+            Constraint::Min(40),
+        ])
         .split(body_rect);
 
     let category_rect = body_chunks[0];
-    let detail_rect = body_chunks[1];
+    let divider_rect = body_chunks[1];
+    let detail_rect = body_chunks[2];
 
     // Left pane contrasting surface
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(props.theme.surface())),
         category_rect,
     );
+    // Vertical subtle divider
+    let divider_lines: Vec<Line<'static>> = (0..divider_rect.height)
+        .map(|_| Line::from(Span::styled("│", Style::default().fg(props.theme.dim()).bg(props.theme.surface()))))
+        .collect();
+    frame.render_widget(Paragraph::new(divider_lines), divider_rect);
     // Right pane main canvas body
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(props.theme.body())),
@@ -281,21 +290,23 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
         return;
     }
 
-    let bg = theme.body();
+    let bg = theme.raised();
     let fill = Style::default().bg(bg);
-    let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
-    let hint_style = fill.fg(theme.muted());
+    frame.render_widget(RtBlock::default().style(fill), rect);
 
-    let pairs: Vec<(&'static str, &'static str)> = match focus {
+    use crate::components::keycap::KeyAffordance;
+    use crate::keymap::{keyvocab, Key};
+
+    let pairs: Vec<KeyAffordance> = match focus {
         ConfigFocus::Categories => vec![
-            ("↑/↓", "select"),
-            ("Enter", "enter panel"),
-            ("Esc", "close"),
+            KeyAffordance::from_glyph(keyvocab::ARROWS_UD, "select"),
+            KeyAffordance::from_key(Key::ENTER, "enter panel"),
+            KeyAffordance::from_key(Key::ESC, "close"),
         ],
         ConfigFocus::Detail => vec![
-            ("↑/↓", "navigate"),
-            ("Enter/Space", "apply/toggle"),
-            ("Esc", "back to nav"),
+            KeyAffordance::from_glyph(keyvocab::ARROWS_UD, "navigate"),
+            KeyAffordance::from_glyph("Enter/Space", "apply/toggle"),
+            KeyAffordance::from_key(Key::ESC, "back to nav"),
         ],
     };
 
@@ -305,7 +316,7 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
 
     let total_pair_width: usize = pairs
         .iter()
-        .map(|(k, h)| k.width() + 1 + h.width())
+        .map(|affordance| affordance.width())
         .sum::<usize>()
         + (pairs.len().saturating_sub(1) * PAIR_GAP);
 
@@ -314,8 +325,8 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
     } else {
         let mut running = 0;
         let mut c = 0;
-        for (i, (k, h)) in pairs.iter().enumerate() {
-            let pair_w = k.width() + 1 + h.width() + if i > 0 { PAIR_GAP } else { 0 };
+        for (i, affordance) in pairs.iter().enumerate() {
+            let pair_w = affordance.width() + if i > 0 { PAIR_GAP } else { 0 };
             if running + pair_w + (MARGIN_MIN * 2) <= width {
                 running += pair_w;
                 c += 1;
@@ -327,13 +338,13 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
     };
 
     let mut spans: Vec<Span<'static>> = Vec::new();
-    for (i, (key, hint)) in pairs[..count].iter().enumerate() {
+    for (i, affordance) in pairs[..count].iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("   "));
         }
-        spans.push(Span::styled((*key).to_string(), key_style));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled((*hint).to_string(), hint_style));
+        let [key_span, label_span] = affordance.render_spans(theme, bg);
+        spans.push(key_span);
+        spans.push(label_span);
     }
 
     let p = Paragraph::new(Line::from(spans)).style(fill);

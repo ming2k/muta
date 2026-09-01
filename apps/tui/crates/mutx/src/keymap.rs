@@ -114,42 +114,11 @@ pub mod keyvocab {
     /// exhaustive; remove if it stays dead.
     #[allow(dead_code)]
     pub const SHIFT_ENTER: &str = "⇧Enter";
-
-    // ── Display-form single keys (capitalized), as `&'static str` constants so
-    // footers can use them in `const`/array contexts without a method call.
-    // These mirror the most common `Key::display()` results; keep the two in
-    // sync (the test `const_display_names_match_key_display` locks that). The
-    // call site chooses freely between `keyvocab::ESC` (const) and
-    // `Key::ESC.display()` (method) — they render identically. ──
-
-    /// `Esc` — the display form of [`super::Key::ESC`].
-    pub const ESC: &str = "Esc";
-    /// `Enter` — the display form of [`super::Key::ENTER`].
-    pub const ENTER: &str = "Enter";
-    /// `Tab` — the display form of [`super::Key::TAB`].
-    pub const TAB: &str = "Tab";
-    /// `F2` — legacy display token. The F-key queue family moved to the Ctrl
-    /// row (ADR-0126); kept so historical copy stays spellable until every
-    /// surface is migrated.
-    #[allow(dead_code)]
-    pub const F2: &str = "F2";
-    /// `Ctrl+Q` — the display form of [`super::Key::CTRL_Q`] (open the queue
-    /// modal).
-    pub const CTRL_Q: &str = "Ctrl+Q";
-    /// `Ctrl+P` — the display form of [`super::Key::CTRL_P`] (block/resume the
-    /// queue).
-    pub const CTRL_P: &str = "Ctrl+P";
-    /// `Ctrl+T` — the display form of [`super::Key::CTRL_T`]. Kept for
-    /// completeness; call sites currently use `Key::CTRL_T.display()`.
-    #[allow(dead_code)]
-    pub const CTRL_T: &str = "Ctrl+T";
-    /// `Ctrl+X` — the history-clear shortcut (inside the Ctrl+R panel).
-    pub const CTRL_X: &str = "Ctrl+X";
 }
 
 /// The compact token for a core [`KeyCode`] — the lowercase `enter` / `esc` /
 /// `↑` fragment used inside a chord, before any modifier prefix.
-fn chord_token(code: KeyCode) -> &'static str {
+pub const fn chord_token(code: KeyCode) -> &'static str {
     match code {
         KeyCode::Char(c) => match c.to_ascii_lowercase() {
             'a' => "a",
@@ -158,7 +127,9 @@ fn chord_token(code: KeyCode) -> &'static str {
             'd' => "d",
             'e' => "e",
             'f' => "f",
+            'g' => "g",
             'h' => "h",
+            'i' => "i",
             'j' => "j",
             'k' => "k",
             'l' => "l",
@@ -173,13 +144,25 @@ fn chord_token(code: KeyCode) -> &'static str {
             'u' => "u",
             'v' => "v",
             'w' => "w",
+            'x' => "x",
+            'y' => "y",
+            'z' => "z",
+            '0' => "0",
+            '1' => "1",
+            '2' => "2",
+            '3' => "3",
+            '4' => "4",
+            '5' => "5",
+            '6' => "6",
+            '7' => "7",
+            '8' => "8",
+            '9' => "9",
             '?' => "?",
             '/' => "/",
             _ => "·",
         },
         KeyCode::Enter => "enter",
         KeyCode::Tab => "tab",
-        // `BackTab` carries its own `shift+tab` label (see `chord`).
         KeyCode::BackTab => "shift+tab",
         KeyCode::Backspace => "backspace",
         KeyCode::Esc => "esc",
@@ -202,12 +185,7 @@ fn chord_token(code: KeyCode) -> &'static str {
 
 /// The display token for a core [`KeyCode`] — the capitalized `Enter` / `Esc` /
 /// `↑` fragment a footer or legend shows, before any modifier prefix.
-///
-/// This is the case-mirror of [`chord_token`]: the two share the same glyph for
-/// arrows / symbols and differ only for named keys (`enter` → `Enter`) and
-/// letters (kept lowercased in a chord, capitalized as a standalone display
-/// key).
-fn display_token(code: KeyCode) -> &'static str {
+pub const fn display_token(code: KeyCode) -> &'static str {
     match code {
         KeyCode::Char(c) => match c.to_ascii_lowercase() {
             'a' => "A",
@@ -216,7 +194,9 @@ fn display_token(code: KeyCode) -> &'static str {
             'd' => "D",
             'e' => "E",
             'f' => "F",
+            'g' => "G",
             'h' => "H",
+            'i' => "I",
             'j' => "J",
             'k' => "K",
             'l' => "L",
@@ -231,13 +211,25 @@ fn display_token(code: KeyCode) -> &'static str {
             'u' => "U",
             'v' => "V",
             'w' => "W",
+            'x' => "X",
+            'y' => "Y",
+            'z' => "Z",
+            '0' => "0",
+            '1' => "1",
+            '2' => "2",
+            '3' => "3",
+            '4' => "4",
+            '5' => "5",
+            '6' => "6",
+            '7' => "7",
+            '8' => "8",
+            '9' => "9",
             '?' => "?",
             '/' => "/",
             _ => "·",
         },
         KeyCode::Enter => "Enter",
         KeyCode::Tab => "Tab",
-        // `BackTab` carries its own `Shift+Tab` label (see `display`).
         KeyCode::BackTab => "Shift+Tab",
         KeyCode::Backspace => "Backspace",
         KeyCode::Esc => "Esc",
@@ -258,130 +250,37 @@ fn display_token(code: KeyCode) -> &'static str {
     }
 }
 
-/// The lowercase modifier prefix for a chord (`ctrl+`, `alt+`, …), or `""` for
-/// none. Shared by [`Key::chord`] and `Key::display_prefix` so the modifier
-/// vocabulary is owned once.
-fn chord_prefix(modifiers: KeyModifiers) -> &'static str {
-    if modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+/// The lowercase modifier prefix for a chord (`ctrl+`, `alt+`, …), or `""` for none.
+pub const fn chord_prefix(modifiers: KeyModifiers) -> &'static str {
+    if modifiers.bits() == (KeyModifiers::CONTROL.bits() | KeyModifiers::SHIFT.bits()) {
         "ctrl+shift+"
-    } else if modifiers == KeyModifiers::CONTROL {
+    } else if modifiers.bits() == KeyModifiers::CONTROL.bits() {
         "ctrl+"
-    } else if modifiers == KeyModifiers::ALT {
+    } else if modifiers.bits() == KeyModifiers::ALT.bits() {
         "alt+"
-    } else if modifiers == KeyModifiers::SHIFT {
+    } else if modifiers.bits() == KeyModifiers::SHIFT.bits() {
         "shift+"
-    } else if modifiers == KeyModifiers::SUPER {
+    } else if modifiers.bits() == KeyModifiers::SUPER.bits() {
         "cmd+"
     } else {
         ""
     }
 }
 
-/// The display-case modifier prefix for a key (`Ctrl+`, `Alt+`, …), or `""`
-/// for none. The case-mirror of [`chord_prefix`].
-fn display_prefix(modifiers: KeyModifiers) -> &'static str {
-    if modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+/// The display-case modifier prefix for a key (`Ctrl+`, `Alt+`, …), or `""` for none.
+pub const fn display_prefix(modifiers: KeyModifiers) -> &'static str {
+    if modifiers.bits() == (KeyModifiers::CONTROL.bits() | KeyModifiers::SHIFT.bits()) {
         "Ctrl+Shift+"
-    } else if modifiers == KeyModifiers::CONTROL {
+    } else if modifiers.bits() == KeyModifiers::CONTROL.bits() {
         "Ctrl+"
-    } else if modifiers == KeyModifiers::ALT {
+    } else if modifiers.bits() == KeyModifiers::ALT.bits() {
         "Alt+"
-    } else if modifiers == KeyModifiers::SHIFT {
+    } else if modifiers.bits() == KeyModifiers::SHIFT.bits() {
         "Shift+"
-    } else if modifiers == KeyModifiers::SUPER {
+    } else if modifiers.bits() == KeyModifiers::SUPER.bits() {
         "Cmd+"
     } else {
         ""
-    }
-}
-
-/// The set of full chord strings the app's declared bindings actually use, so
-/// [`Key::chord`] can return a `&'static str` with no allocation. Backed by the
-/// `concat!` of [`chord_prefix`] + [`chord_token`] for each known combination.
-fn chord_str(prefix: &'static str, core: &'static str) -> &'static str {
-    match (prefix, core) {
-        ("", c) => c,
-        ("ctrl+", "a") => "ctrl+a",
-        ("ctrl+", "b") => "ctrl+b",
-        ("ctrl+", "c") => "ctrl+c",
-        ("ctrl+", "d") => "ctrl+d",
-        ("ctrl+", "e") => "ctrl+e",
-        ("ctrl+", "f") => "ctrl+f",
-        ("ctrl+", "h") => "ctrl+h",
-        ("ctrl+", "j") => "ctrl+j",
-        ("ctrl+", "k") => "ctrl+k",
-        ("ctrl+", "l") => "ctrl+l",
-        ("ctrl+", "m") => "ctrl+m",
-        ("ctrl+", "n") => "ctrl+n",
-        ("ctrl+", "o") => "ctrl+o",
-        ("ctrl+", "p") => "ctrl+p",
-        ("ctrl+", "q") => "ctrl+q",
-        ("ctrl+", "r") => "ctrl+r",
-        ("ctrl+", "s") => "ctrl+s",
-        ("ctrl+", "t") => "ctrl+t",
-        ("ctrl+", "u") => "ctrl+u",
-        ("ctrl+", "v") => "ctrl+v",
-        ("ctrl+", "w") => "ctrl+w",
-        ("ctrl+", "←") => "ctrl+←",
-        ("ctrl+", "→") => "ctrl+→",
-        ("ctrl+", "↑") => "ctrl+↑",
-        ("ctrl+", "↓") => "ctrl+↓",
-        ("ctrl+shift+", "c") => "ctrl+shift+c",
-        ("alt+", "enter") => "alt+enter",
-        ("alt+", "b") => "alt+b",
-        ("alt+", "d") => "alt+d",
-        ("alt+", "f") => "alt+f",
-        ("alt+", "backspace") => "alt+backspace",
-        ("shift+", "tab") => "shift+tab",
-        ("cmd+", "c") => "cmd+c",
-        // Unreachable for declared bindings; keep a stable fallback (the core
-        // token alone) so the function is total for any `KeyCode`.
-        (_, c) => c,
-    }
-}
-
-/// The set of full display strings the app's bindings actually use, so
-/// [`Key::display`] can return a `&'static str` with no allocation. The
-/// case-mirror of [`chord_str`].
-fn display_str(prefix: &'static str, core: &'static str) -> &'static str {
-    match (prefix, core) {
-        ("", c) => c,
-        ("Ctrl+", "A") => "Ctrl+A",
-        ("Ctrl+", "B") => "Ctrl+B",
-        ("Ctrl+", "C") => "Ctrl+C",
-        ("Ctrl+", "D") => "Ctrl+D",
-        ("Ctrl+", "E") => "Ctrl+E",
-        ("Ctrl+", "F") => "Ctrl+F",
-        ("Ctrl+", "H") => "Ctrl+H",
-        ("Ctrl+", "J") => "Ctrl+J",
-        ("Ctrl+", "K") => "Ctrl+K",
-        ("Ctrl+", "L") => "Ctrl+L",
-        ("Ctrl+", "M") => "Ctrl+M",
-        ("Ctrl+", "N") => "Ctrl+N",
-        ("Ctrl+", "O") => "Ctrl+O",
-        ("Ctrl+", "P") => "Ctrl+P",
-        ("Ctrl+", "Q") => "Ctrl+Q",
-        ("Ctrl+", "R") => "Ctrl+R",
-        ("Ctrl+", "S") => "Ctrl+S",
-        ("Ctrl+", "T") => "Ctrl+T",
-        ("Ctrl+", "U") => "Ctrl+U",
-        ("Ctrl+", "V") => "Ctrl+V",
-        ("Ctrl+", "W") => "Ctrl+W",
-        ("Ctrl+", "←") => "Ctrl+←",
-        ("Ctrl+", "→") => "Ctrl+→",
-        ("Ctrl+", "↑") => "Ctrl+↑",
-        ("Ctrl+", "↓") => "Ctrl+↓",
-        ("Ctrl+Shift+", "C") => "Ctrl+Shift+C",
-        ("Alt+", "Enter") => "Alt+Enter",
-        ("Alt+", "B") => "Alt+B",
-        ("Alt+", "D") => "Alt+D",
-        ("Alt+", "F") => "Alt+F",
-        ("Alt+", "Backspace") => "Alt+Backspace",
-        ("Shift+", "Tab") => "Shift+Tab",
-        ("Cmd+", "C") => "Cmd+C",
-        // Fallback for combos not enumerated above; declared bindings never
-        // reach here. Returning the core token keeps the function total.
-        (_, c) => c,
     }
 }
 
@@ -416,6 +315,30 @@ impl Key {
         }
     }
 
+    /// Construct a bare character key with no modifiers.
+    pub const fn from_char(ch: char) -> Self {
+        Self {
+            modifiers: KeyModifiers::NONE,
+            code: KeyCode::Char(ch),
+        }
+    }
+
+    /// Construct a Ctrl+key combination.
+    pub const fn ctrl(ch: char) -> Self {
+        Self {
+            modifiers: KeyModifiers::CONTROL,
+            code: KeyCode::Char(ch),
+        }
+    }
+
+    /// Construct an Alt+key combination.
+    pub const fn alt(ch: char) -> Self {
+        Self {
+            modifiers: KeyModifiers::ALT,
+            code: KeyCode::Char(ch),
+        }
+    }
+
     /// The canonical lowercase chord for this key, in the `ctrl+t` /
     /// `alt+enter` / `f1` / `esc` / `↑` notation used by the Help modal's prose
     /// rows. Joined keys use `+`, matching the established Help copy.
@@ -427,13 +350,76 @@ impl Key {
     /// Returns `&'static str` because every declared binding is a fixed,
     /// compile-time-known combination, so the label can be stored alongside
     /// the `&'static str` description in the Help rows without allocation.
-    pub fn chord(self) -> &'static str {
-        // `BackTab` already carries its full `shift+tab` label, so ignore the
-        // prefix (a `Shift`+`Tab` event arrives as `BackTab` with SHIFT set).
+    pub const fn chord(self) -> &'static str {
         if matches!(self.code, KeyCode::BackTab) {
             return "shift+tab";
         }
-        chord_str(chord_prefix(self.modifiers), chord_token(self.code))
+        let ctrl = self.modifiers.bits() & KeyModifiers::CONTROL.bits() != 0;
+        let shift = self.modifiers.bits() & KeyModifiers::SHIFT.bits() != 0;
+        let alt = self.modifiers.bits() & KeyModifiers::ALT.bits() != 0;
+        let cmd = self.modifiers.bits() & KeyModifiers::SUPER.bits() != 0;
+
+        if ctrl && shift {
+            match self.code {
+                KeyCode::Char('c') | KeyCode::Char('C') => "ctrl+shift+c",
+                _ => "·",
+            }
+        } else if ctrl {
+            match self.code {
+                KeyCode::Char('a') | KeyCode::Char('A') => "ctrl+a",
+                KeyCode::Char('b') | KeyCode::Char('B') => "ctrl+b",
+                KeyCode::Char('c') | KeyCode::Char('C') => "ctrl+c",
+                KeyCode::Char('d') | KeyCode::Char('D') => "ctrl+d",
+                KeyCode::Char('e') | KeyCode::Char('E') => "ctrl+e",
+                KeyCode::Char('f') | KeyCode::Char('F') => "ctrl+f",
+                KeyCode::Char('g') | KeyCode::Char('G') => "ctrl+g",
+                KeyCode::Char('h') | KeyCode::Char('H') => "ctrl+h",
+                KeyCode::Char('i') | KeyCode::Char('I') => "ctrl+i",
+                KeyCode::Char('j') | KeyCode::Char('J') => "ctrl+j",
+                KeyCode::Char('k') | KeyCode::Char('K') => "ctrl+k",
+                KeyCode::Char('l') | KeyCode::Char('L') => "ctrl+l",
+                KeyCode::Char('m') | KeyCode::Char('M') => "ctrl+m",
+                KeyCode::Char('n') | KeyCode::Char('N') => "ctrl+n",
+                KeyCode::Char('o') | KeyCode::Char('O') => "ctrl+o",
+                KeyCode::Char('p') | KeyCode::Char('P') => "ctrl+p",
+                KeyCode::Char('q') | KeyCode::Char('Q') => "ctrl+q",
+                KeyCode::Char('r') | KeyCode::Char('R') => "ctrl+r",
+                KeyCode::Char('s') | KeyCode::Char('S') => "ctrl+s",
+                KeyCode::Char('t') | KeyCode::Char('T') => "ctrl+t",
+                KeyCode::Char('u') | KeyCode::Char('U') => "ctrl+u",
+                KeyCode::Char('v') | KeyCode::Char('V') => "ctrl+v",
+                KeyCode::Char('w') | KeyCode::Char('W') => "ctrl+w",
+                KeyCode::Char('x') | KeyCode::Char('X') => "ctrl+x",
+                KeyCode::Char('y') | KeyCode::Char('Y') => "ctrl+y",
+                KeyCode::Char('z') | KeyCode::Char('Z') => "ctrl+z",
+                KeyCode::Left => "ctrl+←",
+                KeyCode::Right => "ctrl+→",
+                KeyCode::Up => "ctrl+↑",
+                KeyCode::Down => "ctrl+↓",
+                _ => "·",
+            }
+        } else if alt {
+            match self.code {
+                KeyCode::Enter => "alt+enter",
+                KeyCode::Char('b') | KeyCode::Char('B') => "alt+b",
+                KeyCode::Char('d') | KeyCode::Char('D') => "alt+d",
+                KeyCode::Char('f') | KeyCode::Char('F') => "alt+f",
+                KeyCode::Backspace => "alt+backspace",
+                _ => "·",
+            }
+        } else if shift {
+            match self.code {
+                KeyCode::Tab => "shift+tab",
+                _ => chord_token(self.code),
+            }
+        } else if cmd {
+            match self.code {
+                KeyCode::Char('c') | KeyCode::Char('C') => "cmd+c",
+                _ => "·",
+            }
+        } else {
+            chord_token(self.code)
+        }
     }
 
     /// The canonical capitalized display name for this key — `Enter`, `Esc`,
@@ -446,11 +432,76 @@ impl Key {
     ///
     /// Returns `&'static str` for the same allocation-free reason as
     /// [`Key::chord`].
-    pub fn display(self) -> &'static str {
+    pub const fn display(self) -> &'static str {
         if matches!(self.code, KeyCode::BackTab) {
             return keyvocab::SHIFT_TAB;
         }
-        display_str(display_prefix(self.modifiers), display_token(self.code))
+        let ctrl = self.modifiers.bits() & KeyModifiers::CONTROL.bits() != 0;
+        let shift = self.modifiers.bits() & KeyModifiers::SHIFT.bits() != 0;
+        let alt = self.modifiers.bits() & KeyModifiers::ALT.bits() != 0;
+        let cmd = self.modifiers.bits() & KeyModifiers::SUPER.bits() != 0;
+
+        if ctrl && shift {
+            match self.code {
+                KeyCode::Char('c') | KeyCode::Char('C') => "Ctrl+Shift+C",
+                _ => "·",
+            }
+        } else if ctrl {
+            match self.code {
+                KeyCode::Char('a') | KeyCode::Char('A') => "Ctrl+A",
+                KeyCode::Char('b') | KeyCode::Char('B') => "Ctrl+B",
+                KeyCode::Char('c') | KeyCode::Char('C') => "Ctrl+C",
+                KeyCode::Char('d') | KeyCode::Char('D') => "Ctrl+D",
+                KeyCode::Char('e') | KeyCode::Char('E') => "Ctrl+E",
+                KeyCode::Char('f') | KeyCode::Char('F') => "Ctrl+F",
+                KeyCode::Char('g') | KeyCode::Char('G') => "Ctrl+G",
+                KeyCode::Char('h') | KeyCode::Char('H') => "Ctrl+H",
+                KeyCode::Char('i') | KeyCode::Char('I') => "Ctrl+I",
+                KeyCode::Char('j') | KeyCode::Char('J') => "Ctrl+J",
+                KeyCode::Char('k') | KeyCode::Char('K') => "Ctrl+K",
+                KeyCode::Char('l') | KeyCode::Char('L') => "Ctrl+L",
+                KeyCode::Char('m') | KeyCode::Char('M') => "Ctrl+M",
+                KeyCode::Char('n') | KeyCode::Char('N') => "Ctrl+N",
+                KeyCode::Char('o') | KeyCode::Char('O') => "Ctrl+O",
+                KeyCode::Char('p') | KeyCode::Char('P') => "Ctrl+P",
+                KeyCode::Char('q') | KeyCode::Char('Q') => "Ctrl+Q",
+                KeyCode::Char('r') | KeyCode::Char('R') => "Ctrl+R",
+                KeyCode::Char('s') | KeyCode::Char('S') => "Ctrl+S",
+                KeyCode::Char('t') | KeyCode::Char('T') => "Ctrl+T",
+                KeyCode::Char('u') | KeyCode::Char('U') => "Ctrl+U",
+                KeyCode::Char('v') | KeyCode::Char('V') => "Ctrl+V",
+                KeyCode::Char('w') | KeyCode::Char('W') => "Ctrl+W",
+                KeyCode::Char('x') | KeyCode::Char('X') => "Ctrl+X",
+                KeyCode::Char('y') | KeyCode::Char('Y') => "Ctrl+Y",
+                KeyCode::Char('z') | KeyCode::Char('Z') => "Ctrl+Z",
+                KeyCode::Left => "Ctrl+←",
+                KeyCode::Right => "Ctrl+→",
+                KeyCode::Up => "Ctrl+↑",
+                KeyCode::Down => "Ctrl+↓",
+                _ => "·",
+            }
+        } else if alt {
+            match self.code {
+                KeyCode::Enter => "Alt+Enter",
+                KeyCode::Char('b') | KeyCode::Char('B') => "Alt+B",
+                KeyCode::Char('d') | KeyCode::Char('D') => "Alt+D",
+                KeyCode::Char('f') | KeyCode::Char('F') => "Alt+F",
+                KeyCode::Backspace => "Alt+Backspace",
+                _ => "·",
+            }
+        } else if shift {
+            match self.code {
+                KeyCode::Tab => keyvocab::SHIFT_TAB,
+                _ => display_token(self.code),
+            }
+        } else if cmd {
+            match self.code {
+                KeyCode::Char('c') | KeyCode::Char('C') => "Cmd+C",
+                _ => "·",
+            }
+        } else {
+            display_token(self.code)
+        }
     }
 }
 
@@ -469,51 +520,105 @@ impl Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Enter,
     };
-    /// The Tab key. Kept for completeness alongside [`keyvocab::TAB`]; the
-    /// queue bar's Tab legend was removed when the insert/next-round toggle
-    /// was dropped, and the other Tab surfaces (history preview, provider
-    /// field cycling) render via `keyvocab::TAB` instead.
-    #[allow(dead_code)]
+    /// The Tab key.
     pub const TAB: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Tab,
     };
-    /// Ctrl+T (open Todos) — the global shortcut surfaced in the idle activity
-    /// bar's discoverability hint.
-    pub const CTRL_T: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('t'),
+    /// The Backspace key.
+    pub const BACKSPACE: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Backspace,
     };
-    /// Ctrl+Q (open the queue modal) — the queue family lives on the Ctrl row:
-    /// `Ctrl+P` pause, `Ctrl+Q` expand. Mnemonic and Fn-layer-free,
-    /// unlike the F-keys it replaces (ADR-0126).
-    pub const CTRL_Q: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('q'),
+    /// The Up arrow key.
+    pub const UP: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Up,
     };
-    /// Ctrl+P (block/resume the queue) — "pause". Companion of [`Self::CTRL_Q`].
-    pub const CTRL_P: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('p'),
+    /// The Down arrow key.
+    pub const DOWN: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Down,
     };
-    /// Ctrl+O (open the context/token usage report) — the keyboard twin of
-    /// clicking the model bar's context meter.
-    pub const CTRL_O: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('o'),
+    /// The Left arrow key.
+    pub const LEFT: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Left,
     };
-    /// Ctrl+N (open active connection detail) — the keyboard twin of
-    /// clicking the model bar's model / connection cluster.
-    pub const CTRL_N: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('n'),
+    /// The Right arrow key.
+    pub const RIGHT: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Right,
     };
-    /// Ctrl+S (open the latest-turn performance report) — the keyboard twin
-    /// of clicking the model bar's stream-rate gauge. "s" for "speed".
-    pub const CTRL_S: Key = Key {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('s'),
+    /// F1.
+    pub const F1: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(1),
     };
+    /// F2.
+    pub const F2: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(2),
+    };
+    /// F3.
+    pub const F3: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(3),
+    };
+    /// F4.
+    pub const F4: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(4),
+    };
+    /// F5.
+    pub const F5: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(5),
+    };
+    /// Ctrl+A.
+    pub const CTRL_A: Key = Key::ctrl('a');
+    /// Ctrl+B.
+    pub const CTRL_B: Key = Key::ctrl('b');
+    /// Ctrl+C.
+    pub const CTRL_C: Key = Key::ctrl('c');
+    /// Ctrl+D.
+    pub const CTRL_D: Key = Key::ctrl('d');
+    /// Ctrl+E.
+    pub const CTRL_E: Key = Key::ctrl('e');
+    /// Ctrl+F.
+    pub const CTRL_F: Key = Key::ctrl('f');
+    /// Ctrl+G.
+    pub const CTRL_G: Key = Key::ctrl('g');
+    /// Ctrl+H.
+    pub const CTRL_H: Key = Key::ctrl('h');
+    /// Ctrl+K.
+    pub const CTRL_K: Key = Key::ctrl('k');
+    /// Ctrl+M.
+    pub const CTRL_M: Key = Key::ctrl('m');
+    /// Ctrl+N.
+    pub const CTRL_N: Key = Key::ctrl('n');
+    /// Ctrl+O.
+    pub const CTRL_O: Key = Key::ctrl('o');
+    /// Ctrl+P.
+    pub const CTRL_P: Key = Key::ctrl('p');
+    /// Ctrl+Q.
+    pub const CTRL_Q: Key = Key::ctrl('q');
+    /// Ctrl+R.
+    pub const CTRL_R: Key = Key::ctrl('r');
+    /// Ctrl+S.
+    pub const CTRL_S: Key = Key::ctrl('s');
+    /// Ctrl+T.
+    pub const CTRL_T: Key = Key::ctrl('t');
+    /// Ctrl+U.
+    pub const CTRL_U: Key = Key::ctrl('u');
+    /// Ctrl+W.
+    pub const CTRL_W: Key = Key::ctrl('w');
+    /// Ctrl+X.
+    pub const CTRL_X: Key = Key::ctrl('x');
+    /// Ctrl+Y.
+    pub const CTRL_Y: Key = Key::ctrl('y');
+    /// Ctrl+Z.
+    pub const CTRL_Z: Key = Key::ctrl('z');
 }
 
 /// The precondition under which a binding is active.
@@ -1095,16 +1200,24 @@ mod tests {
 
     #[test]
     fn const_display_names_match_key_display() {
-        // The `keyvocab::ESC`/`ENTER`/… string constants must agree byte-for-byte
-        // with `Key::display()` for the corresponding `Key` constant, so a footer
-        // may freely swap `keyvocab::ESC` for `Key::ESC.display()` (and vice
-        // versa) without changing what renders.
-        assert_eq!(keyvocab::ESC, Key::ESC.display());
-        assert_eq!(keyvocab::ENTER, Key::ENTER.display());
-        assert_eq!(keyvocab::TAB, Key::TAB.display());
-        assert_eq!(keyvocab::CTRL_T, Key::CTRL_T.display());
-        assert_eq!(keyvocab::CTRL_P, Key::CTRL_P.display());
-        assert_eq!(keyvocab::CTRL_Q, Key::CTRL_Q.display());
+        // Key::display() is a compile-time const fn that accurately returns
+        // the canonical capitalized human form for every key.
+        assert_eq!(Key::ESC.display(), "Esc");
+        assert_eq!(Key::ENTER.display(), "Enter");
+        assert_eq!(Key::TAB.display(), "Tab");
+        assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
+        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
+        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
+        assert_eq!(Key::CTRL_X.display(), "Ctrl+X");
+        assert_eq!(Key::CTRL_C.display(), "Ctrl+C");
+        assert_eq!(Key::CTRL_G.display(), "Ctrl+G");
+        assert_eq!(Key::CTRL_R.display(), "Ctrl+R");
+        assert_eq!(Key::CTRL_M.display(), "Ctrl+M");
+        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
+        assert_eq!(Key::CTRL_N.display(), "Ctrl+N");
+        assert_eq!(Key::CTRL_S.display(), "Ctrl+S");
+        assert_eq!(Key::F1.display(), "F1");
+        assert_eq!(Key::F5.display(), "F5");
         // SHIFT_TAB matches the BackTab display form.
         assert_eq!(
             keyvocab::SHIFT_TAB,

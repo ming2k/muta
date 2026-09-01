@@ -53,12 +53,12 @@ pub fn draw_connections_modal(
     let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary(keyvocab::ENTER, "details"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "details"),
         FooterHint::secondary("a", "preset"),
         FooterHint::secondary("c", "custom"),
         FooterHint::secondary("e", "edit"),
         FooterHint::secondary("r", "refresh"),
-        FooterHint::always(keyvocab::ESC, "close"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let browse_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
         key: "D",
@@ -68,7 +68,7 @@ pub fn draw_connections_modal(
     let search_hints: [FooterHint; 3] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::always(keyvocab::ESC, "clear search"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "clear search"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
         (&search_hints, &[])
@@ -112,13 +112,13 @@ pub fn draw_connections_modal(
         }
         let detail_footer: [FooterHint; 3] = if connection_info_standalone {
             [
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
                 FooterHint::secondary("r", "refresh"),
                 FooterHint::secondary("e", "edit"),
             ]
         } else {
             [
-                FooterHint::always(keyvocab::ESC, "list"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "list"),
                 FooterHint::secondary("r", "refresh"),
                 FooterHint::secondary("e", "edit"),
             ]

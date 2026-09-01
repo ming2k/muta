@@ -84,7 +84,7 @@ impl ViewHints<'_> {
     /// - **Breadcrumbs active**: always expands row 2.
     /// - **Main**: only while at least one aside is live (the aside chip +
     ///   `F5 asides` are exactly the affordances this row exists for).
-    /// - **Btw**: always — `Ctrl-C back` is the view's single exit, and
+    /// - **Btw**: always — `Ctrl+C back` is the view's single exit, and
     ///   no other surface repeats it.
     /// - **Runner**: never — its permanent footer already carries the same
     ///   legend (`draw_runner_footer`), so a row-2 copy would duplicate the
@@ -239,12 +239,12 @@ pub(crate) fn draw_view_header(
         },
     };
 
-    let bg = theme.body();
+    let bg = theme.raised();
     let fill = Style::default().bg(bg);
-    let title_style = fill.fg(theme.fg()).add_modifier(Modifier::BOLD);
+    let title_style = fill.fg(theme.heading()).add_modifier(Modifier::BOLD);
     let tag_style = fill.fg(theme.dim());
     let badge_style = fill.fg(theme.brand()).add_modifier(Modifier::BOLD);
-    let primary_style = fill.fg(theme.brand());
+    let primary_style = fill.fg(theme.brand()).add_modifier(Modifier::BOLD);
     let meta_style = match header {
         ViewHeader::Btw(head)
             if matches!(
@@ -339,23 +339,25 @@ pub(crate) fn draw_view_header_hints(
         return;
     }
 
-    let bg = theme.body();
+    let bg = theme.raised();
     let fill = Style::default().bg(bg);
-    let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
-    let hint_style = fill.fg(theme.muted());
     let note_style = fill.fg(theme.dim());
 
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
-        let right_key = crate::components::keycap::keycap_span(theme, "C-x");
+        let affordance = crate::components::keycap::KeyAffordance::from_key(
+            crate::keymap::Key::CTRL_X,
+            "menu",
+        );
+        let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
         let left_len = crumbs.width() + 3;
-        let right_len = 3 + 3;
+        let right_len = affordance.width() + 3;
         let pad_len = (rect.width as usize).saturating_sub(left_len + right_len);
         let pad = " ".repeat(pad_len);
 
-        let line = Line::from(vec![left, Span::raw(pad), right_key, right_pad]);
+        let line = Line::from(vec![left, Span::raw(pad), key_span, label_span, right_pad]);
         frame.render_widget(Paragraph::new(line).style(fill), rect);
         return;
     }
@@ -377,41 +379,49 @@ pub(crate) fn draw_view_header_hints(
         ViewKind::Runner | ViewKind::Settings => None,
     };
 
-    let pairs: Vec<(&'static str, &'static str)> = match hints.kind {
+    let pairs: Vec<crate::components::keycap::KeyAffordance> = match hints.kind {
         ViewKind::Main => {
             let mut pairs = Vec::new();
             if hints.asides.is_some() {
-                pairs.push(("F5", "asides"));
+                pairs.push(crate::components::keycap::KeyAffordance::from_key(
+                    crate::keymap::Key::F5,
+                    "asides",
+                ));
             }
             pairs
         }
         ViewKind::Btw => {
-            let mut pairs = vec![("Ctrl-C", "back"), ("F5", "asides")];
+            let mut pairs = vec![
+                crate::components::keycap::KeyAffordance::from_key(
+                    crate::keymap::Key::CTRL_C,
+                    "back",
+                ),
+                crate::components::keycap::KeyAffordance::from_key(
+                    crate::keymap::Key::F5,
+                    "asides",
+                ),
+            ];
             if hints.interruptible {
-                pairs.push(("Esc", "interrupt aside"));
+                pairs.push(crate::components::keycap::KeyAffordance::from_key(
+                    crate::keymap::Key::ESC,
+                    "interrupt aside",
+                ));
             }
             pairs
         }
         ViewKind::Runner => Vec::new(),
-        ViewKind::Settings => vec![("C-x", "")],
+        ViewKind::Settings => vec![crate::components::keycap::KeyAffordance::from_key(
+            crate::keymap::Key::CTRL_X,
+            "menu",
+        )],
     };
 
     let width = rect.width as usize;
-    let chosen: Vec<(&'static str, &'static str)> = {
+    let chosen: Vec<crate::components::keycap::KeyAffordance> = {
         let mut chosen = pairs.clone();
         loop {
             let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
-            let pairs_width: usize = chosen
-                .iter()
-                .map(|(key, label)| {
-                    key.width()
-                        + if label.is_empty() {
-                            0
-                        } else {
-                            1 + label.width()
-                        }
-                })
-                .sum();
+            let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
             let needed =
                 note_width + pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
             if needed <= width.saturating_sub(2 * ENVOY_FOOTER_MARGIN_MIN) || chosen.len() <= 1 {
@@ -423,17 +433,7 @@ pub(crate) fn draw_view_header_hints(
     };
 
     let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
-    let pairs_width: usize = chosen
-        .iter()
-        .map(|(key, label)| {
-            key.width()
-                + if label.is_empty() {
-                    0
-                } else {
-                    1 + label.width()
-                }
-        })
-        .sum();
+    let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
     let gaps =
         ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };
     let content_width = note_width + pairs_width + gaps;
@@ -443,14 +443,13 @@ pub(crate) fn draw_view_header_hints(
     if let Some(note) = note {
         spans.push(Span::styled(format!("{note}    "), note_style));
     }
-    for (i, (key, label)) in chosen.iter().enumerate() {
+    for (i, affordance) in chosen.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
         }
-        spans.push(Span::styled(*key, key_style));
-        if !label.is_empty() {
-            spans.push(Span::styled(format!(" {label}"), hint_style));
-        }
+        let [key_span, label_span] = affordance.render_spans(theme, bg);
+        spans.push(key_span);
+        spans.push(label_span);
     }
     spans.push(Span::styled(
         " ".repeat(width.saturating_sub(margin + content_width)),
@@ -471,32 +470,30 @@ pub(crate) fn draw_runner_footer(
         return;
     }
 
-    let bg = theme.body();
+    let bg = theme.raised();
     let fill = Style::default().bg(bg);
-    let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
-    let hint_style = fill.fg(theme.muted());
 
-    let mut pairs: Vec<(&'static str, &'static str)> = vec![("Esc", "back")];
+    let mut pairs: Vec<crate::components::keycap::KeyAffordance> = vec![
+        crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back"),
+    ];
     if info.total > 1 {
-        pairs.push(("[", "prev"));
-        pairs.push(("]", "next"));
+        pairs.push(crate::components::keycap::KeyAffordance::new("[", "prev"));
+        pairs.push(crate::components::keycap::KeyAffordance::new("]", "next"));
     }
 
-    let content_len: usize = pairs
-        .iter()
-        .map(|(key, label)| key.width() + 1 + label.width())
-        .sum::<usize>()
+    let content_len: usize = pairs.iter().map(|a| a.width()).sum::<usize>()
         + ENVOY_FOOTER_PAIR_GAP * pairs.len().saturating_sub(1);
     let width = rect.width as usize;
     let margin = (width.saturating_sub(content_len)) / 2;
 
     let mut spans: Vec<Span<'static>> = vec![Span::styled(" ".repeat(margin), fill)];
-    for (i, (key, label)) in pairs.iter().enumerate() {
+    for (i, affordance) in pairs.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
         }
-        spans.push(Span::styled(*key, key_style));
-        spans.push(Span::styled(format!(" {label}"), hint_style));
+        let [key_span, label_span] = affordance.render_spans(theme, bg);
+        spans.push(key_span);
+        spans.push(label_span);
     }
     spans.push(Span::styled(
         " ".repeat(width.saturating_sub(margin + content_len)),
@@ -656,7 +653,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            row.contains("Ctrl-C"),
+            row.contains("Ctrl+C"),
             "legend must lead with the exit pair: {row}"
         );
         assert!(
@@ -775,9 +772,9 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(row.contains("Main › Runner[explore]"));
-        assert!(row.contains("C-x"));
+        assert!(row.contains("Ctrl+X menu"));
         assert!(!row.contains("Esc"));
-        assert!(!row.contains("C-x b"));
+        assert!(!row.contains("C-x"));
     }
 
     #[test]
@@ -822,7 +819,7 @@ mod tests {
             draw_view_header(frame, frame.area(), &ViewHeader::Session(&head), &theme);
         });
         for cell in &terminal.buffer().content {
-            assert_eq!(cell.bg, theme.body());
+            assert_eq!(cell.bg, theme.raised());
         }
         let row: String = terminal
             .buffer()

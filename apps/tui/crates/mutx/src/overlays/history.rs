@@ -150,9 +150,9 @@ pub fn draw_history_panel(
     if keymap_open {
         let hints: [FooterHint; 4] = [
             FooterHint::navigation(keyvocab::ARROWS_UD, "next entry"),
-            FooterHint::primary(keyvocab::ENTER, "insert"),
-            FooterHint::secondary(keyvocab::TAB, "preview"),
-            FooterHint::always(keyvocab::ESC, "close"),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, "insert"),
+            FooterHint::key_secondary(crate::keymap::Key::TAB, "preview"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "close"),
         ];
         let body = keymap_body_lines(&hints, &[], theme);
         // Selectable document: the keymap sub-page registers as MODAL_DOC
@@ -235,9 +235,9 @@ fn draw_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
     let hints: [FooterHint; 5] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "insert"),
-        FooterHint::always(keyvocab::CTRL_X, "clear"),
-        FooterHint::always(keyvocab::ESC, "close"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "insert"),
+        FooterHint::key_always(crate::keymap::Key::CTRL_X, "clear"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     render_modal_footer_with_more(frame, rect, &hints, &[], theme);
 }

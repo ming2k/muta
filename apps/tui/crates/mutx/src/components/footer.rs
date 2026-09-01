@@ -49,6 +49,32 @@ pub(crate) struct FooterHint {
 }
 
 impl FooterHint {
+    pub(crate) const fn key_always(key: crate::keymap::Key, label: &'static str) -> Self {
+        Self::always(key.display(), label)
+    }
+
+    pub(crate) const fn key_primary(key: crate::keymap::Key, label: &'static str) -> Self {
+        Self::primary(key.display(), label)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn key_navigation(key: crate::keymap::Key, label: &'static str) -> Self {
+        Self::navigation(key.display(), label)
+    }
+
+    pub(crate) const fn key_secondary(key: crate::keymap::Key, label: &'static str) -> Self {
+        Self::secondary(key.display(), label)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn key_with_band(
+        key: crate::keymap::Key,
+        label: &'static str,
+        band: u8,
+    ) -> FooterHintWithBand {
+        Self::with_band(key.display(), label, band)
+    }
+
     pub(crate) const fn always(key: &'static str, label: &'static str) -> Self {
         Self {
             key,
@@ -218,7 +244,7 @@ pub(crate) fn keymap_body_lines<'a>(
 pub(crate) fn keymap_page_footer_hints() -> [FooterHint; 2] {
     [
         FooterHint::navigation(super::super::keymap::keyvocab::ARROWS_UD, "scroll"),
-        FooterHint::always(super::super::keymap::keyvocab::ESC, "back"),
+        FooterHint::key_always(super::super::keymap::Key::ESC, "back"),
     ]
 }
 

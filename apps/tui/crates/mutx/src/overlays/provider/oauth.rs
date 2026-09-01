@@ -9,7 +9,7 @@ use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
     ContentModalSpec, FooterHint, content_modal_area, content_modal_probe, hierarchical_breadcrumb,
-    keyvocab, modal_chrome_rows, modal_frame, modal_header_parts, render_modal_footer,
+    modal_chrome_rows, modal_frame, modal_header_parts, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -132,7 +132,7 @@ pub fn draw_oauth_pending(
                 hints.push(FooterHint::secondary("c", "copy code"));
             }
         }
-        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
+        hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
     area

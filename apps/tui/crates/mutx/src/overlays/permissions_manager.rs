@@ -87,13 +87,13 @@ pub fn draw_permissions_manager(
     // ── Footer ──
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if rules.is_empty() {
-            &[FooterHint::always(keyvocab::ESC, "close")]
+            &[FooterHint::key_always(crate::keymap::Key::ESC, "close")]
         } else {
             &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary(keyvocab::SPACE, "revoke"),
                 FooterHint::secondary("c", "clear all"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ]
         };
         render_modal_footer(frame, fo, hints, theme);

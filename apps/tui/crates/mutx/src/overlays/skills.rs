@@ -146,12 +146,12 @@ pub fn draw_skills_modal(
     // ── Footer ──
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if skills.is_empty() {
-            &[FooterHint::always(keyvocab::ESC, "close")]
+            &[FooterHint::key_always(crate::keymap::Key::ESC, "close")]
         } else {
             &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
-                FooterHint::primary(keyvocab::ENTER, "detail"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_primary(crate::keymap::Key::ENTER, "detail"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ]
         };
         render_modal_footer(frame, fo, hints, theme);

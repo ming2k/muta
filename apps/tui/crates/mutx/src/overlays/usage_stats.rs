@@ -61,7 +61,7 @@ pub fn draw_usage_stats_modal(
                 true,
                 theme.muted(),
             )],
-            vec![FooterHint::always(keyvocab::ESC, "close")],
+            vec![FooterHint::key_always(crate::keymap::Key::ESC, "close")],
         )
     } else {
         (

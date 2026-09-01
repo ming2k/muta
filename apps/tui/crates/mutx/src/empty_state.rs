@@ -83,15 +83,23 @@ pub(crate) fn carousel_pages() -> Vec<CarouselPage> {
         },
         CarouselPage {
             lead: "All shortcuts live behind ",
-            tokens: vec![Tok::Key("F1"), Tok::Text(" or "), Tok::Key("?")],
+            tokens: vec![
+                Tok::Key(crate::keymap::Key::F1.display()),
+                Tok::Text(" or "),
+                Tok::Key("?"),
+            ],
         },
         CarouselPage {
             lead: "Recall what you typed with ",
-            tokens: vec![Tok::Key("Ctrl-R")],
+            tokens: vec![Tok::Key(crate::keymap::Key::CTRL_R.display())],
         },
         CarouselPage {
             lead: "Switch models with ",
-            tokens: vec![Tok::Key("Ctrl-M"), Tok::Text(" or "), Tok::Key("/models")],
+            tokens: vec![
+                Tok::Key(crate::keymap::Key::CTRL_M.display()),
+                Tok::Text(" or "),
+                Tok::Key("/models"),
+            ],
         },
         CarouselPage {
             lead: "Mention files with ",

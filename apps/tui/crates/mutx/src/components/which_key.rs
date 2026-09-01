@@ -8,7 +8,43 @@ use mutx_engine::{Block as RtBlock, Borders, Clear, Frame, Line, Paragraph, Rect
 
 use super::super::Theme;
 use super::super::app::LeaderChord;
+use super::super::keymap::Key;
 use super::keycap::keycap_span;
+
+/// A single entry in the which-key chord overlay.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WhichKeyItem {
+    pub key: &'static str,
+    pub desc: &'static str,
+    pub is_primary: bool,
+}
+
+impl WhichKeyItem {
+    pub const fn primary(key: &'static str, desc: &'static str) -> Self {
+        Self {
+            key,
+            desc,
+            is_primary: true,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub const fn secondary(key: &'static str, desc: &'static str) -> Self {
+        Self {
+            key,
+            desc,
+            is_primary: false,
+        }
+    }
+
+    pub const fn from_key(key: Key, desc: &'static str, is_primary: bool) -> Self {
+        Self {
+            key: key.display(),
+            desc,
+            is_primary,
+        }
+    }
+}
 
 /// Render the floating leader chord guide if a chord is active.
 pub(crate) fn draw_which_key_overlay(
@@ -21,26 +57,26 @@ pub(crate) fn draw_which_key_overlay(
         return;
     }
 
-    let (title, items): (&'static str, Vec<(&'static str, &'static str, bool)>) = match chord {
+    let (title, items): (&'static str, Vec<WhichKeyItem>) = match chord {
         LeaderChord::CtrlX => (
-            "C-x (View / Window)",
+            "Ctrl+X (View / Window)",
             vec![
-                ("b", "switch view / buffer", true),
-                ("k", "close current view", true),
-                ("o", "other pane / focus", true),
-                ("C-c", "quit mutx", true),
-                ("C-g", "cancel", false),
+                WhichKeyItem::primary("b", "switch view / buffer"),
+                WhichKeyItem::primary("k", "close current view"),
+                WhichKeyItem::primary("o", "other pane / focus"),
+                WhichKeyItem::from_key(Key::CTRL_C, "quit mutx", true),
+                WhichKeyItem::from_key(Key::CTRL_G, "cancel", false),
             ],
         ),
         LeaderChord::CtrlC => (
-            "C-c (Agent / Mode)",
+            "Ctrl+C (Agent / Mode)",
             vec![
-                ("c", "interrupt round", true),
-                ("p", "permissions modal", true),
-                ("t", "todos task list", true),
-                ("m", "models picker", true),
-                ("d", "performance report", true),
-                ("C-g", "cancel", false),
+                WhichKeyItem::primary("c", "interrupt round"),
+                WhichKeyItem::primary("p", "permissions modal"),
+                WhichKeyItem::primary("t", "todos task list"),
+                WhichKeyItem::primary("m", "models picker"),
+                WhichKeyItem::primary("d", "performance report"),
+                WhichKeyItem::from_key(Key::CTRL_G, "cancel", false),
             ],
         ),
         LeaderChord::None => return,
@@ -83,15 +119,15 @@ pub(crate) fn draw_which_key_overlay(
                 .add_modifier(mutx_engine::Modifier::BOLD),
         ),
     ]));
-    for (key, desc, is_primary) in items {
-        let key_span = keycap_span(theme, key);
-        let pad = match key.len() {
+    for item in items {
+        let key_span = keycap_span(theme, item.key);
+        let pad = match item.key.len() {
             1 => "   ",
             2 => "  ",
             3 => " ",
             _ => " ",
         };
-        let desc_style = if is_primary {
+        let desc_style = if item.is_primary {
             Style::default().fg(theme.fg())
         } else {
             Style::default().fg(theme.dim())
@@ -100,7 +136,7 @@ pub(crate) fn draw_which_key_overlay(
             Span::raw(" "),
             key_span,
             Span::raw(pad),
-            Span::styled(desc, desc_style),
+            Span::styled(item.desc, desc_style),
         ]));
     }
     lines.push(Line::default()); // Bottom empty line
@@ -126,7 +162,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(content.contains("C-x (View / Window)"));
+        assert!(content.contains("Ctrl+X (View / Window)"));
         assert!(content.contains("switch view"));
         assert!(content.contains("cancel"));
 
@@ -151,7 +187,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(content.contains("C-c (Agent / Mode)"));
+        assert!(content.contains("Ctrl+C (Agent / Mode)"));
         assert!(content.contains("interrupt round"));
         assert!(content.contains("permissions"));
     }
@@ -169,7 +205,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(!content.contains("C-x"));
-        assert!(!content.contains("C-c"));
+        assert!(!content.contains("Ctrl+X"));
+        assert!(!content.contains("Ctrl+C"));
     }
 }

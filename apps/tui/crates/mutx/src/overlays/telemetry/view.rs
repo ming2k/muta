@@ -68,7 +68,7 @@ pub fn draw_telemetry_modal(
             render_modal_footer(
                 frame,
                 footer_area,
-                &[FooterHint::always(keyvocab::ESC, "close")],
+                &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
                 theme,
             );
         }
@@ -110,7 +110,7 @@ pub fn draw_telemetry_modal(
         );
         let footer = [
             FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
-            FooterHint::always(keyvocab::ESC, "turns"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "turns"),
         ];
 
         let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
@@ -133,8 +133,8 @@ pub fn draw_telemetry_modal(
             build_turns_table(&rounds, selected, turn_cursor, body_width, theme);
         let footer = [
             FooterHint::always(keyvocab::ARROWS_UD, "select"),
-            FooterHint::always(keyvocab::ENTER, "inspect"),
-            FooterHint::always(keyvocab::ESC, "rounds"),
+            FooterHint::key_always(crate::keymap::Key::ENTER, "inspect"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "rounds"),
         ];
 
         let desired = (rows.len() + 1) as u16 + modal_chrome_rows(geometry.modal_spec());
@@ -189,10 +189,10 @@ pub fn draw_telemetry_modal(
                 let body_lines: Vec<Line<'static>> =
                     tab_strip.into_iter().chain(overview).collect();
                 let footer = [
-                    FooterHint::always(keyvocab::TAB, "2 Activity"),
+                    FooterHint::key_always(crate::keymap::Key::TAB, "2 Activity"),
                     FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
-                    FooterHint::always(keyvocab::ENTER, "activity"),
-                    FooterHint::always(keyvocab::ESC, "close"),
+                    FooterHint::key_always(crate::keymap::Key::ENTER, "activity"),
+                    FooterHint::key_always(crate::keymap::Key::ESC, "close"),
                 ];
 
                 let desired = body_lines.len() as u16 + modal_chrome_rows(geometry.modal_spec());
@@ -218,10 +218,10 @@ pub fn draw_telemetry_modal(
                 let (table_header, rows, follow) =
                     build_rounds_table(&rounds, selected, body_width, theme);
                 let footer = [
-                    FooterHint::always(keyvocab::TAB, "1 Overview"),
+                    FooterHint::key_always(crate::keymap::Key::TAB, "1 Overview"),
                     FooterHint::always(keyvocab::ARROWS_UD, "select"),
-                    FooterHint::always(keyvocab::ENTER, "turns"),
-                    FooterHint::always(keyvocab::ESC, "close"),
+                    FooterHint::key_always(crate::keymap::Key::ENTER, "turns"),
+                    FooterHint::key_always(crate::keymap::Key::ESC, "close"),
                 ];
 
                 let desired = (rows.len() + 3) as u16 + modal_chrome_rows(geometry.modal_spec());

@@ -209,10 +209,10 @@ pub fn draw_tree_modal(
             has_items: has_rows,
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-                FooterHint::primary(keyvocab::ENTER, "checkout branch"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_primary(crate::keymap::Key::ENTER, "checkout branch"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ],
-            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
+            empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
             extra_footer_hints: &[],
             keymap_open: false,
             select_doc: None,

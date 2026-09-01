@@ -824,23 +824,23 @@ fn footer_hints(focus: DashboardFocus) -> Vec<FooterHint> {
     match focus {
         DashboardFocus::List => vec![
             FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-            FooterHint::always(keyvocab::TAB, "switch pane"),
-            FooterHint::primary(keyvocab::ENTER, "preview"),
+            FooterHint::key_always(crate::keymap::Key::TAB, "switch pane"),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, "preview"),
             FooterHint::secondary("a", "attach"),
             FooterHint::secondary("p", "prompt"),
             FooterHint::secondary("n", "new session"),
             FooterHint::secondary("i", "interrupt"),
             FooterHint::secondary("k", "kill"),
             FooterHint::secondary("s", "suspend"),
-            FooterHint::secondary("Esc", "close"),
+            FooterHint::key_secondary(crate::keymap::Key::ESC, "close"),
         ],
         DashboardFocus::Detail => vec![
             FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
-            FooterHint::always(keyvocab::TAB, "switch pane"),
+            FooterHint::key_always(crate::keymap::Key::TAB, "switch pane"),
             FooterHint::secondary("n", "new session"),
             FooterHint::secondary("p", "prompt"),
             FooterHint::secondary("a", "attach"),
-            FooterHint::secondary("Esc", "close"),
+            FooterHint::key_secondary(crate::keymap::Key::ESC, "close"),
         ],
     }
 }

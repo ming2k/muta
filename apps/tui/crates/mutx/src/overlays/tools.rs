@@ -143,9 +143,9 @@ pub fn draw_tools_modal(
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary(keyvocab::SPACE, "toggle"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ],
-            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
+            empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
             extra_footer_hints: &[],
             keymap_open: false,
             select_doc: None,

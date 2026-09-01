@@ -70,8 +70,8 @@ pub fn draw_sessions_modal(
     let close_label = if startup_picker { "quit" } else { "close" };
     let list_footer_hints: [FooterHint; 3] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "open"),
-        FooterHint::always(keyvocab::ESC, close_label),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, "open"),
+        FooterHint::key_always(crate::keymap::Key::ESC, close_label),
     ];
     let list_extra: [FooterHintWithBand; 3] = [
         FooterHint::with_band("N", "new", 40),
@@ -111,7 +111,8 @@ pub fn draw_sessions_modal(
     if session_info_detail {
         let header = breadcrumb_parts("Sessions", "Info");
         modal_header_parts(frame, f.header, &header, theme);
-        let detail_footer: [FooterHint; 1] = [FooterHint::always(keyvocab::ESC, "list")];
+        let detail_footer: [FooterHint; 1] =
+            [FooterHint::key_always(crate::keymap::Key::ESC, "list")];
         let body = match session_detail {
             None => {
                 const SPINNER_FRAMES: [&str; 10] =

@@ -236,7 +236,7 @@ pub fn draw_activity_modal(
             footer,
             &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ],
             theme,
         );

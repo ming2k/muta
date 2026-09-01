@@ -139,8 +139,8 @@ pub fn draw_help_modal(
             frame,
             footer,
             &[
-                FooterHint::navigation("↑↓", "scroll"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::navigation(crate::keymap::keyvocab::ARROWS_UD, "scroll"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
             ],
             theme,
         );

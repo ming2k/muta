@@ -126,12 +126,15 @@ pub fn draw_queue_modal(
             has_items,
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
-                FooterHint::primary(keyvocab::ENTER, "edit"),
-                FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::key_primary(crate::keymap::Key::ENTER, "edit"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
                 FooterHint::secondary("J/K", "reorder"),
-                FooterHint::secondary(keyvocab::CTRL_P, if blocked { "resume" } else { "block" }),
+                FooterHint::key_secondary(
+                    crate::keymap::Key::CTRL_P,
+                    if blocked { "resume" } else { "block" },
+                ),
             ],
-            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
+            empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
             // Destructive delete sits at band 70 (outlives secondaries, never
             // the always-keep close) — the same convention as Connections /
             // Sessions.

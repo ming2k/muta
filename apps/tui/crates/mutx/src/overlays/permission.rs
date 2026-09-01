@@ -268,7 +268,7 @@ pub fn draw_question_modal(
         let mut hints = vec![
             FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
             FooterHint::navigation("wheel/Pg", "scroll"),
-            FooterHint::primary(keyvocab::ENTER, enter_label),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, enter_label),
         ];
         if current_question > 0 {
             hints.push(FooterHint::secondary(keyvocab::SHIFT_TAB, "back"));
@@ -277,7 +277,7 @@ pub fn draw_question_modal(
             hints.push(FooterHint::secondary(keyvocab::SPACE, "select"));
         }
         hints.push(FooterHint::secondary("1-9", "jump"));
-        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
+        hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
     area
@@ -585,21 +585,21 @@ pub fn draw_permission_sheet(
     let hints: &[FooterHint] = if confirm_always {
         &[
             FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
-            FooterHint::primary(keyvocab::ENTER, "confirm"),
-            FooterHint::always(keyvocab::ESC, "back"),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, "confirm"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "back"),
         ]
     } else if max_scroll > 0 {
         &[
             FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
             FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
-            FooterHint::primary(keyvocab::ENTER, "confirm"),
-            FooterHint::always(keyvocab::ESC, "reject"),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, "confirm"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "reject"),
         ]
     } else {
         &[
             FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
-            FooterHint::primary(keyvocab::ENTER, "confirm"),
-            FooterHint::always(keyvocab::ESC, "reject"),
+            FooterHint::key_primary(crate::keymap::Key::ENTER, "confirm"),
+            FooterHint::key_always(crate::keymap::Key::ESC, "reject"),
         ]
     };
     let footer_width = content_w as usize;

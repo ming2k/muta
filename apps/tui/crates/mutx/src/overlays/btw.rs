@@ -137,11 +137,11 @@ pub fn draw_btw_modal(
             has_items,
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
-                FooterHint::primary(keyvocab::ENTER, "open"),
-                FooterHint::always(keyvocab::ESC, "close"),
-                FooterHint::secondary("F5", "refresh"),
+                FooterHint::key_primary(crate::keymap::Key::ENTER, "open"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
+                FooterHint::key_secondary(crate::keymap::Key::F5, "refresh"),
             ],
-            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
+            empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
             // Destructive close sits at band 70 (outlives secondaries, never
             // the always-keep close) — the same convention as Connections /
             // Sessions / Queue deletes.

@@ -19,11 +19,11 @@ Every view shares this chrome slot:
   (last 4 chars, dimmed), and the tilde-shortened workspace path on the
   left; the delegated-autonomous flag (`DELEGATED`) on the right. Row 2
   appears when view stack depth > 1 (rendering the breadcrumb trail `Main › Runner[...]`
-  plus `[C-x b: view  C-g: back]`), or while asides are live (the aside chip
+  plus `Ctrl+X menu`), or while asides are live (the aside chip
   `btw 2 · 1 running` and `F5 asides`). No interrupt pair — the activity bar's
   `Esc Esc interrupt` hint is the authoritative copy.
 - **`/btw`:** `/btw` identity, "Side conversation", parent status. Row 2
-  shows the view breadcrumbs (`Main › Aside`), `Ctrl-C back`, `F5 asides`, and
+  shows the view breadcrumbs (`Main › Aside`), `Ctrl+C back`, `F5 asides`, and
   `Esc interrupt aside` (while the aside's round runs).
 - **Envoy:** `Envoy` identity, the task label, `N of M` position. Row 2 is omitted
   when single-depth (its permanent footer already carries the legend); when nested,
@@ -49,7 +49,7 @@ Nested view stack (row 2 expanded with breadcrumbs):
 
 ```text
  SESSION b3c4 ~/projects/xx                                    DELEGATED
-   Main › Runner[explore: repo scan]                C-x b view  C-g back
+   Main › Runner[explore: repo scan]                         Ctrl+X menu
 ```
 
 On narrow terminals the workspace path truncates from the left (keeping its
@@ -66,7 +66,7 @@ The row never overflows.
 | Session-id tail | Dimmed (`text_dim`), last 4 chars of the persistent id |
 | Workspace | `text_brand`, tilde-shortened |
 | `DELEGATED` flag | Warning tone + BOLD, right-aligned (before the trailing pad), only while delegated autonomous mode is on |
-| Breadcrumbs | `text_primary` for breadcrumb trail, `text_brand` + bold for keycaps (`C-x b`, `C-g`), `text_muted` for labels |
+| Breadcrumbs | `text_primary` for breadcrumb trail, `text_brand` + bold for keycaps (`Ctrl+X`), `text_muted` for labels (`menu`) |
 | Background | `body` |
 
 ## Source
