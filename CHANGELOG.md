@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.25] - 2026-09-01
+
+### Added
+
+- Added ADR-0162 for zero-latency two-tier composer completion and flicker-free rendering (`docs/adr`).
+- Exposed `complete_slash_items` pure domain completion function in `muta-runtime` (`muta-runtime`).
+
+### Changed
+
+- Implemented Two-Tier completion in Mutx: Tier 1 synchronous 0ms slash/harness command matching and Tier 2 SWR async path completion (`mutx`).
+- Prevented transient state collapse in `compose_target` and eliminated bottom hint row flickering during command typing (`mutx`).
+- Retained in-flight completion cache during path mention typing, eliminating blank frames (`mutx`).
+
 ## [0.37.24] - 2026-09-01
+
 
 ### Added
 
@@ -5795,7 +5809,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.24...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.25...HEAD
+[0.37.25]: https://github.com/ming2k/muta/compare/v0.37.24...v0.37.25
 [0.37.24]: https://github.com/ming2k/muta/compare/v0.37.23...v0.37.24
 [0.37.23]: https://github.com/ming2k/muta/compare/v0.37.22...v0.37.23
 [0.37.22]: https://github.com/ming2k/muta/compare/v0.37.21...v0.37.22
