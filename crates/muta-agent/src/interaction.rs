@@ -34,7 +34,7 @@ impl Default for InteractionConfig {
 pub struct InteractionController {
     /// Baseline posture (Interactive vs Autonomous vs AutoReject).
     posture: Arc<AtomicU8>,
-    /// YOLO mode flag (when true, auto-approves all tool permissions).
+    /// Delegated mode flag (when true, auto-approves all tool permissions).
     delegated: Arc<AtomicBool>,
     /// Model-provided stdin support for shell tools.
     allow_model_stdin: Arc<AtomicBool>,

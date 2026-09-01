@@ -197,6 +197,11 @@ impl SessionRegistry {
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
         }
     }
+    /// Look up an active hosted session by its ID.
+    pub async fn get(&self, session_id: &str) -> Option<Arc<HostedSession>> {
+        self.sessions.lock().await.get(session_id).cloned()
+    }
+
     /// Record the host's provenance (project root + start time) so monitor
     /// snapshots can identify the host. Called once by `host::run` before
     /// the listener starts accepting monitor clients.

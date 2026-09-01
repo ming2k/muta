@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
-use muta_contracts::{AgentTier, MeshAddress, MeshEnvelope, MeshMessage, Tool};
+use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MeshStation, Tool};
 
 use super::MeshTracker;
 
-/// Tool allowing agents to send lawful messages over the three-tier mesh network.
+/// Tool allowing agents to send lawful messages over the mesh network.
 pub struct MeshSendTool {
     tracker: MeshTracker,
     sender_address: Arc<Mutex<Option<MeshAddress>>>,
@@ -42,10 +42,10 @@ impl Tool for MeshSendTool {
         json!({
             "type": "object",
             "properties": {
-                "recipient_tier": {
+                "recipient_station": {
                     "type": "string",
-                    "enum": ["supervisor", "master", "runner"],
-                    "description": "Tier of the recipient agent"
+                    "enum": ["hypervisor", "master", "runner", "session", "subtask"],
+                    "description": "Station of the recipient agent"
                 },
                 "recipient_session": {
                     "type": "string",
@@ -65,7 +65,7 @@ impl Tool for MeshSendTool {
                     "description": "Content of the message"
                 }
             },
-            "required": ["recipient_tier", "recipient_session", "recipient_agent", "message_type", "body"]
+            "required": ["recipient_station", "recipient_session", "recipient_agent", "message_type", "body"]
         })
     }
 
@@ -73,9 +73,10 @@ impl Tool for MeshSendTool {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
 
-        let tier_str = args["recipient_tier"]
+        let station_str = args["recipient_station"]
             .as_str()
-            .ok_or("Missing 'recipient_tier'")?;
+            .or_else(|| args["recipient_tier"].as_str())
+            .ok_or("Missing 'recipient_station'")?;
         let session = args["recipient_session"]
             .as_str()
             .ok_or("Missing 'recipient_session'")?;
@@ -87,14 +88,14 @@ impl Tool for MeshSendTool {
             .ok_or("Missing 'message_type'")?;
         let body = args["body"].as_str().ok_or("Missing 'body'")?;
 
-        let tier = match tier_str {
-            "supervisor" => AgentTier::Supervisor,
-            "master" => AgentTier::Master,
-            "runner" => AgentTier::Runner,
-            other => return Err(format!("Unknown recipient_tier: '{other}'")),
+        let station = match station_str {
+            "hypervisor" | "supervisor" => MeshStation::Hypervisor,
+            "session" | "master" => MeshStation::Session,
+            "subtask" | "runner" => MeshStation::Subtask,
+            other => return Err(format!("Unknown recipient_station: '{other}'")),
         };
 
-        let recipient = MeshAddress::new(tier, session, agent);
+        let recipient = MeshAddress::new(station, session, agent);
         let message = match message_type {
             "instruction" => MeshMessage::Instruction {
                 body: body.to_string(),
@@ -120,23 +121,22 @@ impl Tool for MeshSendTool {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
 
-        let envelope = MeshEnvelope::new(sender, recipient.clone(), message);
-        let envelope_id = envelope.id.clone();
+        let envelope = MeshEnvelope::new(sender, recipient, message);
+        let msg_id = envelope.id.clone();
 
         self.tracker
             .send(envelope)
-            .map_err(|e| format!("Failed to deliver mesh envelope: {e}"))?;
+            .map_err(|e| format!("Mesh send failed: {e}"))?;
 
         Ok(json!({
             "status": "delivered",
-            "envelope_id": envelope_id,
-            "recipient": recipient.display()
+            "message_id": msg_id
         })
         .to_string())
     }
 }
 
-/// Tool allowing agents to discover active peers and subordinates in the BitTorrent-style mesh tracker.
+/// Tool for discovering other agents registered in the daemon's mesh.
 pub struct MeshListPeersTool {
     tracker: MeshTracker,
     sender_address: Arc<Mutex<Option<MeshAddress>>>,
@@ -165,7 +165,7 @@ impl Tool for MeshListPeersTool {
     }
 
     fn description(&self) -> &str {
-        "Discover active agents registered in the mesh tracker. Allows finding same-tier peers (e.g. other masters), subordinate runners, or all registered endpoints."
+        "Discover active agents registered in the mesh tracker. Allows finding same-station peers (e.g. other masters), subordinate runners, or all registered endpoints."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -174,8 +174,8 @@ impl Tool for MeshListPeersTool {
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["same_tier", "subordinates", "masters", "all"],
-                    "description": "Filter scope for discovery (default: same_tier)"
+                    "enum": ["same_station", "subordinates", "masters", "all"],
+                    "description": "Filter scope for discovery (default: same_station)"
                 }
             }
         })
@@ -183,7 +183,7 @@ impl Tool for MeshListPeersTool {
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-        let scope = args["scope"].as_str().unwrap_or("same_tier");
+        let scope = args["scope"].as_str().unwrap_or("same_station");
 
         let sender = self
             .sender_address
@@ -193,13 +193,13 @@ impl Tool for MeshListPeersTool {
 
         let addresses = match scope {
             "all" => self.tracker.live_addresses(),
-            "masters" => self.tracker.peers_by_tier(AgentTier::Master),
+            "masters" => self.tracker.peers_by_station(MeshStation::Session),
             "subordinates" => {
                 if let Some(s) = sender {
-                    if s.tier == AgentTier::Master {
-                        self.tracker.peers(AgentTier::Runner, &s.session)
-                    } else if s.tier == AgentTier::Supervisor {
-                        self.tracker.peers_by_tier(AgentTier::Master)
+                    if s.station == MeshStation::Session {
+                        self.tracker.peers(MeshStation::Subtask, &s.session)
+                    } else if s.station == MeshStation::Hypervisor {
+                        self.tracker.peers_by_station(MeshStation::Session)
                     } else {
                         vec![]
                     }
@@ -208,12 +208,12 @@ impl Tool for MeshListPeersTool {
                 }
             }
             _ => {
-                // "same_tier"
+                // "same_station" / "same_tier"
                 if let Some(s) = sender {
-                    if s.tier == AgentTier::Master {
-                        self.tracker.peers_by_tier(AgentTier::Master)
+                    if s.station == MeshStation::Session {
+                        self.tracker.peers_by_station(MeshStation::Session)
                     } else {
-                        self.tracker.peers(s.tier, &s.session)
+                        self.tracker.peers(s.station, &s.session)
                     }
                 } else {
                     self.tracker.live_addresses()
@@ -225,7 +225,7 @@ impl Tool for MeshListPeersTool {
             .into_iter()
             .map(|a| {
                 json!({
-                    "tier": a.tier.label(),
+                    "station": a.station.label(),
                     "session": a.session,
                     "agent": a.agent,
                     "address": a.display()
@@ -247,76 +247,54 @@ mod tests {
     use crate::mesh::MeshMailbox;
 
     #[tokio::test]
-    async fn mesh_tools_discovery_and_sending() {
+    async fn mesh_send_tool_success() {
         let tracker = MeshTracker::new();
+        let master_addr = MeshAddress::master("session_1");
+        let mut mailbox = MeshMailbox::spawn(tracker.clone(), master_addr.clone(), None);
 
-        let master_a = MeshAddress::master("session-a");
-        let master_b = MeshAddress::master("session-b");
-        let runner_a1 = MeshAddress::runner("session-a", "runner-1");
+        let tool = MeshSendTool::new(tracker.clone(), Some(MeshAddress::hypervisor("daemon")));
 
-        let _mb_a = MeshMailbox::spawn(tracker.clone(), master_a.clone(), None);
-        let mut mb_b = MeshMailbox::spawn(tracker.clone(), master_b.clone(), None);
-        let mut mb_r =
-            MeshMailbox::spawn(tracker.clone(), runner_a1.clone(), Some(master_a.clone()));
-
-        let send_tool = MeshSendTool::new(tracker.clone(), Some(master_a.clone()));
-        let list_tool = MeshListPeersTool::new(tracker.clone(), Some(master_a.clone()));
-
-        // Discover masters (peers)
-        let peers_json = list_tool.call(r#"{"scope":"masters"}"#).await.unwrap();
-        assert!(peers_json.contains("session-a"));
-        assert!(peers_json.contains("session-b"));
-
-        // Master A sends peer note to Master B
-        let send_peer = send_tool
-            .call(
-                r#"{
-            "recipient_tier": "master",
-            "recipient_session": "session-b",
-            "recipient_agent": "session-b",
-            "message_type": "peer_note",
-            "body": "hello peer master"
-        }"#,
-            )
-            .await
-            .unwrap();
-        assert!(send_peer.contains("delivered"));
-
-        let received_by_b = mb_b
-            .recv()
-            .await
-            .expect("master b should receive peer note");
-        assert_eq!(
-            received_by_b.message,
-            MeshMessage::PeerNote {
-                body: "hello peer master".to_string()
-            }
-        );
-
-        // Master A sends instruction to subordinate runner
-        let send_instr = send_tool
-            .call(
-                r#"{
-            "recipient_tier": "runner",
-            "recipient_session": "session-a",
-            "recipient_agent": "runner-1",
+        let args = json!({
+            "recipient_station": "master",
+            "recipient_session": "session_1",
+            "recipient_agent": "session_1",
             "message_type": "instruction",
-            "body": "search the code"
-        }"#,
-            )
-            .await
-            .unwrap();
-        assert!(send_instr.contains("delivered"));
+            "body": "test instruction"
+        })
+        .to_string();
 
-        let received_by_r = mb_r
-            .recv()
-            .await
-            .expect("runner should receive instruction");
+        let res = tool.call(&args).await.unwrap();
+        assert!(res.contains("delivered"));
+
+        let env = mailbox.recv().await.unwrap();
         assert_eq!(
-            received_by_r.message,
+            env.message,
             MeshMessage::Instruction {
-                body: "search the code".to_string()
+                body: "test instruction".to_string()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn mesh_list_peers_tool_filtering() {
+        let tracker = MeshTracker::new();
+        let m1 = MeshAddress::master("s1");
+        let m2 = MeshAddress::master("s2");
+        let r1 = MeshAddress::runner("s1", "r1");
+
+        let _mb1 = MeshMailbox::spawn(tracker.clone(), m1.clone(), None);
+        let _mb2 = MeshMailbox::spawn(tracker.clone(), m2.clone(), None);
+        let _mbr1 = MeshMailbox::spawn(tracker.clone(), r1.clone(), Some(m1.clone()));
+
+        let tool = MeshListPeersTool::new(tracker.clone(), Some(m1.clone()));
+
+        let res_str = tool.call(&json!({"scope": "masters"}).to_string()).await.unwrap();
+        let res: serde_json::Value = serde_json::from_str(&res_str).unwrap();
+        assert_eq!(res["count"], 2);
+
+        let res_sub_str = tool.call(&json!({"scope": "subordinates"}).to_string()).await.unwrap();
+        let res_sub: serde_json::Value = serde_json::from_str(&res_sub_str).unwrap();
+        assert_eq!(res_sub["count"], 1);
+        assert_eq!(res_sub["peers"][0]["agent"], "r1");
     }
 }

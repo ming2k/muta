@@ -1,24 +1,10 @@
-//! Session-level AI digest runner (ADR-0022 evolution): the LLM-backed side
-//! of the Chronicler's [`SessionDigestTask`].
+//! Session-level AI digest runner (ADR-0022 / ADR-0167): the LLM-backed side
+//! of [`SessionDigestTask`].
 //!
 //! The digest is the session's *working-memory projection* — title, user
 //! intent, and a running history checklist — structured so a resumed (or
 //! merely revisited) session can be understood at a glance; the session
-//! picker's detail view renders it. Like the retired title-only runner, the
-//! domain vocabulary lives in `muta-contracts` ([`SessionDigest`],
-//! [`clean_title`]); the provider call lives here next to the `Agent`. It is
-//! a bounded, zero-tool, single-shot Steward consult — never a full ReAct
-//! turn.
-//!
-//! ## Lifecycle
-//!
-//! [`Agent::generate_digest`] returns a cleaned digest or `None` (on
-//! provider error, timeout, or an unparseable answer). Orchestration decides
-//! *when*: the first admitted user round generates immediately — the opening
-//! request alone names the session's title and intent — and later rounds
-//! refresh the digest once the transcript has grown past its stored char
-//! anchor, so a resumed session's digest stays representative without
-//! consulting the Chronicler on every message.
+//! picker's detail view renders it.
 //!
 //! [`SessionDigest`]: muta_contracts::SessionDigest
 //! [`SessionDigestTask`]: muta_contracts::SessionDigestTask
@@ -66,7 +52,7 @@ impl Agent {
             None => None,
         };
         let digest = self
-            .steward()
+            .cognitive()
             .generate_digest(SessionDigestInput {
                 excerpt,
                 previous: previous_json,
@@ -181,13 +167,14 @@ fn truncate(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use muta_contracts::{ModelRequest, SessionDigestTask, StewardTask};
+    use muta_contracts::{CognitiveTask, ModelRequest, SessionDigestTask};
     use std::sync::{Arc, Mutex};
 
     /// A provider double that returns a canned assistant message. Captures the
     /// last request so tests can assert the digest prompt shape and tool scope.
     struct CannedProvider {
         reply: String,
+        last_instructions: Mutex<muta_contracts::InstructionBundle>,
         last_messages: Mutex<Vec<Message>>,
         last_tool_specs: Mutex<Vec<muta_contracts::ToolSpec>>,
     }
@@ -198,6 +185,7 @@ mod tests {
             &self,
             request: ModelRequest,
         ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+            *self.last_instructions.lock().unwrap() = request.instructions;
             *self.last_messages.lock().unwrap() = request.messages;
             *self.last_tool_specs.lock().unwrap() = request.tool_specs;
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
@@ -220,6 +208,7 @@ mod tests {
     async fn agent_with_reply(reply: &str) -> (Agent, Arc<CannedProvider>) {
         let provider = Arc::new(CannedProvider {
             reply: reply.to_string(),
+            last_instructions: Mutex::new(muta_contracts::InstructionBundle::default()),
             last_messages: Mutex::new(Vec::new()),
             last_tool_specs: Mutex::new(Vec::new()),
         });
@@ -325,26 +314,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_digest_uses_chronicler_office_and_digest_task_prompt() {
+    async fn generate_digest_uses_digest_task_prompt() {
         let (agent, provider) = agent_with_reply(&digest_json("T", "I", &[])).await;
         agent
             .generate_digest(&transcript_of_opening("a session about rust"), None)
             .await
             .expect("digest parses");
-        let messages = provider.last_messages.lock().unwrap().clone();
-        let system = messages
-            .iter()
-            .find(|message| message.role == Role::System)
-            .expect("a system frame");
+        let instructions = provider.last_instructions.lock().unwrap().clone();
+        let system_text = instructions.render_combined();
         assert!(
-            system
-                .content
+            system_text
                 .ends_with(muta_contracts::SessionDigestTask.system_prompt()),
             "the task's system prompt frames the consult"
         );
         assert!(
-            system.content.contains("Chronicler"),
-            "the Chronicler office charter is embedded"
+            system_text.contains("session digest generator"),
+            "the session digest task prompt is embedded"
         );
         let _ = SessionDigestTask; // referenced for the import assertion
     }

@@ -1,4 +1,4 @@
-//! Request-scoped model-request assembly.
+//! Request-scoped model-request assembly (ADR-0056 / ADR-0160).
 //!
 //! The assembler is intentionally independent of [`crate::Agent`]. The agent
 //! owns when assembly occurs and supplies a plain state snapshot; this module
@@ -45,15 +45,14 @@ impl ModelRequestAssembler {
         let mut messages = window.to_vec();
         crate::agent::remove_empty_assistant_messages(&mut messages);
         messages.retain(|message| message.role != Role::System && !message.is_command_echo());
-        messages.insert(0, self.system_prompt_registry.build_message(context));
-        muta_contracts::ModelRequest::with_tools(messages, tools)
+        let instructions = self.system_prompt_registry.build_bundle(context);
+        muta_contracts::ModelRequest::with_instructions_and_tools(instructions, messages, tools)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::Role;
 
     struct TestTool;
 
@@ -86,19 +85,19 @@ mod tests {
         ];
         let context = SystemPromptContext::empty();
         let request = assembler.assemble(&window, &context, &[Arc::clone(&tool)]);
-        // Head system message stamped at position 0, transcript follows in order.
-        assert_eq!(request.messages[0].role, Role::System);
-        assert_eq!(request.messages[1].content, "hello");
-        assert_eq!(request.messages[2].content, "hi");
+        // Transcript turns are pure conversation messages.
+        assert_eq!(request.messages[0].role, Role::User);
+        assert_eq!(request.messages[0].content, "hello");
+        assert_eq!(request.messages[1].role, Role::Assistant);
+        assert_eq!(request.messages[1].content, "hi");
         // Tool spec travels with the request.
         assert_eq!(request.tool_specs.len(), 1);
         assert_eq!(request.tool_specs[0].name, "inspect");
-        // Repeat assembly of the same window yields identical bytes (the
-        // memoized prompt + projection are pure functions of the inputs).
+        // Repeat assembly of the same window yields identical bytes.
         let again = assembler.assemble(&window, &context, &[tool]);
         assert_eq!(
-            request.messages[0].content, again.messages[0].content,
-            "system prompt must be byte-stable across assemblies"
+            request.instructions, again.instructions,
+            "system prompt instructions must be byte-stable across assemblies"
         );
     }
 }

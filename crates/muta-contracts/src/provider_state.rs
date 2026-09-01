@@ -152,10 +152,17 @@ pub fn semantic_context_head<'a>(messages: impl IntoIterator<Item = &'a crate::M
 
 #[allow(clippy::expect_used)] // Tool declarations contain no fallible custom serializers.
 pub fn request_envelope_fingerprint(
+    instructions: &crate::InstructionBundle,
     messages: &[crate::Message],
     tools: &[crate::ToolSpec],
 ) -> String {
     let mut digest = Sha256::new();
+    for slice in &instructions.slices {
+        digest.update(slice.id.as_bytes());
+        digest.update([slice.tier as u8]);
+        digest.update(slice.content.as_bytes());
+        digest.update([0xff]);
+    }
     for message in messages
         .iter()
         .filter(|message| message.role == crate::Role::System)

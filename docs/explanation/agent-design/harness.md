@@ -260,7 +260,7 @@ activity is terminal, so tool side effects are never replayed.
 - Skills add on-demand model instructions.
 - MCP servers add dynamically discovered tools.
 - Built-in tools and MCP tools share the `Tool` trait and event pipeline.
-- [The Harness Steward](steward.md) provides typed, out-of-band cognitive infrastructure (loop sentinel, sanity checks, context compaction, session titling) directly to the Harness state machine.
+- [The Harness Cognitive Pipeline](steward.md) provides typed, out-of-band cognitive infrastructure (loop sentinel, context compaction, session titling, working memory digests) directly to the Harness state machine.
 - Future permissions should wrap tool execution in the shared execution path.
 - Future durable sessions should persist messages and loop checkpoints without
   changing the provider abstraction.

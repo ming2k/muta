@@ -81,9 +81,9 @@ model of one agent round.
    One event axis with capability implied by the event; the reference for
    the extension surface that adds practice (format, CI gates, context
    injection) without touching the core loop.
-12. [The Harness Steward](steward.md) — out-of-band cognitive infrastructure
-    for the Agent Harness: typed tasks (`StewardTask`) for semantic loop detection,
-    sanity checks, context compaction, and session titling. Zero-tool, fail-open.
+12. [The Harness Cognitive Pipeline](steward.md) — out-of-band cognitive infrastructure
+    for the Agent Harness: typed tasks (`CognitiveTask`) for semantic loop detection,
+    session digests, and titling. Zero-tool, fail-open.
 
 The harness's [context projection](harness.md#context-projection) section has two
 deep-dive references, read as a pair:

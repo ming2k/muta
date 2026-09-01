@@ -38,7 +38,7 @@ impl ActionDensity {
     /// long-form busy sentence plus a short char counter comfortable inside an
     /// 80-col composer and degrade before the counter would ever be dropped.
     pub(crate) fn for_width(row_width: usize) -> Self {
-        if row_width >= 44 {
+        if row_width >= 72 {
             ActionDensity::Full
         } else if row_width >= 28 {
             ActionDensity::Compact
@@ -322,31 +322,6 @@ pub(crate) fn hint_row_spans(
     spans
 }
 
-/// Build the hint row when a transcript step is focused (composer unfocused).
-pub(crate) fn step_focused_hint_spans(
-    density: ActionDensity,
-    theme: &Theme,
-    bg: Color,
-) -> Vec<Span<'static>> {
-    let key_style = keycap_style(theme).bg(bg);
-    let hint_style = theme.keycap_label_style().bg(bg);
-    let compact = density.compact();
-
-    let mut spans = vec![
-        Span::styled(keyvocab::ARROWS_UD, key_style),
-        Span::styled(" select", hint_style),
-        Span::styled("  ", hint_style),
-        Span::styled(Key::ENTER.display(), key_style),
-        Span::styled(" toggle", hint_style),
-    ];
-    if !compact {
-        spans.push(Span::styled("  ", hint_style));
-        spans.push(Span::styled(Key::ESC.display(), key_style));
-        spans.push(Span::styled(" compose", hint_style));
-    }
-    spans
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,7 +340,16 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(idle, "Enter send prompt");
+        assert_eq!(idle, "Enter send prompt  PgUp history  Alt+↑ transcript");
+
+        let idle_compact = text(&hint_row_spans(
+            false,
+            ActionDensity::Compact,
+            ComposeTarget::Prompt,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(idle_compact, "Enter send prompt");
 
         let steer = text(&hint_row_spans(
             false,

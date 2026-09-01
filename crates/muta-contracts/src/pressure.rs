@@ -803,6 +803,7 @@ impl MessageTokenWeights {
 /// cheap to recombine into a [`RequestTokenEstimate`] without re-tokenizing
 /// anything.
 pub struct LayeredRequestWeights {
+    pub instructions_tokens: usize,
     pub per_message: Vec<std::sync::Arc<i64>>,
     pub tool_schema_tokens: usize,
 }
@@ -819,9 +820,10 @@ impl LayeredRequestWeights {
             .max(0) as usize
     }
 
-    /// Total prepared-request weight including the head system message.
+    /// Total prepared-request weight including instructions and the head system message.
     pub fn prepared_tokens(&self) -> usize {
-        self.per_message.iter().map(|t| **t).sum::<i64>().max(0) as usize
+        self.instructions_tokens
+            .saturating_add(self.per_message.iter().map(|t| **t).sum::<i64>().max(0) as usize)
     }
 
     pub fn total_tokens(&self) -> usize {
@@ -837,6 +839,11 @@ pub fn layered_request_weights(
     request: &crate::ModelRequest,
     weights: &MessageTokenWeights,
 ) -> LayeredRequestWeights {
+    let instructions_tokens = if request.instructions.is_empty() {
+        0
+    } else {
+        estimate_string_tokens(&request.instructions.render_combined()).max(0) as usize
+    };
     let per_message = request
         .messages
         .iter()
@@ -851,6 +858,7 @@ pub fn layered_request_weights(
         })
         .sum::<usize>();
     LayeredRequestWeights {
+        instructions_tokens,
         per_message,
         tool_schema_tokens,
     }

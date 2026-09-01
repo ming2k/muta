@@ -877,7 +877,7 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
     let brand = Style::default().fg(theme.brand());
     let muted = Style::default().fg(theme.muted());
 
-    // ── 1. Cognitive Mission & Intent (Steward Chronicler) ────────────
+    // ── 1. Cognitive Mission & Intent ──────────────────────────────────
     if let Some(digest) = &row.digest {
         if !digest.title.is_empty() {
             lines.push(Line::from(vec![
@@ -1683,7 +1683,7 @@ mod tests {
     }
 
     #[test]
-    fn session_detail_lines_renders_steward_digest_intent_and_milestones() {
+    fn session_detail_lines_renders_cognitive_digest_intent_and_milestones() {
         let theme = Theme::default();
         let mut r = row("s-123", 1000, "/work/muta", SessionStatus::Running);
         r.digest = Some(muta_contracts::SessionDigest {

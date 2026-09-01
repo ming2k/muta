@@ -45,6 +45,9 @@ pub use error::{
 pub mod message;
 pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, ToolCall, ToolResult};
 
+pub mod instructions;
+pub use instructions::{InstructionBundle, InstructionSlice, InstructionTier};
+
 pub mod command;
 pub use command::{CommandRecord, CommandResult, CommandStatus, SearchHit};
 
@@ -90,21 +93,20 @@ pub mod mcp;
 pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
+pub mod agent_kind;
+pub mod cognitive;
 pub mod hazard;
 pub use hazard::*;
 pub mod job;
 pub mod master;
 pub mod mesh;
 pub mod runner;
-pub mod steward;
-pub mod tier;
-pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
-pub use steward::{
-    SessionDigest, SessionDigestInput, SessionDigestTask, StewardModelPreference, StewardOffice,
-    StewardTask, StreamLoopChannel, StreamLoopReviewInput, StreamLoopReviewerTask,
-    StreamLoopVerdict, steward_identity,
+pub use agent_kind::{AgentKind, MeshStation};
+pub use cognitive::{
+    CognitiveModelPreference, CognitiveTask, SessionDigest, SessionDigestInput, SessionDigestTask,
+    StreamLoopChannel, StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
 };
-pub use tier::AgentTier;
+pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
 pub mod history;
 pub mod human_request;
 pub use history::{HISTORY_CAP, HistoryEntry, merge_history};

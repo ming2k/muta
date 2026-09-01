@@ -284,7 +284,7 @@ export type CommandThemeConfig = { idle_bg: string | null, hover_bg: string | nu
 /**
  * Specialized component theme overrides container.
  */
-export type ComponentThemesConfig = { input: InputThemeConfig | null, crate: CrateThemeConfig | null, diff: DiffThemeConfig | null, command: CommandThemeConfig | null, };
+export type ComponentThemesConfig = { input: InputThemeConfig | null, crate: CrateThemeConfig | null, diff: DiffThemeConfig | null, command: CommandThemeConfig | null, keycap: KeycapThemeConfig | null, };
 
 /**
  * One completion edit produced by the daemon for the composer.
@@ -572,6 +572,24 @@ reason?: string, };
 export type InputThemeConfig = { bg_active: string | null, bg_inactive: string | null, caret: string | null, selection: string | null, placeholder: string | null, };
 
 /**
+ * A structured manifest of instruction slices assembled for a model request.
+ */
+export type InstructionBundle = { slices: Array<InstructionSlice>, };
+
+/**
+ * A self-contained rendered instruction slice with stable identity and tier classification.
+ */
+export type InstructionSlice = { id: string, tier: InstructionTier, content: string, };
+
+/**
+ * Cache tier and lifetime volatility of an instruction slice.
+ *
+ * Order determines placement priority when flattening or setting cache breakpoints:
+ * lower numerical value = more static / earlier prefix.
+ */
+export type InstructionTier = "base" | "session" | "task" | "ephemeral";
+
+/**
  * Unique identifier for a background job.
  */
 export type JobId = string;
@@ -585,6 +603,11 @@ export type JobSpec = { "kind": "process", command: string, label?: string | nul
  * Lifecycle state of a background job.
  */
 export type JobState = { "status": "queued" } | { "status": "running", started_at_ms: number, pid?: number | null, } | { "status": "succeeded", duration_ms: number, exit_code: number, } | { "status": "failed", duration_ms: number, exit_code: number, error: string, } | { "status": "killed", duration_ms: number, } | { "status": "timed_out", duration_ms: number, };
+
+/**
+ * Component-specific override for keyboard shortcut keys and affordance labels.
+ */
+export type KeycapThemeConfig = { key_fg: string | null, key_bg: string | null, label_fg: string | null, accent_fg: string | null, warn_fg: string | null, };
 
 /**
  * Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
@@ -1787,7 +1810,7 @@ export type ToolStreamFrame = { "Stdout": string } | { "Stderr": string };
  * expands to [`TrustDomain::ALL`]. Persisting an aggregate grant would create
  * a second source of truth and make a concrete domain impossible to revoke.
  */
-export type TrustDomain = "mcp" | "skills" | "hooks" | "rules" | "roots";
+export type TrustDomain = "mcp" | "skills" | "hooks" | "instructions" | "ex_workspace";
 
 /**
  * Live, compact performance update for the latest settled model turn.
@@ -2027,13 +2050,13 @@ skills: WorkspaceTrustState,
  */
 hooks: WorkspaceTrustState, 
 /**
- * Trust status for project instructions and slash commands.
+ * Trust status for project instructions (AGENTS.md).
  */
-rules: WorkspaceTrustState, 
+instructions: WorkspaceTrustState, 
 /**
- * Trust status for project-declared linked workspace roots.
+ * Trust status for project-declared external workspace roots.
  */
-roots: WorkspaceTrustState, };
+ex_workspace: WorkspaceTrustState, };
 
 /**
  * Trust state for one project-authored asset domain.

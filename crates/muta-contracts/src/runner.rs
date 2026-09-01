@@ -286,8 +286,8 @@ handful of turns, then answer.",
 
 /// The session-titling role (ADR-0022). Read-only and non-interactive, its
 /// task is pure text-in/text-out — it admits no tool loop at all. The
-/// digest runner (`Agent::generate_digest`) makes a single `provider.chat()`
-/// through the Chronicler steward and normalizes the title via
+/// digest generator makes a single `provider.chat()`
+/// through the cognitive pipeline and normalizes the title via
 /// `clean_title`. Declared as a profile (not an ad-hoc call) so the
 /// capability-axis vocabulary stays the single source of truth for what a
 /// bounded runner may do, per ADR-0011.

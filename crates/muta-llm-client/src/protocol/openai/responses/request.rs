@@ -47,6 +47,8 @@ impl std::error::Error for RequestBuildError {}
 pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
+    /// Structured instructions from the instruction manifest.
+    pub instructions: Option<&'a muta_contracts::InstructionBundle>,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     pub reasoning_effort: Option<Effort>,
@@ -78,6 +80,7 @@ pub fn body_with_capabilities(
     let BodyInput {
         model: model_id,
         stream,
+        instructions: input_instructions,
         tool_specs,
         reasoning_effort,
         delivery,
@@ -90,10 +93,12 @@ pub fn body_with_capabilities(
     // the tool-trace projection must retain without looking for local calls.
     let remote_call_ids = remote_parent_call_ids(&messages, delivery);
 
-    // Fold system messages into `instructions`, strip images on non-vision
-    // models (the Responses API rejects `input_image` on them), and project a
-    // remote continuation down to only the locally new suffix.
-    let mut instructions = String::new();
+    // Fold system instructions and legacy messages into `instructions`, strip
+    // images on non-vision models (the Responses API rejects `input_image` on them),
+    // and project a remote continuation down to only the locally new suffix.
+    let mut instructions = input_instructions
+        .map(|b| b.render_combined())
+        .unwrap_or_default();
     let mut working: Vec<Message> = Vec::with_capacity(messages.len());
     for (index, mut m) in messages.into_iter().enumerate() {
         match m.role {
@@ -397,6 +402,27 @@ mod tests {
     static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
         muta_contracts::ResolvedCachePlan::Unsupported;
 
+    fn test_body_input<'a>(
+        model: &'a str,
+        stream: bool,
+        tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
+        reasoning_effort: Option<Effort>,
+        delivery: &'a muta_contracts::RequestDelivery,
+        store: bool,
+        cache_plan: &'a muta_contracts::ResolvedCachePlan,
+    ) -> BodyInput<'a> {
+        BodyInput {
+            model,
+            stream,
+            instructions: None,
+            tool_specs,
+            reasoning_effort,
+            delivery,
+            store,
+            cache_plan,
+        }
+    }
+
     fn assistant_with_call(call: ToolCall, content: &str) -> Message {
         Message {
             tool_calls: Some(vec![call]),
@@ -411,15 +437,15 @@ mod tests {
                 Message::new(Role::System, "be concise"),
                 Message::new(Role::User, "hi"),
             ],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
         assert_eq!(body["instructions"], "be concise");
@@ -446,15 +472,15 @@ mod tests {
                 assistant_with_call(call, "running it"),
                 result,
             ],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
         let input = body["input"].as_array().unwrap();
@@ -487,15 +513,15 @@ mod tests {
                 assistant_with_call(second_call.clone(), ""),
                 Message::tool_result(&second_call, "second result"),
             ],
-            BodyInput {
-                model: "deepseek-v4-flash",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "deepseek-v4-flash",
+                true,
+                None,
+                None,
+                &muta_contracts::RequestDelivery::OpaqueReplay,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
 
@@ -555,15 +581,15 @@ mod tests {
                 opaque_assistant(second.clone(), "fc_2"),
                 Message::tool_result(&second, "two"),
             ],
-            BodyInput {
-                model: "deepseek-v4-flash",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "deepseek-v4-flash",
+                true,
+                None,
+                None,
+                &muta_contracts::RequestDelivery::OpaqueReplay,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
 
@@ -595,15 +621,15 @@ mod tests {
                 assistant_with_call(call.clone(), ""),
                 Message::tool_result(&call, "done"),
             ],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &delivery,
-                store: true,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                None,
+                &delivery,
+                true,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
 
@@ -627,15 +653,15 @@ mod tests {
                 Message::new(Role::User, "go"),
                 assistant_with_call(call, "thinking"),
             ],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                false,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
         let input = body["input"].as_array().unwrap();
@@ -648,15 +674,15 @@ mod tests {
     fn reasoning_summary_always_requested_with_effort_when_supported() {
         let body = body(
             vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: Some(Effort::Medium),
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                Some(Effort::Medium),
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap();
         // The most verbose summaries the backend offers — the raw chain of
@@ -669,19 +695,19 @@ mod tests {
     fn stateless_requests_preserve_encrypted_reasoning_and_parallel_tools() {
         let request = body_with_capabilities(
             vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                tool_specs: Some(&[muta_contracts::ToolSpec {
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                Some(&[muta_contracts::ToolSpec {
                     name: "lookup".to_string(),
                     description: "lookup".to_string(),
                     parameters: serde_json::json!({"type": "object"}),
                 }]),
-                stream: true,
-                reasoning_effort: None,
-                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
-                store: false,
-                cache_plan: &muta_contracts::ResolvedCachePlan::Unsupported,
-            },
+                None,
+                &muta_contracts::RequestDelivery::OpaqueReplay,
+                false,
+                &muta_contracts::ResolvedCachePlan::Unsupported,
+            ),
             &muta_contracts::ModelCapabilities::for_channel("gpt-5.6-sol", None),
         )
         .unwrap();
@@ -773,15 +799,15 @@ mod tests {
 
         let payload = body_with_capabilities(
             vec![msg],
-            BodyInput {
-                model: "gpt-4o",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-4o",
+                false,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
             &caps,
         )
         .unwrap();
@@ -813,15 +839,15 @@ mod tests {
         };
         let error = body(
             vec![assistant, Message::new(Role::User, "continue")],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                None,
+                &muta_contracts::RequestDelivery::OpaqueReplay,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap_err();
         assert_eq!(error, RequestBuildError::EmptyReplayArtifact);
@@ -835,15 +861,15 @@ mod tests {
                 tool_call_id: Some("missing_call".to_string()),
                 ..Message::new(Role::Tool, "result")
             }],
-            BodyInput {
-                model: "gpt-5.6-sol",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                delivery: &DEFAULT_DELIVERY,
-                store: false,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input(
+                "gpt-5.6-sol",
+                true,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown call_id `missing_call`"));

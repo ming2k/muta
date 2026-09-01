@@ -86,12 +86,13 @@ pub async fn generate_branch_summary(
             .unwrap_or_default()
     );
 
-    let messages = vec![
-        Message::new(Role::System, BRANCH_SUMMARY_SYSTEM_PROMPT),
-        Message::new(Role::User, prompt_body),
-    ];
-
-    let request = ModelRequest::ephemeral(messages);
+    let instructions = muta_contracts::InstructionBundle::from_single(
+        "compaction.branch_summary",
+        muta_contracts::InstructionTier::Task,
+        BRANCH_SUMMARY_SYSTEM_PROMPT,
+    );
+    let messages = vec![Message::new(Role::User, prompt_body)];
+    let request = ModelRequest::ephemeral(messages).with_instructions(instructions);
 
     let response = match tokio::time::timeout(BRANCH_SUMMARY_TIMEOUT, provider.chat(request)).await
     {

@@ -1465,10 +1465,10 @@ pub struct SessionOverview {
     /// conversation forked off the trunk), or `trunk` (no parent).
     #[serde(default)]
     pub fork_kind: SessionForkKind,
-    /// The Chronicler's structured digest (intent + history checklist), if
+    /// Structured digest (intent + history checklist), if
     /// the session has generated one.
     #[serde(default)]
-    pub digest: Option<crate::steward::SessionDigest>,
+    pub digest: Option<crate::cognitive::SessionDigest>,
 }
 
 /// The provenance of a session relative to its lineage.
@@ -1495,10 +1495,10 @@ pub struct SessionDetail {
     pub id: String,
     /// Stored title (AI or manual), if any.
     pub title: Option<String>,
-    /// The Chronicler's structured digest (intent + history checklist), if
+    /// Structured digest (intent + history checklist), if
     /// the session has generated one — the resume-time working-memory view.
     #[serde(default)]
-    pub digest: Option<crate::steward::SessionDigest>,
+    pub digest: Option<crate::cognitive::SessionDigest>,
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: usize,

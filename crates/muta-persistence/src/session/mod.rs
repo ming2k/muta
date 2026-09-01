@@ -215,7 +215,7 @@ pub(crate) struct SessionData {
     /// legacy canonical JSON byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_pending: Option<muta_contracts::RetryPoint>,
-    /// Session-scoped YOLO posture: `true` means the agent
+    /// Session-scoped delegated posture: `true` means the agent
     /// runs in full auto-approve mode (bypasses tool permission prompts).
     #[serde(
         default,
@@ -1740,10 +1740,12 @@ pub async fn summarize_with_provider(
 ) -> Result<String, String> {
     let transcript = serialize_for_summary(archived, budget);
     let user_prompt = build_summarization_user_prompt(&transcript, previous_summary, extra_context);
-    let messages = vec![
-        Message::new(Role::System, SUMMARIZATION_SYSTEM_PROMPT),
-        Message::new(Role::User, user_prompt),
-    ];
+    let instructions = muta_contracts::InstructionBundle::from_single(
+        "compaction.summarization",
+        muta_contracts::InstructionTier::Task,
+        SUMMARIZATION_SYSTEM_PROMPT,
+    );
+    let messages = vec![Message::new(Role::User, user_prompt)];
     // Bound the summarization call so a stalled or overloaded provider
     // triggers the excerpt fallback instead of hanging the turn (and the
     // entire frontend) forever. Two minutes is generous for a single
@@ -1751,7 +1753,7 @@ pub async fn summarize_with_provider(
     const SUMMARIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
     let response = match tokio::time::timeout(
         SUMMARIZATION_TIMEOUT,
-        provider.chat(muta_contracts::ModelRequest::new(messages)),
+        provider.chat(muta_contracts::ModelRequest::ephemeral(messages).with_instructions(instructions)),
     )
     .await
     {

@@ -1,17 +1,14 @@
-//! System-prompt sections and policy registries (ADR-0056).
+//! System-prompt sections and policy registries (ADR-0056 / ADR-0160).
 //!
-//! The system prompt is no longer one imperative method that pushes string
-//! literals into a `Vec`. It is a [`SystemPromptRegistry`] of declarative
+//! The system prompt is a [`SystemPromptRegistry`] of declarative
 //! [`SystemPromptSection`]s — one per behavioral paragraph — registered on the
 //! [`Agent`](crate::Agent) at construction. The `model_request` assembler
-//! rebuilds the singleton system message from live agent state before every
-//! provider request.
-//!
-//! The default system sections ([`IdentityPreamble`], [`ToneGuidance`],
-//! [`PersistenceGuidance`], [`DelegationGuidance`])
-//! compose the system message in rank order: sections
-//! that need a visual gap include a leading `\n` in their own `render`, so
-//! joining on a single `\n` preserves a stable layout.
+//! rebuilds a structured, cache-tiered [`InstructionBundle`] from live agent
+//! state before every provider request.
+
+use muta_contracts::InstructionTier;
+
+use super::system_prompt::InstructionOrder;
 use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
 
 // ---------------------------------------------------------------------------
@@ -30,8 +27,11 @@ impl SystemPromptSection for IdentityPreamble {
     fn id(&self) -> &'static str {
         "system.identity_preamble"
     }
-    fn rank(&self) -> u32 {
-        10
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Head
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.identity_preamble.is_empty()
@@ -50,8 +50,11 @@ impl SystemPromptSection for HostEnvironmentGuidance {
     fn id(&self) -> &'static str {
         "system.host_environment"
     }
-    fn rank(&self) -> u32 {
-        12
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::After("system.identity_preamble")
     }
     fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
         true
@@ -94,8 +97,11 @@ impl SystemPromptSection for ToneGuidance {
     fn id(&self) -> &'static str {
         "system.tone"
     }
-    fn rank(&self) -> u32 {
-        20
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::After("system.host_environment")
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         None
@@ -112,8 +118,11 @@ impl SystemPromptSection for ModelGuidance {
     fn id(&self) -> &'static str {
         "system.model_guidance"
     }
-    fn rank(&self) -> u32 {
-        25
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::After("system.tone")
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.model_guidance.is_empty()
@@ -135,8 +144,11 @@ impl SystemPromptSection for ProviderGuidance {
     fn id(&self) -> &'static str {
         "system.provider_guidance"
     }
-    fn rank(&self) -> u32 {
-        27
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::After("system.model_guidance")
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.provider_guidance.is_empty()
@@ -160,8 +172,11 @@ impl SystemPromptSection for ProjectRulesGuidance {
     fn id(&self) -> &'static str {
         "system.project_rules"
     }
-    fn rank(&self) -> u32 {
-        30
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Head
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.project_rules.is_empty()
@@ -186,33 +201,14 @@ impl SystemPromptSection for PersistenceGuidance {
     fn id(&self) -> &'static str {
         "system.persistence"
     }
-    fn rank(&self) -> u32 {
-        35
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Base
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Tail
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(PERSISTENCE))
-    }
-}
-
-/// The Delegated mode guidance section. Active only when the agent is running
-/// in delegated autonomous mode this round. The harness reclaims `ask_user`; all tool actions are auto-approved.
-/// Leading `\n` separates it from the paragraphs above.
-struct DelegatedModeGuidance;
-
-const DELEGATED_GUIDANCE: &str = "\nYou are running in Delegated Autonomous mode: You are fully empowered to make design and implementation decisions, tool permissions are auto-approved, and you are expected to resolve ambiguities self-reliantly without asking. Surface any key choices or verification results in your final summary.";
-
-impl SystemPromptSection for DelegatedModeGuidance {
-    fn id(&self) -> &'static str {
-        "system.delegated_mode"
-    }
-    fn rank(&self) -> u32 {
-        36
-    }
-    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.delegated
-    }
-    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(DELEGATED_GUIDANCE))
     }
 }
 
@@ -233,8 +229,11 @@ impl SystemPromptSection for DelegationGuidance {
     fn id(&self) -> &'static str {
         "system.delegation_guidance"
     }
-    fn rank(&self) -> u32 {
-        55
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Tail
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
@@ -266,8 +265,11 @@ impl SystemPromptSection for FileEditingGuidance {
     fn id(&self) -> &'static str {
         "system.file_editing_guidance"
     }
-    fn rank(&self) -> u32 {
-        56
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Tail
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
@@ -300,8 +302,11 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
     fn id(&self) -> &'static str {
         "system.web_untrusted_content"
     }
-    fn rank(&self) -> u32 {
-        57
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Tail
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names.iter().any(|name| {
@@ -322,8 +327,11 @@ impl SystemPromptSection for WorkspaceRootsGuidance {
     fn id(&self) -> &'static str {
         "system.workspace_roots"
     }
-    fn rank(&self) -> u32 {
-        58
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::After("system.project_rules")
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.additional_workspace_roots.is_empty()
@@ -350,8 +358,11 @@ impl SystemPromptSection for RunnerRoleGuidance {
     fn id(&self) -> &'static str {
         "system.runner_role"
     }
-    fn rank(&self) -> u32 {
-        15
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Task
+    }
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Head
     }
     fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
         true
@@ -380,9 +391,7 @@ impl SystemPromptSection for RunnerRoleGuidance {
     }
 }
 
-/// Build the registry with the default system-prompt sections, in rank
-/// order. Called by [`crate::Agent::builder`]; an embedding may add, reorder, or
-/// disable sections on [`crate::AgentBuilder`] before freezing the agent.
+/// Build the registry with the default system-prompt sections.
 pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
@@ -392,7 +401,6 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ProviderGuidance);
     registry.register(ProjectRulesGuidance);
     registry.register(PersistenceGuidance);
-    registry.register(DelegatedModeGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry.register(WorkspaceRootsGuidance);
@@ -400,9 +408,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry
 }
 
-/// Build a specialized, minimal system prompt registry for a runner preset
-/// (ADR-0144): a known preset name gets curated mission guidance; anything
-/// else falls back to the generic framing with the preset name interpolated.
+/// Build a specialized, minimal system prompt registry for a runner preset (ADR-0144).
 pub fn runner_system_prompt_registry(preset: &str) -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);

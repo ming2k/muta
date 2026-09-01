@@ -485,14 +485,14 @@ mod tests {
         // no `•`-joined single-line squeeze, no soft-break collapse.
         assert_eq!(
             CommandResult::Ack {
-                title: "YOLO mode ON".to_string(),
+                title: "Delegated mode ON".to_string(),
                 detail: Some(vec![
                     "File edits & creations are auto-approved".to_string(),
                     "Commands are auto-approved (catastrophic hard-denies retained)".to_string(),
                 ]),
             }
             .to_text(),
-            "YOLO mode ON\n\
+            "Delegated mode ON\n\
              File edits & creations are auto-approved\n\
              Commands are auto-approved (catastrophic hard-denies retained)"
         );

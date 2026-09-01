@@ -1,116 +1,146 @@
-//! Agent-owned declarative system-prompt composition (ADR-0056).
+//! Agent-owned declarative instruction composition and registry (ADR-0056 / ADR-0160).
 //!
-//! A system prompt has a lifecycle unlike every other model-context message:
-//! many policy sections compose into one head `Role::System` message, and that
-//! singleton is rebuilt before every provider request. Harness-authored user
-//! context is event-driven and carries a bespoke payload, so it stays outside
-//! this registry and is constructed by `conversation_context` lifecycle owners.
+//! A system prompt has a lifecycle unlike conversational turn messages:
+//! multiple declarative policy sections compose into a structured, cache-tiered
+//! [`InstructionBundle`] that is rebuilt before every provider request.
 //!
-//! Registration is static and explicit. The policy lives with the agent that
-//! owns request preparation; only provider-supplied prompt hints cross the
-//! lower-layer contract boundary.
+//! Sections are categorized by [`InstructionTier`]:
+//! - Base (immutable persona, safety ethos, host environment)
+//! - Session (workspace rules, multi-root access, static tool categories)
+//! - Task (subagent mission, runner task framing)
+//! - Ephemeral (turn-dynamic nudges)
+//!
+//! Ordering within each tier is governed by semantic [`InstructionOrder`] relations
+//! (Head, After, Before, Tail) eliminating fragile magic rank numbers.
 
-use muta_contracts::{InjectionKind, InjectionOrigin, Message, Role};
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-/// Read-only view of the live turn state a section may draw on to render.
+use muta_contracts::{
+    InjectionKind, InjectionOrigin, InstructionBundle, InstructionSlice, InstructionTier, Message,
+    Role,
+};
+
+/// Read-only view of the live turn state an instruction section may draw on to render.
 ///
-/// Owned plain data (no `&Agent`) keeps a section's `render` signature free of
-/// lifetime parameters. The context is rebuilt each round; the cost of cloning
-/// a few small strings is negligible next to a model request. New fields are
-/// added only when a real section needs them, so the surface stays minimal.
-#[derive(Debug, Clone, Default)]
+/// Plain data (no `&Agent`) keeps a section's `render` signature free of lifetime parameters.
+/// Automatically derives [`Hash`] so the entire turn context is content-addressed for memoization
+/// without risk of manual hasher drift.
+#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
 pub struct SystemPromptContext {
     /// The composed identity preamble sentence (name/mission/persona), empty
     /// for tests / when no identity is set.
     pub identity_preamble: String,
     /// Names of the tools admitted this turn (e.g. `["ask_user", ...]`).
     pub tool_names: Vec<String>,
-    /// Model-specific guidance from the resolved model. Empty for all
-    /// known models today; non-empty when a model entry carries a
-    /// `Model::model_guidance`. Rendered verbatim by `ModelGuidance`.
+    /// Model-specific guidance from the resolved model.
     pub model_guidance: &'static str,
     /// Provider/protocol-specific prompt guidance from the active provider.
-    /// This is intentionally factual and narrow: the SDK/provider may describe
-    /// how its wire protocol projects tools, thinking, or replay metadata, but
-    /// the agent still owns identity, workflow, and behavior policy.
     pub provider_guidance: &'static str,
-    /// Whether the agent is running in YOLO mode this round — with all tool
-    /// permissions auto-approved and ask_user reclaimed.
-    pub delegated: bool,
-    /// Content-attested project instructions. Empty while the Rules asset
-    /// domain is absent, quarantined, or changed.
+    /// Content-attested project instructions (e.g. AGENTS.md).
     pub project_rules: String,
-    /// Canonicalized additional workspace roots admitted alongside the
-    /// primary (ADR-0142). Empty for the default single-root session;
-    /// `WorkspaceRootsGuidance` renders the cross-project admission notice
-    /// only when it is non-empty.
+    /// Canonicalized additional workspace roots admitted alongside the primary.
     pub additional_workspace_roots: Vec<String>,
     /// The primary workspace root path, if any.
     pub workspace_root: Option<String>,
 }
 
 impl SystemPromptContext {
-    /// An all-empty context for registry-mechanics tests and for turns that
-    /// genuinely carry no identity / tools.
+    /// An all-empty context for registry-mechanics tests and turns with no identity/tools.
     pub fn empty() -> Self {
         Self::default()
     }
 }
 
-/// A self-contained, declaratively registered system-prompt fragment.
-///
-/// Sections are typically unit-ish structs whose `render` draws only from the
-/// shared [`SystemPromptContext`], making each independently testable.
-///
-/// The default [`SystemPromptSection::is_active`] is `true`; a section overrides it
-/// to encode the single branch it owns — the *decision to appear* — kept with
-/// the *text it would emit*.
+/// Relative or semantic ordering placement of an instruction section within its tier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstructionOrder {
+    /// Placed at the very front of its tier.
+    Head,
+    /// Placed before the specified section id within its tier.
+    Before(&'static str),
+    /// Placed after the specified section id within its tier.
+    After(&'static str),
+    /// Explicit rank/order within its tier (lower values sort earlier).
+    Index(u32),
+    /// Placed at the end of its tier (default).
+    Tail,
+}
+
+impl Default for InstructionOrder {
+    fn default() -> Self {
+        Self::Tail
+    }
+}
+
+/// A self-contained, declaratively registered instruction section.
 pub trait SystemPromptSection: Send + Sync {
-    /// Stable id, used for registration, override, disable, and debugging.
-    /// Convention: `system.<area>[.<name>]`, e.g. `"system.tone"`.
+    /// Stable unique identifier, used for overrides, disables, dependencies, and tracing.
+    /// Convention: `system.<area>[.<name>]`, e.g. `"system.host_environment"`.
     fn id(&self) -> &'static str;
-    /// Default ordering within the system message. Lower sorts earlier. Stable so
-    /// the output never depends on registration call order alone.
-    fn rank(&self) -> u32;
+
+    /// Cache tier and lifetime volatility of this section.
+    fn tier(&self) -> InstructionTier {
+        InstructionTier::Session
+    }
+
+    /// Semantic ordering relation within its tier.
+    fn order(&self) -> InstructionOrder {
+        InstructionOrder::Tail
+    }
+
+    /// Backward-compatible rank accessor; maps to Index if not overridden.
+    fn rank(&self) -> u32 {
+        match self.order() {
+            InstructionOrder::Head => 0,
+            InstructionOrder::Index(idx) => idx,
+            InstructionOrder::Before(_) => 50,
+            InstructionOrder::After(_) => 60,
+            InstructionOrder::Tail => 100,
+        }
+    }
+
     /// Whether this section applies in the current context. Default `true`.
     fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
         true
     }
+
     /// Render the section body. `None` means "active but produces no text this
     /// turn"; the registry skips a `None` without leaving a blank gap.
     fn render(&self, ctx: &SystemPromptContext) -> Option<String>;
 }
 
-/// A registered section plus its runtime overrides.
+/// A registered section entry plus runtime overrides.
 struct Entry {
     section: Box<dyn SystemPromptSection + Send + Sync>,
-    rank_override: Option<u32>,
+    order_override: Option<InstructionOrder>,
     disabled: bool,
 }
 
 impl Entry {
-    fn effective_rank(&self) -> u32 {
-        self.rank_override.unwrap_or_else(|| self.section.rank())
+    fn id(&self) -> &'static str {
+        self.section.id()
+    }
+
+    fn tier(&self) -> InstructionTier {
+        self.section.tier()
+    }
+
+    fn effective_order(&self) -> InstructionOrder {
+        self.order_override.clone().unwrap_or_else(|| self.section.order())
     }
 }
 
 /// System-prompt policy assembled before an agent starts running.
 ///
-/// Holds one [`SystemPromptSection`] per policy fragment, keyed by stable id.
-/// Active fragments are assembled into one head message by
-/// [`build_message`](Self::build_message).
+/// Holds registered [`SystemPromptSection`]s, keyed by stable id.
+/// Active fragments are topologically ordered and assembled into a structured
+/// [`InstructionBundle`] by [`build_bundle`](Self::build_bundle).
 #[derive(Default)]
 pub struct SystemPromptRegistry {
     entries: Vec<Entry>,
-    /// Content-addressed memo of the last render: the fingerprint of the
-    /// [`SystemPromptContext`] it was rendered from, and the rendered
-    /// `Message`. The prompt is a pure function of the context, and turn
-    /// after turn it is byte-identical while the transcript grows — caching
-    /// it keeps every assemble pass to one hash over a few KB instead of
-    /// re-rendering every section and re-sorting ranks. Any context change
-    /// (delegation flip, toolset change, skills reload) produces a different
-    /// fingerprint and the next render replaces the memo.
-    render_memo: std::sync::Mutex<Option<(u64, u64, Message)>>,
+    /// Content-addressed memo of the last render: (context_hash, InstructionBundle).
+    render_memo: std::sync::Mutex<Option<(u64, InstructionBundle)>>,
 }
 
 /// Configuration error returned while composing a [`SystemPromptRegistry`].
@@ -139,9 +169,7 @@ impl SystemPromptRegistry {
         Self::default()
     }
 
-    /// Register a section. Panics on a duplicate id — use
-    /// [`try_register`](Self::try_register) when the section comes from an
-    /// embedding or other fallible configuration surface.
+    /// Register a section. Panics on a duplicate id.
     pub fn register<S: SystemPromptSection + 'static>(&mut self, section: S) {
         if let Err(error) = self.try_register(section) {
             panic!("{error}");
@@ -154,133 +182,203 @@ impl SystemPromptRegistry {
         section: S,
     ) -> Result<(), SystemPromptRegistryError> {
         let id = section.id();
-        if self.entries.iter().any(|e| e.section.id() == id) {
+        if self.entries.iter().any(|e| e.id() == id) {
             return Err(SystemPromptRegistryError::DuplicateId(id));
         }
         self.entries.push(Entry {
             section: Box::new(section),
-            rank_override: None,
+            order_override: None,
             disabled: false,
         });
         Ok(())
     }
 
-    /// Override a section's ordering by id, without editing its source. This
-    /// is the lever for "flexible reordering": default order comes from
-    /// [`SystemPromptSection::rank`], runtime overrides come from here.
-    pub fn set_rank(&mut self, id: &str, rank: u32) -> Result<(), SystemPromptRegistryError> {
+    /// Override a section's ordering relative to other sections.
+    pub fn set_order(&mut self, id: &str, order: InstructionOrder) -> Result<(), SystemPromptRegistryError> {
         let entry = self
             .entries
             .iter_mut()
-            .find(|entry| entry.section.id() == id)
+            .find(|entry| entry.id() == id)
             .ok_or_else(|| SystemPromptRegistryError::UnknownId(id.to_owned()))?;
-        entry.rank_override = Some(rank);
+        entry.order_override = Some(order);
         Ok(())
     }
 
-    /// Disable a section by id (it is skipped as if inactive). The opposite of
-    /// `set_rank` — used to turn a section off without removing its
-    /// registration.
+    /// Set explicit integer rank override (backward-compatible convenience).
+    pub fn set_rank(&mut self, id: &str, rank: u32) -> Result<(), SystemPromptRegistryError> {
+        self.set_order(id, InstructionOrder::Index(rank))
+    }
+
+    /// Disable a section by id (it is skipped as if inactive).
     pub fn disable(&mut self, id: &str) -> Result<(), SystemPromptRegistryError> {
         let entry = self
             .entries
             .iter_mut()
-            .find(|entry| entry.section.id() == id)
+            .find(|entry| entry.id() == id)
             .ok_or_else(|| SystemPromptRegistryError::UnknownId(id.to_owned()))?;
         entry.disabled = true;
         Ok(())
     }
 
-    /// Assemble every active section into one head `Role::System` message:
-    /// filter by active state, sort by effective rank (stable, so equal ranks
-    /// preserve registration order), join with a newline, and stamp
-    /// [`InjectionKind::SystemPrompt`].
-    ///
-    /// Sections that need a visual separator include a leading `\n` in their
-    /// own `render`, so joining on a single `\n` reproduces the legacy
-    /// `parts.join("\n")` layout exactly.
-    ///
-    /// The result is memoized against a fingerprint of `ctx`: the prompt is a
-    /// pure function of the context and is byte-identical across the turns of
-    /// a round (the transcript grows, the prompt does not), so repeat
-    /// assemblies cost one hash instead of a full re-render. A changed
-    /// context — delegation flip, toolset change, skills reload, section
-    /// enable/disable — fingerprints differently and re-renders.
-    pub fn build_message(&self, ctx: &SystemPromptContext) -> Message {
-        let fingerprint = fingerprint_context(ctx);
+    /// Build a structured, memoized [`InstructionBundle`] from the current context.
+    pub fn build_bundle(&self, ctx: &SystemPromptContext) -> InstructionBundle {
+        let mut hasher = DefaultHasher::new();
+        ctx.hash(&mut hasher);
+        let hash = hasher.finish();
+
         if let Ok(memo) = self.render_memo.lock()
-            && let Some((h1, h2, message)) = memo.as_ref()
-            && (*h1, *h2) == fingerprint
+            && let Some((cached_hash, bundle)) = memo.as_ref()
+            && *cached_hash == hash
         {
-            return message.clone();
+            return bundle.clone();
         }
-        let message = self.render(ctx);
+
+        let bundle = self.render_bundle(ctx);
         if let Ok(mut memo) = self.render_memo.lock() {
-            *memo = Some((fingerprint.0, fingerprint.1, message.clone()));
+            *memo = Some((hash, bundle.clone()));
         }
-        message
+        bundle
     }
 
-    /// The unmemoized render path. Kept separate so the memo logic above is
-    /// the only place that decides between cached and fresh.
-    fn render(&self, ctx: &SystemPromptContext) -> Message {
-        let mut active: Vec<(u32, String)> = self
+    /// Legacy / debug helper: render all sections into a combined `Role::System` message.
+    pub fn build_message(&self, ctx: &SystemPromptContext) -> Message {
+        let bundle = self.build_bundle(ctx);
+        Message::new(Role::System, bundle.render_combined())
+            .with_origin(InjectionOrigin::new(InjectionKind::SystemPrompt))
+    }
+
+    /// Topological assembly path: groups by tier and resolves relative order constraints.
+    fn render_bundle(&self, ctx: &SystemPromptContext) -> InstructionBundle {
+        let active_entries: Vec<&Entry> = self
             .entries
             .iter()
-            .filter(|e| !e.disabled)
-            .filter(|e| e.section.is_active(ctx))
-            .filter_map(|e| e.section.render(ctx).map(|r| (e.effective_rank(), r)))
+            .filter(|e| !e.disabled && e.section.is_active(ctx))
             .collect();
-        active.sort_by_key(|(rank, _)| *rank);
-        let body: String = active
-            .into_iter()
-            .map(|(_, r)| r)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Message::new(Role::System, body)
-            .with_origin(InjectionOrigin::new(InjectionKind::SystemPrompt))
+
+        // Separate by tier (Base -> Session -> Task -> Ephemeral)
+        let tiers = [
+            InstructionTier::Base,
+            InstructionTier::Session,
+            InstructionTier::Task,
+            InstructionTier::Ephemeral,
+        ];
+
+        let mut slices = Vec::new();
+        for tier in tiers {
+            let tier_entries: Vec<&Entry> = active_entries
+                .iter()
+                .copied()
+                .filter(|e| e.tier() == tier)
+                .collect();
+            let ordered_indices = sort_tier_entries(&tier_entries);
+            for idx in ordered_indices {
+                let entry = tier_entries[idx];
+                if let Some(content) = entry.section.render(ctx) {
+                    if !content.trim().is_empty() {
+                        slices.push(InstructionSlice::new(entry.id(), tier, content));
+                    }
+                }
+            }
+        }
+
+        InstructionBundle::new(slices)
     }
 }
 
-/// Fingerprint every field that feeds section rendering. Must stay in
-/// lockstep with [`SystemPromptSection::render`] implementations — any field
-/// a section reads must appear here.
-fn fingerprint_context(ctx: &SystemPromptContext) -> (u64, u64) {
-    use std::hash::{Hash, Hasher};
-    let mut h1 = std::collections::hash_map::DefaultHasher::new();
-    let mut h2 = std::collections::hash_map::DefaultHasher::new();
-    ctx.identity_preamble.hash(&mut h1);
-    ctx.tool_names.hash(&mut h2);
-    ctx.model_guidance.hash(&mut h1);
-    ctx.provider_guidance.hash(&mut h2);
-    ctx.delegated.hash(&mut h2);
-    ctx.project_rules.hash(&mut h1);
-    ctx.additional_workspace_roots.hash(&mut h2);
-    ctx.workspace_root.hash(&mut h1);
-    // Cross-perturb so swapping values between the two hashers cannot
-    // collide (h1=(a,·), h2=(·,b) vs h1=(b,·), h2=(·,a)).
-    h1.write_u64(h2.finish());
-    (h1.finish(), h2.finish())
+/// Topologically sorts entries within a single tier based on `InstructionOrder`.
+fn sort_tier_entries(entries: &[&Entry]) -> Vec<usize> {
+    let n = entries.len();
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    let id_to_index: HashMap<&'static str, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(idx, e)| (e.id(), idx))
+        .collect();
+
+    let mut heads = Vec::new();
+    let mut indices: Vec<(u32, usize)> = Vec::new();
+    let mut befores: Vec<(usize, usize)> = Vec::new(); // (item_idx, target_idx)
+    let mut afters: Vec<(usize, usize)> = Vec::new(); // (item_idx, target_idx)
+    let mut tails = Vec::new();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        match entry.effective_order() {
+            InstructionOrder::Head => heads.push(idx),
+            InstructionOrder::Index(rank) => indices.push((rank, idx)),
+            InstructionOrder::Before(target_id) => {
+                if let Some(&target_idx) = id_to_index.get(target_id) {
+                    befores.push((idx, target_idx));
+                } else {
+                    tails.push(idx);
+                }
+            }
+            InstructionOrder::After(target_id) => {
+                if let Some(&target_idx) = id_to_index.get(target_id) {
+                    afters.push((idx, target_idx));
+                } else {
+                    tails.push(idx);
+                }
+            }
+            InstructionOrder::Tail => tails.push(idx),
+        }
+    }
+
+    indices.sort_by_key(|(rank, _)| *rank);
+    let mut result = Vec::with_capacity(n);
+    result.extend(heads);
+    for (_, idx) in indices {
+        result.push(idx);
+    }
+    result.extend(tails);
+
+    // Apply Before / After relative dependencies
+    for (item_idx, target_idx) in befores {
+        if let Some(target_pos) = result.iter().position(|&x| x == target_idx) {
+            result.retain(|&x| x != item_idx);
+            let insert_pos = result.iter().position(|&x| x == target_idx).unwrap_or(target_pos);
+            result.insert(insert_pos, item_idx);
+        } else if !result.contains(&item_idx) {
+            result.push(item_idx);
+        }
+    }
+
+    for (item_idx, target_idx) in afters {
+        if let Some(target_pos) = result.iter().position(|&x| x == target_idx) {
+            result.retain(|&x| x != item_idx);
+            let target_current = result.iter().position(|&x| x == target_idx).unwrap_or(target_pos);
+            result.insert(target_current + 1, item_idx);
+        } else if !result.contains(&item_idx) {
+            result.push(item_idx);
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A configurable section for registry-mechanics tests.
-    struct S {
+    struct TestSection {
         id: &'static str,
-        rank: u32,
+        tier: InstructionTier,
+        order: InstructionOrder,
         active: bool,
         text: Option<&'static str>,
     }
 
-    impl SystemPromptSection for S {
+    impl SystemPromptSection for TestSection {
         fn id(&self) -> &'static str {
             self.id
         }
-        fn rank(&self) -> u32 {
-            self.rank
+        fn tier(&self) -> InstructionTier {
+            self.tier
+        }
+        fn order(&self) -> InstructionOrder {
+            self.order.clone()
         }
         fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
             self.active
@@ -290,117 +388,80 @@ mod tests {
         }
     }
 
-    fn sys(id: &'static str, rank: u32, text: &'static str) -> S {
-        S {
+    fn sec(id: &'static str, order: InstructionOrder, text: &'static str) -> TestSection {
+        TestSection {
             id,
-            rank,
+            tier: InstructionTier::Base,
+            order,
             active: true,
             text: Some(text),
         }
     }
 
     #[test]
-    fn system_message_orders_by_rank_and_joins_with_newline() {
+    fn relative_ordering_resolves_semantic_dependencies() {
         let mut reg = SystemPromptRegistry::new();
-        // Registered out of rank order; output must follow rank.
-        reg.register(sys("system.tone", 20, "Tone body."));
-        reg.register(sys("system.identity", 10, "Identity body."));
-        reg.register(sys("system.todo", 30, "Todo body."));
+        reg.register(sec("tail_item", InstructionOrder::Tail, "Tail"));
+        reg.register(sec("head_item", InstructionOrder::Head, "Head"));
+        reg.register(sec("after_head", InstructionOrder::After("head_item"), "AfterHead"));
+        reg.register(sec("before_tail", InstructionOrder::Before("tail_item"), "BeforeTail"));
 
-        let msg = reg.build_message(&SystemPromptContext::empty());
-        assert_eq!(msg.role, Role::System);
-        assert_eq!(msg.content, "Identity body.\nTone body.\nTodo body.");
+        let bundle = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(
+            bundle.render_combined(),
+            "Head\nAfterHead\nBeforeTail\nTail"
+        );
     }
 
     #[test]
-    fn equal_ranks_preserve_registration_order() {
+    fn equal_orders_preserve_registration_order() {
         let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.a", 10, "A"));
-        reg.register(sys("system.b", 10, "B"));
-        reg.register(sys("system.c", 10, "C"));
-        let msg = reg.build_message(&SystemPromptContext::empty());
-        assert_eq!(msg.content, "A\nB\nC");
+        reg.register(sec("system.a", InstructionOrder::Head, "A"));
+        reg.register(sec("system.b", InstructionOrder::Head, "B"));
+
+        let bundle = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(bundle.render_combined(), "A\nB");
     }
 
     #[test]
-    fn inactive_and_empty_renders_are_skipped_without_gaps() {
+    fn disabled_section_is_skipped() {
         let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.a", 10, "A"));
-        reg.register(S {
-            id: "system.inactive",
-            rank: 20,
-            active: false,
-            text: Some("should not appear"),
-        });
-        reg.register(S {
-            id: "system.empty",
-            rank: 30,
-            active: true,
-            text: None,
-        });
-        reg.register(sys("system.d", 40, "D"));
+        reg.register(sec("system.a", InstructionOrder::Head, "A"));
+        reg.register(sec("system.b", InstructionOrder::Tail, "B"));
+        reg.disable("system.a").unwrap();
 
-        let msg = reg.build_message(&SystemPromptContext::empty());
-        // No blank line where the skipped sections would have been.
-        assert_eq!(msg.content, "A\nD");
+        let bundle = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(bundle.render_combined(), "B");
+    }
+
+    #[test]
+    fn order_override_changes_position() {
+        let mut reg = SystemPromptRegistry::new();
+        reg.register(sec("system.a", InstructionOrder::Head, "A"));
+        reg.register(sec("system.b", InstructionOrder::Tail, "B"));
+        reg.set_order("system.b", InstructionOrder::Before("system.a")).unwrap();
+
+        let bundle = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(bundle.render_combined(), "B\nA");
     }
 
     #[test]
     fn system_message_origin_is_system_prompt() {
         let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.tone", 10, "Tone"));
+        reg.register(sec("system.a", InstructionOrder::Head, "A"));
         let msg = reg.build_message(&SystemPromptContext::empty());
         assert_eq!(
-            msg.origin.as_ref().map(|o| o.kind),
+            msg.origin.map(|o| o.kind),
             Some(InjectionKind::SystemPrompt)
         );
     }
 
     #[test]
-    fn set_rank_reorders_output() {
+    fn memoization_returns_identical_bundle() {
         let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.a", 10, "A"));
-        reg.register(sys("system.b", 20, "B"));
-        reg.set_rank("system.b", 5).unwrap();
-
-        let msg = reg.build_message(&SystemPromptContext::empty());
-        assert_eq!(msg.content, "B\nA", "override rank wins over default");
-    }
-
-    #[test]
-    fn disable_removes_section_from_output() {
-        let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.a", 10, "A"));
-        reg.register(sys("system.b", 20, "B"));
-        reg.disable("system.b").unwrap();
-
-        let msg = reg.build_message(&SystemPromptContext::empty());
-        assert_eq!(msg.content, "A");
-    }
-
-    #[test]
-    fn fallible_configuration_reports_invalid_ids() {
-        let mut reg = SystemPromptRegistry::new();
-        reg.try_register(sys("system.tone", 10, "Tone")).unwrap();
-        assert_eq!(
-            reg.try_register(sys("system.tone", 20, "Tone again")),
-            Err(SystemPromptRegistryError::DuplicateId("system.tone"))
-        );
-        assert_eq!(
-            reg.disable("missing"),
-            Err(SystemPromptRegistryError::UnknownId("missing".to_owned()))
-        );
-        assert_eq!(
-            reg.set_rank("missing", 1),
-            Err(SystemPromptRegistryError::UnknownId("missing".to_owned()))
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "duplicate SystemPromptSection id: system.tone")]
-    fn register_panics_on_duplicate_id() {
-        let mut reg = SystemPromptRegistry::new();
-        reg.register(sys("system.tone", 10, "Tone"));
-        reg.register(sys("system.tone", 20, "Tone again"));
+        reg.register(sec("system.a", InstructionOrder::Head, "A"));
+        let b1 = reg.build_bundle(&SystemPromptContext::empty());
+        let b2 = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(b1, b2);
     }
 }

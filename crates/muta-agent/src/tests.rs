@@ -1676,10 +1676,10 @@ fn turn(calls: &[(&str, &str, &str)]) -> Vec<ProviderStreamEvent> {
 
 struct ScriptedProvider {
     turns: std::sync::Mutex<std::collections::VecDeque<Vec<ProviderStreamEvent>>>,
-    steward_replies: std::sync::Mutex<std::collections::VecDeque<String>>,
-    steward_requests: std::sync::Mutex<Vec<muta_contracts::ModelRequest>>,
+    cognitive_replies: std::sync::Mutex<std::collections::VecDeque<String>>,
+    cognitive_requests: std::sync::Mutex<Vec<muta_contracts::ModelRequest>>,
     /// Pace every stream event with a small gap so the runtime interleaves
-    /// spawned Stream Sentinel consults with stream consumption — the
+    /// spawned cognitive loop consults with stream consumption — the
     /// network cadence an instantly-ready scripted stream omits. Without
     /// it, a current-thread test runtime consumes the whole script before
     /// the detached consult ever runs, so mid-stream verdict cuts can never
@@ -1691,15 +1691,15 @@ impl ScriptedProvider {
     fn new(turns: Vec<Vec<ProviderStreamEvent>>) -> Self {
         Self {
             turns: std::sync::Mutex::new(turns.into_iter().collect()),
-            steward_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            steward_requests: std::sync::Mutex::new(Vec::new()),
+            cognitive_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            cognitive_requests: std::sync::Mutex::new(Vec::new()),
             paced: false,
         }
     }
 
-    fn with_steward_replies(self, replies: &[&str]) -> Self {
+    fn with_cognitive_replies(self, replies: &[&str]) -> Self {
         *self
-            .steward_replies
+            .cognitive_replies
             .lock()
             .unwrap_or_else(|error| error.into_inner()) =
             replies.iter().map(|reply| (*reply).to_string()).collect();
@@ -1718,12 +1718,12 @@ impl Provider for ScriptedProvider {
         &self,
         request: muta_contracts::ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
-        self.steward_requests
+        self.cognitive_requests
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(request);
         let reply = self
-            .steward_replies
+            .cognitive_replies
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .pop_front()
@@ -3314,7 +3314,7 @@ async fn stream_loop_verdict_after_natural_end_still_recovers() {
     let agent = Arc::new(Agent::new(
         Arc::new(
             ScriptedProvider::new(vec![degenerative_stream, text_turn("Recovered summary.")])
-                .with_steward_replies(&["yes"]),
+                .with_cognitive_replies(&["yes"]),
         ),
         Vec::new(),
         crate::AgentIdentity::default(),
@@ -3362,7 +3362,7 @@ async fn in_flight_streaming_loop_cuts_mid_stream_when_verdict_lands() {
     };
     let provider = Arc::new(
         ScriptedProvider::new(vec![degenerative_stream(), text_turn("Recovered summary.")])
-            .with_steward_replies(&["yes"])
+            .with_cognitive_replies(&["yes"])
             .paced(),
     );
     let agent = Arc::new(Agent::new(
@@ -3385,10 +3385,10 @@ async fn in_flight_streaming_loop_cuts_mid_stream_when_verdict_lands() {
         event,
         AgentEvent::AssistantEnd(content) if content.contains("never reached extra text")
     )));
-    // Exactly one Stream Sentinel consult ran for the confirmed candidate.
+    // Exactly one cognitive consult ran for the confirmed candidate.
     assert_eq!(
         provider
-            .steward_requests
+            .cognitive_requests
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .len(),
@@ -3409,7 +3409,7 @@ async fn repeated_stream_loop_hard_stop_is_visible() {
     let agent = Arc::new(Agent::new(
         Arc::new(
             ScriptedProvider::new(vec![degenerative_stream(), degenerative_stream()])
-                .with_steward_replies(&["yes", "yes"]),
+                .with_cognitive_replies(&["yes", "yes"]),
         ),
         Vec::new(),
         crate::AgentIdentity::default(),
@@ -3447,7 +3447,7 @@ async fn reasoning_stream_loop_trims_reasoning_without_rewriting_answer() {
     let agent = Arc::new(Agent::new(
         Arc::new(
             ScriptedProvider::new(vec![looping_reasoning, text_turn("Recovered answer.")])
-                .with_steward_replies(&["yes"]),
+                .with_cognitive_replies(&["yes"]),
         ),
         Vec::new(),
         crate::AgentIdentity::default(),
@@ -3469,11 +3469,11 @@ async fn reasoning_stream_loop_trims_reasoning_without_rewriting_answer() {
 }
 
 #[tokio::test]
-async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
+async fn cognitive_clears_legitimate_repeated_reverse_engineering_data() {
     // Under dwell semantics this data never escalates at all: each line ends
     // in "nop", so the periodic trail acquits every push (the digits do not
     // dominate density either). The mechanical layer resolves legitimate
-    // content locally — the Steward must not even be consulted.
+    // content locally — the cognitive pipeline must not even be consulted.
     let repeated_dump = "00401000: 90 90 90 90    nop nop nop nop\n";
     let provider = Arc::new(
         ScriptedProvider::new(vec![vec![
@@ -3482,7 +3482,7 @@ async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
             ProviderStreamEvent::TextDelta(repeated_dump.to_string()),
             ProviderStreamEvent::TextDelta("Dump complete; continuing analysis.".to_string()),
         ]])
-        .with_steward_replies(&["no"]),
+        .with_cognitive_replies(&["no"]),
     );
     let agent = Arc::new(Agent::new(
         provider.clone(),
@@ -3497,7 +3497,7 @@ async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
     )
     .await;
     let content = outcome
-        .expect("Steward-cleared stream completes")
+        .expect("Cognitive-cleared stream completes")
         .message
         .content;
     assert!(content.contains("Dump complete; continuing analysis."));
@@ -3506,15 +3506,15 @@ async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
         events
             .iter()
             .all(|event| !matches!(event, AgentEvent::Notice(notice) if notice.source == NoticeSource::TurnGuard)),
-        "an L1 candidate cleared by Steward must not surface as an intervention"
+        "an L1 candidate cleared by cognitive check must not surface as an intervention"
     );
 
     let requests = provider
-        .steward_requests
+        .cognitive_requests
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     // Zero consultations: the mechanical layer never escalated, so the
-    // Stream Sentinel was not woken — the entire point of dwell semantics.
+    // cognitive check was not woken — the entire point of dwell semantics.
     assert!(
         requests.is_empty(),
         "legitimate repeated data must resolve locally without an L2 review"

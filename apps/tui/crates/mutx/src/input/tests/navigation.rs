@@ -347,20 +347,20 @@ fn line_aware_movement_respects_newlines() {
 }
 
 #[test]
-fn up_arrow_walks_the_queue_pointer_when_queue_nonempty() {
-    // While at least one message is staged in the send queue, ↑ arms the
+fn pageup_walks_the_queue_pointer_when_queue_nonempty() {
+    // While at least one message is staged in the send queue, PageUp arms the
     // non-destructive queue pointer at the newest item instead of walking
     // input history — the queue is the newer, more urgent surface. Nothing
     // leaves the queue; the composer becomes an editable projection and
     // Enter writes the edit back in place.
-    assert_eq!(up_with_queued(true), InputAction::QueuePointerPrev);
+    assert_eq!(pageup_with_queued(true), InputAction::QueuePointerPrev);
 }
 
 #[test]
-fn up_arrow_walks_history_when_queue_empty() {
-    // Once the queue drains (or was never populated), ↑ resumes its
-    // normal role of walking the input history.
-    assert_eq!(up_with_queued(false), InputAction::HistoryPrev);
+fn pageup_walks_history_when_queue_empty() {
+    // Once the queue drains (or was never populated), PageUp resumes its
+    // normal role of walking the prompt history.
+    assert_eq!(pageup_with_queued(false), InputAction::HistoryPrev);
 }
 
 #[test]
@@ -381,33 +381,19 @@ fn arrows_navigate_completion_menu_while_command_is_partial() {
 }
 
 #[test]
-fn arrows_walk_history_once_command_is_fully_typed() {
-    // Regression for the reported bug: once ↑/↓ has switched the composer
-    // to a fully-typed `/command`, the exact-match completion row used to
-    // pin the arrows — every press was consumed as a no-op suggestion
-    // cycle and history navigation became unreachable. A resolved command
-    // must hand ↑/↓ back to their ordinary history role.
+fn arrows_stay_in_composer_once_command_is_fully_typed() {
+    // Once a command is resolved (exact match), completion popup closes
+    // and arrows stay as normal cursor navigation in the composer.
     let kind = crate::CompletionKind::Slash;
     assert_eq!(
         compose_key_with_completion(KeyCode::Down, kind, 1, true),
-        InputAction::HistoryNext,
-        "↓ on an exact-match command should keep walking history"
+        InputAction::None,
+        "↓ on an exact-match command should stay in composer"
     );
     assert_eq!(
         compose_key_with_completion(KeyCode::Up, kind, 1, true),
-        InputAction::HistoryPrev,
-        "↑ on an exact-match command should keep walking history"
-    );
-    // Even with several candidates, an exact match (e.g. `/session`
-    // alongside the prefix-sibling `/sessions`) is resolved: arrows keep
-    // their history role instead of being captured by the popup.
-    assert_eq!(
-        compose_key_with_completion(KeyCode::Down, kind, 2, true),
-        InputAction::HistoryNext
-    );
-    assert_eq!(
-        compose_key_with_completion(KeyCode::Up, kind, 2, true),
-        InputAction::HistoryPrev
+        InputAction::None,
+        "↑ on an exact-match command should stay in composer"
     );
 }
 
@@ -461,35 +447,33 @@ fn up_arrow_in_browse_does_not_recall_queued() {
 }
 
 #[test]
-fn up_arrow_walks_lines_in_multiline_before_history() {
-    // In a multi-line draft, ↑ first moves the caret up a line instead
-    // of jumping to input history — only at the top line does it fall
-    // through to HistoryPrev.
+fn up_arrow_walks_lines_in_multiline_and_stays_at_top_line() {
+    // In a multi-line draft, ↑ moves the caret up a line. At the top line,
+    // it stays on the top line (InputAction::None) without hijacking history.
     let seed = "hello\nworld";
     // Caret at end of second line: ↑ should move to the same column on
-    // the first line ("hello", col 5) and return None, not HistoryPrev.
+    // the first line ("hello", col 5) and return None.
     let (action, cur) = multiline_arrow(seed, "hello\nworld".chars().count(), KeyCode::Up);
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 5, "up should land at col 5 on the first line");
 
-    // Now sitting at the end of the first line: ↑ should hand off to
-    // history navigation.
+    // Sitting on the first line: ↑ stays in composer (None), history is on PageUp / Alt+P.
     let (action, _) = multiline_arrow(seed, 5, KeyCode::Up);
-    assert_eq!(action, InputAction::HistoryPrev);
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]
-fn down_arrow_walks_lines_in_multiline_before_history() {
+fn down_arrow_walks_lines_in_multiline_and_stays_at_bottom_line() {
     let seed = "hello\nworld";
     // Caret at start of first line: ↓ moves to the same column on the
-    // second line and returns None, not HistoryNext.
+    // second line and returns None.
     let (action, cur) = multiline_arrow(seed, 0, KeyCode::Down);
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 6, "down should land at col 0 of the second line");
 
-    // Caret at end of the second line: ↓ hands off to history.
+    // Caret at end of the second line: ↓ stays on bottom line (None), history is on PageDown / Alt+N.
     let (action, _) = multiline_arrow(seed, "hello\nworld".chars().count(), KeyCode::Down);
-    assert_eq!(action, InputAction::HistoryNext);
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]

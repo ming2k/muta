@@ -8,39 +8,39 @@ use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MonitorAction, Tool
 
 use crate::registry::SessionRegistry;
 
-/// The single Supervisor agent instance per muta daemon (Tier 0).
+/// The single Hypervisor station per muta daemon (staffed by a Master agent).
 ///
 /// Responsible for orchestrating sessions, tracking progress across projects,
 /// joint debugging / cross-session coordination (联调), and dispatching top-down
 /// mesh instructions to session masters.
-pub struct Supervisor {
+pub struct Hypervisor {
     agent: Arc<Agent>,
     registry: SessionRegistry,
     tracker: Arc<MeshTracker>,
     address: MeshAddress,
 }
 
-impl Supervisor {
-    /// Create the singleton supervisor for the daemon.
+impl Hypervisor {
+    /// Create the singleton hypervisor station for the daemon.
     pub fn new(
         provider: Arc<dyn muta_contracts::Provider>,
         registry: SessionRegistry,
         tracker: Arc<MeshTracker>,
     ) -> Self {
-        let address = MeshAddress::supervisor("supervisor");
+        let address = MeshAddress::hypervisor("hypervisor");
 
         let send_tool = Arc::new(MeshSendTool::new((*tracker).clone(), Some(address.clone())));
         let list_peers_tool = Arc::new(MeshListPeersTool::new(
             (*tracker).clone(),
             Some(address.clone()),
         ));
-        let list_sessions_tool = Arc::new(SupervisorListSessionsTool::new(registry.clone()));
-        let inspect_session_tool = Arc::new(SupervisorInspectSessionTool::new(registry.clone()));
-        let instruct_session_tool = Arc::new(SupervisorInstructSessionTool::new(
+        let list_sessions_tool = Arc::new(HypervisorListSessionsTool::new(registry.clone()));
+        let inspect_session_tool = Arc::new(HypervisorInspectSessionTool::new(registry.clone()));
+        let instruct_session_tool = Arc::new(HypervisorInstructSessionTool::new(
             tracker.clone(),
             address.clone(),
         ));
-        let coordinate_tool = Arc::new(SupervisorCoordinateDebugTool::new(
+        let coordinate_tool = Arc::new(HypervisorCoordinateDebugTool::new(
             registry.clone(),
             tracker.clone(),
             address.clone(),
@@ -56,12 +56,12 @@ impl Supervisor {
         ];
 
         let identity = AgentIdentity::new(
-            "supervisor",
-            "the single top-level supervisor for Muta — orchestrating sessions, tracking progress across projects, and coordinating joint debugging and multi-session workflows",
+            "hypervisor",
+            "the single daemon-level hypervisor for Muta — orchestrating sessions, tracking progress across projects, and coordinating joint debugging and multi-session workflows",
         );
 
         let agent = Arc::new(Agent::new(provider, tools, identity));
-        agent.set_tier(muta_contracts::AgentTier::Supervisor);
+        agent.set_kind(muta_contracts::AgentKind::Master);
 
         Self {
             agent,
@@ -88,84 +88,95 @@ impl Supervisor {
     }
 }
 
-/// Tool for Supervisor to list and monitor all hosted sessions across the daemon.
-pub struct SupervisorListSessionsTool {
+/// Tool for Hypervisor to list and monitor all hosted sessions across the daemon.
+pub struct HypervisorListSessionsTool {
     registry: SessionRegistry,
 }
 
-impl SupervisorListSessionsTool {
+impl HypervisorListSessionsTool {
     pub fn new(registry: SessionRegistry) -> Self {
         Self { registry }
     }
 }
 
 #[async_trait]
-impl Tool for SupervisorListSessionsTool {
+impl Tool for HypervisorListSessionsTool {
     fn name(&self) -> &str {
-        "supervisor_list_sessions"
+        "hypervisor_list_sessions"
     }
 
     fn description(&self) -> &str {
-        "List all hosted and active sessions in the Muta daemon, including session IDs, project roots, status, token usage, and active masters."
+        "List all active and hosted sessions in the daemon with their statuses, message counts, token usage, and working memory digests."
     }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
-            "properties": {}
+            "properties": {
+                "include_idle": {
+                    "type": "boolean",
+                    "description": "Whether to include idle/sleeping sessions (default: true)"
+                }
+            }
         })
     }
 
-    async fn call(&self, _arguments: &str) -> Result<String, String> {
+    async fn call(&self, arguments: &str) -> Result<String, String> {
+        let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        let include_idle = args["include_idle"].as_bool().unwrap_or(true);
+
         let snapshot = self
             .registry
             .monitor_snapshot(MonitorAction {
                 watch: false,
-                include_idle: true,
+                include_idle,
             })
             .await;
+
         let sessions: Vec<serde_json::Value> = snapshot
             .sessions
             .iter()
             .map(|s| {
                 json!({
                     "session_id": s.id,
-                    "overview": s.overview,
-                    "project_root": s.project_root,
-                    "status": s.status.as_str(),
+                    "status": format!("{:?}", s.status),
+                    "message_count": s.message_count,
+                    "round": s.round,
                     "output_tokens": s.output_tokens,
-                    "round": s.round
+                    "digest_title": s.digest.as_ref().map(|d| d.title.clone()),
+                    "digest_intent": s.digest.as_ref().map(|d| d.intent.clone()),
+                    "overview": s.overview
                 })
             })
             .collect();
 
         Ok(json!({
-            "total_hosted_sessions": sessions.len(),
+            "total_hosted_sessions": snapshot.sessions.len(),
             "sessions": sessions
         })
         .to_string())
     }
 }
 
-/// Tool for Supervisor to inspect a session's detailed state and messages.
-pub struct SupervisorInspectSessionTool {
+/// Tool for Hypervisor to inspect a session's detailed state and messages.
+pub struct HypervisorInspectSessionTool {
     registry: SessionRegistry,
 }
 
-impl SupervisorInspectSessionTool {
+impl HypervisorInspectSessionTool {
     pub fn new(registry: SessionRegistry) -> Self {
         Self { registry }
     }
 }
 
 #[async_trait]
-impl Tool for SupervisorInspectSessionTool {
+impl Tool for HypervisorInspectSessionTool {
     fn name(&self) -> &str {
-        "supervisor_inspect_session"
+        "hypervisor_inspect_session"
     }
 
     fn description(&self) -> &str {
-        "Inspect a session in detail: status, recent turns, activity, and token usage."
+        "Inspect the detailed state, transcript history, and working memory of a specific hosted session."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -175,6 +186,10 @@ impl Tool for SupervisorInspectSessionTool {
                 "session_id": {
                     "type": "string",
                     "description": "The ID of the session to inspect"
+                },
+                "tail_messages": {
+                    "type": "integer",
+                    "description": "Number of most recent messages to retrieve (default: 10)"
                 }
             },
             "required": ["session_id"]
@@ -184,57 +199,69 @@ impl Tool for SupervisorInspectSessionTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
-        let session_id = args["session_id"].as_str().ok_or("Missing 'session_id'")?;
 
-        let snapshot = self
+        let session_id = args["session_id"]
+            .as_str()
+            .ok_or("Missing 'session_id' argument")?;
+        let tail_messages = args["tail_messages"].as_u64().unwrap_or(10) as usize;
+
+        let host = self
             .registry
-            .monitor_snapshot(MonitorAction {
-                watch: false,
-                include_idle: true,
+            .get(session_id)
+            .await
+            .ok_or_else(|| format!("Session '{session_id}' not found in registry"))?;
+
+        let history = host.session.full_transcript().await;
+        let total_messages = history.len();
+        let start_idx = total_messages.saturating_sub(tail_messages);
+        let recent_slice = &history[start_idx..];
+
+        let messages: Vec<serde_json::Value> = recent_slice
+            .iter()
+            .map(|m| {
+                json!({
+                    "role": format!("{:?}", m.role),
+                    "content": m.content
+                })
             })
-            .await;
-        let session = snapshot
-            .sessions
-            .into_iter()
-            .find(|s| s.id == session_id)
-            .ok_or_else(|| format!("Session '{session_id}' not found"))?;
+            .collect();
+
+        let (digest, _) = host.session.digest().await;
 
         Ok(json!({
-            "session_id": session.id,
-            "overview": session.overview,
-            "project_root": session.project_root,
-            "status": session.status.as_str(),
-            "output_tokens": session.output_tokens,
-            "round": session.round,
-            "activity": session.activity
+            "session_id": session_id,
+            "total_messages": total_messages,
+            "recent_messages_count": messages.len(),
+            "recent_messages": messages,
+            "digest": digest
         })
         .to_string())
     }
 }
 
-/// Tool for Supervisor to send top-down instructions or guidance to a session Master over the mesh.
-pub struct SupervisorInstructSessionTool {
+/// Tool for Hypervisor to send top-down instructions or guidance to a session Master over the mesh.
+pub struct HypervisorInstructSessionTool {
     tracker: Arc<MeshTracker>,
-    supervisor_address: MeshAddress,
+    hypervisor_address: MeshAddress,
 }
 
-impl SupervisorInstructSessionTool {
-    pub fn new(tracker: Arc<MeshTracker>, supervisor_address: MeshAddress) -> Self {
+impl HypervisorInstructSessionTool {
+    pub fn new(tracker: Arc<MeshTracker>, hypervisor_address: MeshAddress) -> Self {
         Self {
             tracker,
-            supervisor_address,
+            hypervisor_address,
         }
     }
 }
 
 #[async_trait]
-impl Tool for SupervisorInstructSessionTool {
+impl Tool for HypervisorInstructSessionTool {
     fn name(&self) -> &str {
-        "supervisor_instruct_session"
+        "hypervisor_instruct_session"
     }
 
     fn description(&self) -> &str {
-        "Send top-down instruction or guidance directly to a session's Master agent over the mesh."
+        "Send top-down instructions or steering guidance from the Hypervisor to a session Master over the agent mesh network."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -243,11 +270,11 @@ impl Tool for SupervisorInstructSessionTool {
             "properties": {
                 "session_id": {
                     "type": "string",
-                    "description": "The target session ID whose Master receives the instruction"
+                    "description": "The ID of the target session"
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "The top-down guidance or task instruction"
+                    "description": "The directive or guidance for the session Master"
                 }
             },
             "required": ["session_id", "instruction"]
@@ -257,78 +284,80 @@ impl Tool for SupervisorInstructSessionTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
-        let session_id = args["session_id"].as_str().ok_or("Missing 'session_id'")?;
+
+        let session_id = args["session_id"]
+            .as_str()
+            .ok_or("Missing 'session_id' argument")?;
         let instruction = args["instruction"]
             .as_str()
-            .ok_or("Missing 'instruction'")?;
+            .ok_or("Missing 'instruction' argument")?;
 
         let recipient = MeshAddress::master(session_id);
         let envelope = MeshEnvelope::new(
-            Some(self.supervisor_address.clone()),
-            recipient.clone(),
+            Some(self.hypervisor_address.clone()),
+            recipient,
             MeshMessage::Instruction {
                 body: instruction.to_string(),
             },
         );
 
-        let id = envelope.id.clone();
+        let msg_id = envelope.id.clone();
         self.tracker
             .send(envelope)
-            .map_err(|e| format!("Failed to deliver instruction to session master: {e}"))?;
+            .map_err(|e| format!("Failed to send instruction via mesh: {e}"))?;
 
         Ok(json!({
-            "status": "instructed",
-            "envelope_id": id,
-            "session_id": session_id,
-            "recipient": recipient.display()
+            "status": "delivered",
+            "message_id": msg_id,
+            "target_session": session_id
         })
         .to_string())
     }
 }
 
-/// Tool for Supervisor to coordinate joint debugging across multiple sessions (联调).
-pub struct SupervisorCoordinateDebugTool {
+/// Tool for Hypervisor to coordinate joint debugging across multiple sessions (联调).
+pub struct HypervisorCoordinateDebugTool {
     registry: SessionRegistry,
     tracker: Arc<MeshTracker>,
-    supervisor_address: MeshAddress,
+    hypervisor_address: MeshAddress,
 }
 
-impl SupervisorCoordinateDebugTool {
+impl HypervisorCoordinateDebugTool {
     pub fn new(
         registry: SessionRegistry,
         tracker: Arc<MeshTracker>,
-        supervisor_address: MeshAddress,
+        hypervisor_address: MeshAddress,
     ) -> Self {
         Self {
             registry,
             tracker,
-            supervisor_address,
+            hypervisor_address,
         }
     }
 }
 
 #[async_trait]
-impl Tool for SupervisorCoordinateDebugTool {
+impl Tool for HypervisorCoordinateDebugTool {
     fn name(&self) -> &str {
-        "supervisor_coordinate_debug"
+        "hypervisor_coordinate_debug"
     }
 
     fn description(&self) -> &str {
-        "Coordinate joint debugging (联调) across multiple sessions: select participants, align progress, and dispatch coordination instructions."
+        "Coordinate joint debugging (联调) across multiple sessions — aggregating cross-session logs and dispatching alignment directives."
     }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "session_ids": {
+                "target_sessions": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "List of session IDs involved in joint debugging. Empty means all hosted sessions."
+                    "description": "Optional list of session IDs to involve in joint debugging (if omitted, all hosted sessions are considered)"
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "Optional joint debugging instruction to broadcast to all participating masters."
+                    "description": "Optional alignment directive to broadcast to all participating session Masters"
                 }
             }
         })
@@ -336,13 +365,9 @@ impl Tool for SupervisorCoordinateDebugTool {
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-
-        let requested_sessions: Option<Vec<String>> = args["session_ids"].as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        });
-
+        let requested_sessions: Option<Vec<String>> = args["target_sessions"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
         let instruction = args["instruction"].as_str();
 
         let snapshot = self
@@ -369,7 +394,7 @@ impl Tool for SupervisorCoordinateDebugTool {
             for session in &participating_sessions {
                 let recipient = MeshAddress::master(&session.id);
                 let envelope = MeshEnvelope::new(
-                    Some(self.supervisor_address.clone()),
+                    Some(self.hypervisor_address.clone()),
                     recipient,
                     MeshMessage::Instruction {
                         body: format!("[Joint Debugging / 联调]: {instr}"),
@@ -395,7 +420,7 @@ mod tests {
     use super::*;
     use crate::registry::HostParams;
     use crate::ui_bridge::{CopyOutcome, UiBridge};
-    use muta_contracts::{AgentTier, MasterPreset, Message, ModelRequest, Provider, Role};
+    use muta_contracts::{MasterPreset, Message, MeshStation, ModelRequest, Provider, Role};
 
     struct DummyUi;
     #[async_trait::async_trait]
@@ -414,7 +439,7 @@ mod tests {
         ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
-                "supervisor response",
+                "hypervisor response",
             )))
         }
         async fn stream_chat(
@@ -426,13 +451,13 @@ mod tests {
         > {
             use futures::stream;
             Ok(Box::pin(stream::once(async {
-                Ok("supervisor response".to_string())
+                Ok("hypervisor response".to_string())
             })))
         }
     }
 
     #[tokio::test]
-    async fn supervisor_construction_and_tools() {
+    async fn hypervisor_construction_and_tools() {
         let params = HostParams {
             identity: AgentIdentity::new("muta", "coding"),
             master: MasterPreset::developer(),
@@ -442,21 +467,21 @@ mod tests {
         let tracker = Arc::new(MeshTracker::new());
         let provider = Arc::new(DummyProvider);
 
-        let supervisor = Supervisor::new(provider, registry.clone(), tracker.clone());
+        let hypervisor = Hypervisor::new(provider, registry.clone(), tracker.clone());
 
-        assert_eq!(supervisor.address().tier, AgentTier::Supervisor);
-        assert_eq!(supervisor.address().agent, "supervisor");
+        assert_eq!(hypervisor.address().station, MeshStation::Hypervisor);
+        assert_eq!(hypervisor.address().agent, "hypervisor");
 
         // List sessions tool
-        let list_tool = SupervisorListSessionsTool::new(registry.clone());
+        let list_tool = HypervisorListSessionsTool::new(registry.clone());
         let list_out = list_tool.call("{}").await.unwrap();
         assert!(list_out.contains("total_hosted_sessions"));
 
         // Joint coordinate debug tool
-        let coord_tool = SupervisorCoordinateDebugTool::new(
+        let coord_tool = HypervisorCoordinateDebugTool::new(
             registry.clone(),
             tracker.clone(),
-            supervisor.address().clone(),
+            hypervisor.address().clone(),
         );
         let coord_out = coord_tool.call("{}").await.unwrap();
         assert!(coord_out.contains("participating_sessions_count"));

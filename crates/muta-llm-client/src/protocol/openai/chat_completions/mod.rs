@@ -261,12 +261,18 @@ impl Provider for OpenAiChatCompletionsProvider {
             .prompt_cache
             .resolve(&request)
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: false,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 cache_plan: &cache_plan,
@@ -323,12 +329,18 @@ impl Provider for OpenAiChatCompletionsProvider {
             .prompt_cache
             .resolve(&request)
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: true,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 cache_plan: &cache_plan,
@@ -357,12 +369,18 @@ impl Provider for OpenAiChatCompletionsProvider {
             .prompt_cache
             .resolve(&request)
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: true,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 cache_plan: &cache_plan,
@@ -490,6 +508,7 @@ mod tests {
             request::BodyInput {
                 model: "test-model",
                 stream: false,
+                instructions: None,
                 tool_specs: Some(&tool_specs),
                 reasoning_effort: None,
                 cache_plan: &DEFAULT_CACHE_PLAN,

@@ -508,10 +508,16 @@ impl GoogleProvider {
                 request::max_thinking_budget(&self.endpoint.model),
             )
         };
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let raw_body = request::body(
             messages,
             request::BodyInput {
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 include_thoughts,
                 thinking,

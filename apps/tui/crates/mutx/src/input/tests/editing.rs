@@ -609,9 +609,9 @@ fn ctrl_b_moves_caret_back_one_char() {
 }
 
 #[test]
-fn ctrl_arrows_drive_focus() {
-    // Ctrl+↑/↓ enter focus from the input box (no focus yet) and keep
-    // cycling once a step is focused. Bare Tab stays a no-op.
+fn alt_arrows_and_alt_o_drive_focus() {
+    // Alt+↑ / Alt+O enter focus from the input box (no focus yet) and Alt+↓ / Alt+O / Esc clear focus.
+    // Bare Tab stays a no-op.
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
@@ -619,7 +619,18 @@ fn ctrl_arrows_drive_focus() {
             &mut input,
             &mut cursor,
             KeyCode::Up,
-            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            crate::Modal::None,
+            false,
+        ),
+        InputAction::FocusPrevTarget
+    );
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Char('o'),
+            KeyModifiers::ALT,
             crate::Modal::None,
             false,
         ),
@@ -630,11 +641,22 @@ fn ctrl_arrows_drive_focus() {
             &mut input,
             &mut cursor,
             KeyCode::Down,
-            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
             crate::Modal::None,
             true,
         ),
-        InputAction::FocusNextTarget
+        InputAction::ClearFocusedTarget
+    );
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Char('o'),
+            KeyModifiers::ALT,
+            crate::Modal::None,
+            true,
+        ),
+        InputAction::ClearFocusedTarget
     );
     assert_eq!(key_with_focus(KeyCode::Tab), InputAction::None);
 }
@@ -697,11 +719,10 @@ fn ctrl_arrows_page_scroll_modal_body() {
     }
 }
 
-/// On the no-modal baseline, Ctrl+↑ / Ctrl+↓ still drive transcript item
-/// focus (the established gesture), not page-scroll — the modal page-scroll
-/// arms are gated on `scrolls_own_body`, so the baseline is untouched.
+/// On the no-modal baseline, Alt+↑ / Alt+↓ drive transcript item focus
+/// switching, while PageUp / PageDown walk prompt history.
 #[test]
-fn ctrl_arrows_keep_transcript_focus_on_no_modal() {
+fn alt_arrows_drive_transcript_focus_on_no_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
@@ -709,7 +730,7 @@ fn ctrl_arrows_keep_transcript_focus_on_no_modal() {
             &mut input,
             &mut cursor,
             KeyCode::Up,
-            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
             crate::Modal::None,
             false
         ),
@@ -720,11 +741,11 @@ fn ctrl_arrows_keep_transcript_focus_on_no_modal() {
             &mut input,
             &mut cursor,
             KeyCode::Down,
-            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
             crate::Modal::None,
-            false
+            true
         ),
-        InputAction::FocusNextTarget
+        InputAction::ClearFocusedTarget
     );
 }
 

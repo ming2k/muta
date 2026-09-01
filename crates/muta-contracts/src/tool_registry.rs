@@ -654,19 +654,19 @@ impl ToolSelection {
 /// An agent's tool requirement declaration against the pool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDeclaration {
-    /// Identifier or role of the declaring agent (e.g. "developer", "code_analyst", "explore", "supervisor").
+    /// Identifier or role of the declaring agent (e.g. "developer", "code_analyst", "explore").
     pub agent_name: String,
-    /// Tier of the agent making the declaration.
-    pub tier: crate::AgentTier,
+    /// Archetype/kind of the agent making the declaration.
+    pub kind: crate::AgentKind,
     /// The capability name scope requested.
     pub scope: ToolScope,
 }
 
 impl ToolDeclaration {
-    pub fn new(agent_name: impl Into<String>, tier: crate::AgentTier, scope: ToolScope) -> Self {
+    pub fn new(agent_name: impl Into<String>, kind: crate::AgentKind, scope: ToolScope) -> Self {
         Self {
             agent_name: agent_name.into(),
-            tier,
+            kind,
             scope,
         }
     }
@@ -1370,7 +1370,7 @@ mod tests {
 
         let decl = ToolDeclaration::new(
             "code_analyst",
-            crate::AgentTier::Master,
+            crate::AgentKind::Master,
             ToolScope::only(["read_text", "search_text"]),
         );
         pool.declare(decl.clone());

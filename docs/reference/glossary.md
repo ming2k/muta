@@ -33,16 +33,15 @@ the pre-ADR-0047 convention, which older documents may still use. See
 
 ## Roles
 
-The architecture defines a two-axis, three-plane model: **`Supervisor`** (fleet control), **`Master`** & **`Runner`** (operational core), and **`Steward`** (harness cognitive infrastructure).
-`agent` is the umbrella term; the roles define mission, scope, and planes (ADR-0150).
+The architecture defines the Worker-Station Model (ADR-0167): strictly two **`AgentKind`** archetypes (**`Master`** & **`Runner`**) placed into host stations (**`Hypervisor`**, **`Session`**, **`Subtask`**), with out-of-band **`CognitivePipeline`** utilities for the Agent Harness.
 
 | Term | Definition |
 |------|------------|
 | **agent** | Umbrella term for an autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). |
-| **supervisor** | The singleton daemon-level agent orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. |
-| **master** | The session-level agent (exactly one active per session). Carries presets (e.g. Developer, Code Analyst) and manages subordinate runners. Owns session conversation and `[master]` config table (`hard_stop_turns`, `allow_model_stdin`, `doom_guard`). |
-| **runner** | A bounded sub-agent spawned by a master (via `runner` or `runner_code` tools) with fresh context, scoped tools, and specific missions. |
-| **steward** | The harness-internal cognitive attendant executing out-of-band, stateless, typed tasks (`StewardTask`: semantic loop detection, sanity verification, context compaction, session titling) for the Agent Harness. Zero-tool, fail-open. [ADR-0150](../adr/0150-two-axis-agent-architecture-and-harness-steward.md) |
+| **master** | The primary cognitive driving brain archetype (full Agentic loop, tool authority, intent reasoning). Places into Session stations as conversation brains or into Daemon station as the Hypervisor coordinator. |
+| **runner** | A bounded sub-agent worker archetype spawned by a master (via `runner_explore` or `runner_code` tools) with fresh context, scoped tools, and single-task lifecycles. |
+| **hypervisor** | The singleton daemon-level governance station (staffed by a Master agent) orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md) |
+| **cognitive pipeline** | Harness-internal, stateless, zero-tool typed LLM execution pipeline (`CognitiveTask`: stream repetition detection, working memory digest, session titling). Zero-tool, fail-open. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md) |
 
 ## Scheduling
 

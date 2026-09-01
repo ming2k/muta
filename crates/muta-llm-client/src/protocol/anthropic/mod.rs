@@ -285,12 +285,18 @@ impl Provider for AnthropicMessagesProvider {
         request: ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
         let cache_plan = self.resolve_cache_plan(&request)?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: false,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
@@ -332,12 +338,18 @@ impl Provider for AnthropicMessagesProvider {
         muta_contracts::ProviderError,
     > {
         let cache_plan = self.resolve_cache_plan(&request)?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: true,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
@@ -363,12 +375,18 @@ impl Provider for AnthropicMessagesProvider {
         muta_contracts::ProviderError,
     > {
         let cache_plan = self.resolve_cache_plan(&request)?;
-        let (messages, tool_specs) = request.into_parts();
+        let ModelRequest {
+            instructions,
+            messages,
+            tool_specs,
+            ..
+        } = request;
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream: true,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,

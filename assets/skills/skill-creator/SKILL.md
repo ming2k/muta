@@ -68,7 +68,7 @@ When two skills share the same name, higher-priority scopes override lower ones:
 
 Muta skills use a three-tier loading model to conserve context window and cost:
 
-1. **Discovery / Metadata** (~50-100 words): Only `name` and `description` are loaded during catalog listing and system prompts.
+1. **Discovery / Metadata** (~50-100 words): Only `name` and `description` are indexed for catalog listing (`muta skill ls`, `/skills` modal) and dynamic discovery without polluting the system prompt.
 2. **Skill Body (`SKILL.md`)** (< 500 lines recommended): Loaded lazily when invoked via `use_skill` or triggered by mention (`@<skill-name>`).
 3. **Bundled Resources**: Loaded on demand only when referenced or executed.
 

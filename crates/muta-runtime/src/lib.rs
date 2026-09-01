@@ -94,13 +94,13 @@ pub mod slash_handler;
 pub mod startup;
 pub mod task_fault_tolerance;
 pub use task_fault_tolerance as supervise;
-pub mod supervisor;
+pub mod hypervisor;
 pub mod ui_bridge;
 pub mod wire_channel;
 
 pub use background_jobs::{BackgroundJobEvent, BackgroundJobManager, SessionJobService};
+pub use hypervisor::Hypervisor;
 pub use session_driver::SessionDriver;
-pub use supervisor::Supervisor;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 
 // NOTE: identity (`MUTA_NAME`/`MUTA_MISSION`/`muta_identity`/

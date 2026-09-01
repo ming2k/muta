@@ -378,7 +378,7 @@ impl PermissionPolicy for BashPolicy {
             BashVerdict::Deny { output } => PolicyDecision::Deny { output },
             BashVerdict::Confirm { match_ } => {
                 if ctx.delegated {
-                    // Under YOLO mode, dangerous commands requiring confirmation are auto-approved.
+                    // Under delegated mode, dangerous commands requiring confirmation are auto-approved.
                     PolicyDecision::Pass
                 } else {
                     // Build the one-off dangerous-command prompt.

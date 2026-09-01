@@ -55,6 +55,8 @@ pub fn headers(api_key: &str, copilot: bool) -> Vec<(&'static str, String)> {
 pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
+    /// Structured instructions to project as the leading system message.
+    pub instructions: Option<&'a muta_contracts::InstructionBundle>,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
@@ -92,10 +94,21 @@ pub fn body_with_capabilities(
     let BodyInput {
         model: model_id,
         stream,
+        instructions,
         tool_specs,
         reasoning_effort,
         cache_plan,
     } = input;
+
+    let mut messages = messages;
+    if let Some(instructions) = instructions
+        && !instructions.is_empty()
+    {
+        let text = instructions.render_combined();
+        if !text.is_empty() {
+            messages.insert(0, Message::new(Role::System, text));
+        }
+    }
 
     // If the model doesn't support vision, strip inline images so the API
     // doesn't reject the request with "unknown variant `image_url`". The
@@ -309,6 +322,23 @@ mod tests {
     static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
         muta_contracts::ResolvedCachePlan::Unsupported;
 
+    fn test_body_input<'a>(
+        model: &'a str,
+        stream: bool,
+        tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
+        reasoning_effort: Option<Effort>,
+        cache_plan: &'a muta_contracts::ResolvedCachePlan,
+    ) -> BodyInput<'a> {
+        BodyInput {
+            model,
+            stream,
+            instructions: None,
+            tool_specs,
+            reasoning_effort,
+            cache_plan,
+        }
+    }
+
     #[test]
     fn request_filters_empty_assistant_history() {
         let body = super::body(
@@ -317,13 +347,7 @@ mod tests {
                 Message::new(Role::Assistant, ""),
                 Message::new(Role::User, "again"),
             ],
-            BodyInput {
-                model: "test-model",
-                stream: true,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", true, None, None, &DEFAULT_CACHE_PLAN),
         );
 
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
@@ -334,13 +358,7 @@ mod tests {
     fn request_includes_reasoning_effort_when_configured() {
         let body = super::body(
             vec![Message::new(Role::User, "think")],
-            BodyInput {
-                model: "gpt-5.5",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: Some(Effort::Xhigh),
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("gpt-5.5", false, None, Some(Effort::Xhigh), &DEFAULT_CACHE_PLAN),
         );
 
         assert_eq!(body["reasoning_effort"], "xhigh");
@@ -356,13 +374,7 @@ mod tests {
         };
         let body = super::body(
             vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                model: "kimi-k2.7-code",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &cache_plan,
-            },
+            test_body_input("kimi-k2.7-code", false, None, None, &cache_plan),
         );
         assert_eq!(body["prompt_cache_key"], "session-42");
     }
@@ -371,13 +383,7 @@ mod tests {
     fn request_omits_prompt_cache_key_when_absent() {
         let body = super::body(
             vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                model: "gpt-5.5",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("gpt-5.5", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         assert!(body.get("prompt_cache_key").is_none());
     }
@@ -433,13 +439,7 @@ mod tests {
                 orphan_result,
                 empty_id_result,
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
 
         let messages = body["messages"].as_array().unwrap();
@@ -476,13 +476,7 @@ mod tests {
                     ..Message::new(Role::Assistant, "")
                 },
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(
@@ -500,13 +494,7 @@ mod tests {
                     ..Message::new(Role::Assistant, "let me think")
                 },
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);
@@ -534,13 +522,7 @@ mod tests {
                     ..Message::new(Role::Tool, "result a")
                 },
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 3);
@@ -561,13 +543,7 @@ mod tests {
                     ..Message::new(Role::Assistant, "second")
                 },
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 3, "both assistants kept for their content");
@@ -592,13 +568,7 @@ mod tests {
                 },
                 Message::new(Role::Assistant, "all done"),
             ],
-            BodyInput {
-                model: "test-model",
-                stream: false,
-                tool_specs: None,
-                reasoning_effort: None,
-                cache_plan: &DEFAULT_CACHE_PLAN,
-            },
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 5, "healthy conversation untouched");

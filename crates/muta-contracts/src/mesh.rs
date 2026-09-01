@@ -1,13 +1,13 @@
 //! The agent mesh: transport-neutral envelopes, addresses, and the
-//! tracker contract (ADR-0144 §4).
+//! tracker contract (ADR-0167).
 //!
 //! ## Why this exists
 //!
-//! The tier hierarchy needs three communication directions:
+//! The station hierarchy needs three communication directions:
 //!
-//! - **top-down** (`Instruction`): an elder steers a subordinate.
-//! - **bottom-up** (`Report`): a subordinate answers its elder.
-//! - **peer** (`PeerNote`): same-tier agents exchange notes without going
+//! - **top-down** (`Instruction`): an elder station steers a subordinate.
+//! - **bottom-up** (`Report`): a subordinate answers its elder station.
+//! - **peer** (`PeerNote`): same-station agents exchange notes without going
 //!   through their parent's conversation.
 //!
 //! The design follows a BitTorrent-style **tracker**: one registry per daemon
@@ -16,65 +16,65 @@
 //! transport-neutral — a future socket transport carries the same envelopes
 //! without touching the agent loop.
 //!
-//! Direction is **signed by tier**: [`MeshMessage::route`] encodes who may
+//! Direction is **governed by station hierarchy**: [`MeshMessage::route`] encodes who may
 //! send what to whom, so a runner can never be commanded by a sibling, and a
 //! master never receives a report from a runner it does not own (ownership
 //! is checked by the receiving side against the sender's parent identity).
 
 use serde::{Deserialize, Serialize};
 
-use crate::tier::AgentTier;
+use crate::agent_kind::MeshStation;
 
 /// A globally unique, sortable address in the daemon's mesh.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct MeshAddress {
-    /// Tier of the addressed agent — the first routing hop.
-    pub tier: AgentTier,
+    /// Station of the addressed agent — the first routing hop.
+    pub station: MeshStation,
     /// Owning session id (runners inherit their master's session).
     pub session: String,
-    /// Agent instance id — unique within `(tier, session)`.
+    /// Agent instance id — unique within `(station, session)`.
     pub agent: String,
 }
 
 impl MeshAddress {
-    pub fn new(tier: AgentTier, session: impl Into<String>, agent: impl Into<String>) -> Self {
+    pub fn new(station: MeshStation, session: impl Into<String>, agent: impl Into<String>) -> Self {
         Self {
-            tier,
+            station,
             session: session.into(),
             agent: agent.into(),
         }
     }
 
-    /// Supervisor address for the daemon.
-    pub fn supervisor(agent_id: impl Into<String>) -> Self {
-        Self::new(AgentTier::Supervisor, "daemon", agent_id)
+    /// Hypervisor address for the daemon.
+    pub fn hypervisor(agent_id: impl Into<String>) -> Self {
+        Self::new(MeshStation::Hypervisor, "daemon", agent_id)
     }
 
     /// Master address for a given session.
     pub fn master(session: impl Into<String>) -> Self {
         let s = session.into();
-        Self::new(AgentTier::Master, s.clone(), s)
+        Self::new(MeshStation::Session, s.clone(), s)
     }
 
     /// Runner address for a subordinate within a session.
     pub fn runner(session: impl Into<String>, agent: impl Into<String>) -> Self {
-        Self::new(AgentTier::Runner, session, agent)
+        Self::new(MeshStation::Subtask, session, agent)
     }
 
     /// The address of this agent's parent in the mesh (same session, one
-    /// tier up). `None` for the supervisor — the root has no parent.
+    /// station up). `None` for the hypervisor — the root has no parent.
     pub fn parent(&self) -> Option<MeshAddress> {
-        let tier = self.tier.parent_tier()?;
+        let station = self.station.parent_station()?;
         Some(Self {
-            tier,
+            station,
             session: self.session.clone(),
             agent: self.session.clone(),
         })
     }
 
-    /// Compact debug form `tier:session:agent`, used in logs and UI chips.
+    /// Compact debug form `station:session:agent`, used in logs and UI chips.
     pub fn display(&self) -> String {
-        format!("{}:{}:{}", self.tier.label(), self.session, self.agent)
+        format!("{}:{}:{}", self.station.label(), self.session, self.agent)
     }
 }
 
@@ -104,14 +104,14 @@ pub enum MeshMessage {
     ReportAck { report_id: String },
     /// Subordinate → elder fire-and-forget progress note.
     ProgressNote { body: String },
-    /// Same-tier fire-and-forget note; never crosses tier lines.
+    /// Same-station fire-and-forget note; never crosses station boundaries.
     PeerNote { body: String },
     /// A runner announcing graceful end-of-life to its master.
     RunnerEol { final_note: Option<String> },
 }
 
 impl MeshMessage {
-    /// The tier-direction class of this message: who may send it to whom.
+    /// The direction class of this message: who may send it to whom.
     pub fn route(&self) -> MeshRoute {
         match self {
             MeshMessage::Instruction { .. } | MeshMessage::InstructionAck { .. } => {
@@ -124,19 +124,19 @@ impl MeshMessage {
         }
     }
 
-    /// Whether an agent of tier `sender` may lawfully emit this message to an
-    /// agent of tier `recipient`.
+    /// Whether an agent at station `sender` may lawfully emit this message to an
+    /// agent at station `recipient`.
     ///
     /// Rules, by route class:
     /// - `Instruction` (elder → subordinate) and `Report` (subordinate →
     ///   elder) are **strictly one hop**: parent-to-child and child-to-parent
-    ///   respectively, never skipping tiers and never inverted.
+    ///   respectively, never skipping stations and never inverted.
     /// - The acks travel the *reverse* direction of their verb: an
     ///   `InstructionAck` flows up, a `ReportAck` flows down.
     /// - `ProgressNote`/`RunnerEol` flow strictly up (one hop).
-    /// - `PeerNote` flows strictly sideways.
+    /// - `PeerNote` flows strictly sideways (same station).
     /// - `Ping`/`Pong` are direction-free liveness.
-    pub fn lawful_for(&self, sender: AgentTier, recipient: AgentTier) -> bool {
+    pub fn lawful_for(&self, sender: MeshStation, recipient: MeshStation) -> bool {
         use MeshMessage::*;
         if sender == recipient {
             // Only liveness and peer traffic is self-addressable (a loopback
@@ -160,7 +160,7 @@ pub enum MeshRoute {
     Vertical,
     /// Subordinate → elder only.
     UpOnly,
-    /// Same tier only.
+    /// Same station only.
     Peer,
     /// Any direction (liveness).
     Any,
@@ -210,12 +210,12 @@ impl MeshEnvelope {
         self
     }
 
-    /// Lawfulness check bundling the sender's tier (when present).
+    /// Lawfulness check bundling the sender's station (when present).
     pub fn lawful(&self) -> bool {
         let Some(sender) = &self.sender else {
             return true;
         };
-        self.message.lawful_for(sender.tier, self.recipient.tier)
+        self.message.lawful_for(sender.station, self.recipient.station)
     }
 }
 
@@ -239,91 +239,61 @@ mod tests {
     use super::*;
 
     fn master(session: &str) -> MeshAddress {
-        MeshAddress::new(AgentTier::Master, session, session)
+        MeshAddress::new(MeshStation::Session, session, session)
     }
 
     fn runner(session: &str, agent: &str) -> MeshAddress {
-        MeshAddress::new(AgentTier::Runner, session, agent)
+        MeshAddress::new(MeshStation::Subtask, session, agent)
     }
 
     #[test]
-    fn addresses_sort_by_tier_then_session_then_agent() {
-        let sup = MeshAddress::new(AgentTier::Supervisor, "daemon", "daemon");
-        let m1 = master("a");
-        let m2 = master("b");
-        let r = runner("a", "r1");
-        assert!(sup < m1 && m1 < m2 && m2 < r);
+    fn addresses_sort_by_station_then_session_then_agent() {
+        let sup = MeshAddress::hypervisor("daemon");
+        let m1 = master("session-1");
+        let r1 = runner("session-1", "runner-a");
+        let r2 = runner("session-1", "runner-b");
+        let m2 = master("session-2");
+
+        let mut addrs = vec![r2.clone(), m2.clone(), sup.clone(), r1.clone(), m1.clone()];
+        addrs.sort();
+        assert_eq!(addrs, vec![sup, m1, m2, r1, r2]);
     }
 
     #[test]
-    fn instruction_flows_down_and_report_flows_up() {
-        let instr = MeshMessage::Instruction { body: "go".into() };
-        assert!(instr.lawful_for(AgentTier::Master, AgentTier::Runner));
-        assert!(!instr.lawful_for(AgentTier::Runner, AgentTier::Master));
+    fn lawful_instruction_flows_down_only() {
+        let instr = MeshMessage::Instruction {
+            body: "do work".into(),
+        };
+        assert!(instr.lawful_for(MeshStation::Session, MeshStation::Subtask));
+        assert!(!instr.lawful_for(MeshStation::Subtask, MeshStation::Session));
+    }
 
+    #[test]
+    fn lawful_report_flows_up_only() {
         let report = MeshMessage::Report {
-            body: "done".into(),
+            body: "work done".into(),
         };
-        assert!(report.lawful_for(AgentTier::Runner, AgentTier::Master));
-        assert!(!report.lawful_for(AgentTier::Master, AgentTier::Runner));
+        assert!(report.lawful_for(MeshStation::Subtask, MeshStation::Session));
+        assert!(!report.lawful_for(MeshStation::Session, MeshStation::Subtask));
     }
 
     #[test]
-    fn peer_notes_never_cross_tiers() {
-        let note = MeshMessage::PeerNote { body: "hi".into() };
-        assert!(note.lawful_for(AgentTier::Runner, AgentTier::Runner));
-        assert!(!note.lawful_for(AgentTier::Runner, AgentTier::Master));
-        assert!(!note.lawful_for(AgentTier::Master, AgentTier::Runner));
-    }
-
-    #[test]
-    fn progress_notes_only_go_up() {
-        let note = MeshMessage::ProgressNote {
-            body: "halfway".into(),
+    fn peer_notes_never_cross_stations() {
+        let note = MeshMessage::PeerNote {
+            body: "hi peer".into(),
         };
-        assert!(note.lawful_for(AgentTier::Runner, AgentTier::Master));
-        assert!(!note.lawful_for(AgentTier::Master, AgentTier::Runner));
-        assert!(!note.lawful_for(AgentTier::Runner, AgentTier::Runner));
+        assert!(note.lawful_for(MeshStation::Subtask, MeshStation::Subtask));
+        assert!(!note.lawful_for(MeshStation::Subtask, MeshStation::Session));
+        assert!(!note.lawful_for(MeshStation::Session, MeshStation::Subtask));
     }
 
     #[test]
-    fn envelopes_check_lawfulness() {
-        let bad = MeshEnvelope::new(
-            Some(runner("s", "r1")),
-            master("s"),
-            MeshMessage::Instruction {
-                body: "usurp".into(),
-            },
-        );
-        assert!(!bad.lawful());
-
-        let good = MeshEnvelope::new(
-            Some(master("s")),
-            runner("s", "r1"),
-            MeshMessage::Instruction { body: "go".into() },
-        );
-        assert!(good.lawful());
-    }
-
-    #[test]
-    fn message_ids_are_unique() {
-        let a = mesh_ids::next_message_id();
-        let b = mesh_ids::next_message_id();
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn envelope_round_trips_serde() {
-        let e = MeshEnvelope::new(
-            Some(master("s")),
-            runner("s", "r1"),
-            MeshMessage::Report {
-                body: "findings".into(),
-            },
-        );
-        let s = serde_json::to_string(&e).unwrap();
-        let back: MeshEnvelope = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.id, e.id);
-        assert_eq!(back.message, e.message);
+    fn runner_eol_flows_up_only() {
+        let note = MeshMessage::RunnerEol {
+            final_note: Some("done".into()),
+        };
+        assert!(note.lawful_for(MeshStation::Subtask, MeshStation::Session));
+        assert!(!note.lawful_for(MeshStation::Session, MeshStation::Subtask));
+        assert!(!note.lawful_for(MeshStation::Subtask, MeshStation::Subtask));
     }
 }

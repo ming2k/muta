@@ -35,6 +35,8 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
+    /// Structured instructions from the instruction manifest.
+    pub instructions: Option<&'a muta_contracts::InstructionBundle>,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     /// Converted to Anthropic's `{name, description, input_schema}` shape.
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
@@ -60,6 +62,7 @@ pub fn body_with_capabilities(
     let BodyInput {
         model: model_id,
         stream,
+        instructions,
         tool_specs,
         max_tokens,
         thinking,
@@ -86,7 +89,9 @@ pub fn body_with_capabilities(
 
     // Pull leading system message(s) out of the list; Anthropic carries
     // system as a top-level string, not a role.
-    let mut system_text = String::new();
+    let mut system_text = instructions
+        .map(|b| b.render_combined())
+        .unwrap_or_default();
     let mut conversation: Vec<Message> = Vec::with_capacity(messages.len());
     for message in messages {
         if message.role == Role::System {

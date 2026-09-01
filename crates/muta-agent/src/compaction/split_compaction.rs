@@ -151,12 +151,13 @@ pub async fn compact_entries(
         conversation_text, COMPACTION_USER_INSTRUCTIONS
     );
 
-    let messages = vec![
-        Message::new(Role::System, COMPACTION_SYSTEM_PROMPT),
-        Message::new(Role::User, prompt_body),
-    ];
-
-    let request = ModelRequest::ephemeral(messages);
+    let instructions = muta_contracts::InstructionBundle::from_single(
+        "compaction.split",
+        muta_contracts::InstructionTier::Task,
+        COMPACTION_SYSTEM_PROMPT,
+    );
+    let messages = vec![Message::new(Role::User, prompt_body)];
+    let request = ModelRequest::ephemeral(messages).with_instructions(instructions);
 
     let response = match tokio::time::timeout(COMPACTION_TIMEOUT, provider.chat(request)).await {
         Ok(Ok(msg)) => msg,

@@ -27,6 +27,7 @@ fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> Body
     BodyInput {
         model: &provider.endpoint.model,
         stream,
+        instructions: None,
         tool_specs: None,
         max_tokens: provider.max_tokens,
         thinking: provider.thinking,
@@ -131,6 +132,7 @@ fn request_body_includes_tools_in_anthropic_shape() {
         BodyInput {
             model: &provider.endpoint.model,
             stream: false,
+            instructions: None,
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
@@ -196,6 +198,7 @@ fn cache_breakpoints_hit_all_four_zones() {
         BodyInput {
             model: &provider.endpoint.model,
             stream: false,
+            instructions: None,
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
@@ -232,6 +235,7 @@ fn disabled_cache_plan_omits_cache_breakpoints() {
         BodyInput {
             model: &provider.endpoint.model,
             stream: false,
+            instructions: None,
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
@@ -261,6 +265,7 @@ fn cache_breakpoints_never_exceed_four_cap() {
         BodyInput {
             model: &provider.endpoint.model,
             stream: false,
+            instructions: None,
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,

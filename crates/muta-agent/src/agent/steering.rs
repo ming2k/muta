@@ -159,18 +159,18 @@ impl Agent {
     /// `from_toolset`. A role whose identity should differ per instance composes
     /// [`muta_contracts::MasterPreset::with_identity`] before construction.
     ///
-    /// The position of this agent in the hierarchy (Supervisor, Master, Runner).
-    pub fn tier(&self) -> muta_contracts::AgentTier {
-        self.tier
+    /// The archetype / kind of this agent (Master, Runner).
+    pub fn kind(&self) -> muta_contracts::AgentKind {
+        self.kind
             .read()
             .map(|t| *t)
-            .unwrap_or(muta_contracts::AgentTier::Master)
+            .unwrap_or(muta_contracts::AgentKind::Master)
     }
 
-    /// Set this agent's position in the hierarchy.
-    pub fn set_tier(&self, tier: muta_contracts::AgentTier) {
-        if let Ok(mut guard) = self.tier.write() {
-            *guard = tier;
+    /// Set this agent's archetype / kind.
+    pub fn set_kind(&self, kind: muta_contracts::AgentKind) {
+        if let Ok(mut guard) = self.kind.write() {
+            *guard = kind;
         }
     }
 

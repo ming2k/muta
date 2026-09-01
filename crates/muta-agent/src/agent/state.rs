@@ -110,7 +110,7 @@ impl Agent {
 
         Self {
             provider,
-            tier: std::sync::RwLock::new(muta_contracts::AgentTier::Master),
+            kind: std::sync::RwLock::new(muta_contracts::AgentKind::Master),
             pool,
             toolset,
             resolved_tools,
@@ -269,7 +269,6 @@ impl Agent {
             tool_names,
             model_guidance,
             provider_guidance,
-            delegated: self.delegated(),
             project_rules: self
                 .project_rules
                 .read()
@@ -354,7 +353,16 @@ impl Agent {
     /// including the freshly composed system prompt and injected skills —
     /// rather than a degenerate reconstruction.
     pub fn prepare_request_messages_debug(&self, messages: &mut Vec<Message>) {
-        *messages = self.model_request(messages).messages;
+        let req = self.model_request(messages);
+        let mut debug_messages = Vec::new();
+        if !req.instructions.is_empty() {
+            debug_messages.push(
+                Message::new(Role::System, req.instructions.render_combined())
+                    .with_origin(muta_contracts::InjectionOrigin::new(muta_contracts::InjectionKind::SystemPrompt))
+            );
+        }
+        debug_messages.extend(req.messages);
+        *messages = debug_messages;
     }
 
     /// A shared handle to this agent's live variant selection (the **override**
@@ -770,8 +778,8 @@ impl Agent {
         *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = muta_contracts::TodoList::default();
     }
 
-    /// Access the Steward cognitive attendant bound to this agent's provider.
-    pub fn steward(&self) -> crate::steward::Steward {
-        crate::steward::Steward::new(self.provider.clone())
+    /// Access the harness cognitive pipeline for out-of-band typed execution.
+    pub fn cognitive(&self) -> crate::cognitive::CognitivePipeline {
+        crate::cognitive::CognitivePipeline::new(self.provider.clone())
     }
 }

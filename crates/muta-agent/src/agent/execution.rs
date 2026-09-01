@@ -424,7 +424,7 @@ impl Agent {
             })
             .unwrap_or_default();
         if let Some(input_kind) = crate::shell_input::classify(&command) {
-            // YOLO mode, or the operator has opted out of the interactive
+            // Delegated mode, or the operator has opted out of the interactive
             // input panel: no one is going to type into the prompt, so the
             // inline panel would either deadlock or just disrupt.
             // Close stdin instead — the command then fails fast with a non-interactive remedy.
@@ -515,7 +515,7 @@ impl Agent {
             }
             crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
                 if self.delegated() {
-                    // Under YOLO mode, missing authority is auto-approved.
+                    // Under delegated mode, missing authority is auto-approved.
                 } else {
                     // The single interactive-park path. Both the broker (a
                     // write/execute the user must approve) and the bash

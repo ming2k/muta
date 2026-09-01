@@ -33,7 +33,7 @@ fn stream_loop_candidate_key(
 }
 
 /// Keep the beginning and live tail of a large field. Most turns fit in full;
-/// the bound prevents one diagnostic call from exceeding the Steward model's
+/// the bound prevents one diagnostic call from exceeding the cognitive model's
 /// context on an already-pathological stream. The explicit omission marker is
 /// evidence too: the reviewer knows it received a projection, not a seamless
 /// string.
@@ -110,7 +110,7 @@ impl Agent {
     /// key acquitted earlier in this provider response never re-consults
     /// (its detector re-arms from zero instead), at most one consult is in
     /// flight at a time, and any malformed/failed consultation fail-opens
-    /// to `no` inside [`crate::steward::Steward`].
+    /// to `no` inside [`crate::cognitive::CognitivePipeline`].
     #[allow(clippy::too_many_arguments)] // mirrors the two call sites' evidence set; bundling would obscure the channel symmetry
     fn dispatch_stream_loop_candidate(
         &self,
@@ -144,12 +144,12 @@ impl Agent {
         ));
     }
 
-    /// Snapshot the evidence and spawn the Stream Sentinel consult as a
-    /// detached task. The task always resolves (the Steward fail-opens on
+    /// Snapshot the evidence and spawn the cognitive loop review as a
+    /// detached task. The task always resolves (the cognitive pipeline fail-opens on
     /// its own timeout, provider failures, and malformed answers) and sends
     /// exactly one verdict; a failed send merely means the round moved on
     /// without it. Running detached also guarantees the provider
-    /// side-channel drain inside `Steward::consult` completes even when the
+    /// side-channel drain inside `CognitivePipeline::consult` completes even when the
     /// round exits before the verdict lands.
     fn spawn_stream_loop_review(
         &self,
@@ -167,9 +167,9 @@ impl Agent {
             reasoning_text: project_stream_loop_field(reasoning_text, STREAM_LOOP_TURN_FIELD_CHARS),
         };
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel();
-        let steward = self.steward();
+        let cognitive = self.cognitive();
         tokio::spawn(async move {
-            let verdict = steward.review_stream_loop(input).await;
+            let verdict = cognitive.review_stream_loop(input).await;
             let _ = verdict_tx.send(verdict);
         });
         PendingStreamLoopReview {
@@ -418,9 +418,9 @@ impl Agent {
             let mut reasoning_loop_detector =
                 crate::stream_loop_detector::StreamLoopDetector::new(1024);
             let mut stream_loop_incident: Option<StreamLoopIncident> = None;
-            let mut steward_cleared_candidates = std::collections::HashSet::new();
-            // Stream Sentinel consults run detached from this loop: the stream
-            // keeps rendering while the Steward deliberates, and the verdict is
+            let mut cognitive_cleared_candidates = std::collections::HashSet::new();
+            // Cognitive loop reviews run detached from this loop: the stream
+            // keeps rendering while the cognitive pipeline deliberates, and the verdict is
             // applied at the next event boundary. At most one consult is in
             // flight at a time; the level-triggered detector re-fires after an
             // acquittal, so a still-looping stream is never left unreviewed.
@@ -480,21 +480,20 @@ impl Agent {
                             channel = ?review.channel,
                             pattern = %review.pattern.description(),
                             verdict = ?verdict,
-                            office = StewardOffice::StreamSentinel.id(),
-                            "stream-loop candidate reviewed by Stream Sentinel"
+                            "stream-loop candidate reviewed by cognitive pipeline"
                         );
                         if verdict.is_loop() {
                             match review.channel {
                                 muta_contracts::StreamLoopChannel::AssistantText => {
                                     tracing::warn!(
                                         pattern = %review.pattern.description(),
-                                        "Steward confirmed in-flight text stream loop; aborting stream early"
+                                        "Cognitive pipeline confirmed in-flight text stream loop; aborting stream early"
                                     );
                                 }
                                 muta_contracts::StreamLoopChannel::Reasoning => {
                                     tracing::warn!(
                                         pattern = %review.pattern.description(),
-                                        "Steward confirmed in-flight reasoning stream loop; aborting stream early"
+                                        "Cognitive pipeline confirmed in-flight reasoning stream loop; aborting stream early"
                                     );
                                 }
                             }
@@ -504,7 +503,7 @@ impl Agent {
                             });
                             break;
                         }
-                        steward_cleared_candidates.insert(review.candidate_key);
+                        cognitive_cleared_candidates.insert(review.candidate_key);
                         match review.channel {
                             muta_contracts::StreamLoopChannel::AssistantText => {
                                 text_loop_detector.reset();
@@ -619,7 +618,7 @@ impl Agent {
                                         &reasoning_content,
                                         muta_contracts::StreamLoopChannel::AssistantText,
                                         pat,
-                                        &steward_cleared_candidates,
+                                        &cognitive_cleared_candidates,
                                         &mut pending_stream_loop_review,
                                     );
                                 }
@@ -633,7 +632,7 @@ impl Agent {
                                 emitted_reasoning = true;
                                 if let Some(pat) = reasoning_loop_detector.push_and_check(&delta) {
                                     // Async consult: keep consuming deltas
-                                    // while the Stream Sentinel deliberates.
+                                    // while the cognitive reviewer deliberates.
                                     self.dispatch_stream_loop_candidate(
                                         &mut reasoning_loop_detector,
                                         messages,
@@ -641,7 +640,7 @@ impl Agent {
                                         &reasoning_content,
                                         muta_contracts::StreamLoopChannel::Reasoning,
                                         pat,
-                                        &steward_cleared_candidates,
+                                        &cognitive_cleared_candidates,
                                         &mut pending_stream_loop_review,
                                     );
                                 }
@@ -747,20 +746,20 @@ impl Agent {
                     channel = ?review.channel,
                     pattern = %review.pattern.description(),
                     verdict = ?verdict,
-                    office = StewardOffice::StreamSentinel.id(),
+                    office = "stream_sentinel",
                     "stream-loop candidate reviewed by Stream Sentinel after natural stream end"
                 );
                 if verdict.is_loop() {
                     tracing::warn!(
                         pattern = %review.pattern.description(),
-                        "Steward confirmed a stream loop that ended naturally; trimming the degenerate tail"
+                        "Cognitive pipeline confirmed a stream loop that ended naturally; trimming the degenerate tail"
                     );
                     stream_loop_incident = Some(StreamLoopIncident {
                         pattern: review.pattern,
                         channel: review.channel,
                     });
                 } else {
-                    steward_cleared_candidates.insert(review.candidate_key);
+                    cognitive_cleared_candidates.insert(review.candidate_key);
                 }
             }
 
@@ -820,7 +819,7 @@ impl Agent {
                         NoticeSource::TurnGuard,
                     )
                     .with_body(format!(
-                        "The Harness Steward confirmed a {}. Its partial output was retained, and the agent received guidance to retry once without repeating it.",
+                        "The Harness cognitive check confirmed a {}. Its partial output was retained, and the agent received guidance to retry once without repeating it.",
                         incident.pattern.description()
                     ))
                 } else {
@@ -832,7 +831,7 @@ impl Agent {
                         NoticeSource::TurnGuard,
                     )
                     .with_body(format!(
-                        "The Harness Steward confirmed that the guided recovery entered a {}. Generation was stopped to prevent a runaway stream; its partial output was retained.",
+                        "The Harness cognitive check confirmed that the guided recovery entered a {}. Generation was stopped to prevent a runaway stream; its partial output was retained.",
                         incident.pattern.description()
                     ))
                 }

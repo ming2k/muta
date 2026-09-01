@@ -160,10 +160,10 @@ pub struct MonitoredSession {
     /// field.
     #[serde(default)]
     pub fork_kind: SessionForkKind,
-    /// The Chronicler's structured digest (intent + history checklist), if
+    /// Structured digest (intent + history checklist), if
     /// the session has generated one.
     #[serde(default)]
-    pub digest: Option<crate::steward::SessionDigest>,
+    pub digest: Option<crate::cognitive::SessionDigest>,
 }
 
 impl MonitoredSession {

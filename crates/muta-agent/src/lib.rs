@@ -160,8 +160,8 @@ pub mod round_lifecycle;
 pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
 pub mod session_digest;
 mod shell_input;
-pub mod steward;
-pub use steward::{Steward, StewardError};
+pub mod cognitive;
+pub use cognitive::{CognitiveError, CognitivePipeline};
 pub mod stream_loop_detector;
 use muta_skills as skills;
 pub use stream_loop_detector::{DegeneratePattern, StreamLoopDetector};
@@ -176,7 +176,8 @@ pub mod tools;
 pub use context_projection::ContextProjectionGate;
 pub use model_request::policies::runner_system_prompt_registry;
 pub use model_request::system_prompt::{
-    SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
+    InstructionOrder, SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError,
+    SystemPromptSection,
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
 pub use runner_tool::{RunnerRegistry, RunnerTool};

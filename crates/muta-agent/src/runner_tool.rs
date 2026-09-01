@@ -697,7 +697,7 @@ impl RunnerTool {
         // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
         let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
         let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
-        runner.set_tier(muta_contracts::AgentTier::Runner);
+        runner.set_kind(muta_contracts::AgentKind::Runner);
 
         if let Some(handle) = self
             .parent_workspace_security
@@ -1581,16 +1581,14 @@ mod tests {
             .unwrap()
             .clone()
             .expect("runner request captured");
-        let system = &request.messages[0];
-        assert_eq!(system.role, muta_contracts::Role::System);
+        let system_content = request.instructions.render_combined();
         assert!(
-            system
-                .content
+            system_content
                 .starts_with("You are a focused research runner"),
-            "system message should open with the RUNNER_EXPLORE persona"
+            "system instructions should open with the RUNNER_EXPLORE persona"
         );
         assert!(
-            !system.content.contains("Task: find files"),
+            !system_content.contains("Task: find files"),
             "the dead `Task: {{description}}` line must not appear (ADR-0039)"
         );
 

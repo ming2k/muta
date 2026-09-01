@@ -74,6 +74,9 @@ impl ToolSpec {
 /// serialize it into their protocol-specific wire shape).
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelRequest {
+    /// Structured instruction manifest (tiers: Base, Session, Task, Ephemeral).
+    #[serde(default, skip_serializing_if = "crate::InstructionBundle::is_empty")]
+    pub instructions: crate::InstructionBundle,
     pub messages: Vec<Message>,
     /// Tool declarations in the provider-neutral [`ToolSpec`] shape. Provider
     /// adapters translate these into their own wire format.
@@ -101,6 +104,7 @@ impl ModelRequest {
     /// Build a request without tools (title generation, summarization, tests).
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
+            instructions: crate::InstructionBundle::default(),
             messages,
             tool_specs: Vec::new(),
             ephemeral: false,
@@ -116,6 +120,7 @@ impl ModelRequest {
     /// Build an ephemeral request without tools (e.g. title generation, compaction).
     pub fn ephemeral(messages: Vec<Message>) -> Self {
         Self {
+            instructions: crate::InstructionBundle::default(),
             messages,
             tool_specs: Vec::new(),
             ephemeral: true,
@@ -126,6 +131,12 @@ impl ModelRequest {
             prompt_cache_preference: crate::PromptCachePreference::default(),
         }
         .with_recomputed_revisions()
+    }
+
+    /// Set instructions on the request.
+    pub fn with_instructions(mut self, instructions: crate::InstructionBundle) -> Self {
+        self.instructions = instructions;
+        self.with_recomputed_revisions()
     }
 
     /// Set the ephemeral flag on the request.
@@ -144,6 +155,32 @@ impl ModelRequest {
             .collect();
         tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
+            instructions: crate::InstructionBundle::default(),
+            messages,
+            tool_specs,
+            ephemeral: false,
+            delivery: crate::RequestDelivery::FullReplay,
+            context_revision: crate::ContextRevision::empty(),
+            context_relation: crate::ContextRelation::Initial,
+            envelope_revision: crate::EnvelopeRevision::ephemeral(),
+            prompt_cache_preference: crate::PromptCachePreference::default(),
+        }
+        .with_recomputed_revisions()
+    }
+
+    /// Build a request with structured instructions and tool declarations.
+    pub fn with_instructions_and_tools(
+        instructions: crate::InstructionBundle,
+        messages: Vec<Message>,
+        tools: &[Arc<dyn Tool>],
+    ) -> Self {
+        let mut tool_specs: Vec<ToolSpec> = tools
+            .iter()
+            .map(|t| ToolSpec::from_tool(t.as_ref()))
+            .collect();
+        tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            instructions,
             messages,
             tool_specs,
             ephemeral: false,
@@ -183,7 +220,11 @@ impl ModelRequest {
         };
         self.envelope_revision = crate::EnvelopeRevision {
             sequence: 0,
-            fingerprint: crate::request_envelope_fingerprint(&self.messages, &self.tool_specs),
+            fingerprint: crate::request_envelope_fingerprint(
+                &self.instructions,
+                &self.messages,
+                &self.tool_specs,
+            ),
         };
         self
     }

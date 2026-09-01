@@ -96,6 +96,8 @@ pub fn resolve_thinking(
 /// Inputs to [`body`]: the prepared tool schemas in OpenAI function-spec
 /// shape, if any.
 pub struct BodyInput<'a> {
+    /// Structured instructions from the instruction manifest.
+    pub instructions: Option<&'a muta_contracts::InstructionBundle>,
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     /// Stamp `generationConfig.thinkingConfig.includeThoughts`. The Google API
     /// only returns reasoning *text* when the request asks for it, and rejects
@@ -112,6 +114,14 @@ pub struct BodyInput<'a> {
 /// Build the Google `generateContent` request body from a message list.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     let mut system = Vec::new();
+    if let Some(instructions) = input.instructions
+        && !instructions.is_empty()
+    {
+        let text = instructions.render_combined();
+        if !text.is_empty() {
+            system.push(text);
+        }
+    }
     let mut contents: Vec<Value> = Vec::new();
     let mut call_names: HashMap<String, String> = HashMap::new();
     let messages = reconcile_tool_history(messages);
@@ -741,6 +751,19 @@ pub fn max_thinking_budget(model: &str) -> u32 {
 mod tests {
     use super::*;
 
+    fn test_body_input<'a>(
+        tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
+        include_thoughts: bool,
+        thinking: Option<GoogleThinking>,
+    ) -> BodyInput<'a> {
+        BodyInput {
+            instructions: None,
+            tool_specs,
+            include_thoughts,
+            thinking,
+        }
+    }
+
     #[test]
     fn preserves_system_harness_context() {
         let body = body(
@@ -748,11 +771,7 @@ mod tests {
                 Message::new(Role::System, "pursuit and tools"),
                 Message::new(Role::User, "continue"),
             ],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
 
         assert_eq!(
@@ -770,11 +789,7 @@ mod tests {
                 Message::new(Role::Tool, "file contents"),
                 Message::new(Role::User, "next"),
             ],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
 
         assert_eq!(body["contents"][1]["role"], "user");
@@ -785,8 +800,8 @@ mod tests {
     fn declares_google_function_tools() {
         let body = body(
             vec![Message::new(Role::User, "list files")],
-            BodyInput {
-                tool_specs: Some(&[muta_contracts::ToolSpec {
+            test_body_input(
+                Some(&[muta_contracts::ToolSpec {
                     name: "list_dir".to_string(),
                     description: "List files".to_string(),
                     parameters: json!({
@@ -795,9 +810,9 @@ mod tests {
                         "required": ["path"]
                     }),
                 }]),
-                include_thoughts: false,
-                thinking: None,
-            },
+                false,
+                None,
+            ),
         );
 
         assert_eq!(
@@ -814,11 +829,7 @@ mod tests {
     fn include_thoughts_stamps_thinking_config() {
         let body = body(
             vec![Message::new(Role::User, "why is the sky blue?")],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: true,
-                thinking: None,
-            },
+            test_body_input(None, true, None),
         );
         // Reasoning text is only surfaced when explicitly requested, and the
         // flag lives under generationConfig.thinkingConfig.
@@ -832,11 +843,7 @@ mod tests {
     fn include_thoughts_off_omits_thinking_config() {
         let body = body(
             vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
         assert!(body.get("generationConfig").is_none());
     }
@@ -867,11 +874,7 @@ mod tests {
                 },
                 Message::tool_result(&call, "Cargo.toml"),
             ],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
 
         assert_eq!(
@@ -928,11 +931,7 @@ mod tests {
                     ..Message::new(Role::Tool, "ignored")
                 },
             ],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
 
         let parts = body["contents"][1]["parts"].as_array().unwrap();
@@ -964,11 +963,7 @@ mod tests {
                 Message::tool_result(&call, "Todo list updated"),
                 Message::new(Role::User, "proceed"),
             ],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: None,
-            },
+            test_body_input(None, false, None),
         );
 
         // Assistant turn has text part for prose and structured text for tool call, NO functionCall
@@ -1054,11 +1049,11 @@ mod tests {
         // Level → thinkingLevel string.
         let level_body = body(
             vec![Message::new(Role::User, "think")],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: Some(GoogleThinking::Level(muta_contracts::Effort::Medium)),
-            },
+            test_body_input(
+                None,
+                false,
+                Some(GoogleThinking::Level(muta_contracts::Effort::Medium)),
+            ),
         );
         assert_eq!(
             level_body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
@@ -1067,11 +1062,11 @@ mod tests {
         // Budget → thinkingBudget integer.
         let budget_body = body(
             vec![Message::new(Role::User, "think")],
-            BodyInput {
-                tool_specs: None,
-                include_thoughts: false,
-                thinking: Some(GoogleThinking::Budget(8192)),
-            },
+            test_body_input(
+                None,
+                false,
+                Some(GoogleThinking::Budget(8192)),
+            ),
         );
         assert_eq!(
             budget_body["generationConfig"]["thinkingConfig"]["thinkingBudget"],

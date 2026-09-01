@@ -262,6 +262,7 @@ impl OpenAiResponsesProvider {
             .resolve(&request)
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
+            instructions,
             messages,
             tool_specs,
             delivery,
@@ -272,6 +273,7 @@ impl OpenAiResponsesProvider {
             request::BodyInput {
                 model: &self.endpoint.model,
                 stream,
+                instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
                 delivery: &delivery,

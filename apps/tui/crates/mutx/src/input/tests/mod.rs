@@ -361,14 +361,18 @@ fn run_history_key(
     )
 }
 
-/// Helper: send `code` in the compose zone with explicit `has_queued`.
-fn up_with_queued(has_queued: bool) -> InputAction {
+/// Helper: send `PageUp` in the compose zone with explicit `has_queued`.
+fn pageup_with_queued(has_queued: bool) -> InputAction {
+    key_with_queued(KeyCode::PageUp, has_queued)
+}
+
+fn key_with_queued(code: KeyCode, has_queued: bool) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
     process_event(
         Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Up,
+            code,
             KeyModifiers::NONE,
         )),
         &mut input,

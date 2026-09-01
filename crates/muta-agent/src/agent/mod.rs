@@ -149,8 +149,8 @@ pub use muta_contracts::RequestTokenEstimate;
 /// [`InputReply`] arrives (or `None` on cancel/turn-end).
 pub struct Agent {
     pub provider: Arc<dyn Provider>,
-    /// Position of this agent in the hierarchy (Supervisor, Master, Runner).
-    tier: std::sync::RwLock<muta_contracts::AgentTier>,
+    /// Archetype / kind of this agent (Master, Runner).
+    kind: std::sync::RwLock<muta_contracts::AgentKind>,
     /// Global/Session tool pool for declarative tool resolution.
     pool: Arc<std::sync::RwLock<muta_contracts::ToolPool>>,
     /// The full capability set: every tool keyed by capability, with all its
@@ -1010,6 +1010,18 @@ impl AgentBuilder {
         id: &str,
     ) -> Result<Self, crate::SystemPromptRegistryError> {
         self.model_request_assembler.registry_mut().disable(id)?;
+        Ok(self)
+    }
+
+    /// Override a registered section's semantic ordering in the final composition.
+    pub fn order_system_prompt_section(
+        mut self,
+        id: &str,
+        order: crate::InstructionOrder,
+    ) -> Result<Self, crate::SystemPromptRegistryError> {
+        self.model_request_assembler
+            .registry_mut()
+            .set_order(id, order)?;
         Ok(self)
     }
 
