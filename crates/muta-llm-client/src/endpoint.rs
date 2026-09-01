@@ -1,7 +1,7 @@
 //! Shared connection configuration and typed request/response carriers.
 //!
 //! Every concrete provider carries the same connection fields —
-//! `credentials`, `model`, `base_url`, `user_agent`, `id` — duplicated verbatim
+//! `credentials`, `model`, `base_url`, `client_profile`, `id` — duplicated verbatim
 //! across [`crate::protocol::openai::OpenAiChatCompletionsProvider`],
 //! [`crate::protocol::anthropic::AnthropicMessagesProvider`], and
 //! [`crate::protocol::google::GoogleProvider`]. [`Endpoint`] factors that out so each
@@ -35,8 +35,8 @@ pub struct Endpoint {
     /// `/messages` path; for Google it is the versioned base
     /// (`.../v1beta`) to which the per-call model path is appended.
     pub base_url: String,
-    /// `User-Agent` header value.
-    pub user_agent: String,
+    /// Client profile specifying the User-Agent and client identity headers.
+    pub client_profile: ClientProfile,
     /// Stable attribution id (`provider_id()`).
     pub id: String,
 }
@@ -53,7 +53,7 @@ impl Endpoint {
             credentials,
             model: model.into(),
             base_url: base_url.into(),
-            user_agent: MUTA_USER_AGENT.to_string(),
+            client_profile: ClientProfile::Native,
             id: id.into(),
         }
     }
@@ -104,9 +104,21 @@ impl Endpoint {
         self.credentials.is_oauth()
     }
 
-    /// Stamp the user-agent header value.
+    /// Stamp the user-agent header value, updating the client profile.
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
+        self.client_profile = ClientProfile::from_user_agent(&user_agent.into());
+        self
+    }
+
+    /// Stamp a client profile directly onto this endpoint.
+    pub fn with_client_profile(mut self, profile: impl Into<ClientProfile>) -> Self {
+        self.client_profile = profile.into();
+        self
+    }
+
+    /// Stamp a client identity directly onto this endpoint.
+    pub fn with_client_identity(mut self, identity: &ClientIdentity) -> Self {
+        self.client_profile = identity.clone();
         self
     }
 
@@ -142,18 +154,22 @@ impl Endpoint {
     }
 
     pub fn user_agent(&self) -> &str {
-        &self.user_agent
+        self.client_profile.user_agent()
     }
 
-    /// Return the resolved [`ClientIdentity`] for this endpoint based on its `user_agent`.
-    pub fn client_identity(&self) -> ClientIdentity {
-        ClientIdentity::from_user_agent(&self.user_agent)
+    /// Return the resolved [`ClientProfile`] for this endpoint.
+    pub fn client_profile(&self) -> &ClientProfile {
+        &self.client_profile
     }
 
-    /// Set the [`ClientIdentity`] for this endpoint, updating its `user_agent`.
-    pub fn with_client_identity(mut self, identity: &ClientIdentity) -> Self {
-        self.user_agent = identity.user_agent().to_string();
-        self
+    /// Return the resolved [`ClientIdentity`] for this endpoint.
+    pub fn client_identity(&self) -> &ClientIdentity {
+        &self.client_profile
+    }
+
+    /// Return the client-identity headers to attach to every request.
+    pub fn headers(&self) -> Vec<(&str, &str)> {
+        self.client_profile.headers()
     }
 
     pub fn id(&self) -> &str {
@@ -166,19 +182,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_identity_presets_have_matching_user_agents_and_headers() {
-        for preset in ClientIdentity::PRESETS {
+    fn client_profile_presets_have_matching_user_agents_and_headers() {
+        for preset in ClientProfile::PRESETS {
             assert!(!preset.id().is_empty());
             assert!(!preset.label().is_empty());
             assert!(!preset.user_agent().is_empty());
 
             // Each preset round-trips through from_id
-            let parsed = ClientIdentity::from_id(preset.id()).expect("parses from canonical id");
+            let parsed = ClientProfile::from_id(preset.id()).expect("parses from canonical id");
             assert_eq!(&parsed, preset);
 
             // from_user_agent detects standard presets
-            if *preset != ClientIdentity::Copilot {
-                let detected = ClientIdentity::from_user_agent(preset.user_agent());
+            if *preset != ClientProfile::Copilot {
+                let detected = ClientProfile::from_user_agent(preset.user_agent());
                 assert_eq!(
                     &detected,
                     preset,
@@ -190,8 +206,8 @@ mod tests {
     }
 
     #[test]
-    fn client_identity_headers_attached_for_impersonated_clients() {
-        let zcode = ClientIdentity::ZCode;
+    fn client_profile_headers_attached_for_emulated_clients() {
+        let zcode = ClientProfile::ZCode;
         let zcode_headers = zcode.headers();
         assert!(
             zcode_headers
@@ -204,7 +220,7 @@ mod tests {
                 .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
         );
 
-        let claude = ClientIdentity::ClaudeCode;
+        let claude = ClientProfile::ClaudeCode;
         assert!(
             claude
                 .headers()
@@ -212,7 +228,7 @@ mod tests {
                 .any(|(k, v)| *k == "x-app" && *v == "claude-code")
         );
 
-        let cline = ClientIdentity::Cline;
+        let cline = ClientProfile::Cline;
         assert!(
             cline
                 .headers()
@@ -220,7 +236,7 @@ mod tests {
                 .any(|(k, v)| *k == "X-Title" && *v == "Cline")
         );
 
-        let cursor = ClientIdentity::Cursor;
+        let cursor = ClientProfile::Cursor;
         assert!(
             cursor
                 .headers()
@@ -228,11 +244,19 @@ mod tests {
                 .any(|(k, v)| *k == "X-Title" && *v == "Cursor")
         );
 
-        let agy = ClientIdentity::Antigravity;
+        let agy = ClientProfile::Antigravity;
         assert!(
             agy.headers()
                 .iter()
                 .any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1")
         );
+
+        let custom = ClientProfile::custom(
+            "custom-agent/1.0",
+            vec![("X-Custom-Foo".to_string(), "Bar".to_string())],
+        );
+        let custom_headers = custom.headers();
+        assert_eq!(custom_headers.len(), 1);
+        assert_eq!(custom_headers[0], ("X-Custom-Foo", "Bar"));
     }
 }

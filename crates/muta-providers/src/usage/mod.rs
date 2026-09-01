@@ -82,7 +82,7 @@ pub async fn fetch_provider_usage_with_client(
     for fetcher in registered_fetchers() {
         if fetcher.matches(preset_id, base_url) {
             return match fetcher.fetch_usage(client, base_url, key).await {
-                Ok(usage) => ConnectionUsageState::Available(usage),
+                Ok(usage) => ConnectionUsageState::Available(Box::new(usage)),
                 Err(err) => ConnectionUsageState::Error(err),
             };
         }

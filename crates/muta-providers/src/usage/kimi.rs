@@ -3,7 +3,7 @@
 //! Query endpoint: `GET https://api.moonshot.cn/v1/users/me/balance`
 
 use muta_contracts::async_trait;
-use muta_contracts::{ProviderUsage, UsageMetric};
+use muta_contracts::{BalanceQuota, ProviderQuotaData, ProviderUsage, UsageMetric};
 use serde::Deserialize;
 
 use super::ProviderUsageFetcher;
@@ -80,6 +80,16 @@ pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUs
 
     let primary_balance = format!("¥{:.2}", data.available_balance);
 
+    let balance_quota = BalanceQuota {
+        currency: "CNY".to_string(),
+        total_balance: Some(data.available_balance),
+        cash_balance: Some(data.cash_balance),
+        voucher_balance: Some(data.voucher_balance),
+        credit_limit: None,
+        consumed_amount: None,
+        display_primary: Some(primary_balance.clone()),
+    };
+
     let mut metrics = Vec::new();
     metrics.push(UsageMetric {
         label: "Available Balance".to_string(),
@@ -104,10 +114,11 @@ pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUs
 
     Ok(ProviderUsage {
         plan: if body.status {
-            Some("Active".to_string())
+            Some("Pay-as-you-go".to_string())
         } else {
             None
         },
+        quota: Some(ProviderQuotaData::Balance(balance_quota)),
         primary_balance: Some(primary_balance),
         metrics,
         updated_at_ms: now_ms,
@@ -133,10 +144,19 @@ mod tests {
         let parsed: KimiBalanceResponse = serde_json::from_str(json).unwrap();
         let usage = parse_kimi_balance(parsed).unwrap();
 
-        assert_eq!(usage.plan.as_deref(), Some("Active"));
+        assert_eq!(usage.plan.as_deref(), Some("Pay-as-you-go"));
         assert_eq!(usage.primary_balance.as_deref(), Some("¥25.80"));
         assert_eq!(usage.metrics.len(), 3);
         assert_eq!(usage.metrics[0].label, "Available Balance");
         assert_eq!(usage.metrics[0].value, "¥25.80");
+
+        if let Some(ProviderQuotaData::Balance(bal)) = usage.quota {
+            assert_eq!(bal.currency, "CNY");
+            assert_eq!(bal.total_balance, Some(25.8));
+            assert_eq!(bal.cash_balance, Some(20.8));
+            assert_eq!(bal.voucher_balance, Some(5.0));
+        } else {
+            panic!("Expected Balance quota data");
+        }
     }
 }

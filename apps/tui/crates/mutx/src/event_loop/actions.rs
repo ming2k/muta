@@ -659,7 +659,9 @@ pub(super) async fn dispatch_action(
                 if let Some(ranked) =
                     providers.get(app.modal_index.min(providers.len().saturating_sub(1)))
                 {
-                    app.connection_detail = None;
+                    if let Some(detail) = app.connection_detail.as_mut() {
+                        detail.usage = muta_contracts::ConnectionUsageState::Fetching;
+                    }
                     let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
                         id: ranked.id.clone(),
                     });

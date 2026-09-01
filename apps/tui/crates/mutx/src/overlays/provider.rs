@@ -149,7 +149,7 @@ pub fn draw_connections_modal(
                     ]),
                 ]
             }
-            Some(detail) => connection_detail_body(detail, theme),
+            Some(detail) => connection_detail_body(detail, spinner_phase, theme),
         };
         let rows: Vec<crate::components::selectable_body::SelectableRow> = body
             .into_iter()
@@ -568,9 +568,84 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
     ]
 }
 
+/// Format a reset time into human-friendly countdown / clock (e.g. "resets in 2h 15m (14:30)").
+fn format_reset_countdown(
+    reset_at_ms: Option<u64>,
+    reset_time_str: Option<&str>,
+) -> Option<String> {
+    if let Some(reset_ms) = reset_at_ms {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if reset_ms > now_ms {
+            let diff_secs = (reset_ms - now_ms) / 1000;
+            let hours = diff_secs / 3600;
+            let mins = (diff_secs % 3600) / 60;
+            let secs = diff_secs % 60;
+            let time_str = if hours > 0 {
+                format!("{hours}h {mins}m")
+            } else if mins > 0 {
+                format!("{mins}m {secs}s")
+            } else {
+                format!("{secs}s")
+            };
+            use chrono::{Local, TimeZone};
+            let clock = Local
+                .timestamp_millis_opt(reset_ms as i64)
+                .single()
+                .map(|dt| dt.format("%H:%M").to_string())
+                .unwrap_or_default();
+            if clock.is_empty() {
+                return Some(format!("resets in {time_str}"));
+            } else {
+                return Some(format!("resets in {time_str} ({clock})"));
+            }
+        } else {
+            return Some("resets soon".to_string());
+        }
+    }
+    if let Some(raw) = reset_time_str
+        && !raw.trim().is_empty()
+    {
+        return Some(format!("resets: {raw}"));
+    }
+    None
+}
+
+/// Render a terminal progress bar (e.g. `[████████░░░░░░]`).
+fn render_progress_bar_spans(
+    used_fraction: f32,
+    bar_width: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let clamped = used_fraction.clamp(0.0, 1.0);
+    let filled_count = (clamped * bar_width as f32).round() as usize;
+    let empty_count = bar_width.saturating_sub(filled_count);
+
+    let color = if clamped >= 0.90 {
+        theme.err()
+    } else if clamped >= 0.70 {
+        theme.warn()
+    } else {
+        theme.ok()
+    };
+
+    let filled_str = "█".repeat(filled_count);
+    let empty_str = "░".repeat(empty_count);
+
+    vec![
+        Span::styled("[", Style::default().fg(theme.dim())),
+        Span::styled(filled_str, Style::default().fg(color)),
+        Span::styled(empty_str, Style::default().fg(theme.dim())),
+        Span::styled("]", Style::default().fg(theme.dim())),
+    ]
+}
+
 /// Render the detail body lines for one connection (configuration + caller identity + models + provider usage).
 fn connection_detail_body(
     detail: &muta_contracts::ConnectionDetail,
+    spinner_phase: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let label = Style::default().fg(theme.dim());
@@ -582,115 +657,367 @@ fn connection_detail_body(
     let highlight = Style::default().fg(theme.primary);
     let warning = Style::default().fg(theme.warning);
 
-    let kv = |k: &str, v: String| {
+    let kv = |k: &str, v: &str| {
         Line::from(vec![
-            Span::styled(format!("{k}: "), label),
-            Span::styled(v, value),
+            Span::styled(format!("{k:<16}"), label),
+            Span::styled(v.to_string(), value),
         ])
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
+    // ── Configuration ──────────────────────────────────────────────────────────
     lines.push(Line::from(Span::styled("Configuration", header_style)));
-    lines.push(kv("ID", detail.id.clone()));
-    lines.push(kv("Name", detail.name.clone()));
+    lines.push(kv("ID", &detail.id));
+    lines.push(kv("Name", &detail.name));
     if let Some(preset) = &detail.preset_label {
-        lines.push(kv("Preset", preset.clone()));
+        lines.push(kv("Preset", preset));
     } else if let Some(pid) = &detail.preset_id {
-        lines.push(kv("Preset ID", pid.clone()));
+        lines.push(kv("Preset ID", pid));
     } else {
-        lines.push(kv("Type", "Custom Connection".to_string()));
+        lines.push(kv("Type", "Custom Connection"));
     }
-    lines.push(kv("Protocol", detail.protocol.clone()));
-    lines.push(kv("Base URL", detail.base_url.clone()));
-    lines.push(kv("Auth Type", detail.auth_type.clone()));
+    lines.push(kv("Protocol", &detail.protocol));
+    lines.push(kv("Base URL", &detail.base_url));
+    lines.push(kv("Auth Type", &detail.auth_type));
     if let Some(masked) = &detail.api_key_masked {
         lines.push(Line::from(vec![
-            Span::styled("API Key: ", label),
+            Span::styled(format!("{:<16}", "API Key"), label),
             Span::styled(masked.clone(), value),
             Span::styled(format!(" ({})", detail.api_key_source), muted),
         ]));
     } else {
-        lines.push(kv("Credential", detail.api_key_source.clone()));
+        lines.push(kv("Credential", &detail.api_key_source));
     }
 
+    // ── Client Profile ────────────────────────────────────────────────────────
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Caller Identity", header_style)));
-    lines.push(kv("Preset", detail.client_identity.label().to_string()));
-    lines.push(kv("User-Agent", detail.user_agent.clone()));
-    if let muta_contracts::ClientIdentity::Custom { extra_headers, .. } = &detail.client_identity
-        && !extra_headers.is_empty()
-    {
-        lines.push(Line::from(Span::styled("Custom Headers:", label)));
-        for (k, v) in extra_headers {
+    lines.push(Line::from(Span::styled("Client Profile", header_style)));
+    lines.push(kv("Preset", detail.client_identity.label()));
+    lines.push(kv("User-Agent", &detail.user_agent));
+    let client_headers = detail.client_identity.headers();
+    if !client_headers.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("{:<16}", "Client Headers"),
+            label,
+        )));
+        for (k, v) in client_headers {
             lines.push(Line::from(vec![
                 Span::styled("  • ", label),
                 Span::styled(format!("{k}: "), label),
-                Span::styled(v.clone(), value),
+                Span::styled(v.to_string(), value),
             ]));
         }
     }
 
+    // ── Served Models ──────────────────────────────────────────────────────────
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Served Models", header_style)));
+    let models_title = if detail.models.is_empty() {
+        "Served Models".to_string()
+    } else {
+        format!("Served Models ({})", detail.models.len())
+    };
+    lines.push(Line::from(Span::styled(models_title, header_style)));
     if let Some(active) = &detail.active_model {
         lines.push(Line::from(vec![
-            Span::styled("Active Model: ", label),
-            Span::styled(active.clone(), highlight),
+            Span::styled("  ★ ", Style::default().fg(theme.warning)),
+            Span::styled(active.clone(), highlight.add_modifier(Modifier::BOLD)),
+            Span::styled(" (default active)", muted),
         ]));
     }
     if detail.models.is_empty() {
-        lines.push(Line::from(Span::styled("(no models configured)", muted)));
-    } else {
-        let models_str = detail.models.join(", ");
         lines.push(Line::from(vec![
-            Span::styled(format!("Models ({}): ", detail.models.len()), label),
-            Span::styled(models_str, value),
+            Span::raw("  "),
+            Span::styled("(no models configured)", muted),
         ]));
+    } else {
+        let mut chip_spans: Vec<Span<'static>> = Vec::new();
+        let mut cur_width = 2usize;
+        chip_spans.push(Span::raw("  "));
+
+        for (idx, model) in detail.models.iter().enumerate() {
+            let badge_str = format!("[ {model} ]");
+            let badge_len = badge_str.len() + 2;
+            if cur_width + badge_len > 72 && idx > 0 {
+                lines.push(Line::from(std::mem::take(&mut chip_spans)));
+                chip_spans.push(Span::raw("  "));
+                cur_width = 2;
+            }
+            let is_active = detail.active_model.as_deref() == Some(model);
+            let chip_style = if is_active {
+                highlight.add_modifier(Modifier::BOLD)
+            } else {
+                value
+            };
+            chip_spans.push(Span::styled("[ ", label));
+            chip_spans.push(Span::styled(model.clone(), chip_style));
+            chip_spans.push(Span::styled(" ]", label));
+            chip_spans.push(Span::raw("  "));
+            cur_width += badge_len;
+        }
+        if chip_spans.len() > 1 {
+            lines.push(Line::from(chip_spans));
+        }
     }
 
+    // ── Provider Usage & Quota ─────────────────────────────────────────────────
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Provider Usage & Quota",
-        header_style,
-    )));
+    let mut quota_header_spans = vec![Span::styled("Provider Usage & Quota", header_style)];
+    if let muta_contracts::ConnectionUsageState::Available(usage) = &detail.usage
+        && let Some(plan) = &usage.plan
+    {
+        quota_header_spans.push(Span::raw("  "));
+        quota_header_spans.push(Span::styled(
+            format!("[ {plan} ]"),
+            Style::default()
+                .fg(theme.info())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    lines.push(Line::from(quota_header_spans));
+
     match &detail.usage {
         muta_contracts::ConnectionUsageState::Available(usage) => {
-            if let Some(plan) = &usage.plan {
-                lines.push(kv("Plan / Status", plan.clone()));
+            let mut rendered_quota = false;
+
+            if let Some(quota_data) = &usage.quota {
+                match quota_data {
+                    muta_contracts::ProviderQuotaData::Periodic(periodic) => {
+                        rendered_quota = true;
+                        if periodic.buckets.is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled("Active (no specific bucket limits reported)", muted),
+                            ]));
+                        } else {
+                            for bucket in &periodic.buckets {
+                                let window_tag = bucket
+                                    .window
+                                    .map(|w| format!(" · {}", w.label()))
+                                    .unwrap_or_default();
+                                lines.push(Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::styled(
+                                        format!("{}{}", bucket.label, window_tag),
+                                        value.add_modifier(Modifier::BOLD),
+                                    ),
+                                ]));
+
+                                let pct_used = (bucket.used_fraction * 100.0).round() as u32;
+                                let pct_rem = 100u32.saturating_sub(pct_used);
+                                let mut bar_spans = vec![Span::raw("    ")];
+                                bar_spans.extend(render_progress_bar_spans(
+                                    bucket.used_fraction,
+                                    20,
+                                    theme,
+                                ));
+                                bar_spans.push(Span::styled(
+                                    format!("  {pct_used}% used ({pct_rem}% remaining)"),
+                                    value,
+                                ));
+                                if let Some(reset_str) = format_reset_countdown(
+                                    bucket.reset_at_ms,
+                                    bucket.reset_time_str.as_deref(),
+                                ) {
+                                    bar_spans.push(Span::styled(
+                                        format!("  ·  {reset_str}"),
+                                        muted,
+                                    ));
+                                }
+                                lines.push(Line::from(bar_spans));
+                            }
+                        }
+                    }
+                    muta_contracts::ProviderQuotaData::Balance(balance) => {
+                        rendered_quota = true;
+                        render_balance_quota_block(balance, &mut lines, label, value, highlight, theme);
+                    }
+                    muta_contracts::ProviderQuotaData::Composite {
+                        balance,
+                        periodic,
+                        rate_limits,
+                    } => {
+                        rendered_quota = true;
+                        if let Some(bal) = balance {
+                            render_balance_quota_block(bal, &mut lines, label, value, highlight, theme);
+                        }
+                        if let Some(per) = periodic {
+                            for bucket in &per.buckets {
+                                let window_tag = bucket
+                                    .window
+                                    .map(|w| format!(" · {}", w.label()))
+                                    .unwrap_or_default();
+                                lines.push(Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::styled(
+                                        format!("{}{}", bucket.label, window_tag),
+                                        value.add_modifier(Modifier::BOLD),
+                                    ),
+                                ]));
+                                let pct_used = (bucket.used_fraction * 100.0).round() as u32;
+                                let pct_rem = 100u32.saturating_sub(pct_used);
+                                let mut bar_spans = vec![Span::raw("    ")];
+                                bar_spans.extend(render_progress_bar_spans(
+                                    bucket.used_fraction,
+                                    20,
+                                    theme,
+                                ));
+                                bar_spans.push(Span::styled(
+                                    format!("  {pct_used}% used ({pct_rem}% remaining)"),
+                                    value,
+                                ));
+                                if let Some(reset_str) = format_reset_countdown(
+                                    bucket.reset_at_ms,
+                                    bucket.reset_time_str.as_deref(),
+                                ) {
+                                    bar_spans.push(Span::styled(
+                                        format!("  ·  {reset_str}"),
+                                        muted,
+                                    ));
+                                }
+                                lines.push(Line::from(bar_spans));
+                            }
+                        }
+                        for rl in rate_limits {
+                            lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(format!("{:<16}", "Rate Limit"), label),
+                                Span::styled(format!("{} req / {}", rl.requests, rl.interval), value),
+                            ]));
+                        }
+                    }
+                }
             }
-            if let Some(bal) = &usage.primary_balance {
-                lines.push(Line::from(vec![
-                    Span::styled("Primary Balance: ", label),
-                    Span::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD)),
-                ]));
-            }
-            for metric in &usage.metrics {
-                let val = match &metric.unit {
-                    Some(u) => format!("{} {}", metric.value, u),
-                    None => metric.value.clone(),
-                };
-                lines.push(kv(&metric.label, val));
+
+            if !rendered_quota {
+                if let Some(bal) = &usage.primary_balance {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(format!("{:<16}", "Primary Balance"), label),
+                        Span::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD)),
+                    ]));
+                }
+                for metric in &usage.metrics {
+                    let val = match &metric.unit {
+                        Some(u) => format!("{} {}", metric.value, u),
+                        None => metric.value.clone(),
+                    };
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(format!("{:<16}", metric.label), label),
+                        Span::styled(val, value),
+                    ]));
+                }
             }
         }
         muta_contracts::ConnectionUsageState::Unsupported => {
-            lines.push(Line::from(Span::styled(
-                "Usage query is not supported for this provider.",
-                muted,
-            )));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "Usage and quota query is not supported for this provider endpoint.",
+                    muted,
+                ),
+            ]));
         }
         muta_contracts::ConnectionUsageState::Error(err) => {
             lines.push(Line::from(vec![
-                Span::styled("Usage query failed: ", warning),
+                Span::raw("  "),
+                Span::styled("⚠ Usage query failed: ", warning),
                 Span::styled(err.clone(), value),
             ]));
         }
         muta_contracts::ConnectionUsageState::Fetching => {
-            lines.push(Line::from(Span::styled("Querying provider usage…", muted)));
+            const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+                Span::styled("Querying upstream provider quota & balance…", muted),
+            ]));
         }
     }
 
     lines
+}
+
+fn render_balance_quota_block(
+    balance: &muta_contracts::BalanceQuota,
+    lines: &mut Vec<Line<'static>>,
+    label: Style,
+    value: Style,
+    highlight: Style,
+    theme: &Theme,
+) {
+    if let (Some(consumed), Some(limit)) = (balance.consumed_amount, balance.credit_limit)
+        && limit > 0.0
+    {
+        let frac = (consumed / limit) as f32;
+        let pct = (frac * 100.0).round() as u32;
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Credit Limit Consumption", value.add_modifier(Modifier::BOLD)),
+        ]));
+        let mut bar_spans = vec![Span::raw("    ")];
+        bar_spans.extend(render_progress_bar_spans(frac, 20, theme));
+        bar_spans.push(Span::styled(
+            format!("  ${:.2} / ${:.2} ({pct}% used)", consumed, limit),
+            value,
+        ));
+        lines.push(Line::from(bar_spans));
+    }
+
+    if let Some(total) = balance.total_balance {
+        let sym = if balance.currency == "CNY" {
+            "¥"
+        } else if balance.currency == "USD" {
+            "$"
+        } else {
+            ""
+        };
+        let total_str = if !sym.is_empty() {
+            format!("{sym}{:.2} {}", total, balance.currency)
+        } else {
+            format!("{:.2} {}", total, balance.currency)
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{:<16}", "Total Balance"), label),
+            Span::styled(total_str, highlight.add_modifier(Modifier::BOLD)),
+        ]));
+    } else if let Some(prim) = &balance.display_primary {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{:<16}", "Balance"), label),
+            Span::styled(prim.clone(), highlight.add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    if let Some(cash) = balance.cash_balance {
+        let sym = if balance.currency == "CNY" {
+            "¥"
+        } else if balance.currency == "USD" {
+            "$"
+        } else {
+            ""
+        };
+        lines.push(Line::from(vec![
+            Span::raw("    ├─ Recharge:     "),
+            Span::styled(format!("{sym}{:.2}", cash), value),
+        ]));
+    }
+    if let Some(voucher) = balance.voucher_balance {
+        let sym = if balance.currency == "CNY" {
+            "¥"
+        } else if balance.currency == "USD" {
+            "$"
+        } else {
+            ""
+        };
+        lines.push(Line::from(vec![
+            Span::raw("    └─ Voucher:      "),
+            Span::styled(format!("{sym}{:.2}", voucher), value),
+        ]));
+    }
 }
 
 /// Build the **Models** flat model list body via the shared [`crate::components::row::ListRow`]
@@ -2784,8 +3111,19 @@ mod tests {
             user_agent: "muta/0.37.21".to_string(),
             models: vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
             active_model: Some("deepseek-chat".to_string()),
-            usage: muta_contracts::ConnectionUsageState::Available(muta_contracts::ProviderUsage {
-                plan: Some("Available".to_string()),
+            usage: muta_contracts::ConnectionUsageState::Available(Box::new(muta_contracts::ProviderUsage {
+                plan: Some("Pay-as-you-go".to_string()),
+                quota: Some(muta_contracts::ProviderQuotaData::Balance(
+                    muta_contracts::BalanceQuota {
+                        currency: "CNY".to_string(),
+                        total_balance: Some(100.50),
+                        cash_balance: Some(100.50),
+                        voucher_balance: Some(0.0),
+                        credit_limit: None,
+                        consumed_amount: None,
+                        display_primary: Some("¥100.50".to_string()),
+                    },
+                )),
                 primary_balance: Some("¥100.50".to_string()),
                 metrics: vec![muta_contracts::UsageMetric {
                     label: "Total Balance".to_string(),
@@ -2793,7 +3131,7 @@ mod tests {
                     unit: Some("CNY".to_string()),
                 }],
                 updated_at_ms: None,
-            }),
+            })),
         };
 
         terminal.draw(|f| {
@@ -2828,9 +3166,10 @@ mod tests {
         assert!(text.contains("deepseek-prod"));
         assert!(text.contains("https://api.deepseek.com"));
         assert!(text.contains("sk-12...abcd"));
-        assert!(text.contains("Caller Identity"));
+        assert!(text.contains("Client Profile"));
         assert!(text.contains("Served Models"));
         assert!(text.contains("deepseek-chat"));
+        assert!(text.contains("deepseek-reasoner"));
 
         // Scroll to view usage section
         terminal.draw(|f| {
@@ -2860,7 +3199,175 @@ mod tests {
 
         let scrolled_text = buffer_text(&terminal);
         assert!(scrolled_text.contains("Provider Usage & Quota"));
-        assert!(scrolled_text.contains("¥100.50"));
-        assert!(scrolled_text.contains("100.50 CNY"));
+        assert!(scrolled_text.contains("Pay-as-you-go"));
+        assert!(scrolled_text.contains("¥100.50 CNY"));
+        assert!(scrolled_text.contains("Recharge:"));
+    }
+
+    #[test]
+    fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(80, 30);
+        let detail = muta_contracts::ConnectionDetail {
+            id: "antigravity-oauth".to_string(),
+            name: "Google Antigravity".to_string(),
+            preset_id: Some("antigravity-oauth".to_string()),
+            preset_label: Some("Google Antigravity".to_string()),
+            protocol: "google".to_string(),
+            base_url: "https://cloudcode-pa.googleapis.com".to_string(),
+            auth_type: "OAuth".to_string(),
+            api_key_masked: None,
+            api_key_source: "OAuth".to_string(),
+            client_identity: muta_contracts::ClientIdentity::Native,
+            user_agent: "muta/0.37.25".to_string(),
+            models: vec!["gemini-3.7-flash".to_string(), "gemini-3.1-pro".to_string()],
+            active_model: Some("gemini-3.7-flash".to_string()),
+            usage: muta_contracts::ConnectionUsageState::Available(Box::new(muta_contracts::ProviderUsage {
+                plan: Some("Google One AI Premium".to_string()),
+                quota: Some(muta_contracts::ProviderQuotaData::Periodic(
+                    muta_contracts::PeriodicQuota {
+                        buckets: vec![
+                            muta_contracts::QuotaWindowBucket {
+                                window: Some(muta_contracts::QuotaWindowKind::Daily),
+                                label: "Gemini 3.7 Flash".to_string(),
+                                used_fraction: 0.15,
+                                used_amount: None,
+                                total_limit: None,
+                                unit: Some("DAY".to_string()),
+                                reset_at_ms: None,
+                                reset_time_str: Some("12:00".to_string()),
+                            },
+                            muta_contracts::QuotaWindowBucket {
+                                window: Some(muta_contracts::QuotaWindowKind::Rolling5Hour),
+                                label: "Gemini 3.1 Pro".to_string(),
+                                used_fraction: 0.40,
+                                used_amount: None,
+                                total_limit: None,
+                                unit: Some("5h".to_string()),
+                                reset_at_ms: None,
+                                reset_time_str: None,
+                            },
+                        ],
+                    },
+                )),
+                primary_balance: Some("60% Quota".to_string()),
+                metrics: Vec::new(),
+                updated_at_ms: None,
+            })),
+        };
+
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 8;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+                true,
+                Some(&detail),
+                &mut 8,
+                0,
+            );
+        });
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Provider Usage & Quota"));
+        assert!(text.contains("Google One AI Premium"));
+        assert!(text.contains("Gemini 3.7 Flash · Daily"));
+        assert!(text.contains("15% used (85% remaining)"));
+        assert!(text.contains("Gemini 3.1 Pro · 5h Window"));
+        assert!(text.contains("40% used (60% remaining)"));
+    }
+
+    #[test]
+    fn connections_modal_detail_view_renders_inline_fetching_spinner() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(80, 30);
+        let detail = muta_contracts::ConnectionDetail {
+            id: "deepseek-prod".to_string(),
+            name: "DeepSeek Production".to_string(),
+            preset_id: Some("deepseek".to_string()),
+            preset_label: Some("DeepSeek".to_string()),
+            protocol: "openai".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            auth_type: "API Key".to_string(),
+            api_key_masked: Some("sk-12...abcd".to_string()),
+            api_key_source: "credentials.toml".to_string(),
+            client_identity: muta_contracts::ClientIdentity::Native,
+            user_agent: "muta/0.37.21".to_string(),
+            models: vec!["deepseek-chat".to_string()],
+            active_model: Some("deepseek-chat".to_string()),
+            usage: muta_contracts::ConnectionUsageState::Fetching,
+        };
+
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+                true,
+                Some(&detail),
+                &mut 0,
+                2,
+            );
+        });
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Configuration"));
+        assert!(text.contains("Served Models"));
+
+        // Scroll to view usage section with inline spinner
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 6;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+                true,
+                Some(&detail),
+                &mut 6,
+                2,
+            );
+        });
+
+        let scrolled_text = buffer_text(&terminal);
+        assert!(scrolled_text.contains("Provider Usage & Quota"));
+        assert!(scrolled_text.contains("Querying upstream provider quota & balance…"));
     }
 }

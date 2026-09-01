@@ -28,9 +28,10 @@ pub use chatgpt_device::{
     verification_url as chatgpt_verification_url,
 };
 pub use config::{
-    CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, OAuthConfig,
-    OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
-    config_by_provider_id, copilot_preset, google_antigravity_preset, xai_preset,
+    CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, GOOGLE_ANTIGRAVITY_CLI,
+    OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
+    config_by_provider_id, copilot_preset, google_antigravity_cli_preset, google_antigravity_preset,
+    xai_preset,
 };
 pub use credential_source::OAuthCredentialSource;
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
@@ -192,6 +193,7 @@ type RefreshSlot = Mutex<Option<Arc<tokio::sync::Mutex<Option<TokenSet>>>>>;
 
 impl OAuth {
     /// Construct with a specific provider configuration.
+    #[allow(clippy::expect_used)]
     pub fn new(config: OAuthConfig) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(concat!("muta/", env!("CARGO_PKG_VERSION")))

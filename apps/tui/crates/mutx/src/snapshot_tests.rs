@@ -518,7 +518,7 @@ fn render_transcript_frame(
     width: u16,
     height: u16,
     scroll: u16,
-    mut height_cache: Option<&mut super::HeightCache>,
+    height_cache: Option<&mut super::HeightCache>,
 ) -> RenderedTranscript {
     use super::{EmptyStateGuidance, QueueBarView, Theme, TranscriptView, draw_transcript};
     use crate::model::layout::LayoutMap;
@@ -563,7 +563,7 @@ fn render_transcript_frame(
                 carousel_index: 0,
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
-                height_cache: height_cache.as_deref_mut(),
+                height_cache,
             },
         ));
     });
@@ -1555,5 +1555,68 @@ fn user_messages_render_timestamps_and_never_sent_marker() {
     assert!(
         !grid_prompt.contains("Sent"),
         "must not contain Sent fallback:\n{grid_prompt}"
+    );
+}
+
+#[test]
+fn user_steer_and_followup_render_clean_unified_headers() {
+    use crate::model::document::{DeliveryStatus, UserMessageOrigin};
+    let epoch_ms = 1_700_000_000_000;
+
+    // Delivered steer with round & turn provenance
+    let mut steer_msg = TranscriptMessage::new(muta_contracts::Role::User, "Adjust heading")
+        .with_round(1)
+        .with_sent_at_ms(epoch_ms);
+    steer_msg.origin = UserMessageOrigin::Steer;
+    steer_msg.turn = Some(2);
+
+    let grid_steer = render_transcript_grid(&[steer_msg], 72, 18);
+    assert!(
+        grid_steer.contains("< steer  round 1 › turn 2"),
+        "must render steer with round › turn breadcrumb:\n{grid_steer}"
+    );
+    assert!(
+        !grid_steer.contains("↳"),
+        "must never use ↳ glyph in user prompt header:\n{grid_steer}"
+    );
+
+    // Queued steer
+    let mut queued_steer = TranscriptMessage::new(muta_contracts::Role::User, "Pending steer")
+        .with_sent_at_ms(epoch_ms);
+    queued_steer.origin = UserMessageOrigin::Steer;
+    queued_steer.delivery = DeliveryStatus::Queued;
+
+    let grid_queued_steer = render_transcript_grid(&[queued_steer], 72, 18);
+    assert!(
+        grid_queued_steer.contains("< steer  queued"),
+        "must render queued steer with clean upright status:\n{grid_queued_steer}"
+    );
+
+    // Delivered follow-up with round provenance
+    let mut followup_msg = TranscriptMessage::new(muta_contracts::Role::User, "Next step")
+        .with_round(2)
+        .with_sent_at_ms(epoch_ms);
+    followup_msg.origin = UserMessageOrigin::FollowUp;
+
+    let grid_followup = render_transcript_grid(&[followup_msg], 72, 18);
+    assert!(
+        grid_followup.contains("< follow-up  round 2"),
+        "must render follow-up with round context:\n{grid_followup}"
+    );
+    assert!(
+        !grid_followup.contains("↳"),
+        "must never use ↳ glyph in follow-up header:\n{grid_followup}"
+    );
+
+    // Queued follow-up
+    let mut queued_followup = TranscriptMessage::new(muta_contracts::Role::User, "Queued next step")
+        .with_sent_at_ms(epoch_ms);
+    queued_followup.origin = UserMessageOrigin::FollowUp;
+    queued_followup.delivery = DeliveryStatus::Queued;
+
+    let grid_queued_followup = render_transcript_grid(&[queued_followup], 72, 18);
+    assert!(
+        grid_queued_followup.contains("< follow-up  queued"),
+        "must render queued follow-up with clean upright status:\n{grid_queued_followup}"
     );
 }

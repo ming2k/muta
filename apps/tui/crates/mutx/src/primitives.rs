@@ -358,8 +358,8 @@ impl ContentModalSpec {
     /// Calculate the maximum dimensions (cols, rows) this modal can occupy in `frame`.
     #[allow(dead_code)]
     pub fn max_dimensions(&self, frame: &Frame) -> (u16, u16) {
-        let viewport = viewport_rect(frame);
-        let mut max_h = ((viewport.height as u32 * self.max_viewport_percent as u32) / 100) as u16;
+        let area = frame.area();
+        let mut max_h = ((area.height as u32 * self.max_viewport_percent as u32) / 100) as u16;
         if let Some(limit) = self.max_height_rows {
             max_h = max_h.min(limit);
         }
@@ -391,13 +391,13 @@ pub(crate) fn modal_area(frame: &Frame, geometry: FixedModalSpec) -> Rect {
     centered_rect(
         geometry.spec.width_percent,
         geometry.height_percent,
-        viewport_rect(frame),
+        frame.area(),
     )
 }
 
 pub(crate) fn content_modal_probe(frame: &Frame, geometry: ContentModalSpec) -> Rect {
-    let viewport = viewport_rect(frame);
-    let mut rect = centered_rect(geometry.spec.width_percent, 100, viewport);
+    let area = frame.area();
+    let mut rect = centered_rect(geometry.spec.width_percent, 100, area);
     if let Some(max_cols) = geometry.max_width_cols
         && rect.width > max_cols
     {
@@ -412,13 +412,13 @@ pub(crate) fn content_modal_area(
     geometry: ContentModalSpec,
     desired_rows: u16,
 ) -> Rect {
-    let viewport = viewport_rect(frame);
-    let mut max_h = ((viewport.height as u32 * geometry.max_viewport_percent as u32) / 100) as u16;
+    let area = frame.area();
+    let mut max_h = ((area.height as u32 * geometry.max_viewport_percent as u32) / 100) as u16;
     if let Some(limit) = geometry.max_height_rows {
         max_h = max_h.min(limit);
     }
     let height = desired_rows.clamp(geometry.min_rows, max_h.max(geometry.min_rows));
-    let mut rect = centered_rect_h(geometry.spec.width_percent, height, viewport);
+    let mut rect = centered_rect_h(geometry.spec.width_percent, height, area);
     if let Some(max_cols) = geometry.max_width_cols
         && rect.width > max_cols
     {
@@ -1268,5 +1268,35 @@ mod tests {
         assert_eq!(tight.len(), 3); // ..., sep, Google Antigravity
         assert!(matches!(tight[0], HeaderPart::Text { text: "...", .. }));
         assert!(matches!(tight[2], HeaderPart::Title("Google Antigravity")));
+    }
+
+    #[test]
+    fn modal_area_is_vertically_centered_within_frame() {
+        for &rows in &[30u16, 40, 45, 50, 60] {
+            let mut grid = mutx_engine::Grid::new(100, rows);
+            let frame = Frame::new(&mut grid);
+            let area = modal_area(&frame, FixedModalSpec::HELP);
+            let top_gap = area.y;
+            let bot_gap = rows.saturating_sub(area.y + area.height);
+            assert!(
+                (top_gap as i32 - bot_gap as i32).abs() <= 1,
+                "modal_area vertically centered at height {rows}: top_gap={top_gap}, bot_gap={bot_gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_modal_area_is_vertically_centered_within_frame() {
+        for &rows in &[30u16, 40, 45, 50, 60] {
+            let mut grid = mutx_engine::Grid::new(100, rows);
+            let frame = Frame::new(&mut grid);
+            let area = content_modal_area(&frame, ContentModalSpec::ACTIVITY, 15);
+            let top_gap = area.y;
+            let bot_gap = rows.saturating_sub(area.y + area.height);
+            assert!(
+                (top_gap as i32 - bot_gap as i32).abs() <= 1,
+                "content_modal_area vertically centered at height {rows}: top_gap={top_gap}, bot_gap={bot_gap}"
+            );
+        }
     }
 }

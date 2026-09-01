@@ -22,7 +22,7 @@ use muta_contracts::{
 use std::sync::{Arc, Mutex};
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint};
+use crate::{Client, ClientProfile, Endpoint};
 
 fn decode_stream_payload(
     data: &str,
@@ -111,7 +111,12 @@ impl OpenAiResponsesProvider {
     }
 
     pub fn with_user_agent(mut self, user_agent: &str) -> Self {
-        self.endpoint.user_agent = user_agent.to_string();
+        self.endpoint.client_profile = ClientProfile::from_user_agent(user_agent);
+        self
+    }
+
+    pub fn with_client_profile(mut self, profile: impl Into<ClientProfile>) -> Self {
+        self.endpoint.client_profile = profile.into();
         self
     }
 
@@ -187,7 +192,7 @@ impl OpenAiResponsesProvider {
         if is_copilot_vision {
             req = req.header("Copilot-Vision-Request", "true");
         }
-        for (name, value) in self.endpoint.client_identity().headers() {
+        for (name, value) in self.endpoint.headers() {
             if !copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()

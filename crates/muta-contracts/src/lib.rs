@@ -71,7 +71,9 @@ pub mod client_identity;
 pub mod connection_auth;
 pub mod connection_detail;
 pub mod provider_state;
-pub use client_identity::ClientIdentity;
+pub use client_identity::{
+    ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile, ClientProfileSpec,
+};
 pub mod effort;
 pub use effort::{
     EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
@@ -151,7 +153,10 @@ pub use catalog::{
     OpenAiResponsesDialect, ProviderEntry, Transport,
 };
 pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};
-pub use connection_detail::{ConnectionDetail, ConnectionUsageState, ProviderUsage, UsageMetric};
+pub use connection_detail::{
+    BalanceQuota, ConnectionDetail, ConnectionUsageState, PeriodicQuota, ProviderQuotaData,
+    ProviderUsage, QuotaWindowBucket, QuotaWindowKind, RateLimitSpec, UsageMetric,
+};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink, DynamicToolSource};
 pub use events::{

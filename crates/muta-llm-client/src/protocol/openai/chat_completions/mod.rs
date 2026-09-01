@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint};
+use crate::{Client, ClientProfile, Endpoint};
 
 pub mod echo;
 pub mod request;
@@ -84,12 +84,12 @@ impl OpenAiChatCompletionsProvider {
         credentials: std::sync::Arc<dyn CredentialSource>,
         model: String,
         base_url: &str,
-        user_agent: &str,
+        client_profile: impl Into<ClientProfile>,
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint::with_credentials(credentials, model, base_url, "openai")
-                .with_user_agent(user_agent),
+                .with_client_profile(client_profile),
             client: Client::new(),
             reasoning_effort: None,
             prompt_cache: crate::PromptCacheConfig::default(),
@@ -160,7 +160,7 @@ impl OpenAiChatCompletionsProvider {
         for (name, value) in request::headers(auth.token.expose_secret(), copilot) {
             req = req.header(name, value);
         }
-        for (name, value) in self.endpoint.client_identity().headers() {
+        for (name, value) in self.endpoint.headers() {
             if !copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()

@@ -3,7 +3,9 @@
 //! Query endpoint: `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
 
 use muta_contracts::async_trait;
-use muta_contracts::{ProviderUsage, UsageMetric};
+use muta_contracts::{
+    PeriodicQuota, ProviderQuotaData, ProviderUsage, QuotaWindowBucket, QuotaWindowKind, UsageMetric,
+};
 use serde::{Deserialize, Serialize};
 
 use super::ProviderUsageFetcher;
@@ -117,6 +119,7 @@ pub(crate) fn parse_antigravity_quota(
     if all_buckets.is_empty() {
         return Ok(ProviderUsage {
             plan: Some("Antigravity Quota Active".to_string()),
+            quota: Some(ProviderQuotaData::Periodic(PeriodicQuota::default())),
             primary_balance: Some("100%".to_string()),
             metrics: Vec::new(),
             updated_at_ms: now_epoch_ms(),
@@ -124,7 +127,8 @@ pub(crate) fn parse_antigravity_quota(
     }
 
     let mut metrics = Vec::new();
-    let mut min_fraction: Option<f32> = None;
+    let mut quota_buckets = Vec::new();
+    let mut min_remaining_fraction: Option<f32> = None;
 
     for bucket in all_buckets {
         let label = bucket
@@ -132,8 +136,35 @@ pub(crate) fn parse_antigravity_quota(
             .filter(|n| !n.trim().is_empty())
             .unwrap_or(bucket.bucket_id);
 
+        let window_kind = bucket.window.as_deref().map(|w| {
+            let upper = w.to_ascii_uppercase();
+            if upper.contains("5H") {
+                QuotaWindowKind::Rolling5Hour
+            } else if upper.contains("DAY") || upper.contains("24H") {
+                QuotaWindowKind::Daily
+            } else if upper.contains("WEEK") || upper.contains("7D") {
+                QuotaWindowKind::Weekly
+            } else if upper.contains("MONTH") || upper.contains("30D") {
+                QuotaWindowKind::Monthly
+            } else {
+                QuotaWindowKind::Custom
+            }
+        });
+
+        let reset_at_ms = bucket.reset_time.as_deref().and_then(|rt| {
+            chrono::DateTime::parse_from_rfc3339(rt)
+                .map(|dt| dt.timestamp_millis() as u64)
+                .ok()
+        });
+
+        let used_fraction = if let Some(frac) = bucket.remaining_fraction {
+            min_remaining_fraction = Some(min_remaining_fraction.map_or(frac, |m| m.min(frac)));
+            (1.0 - frac).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         let value_str = if let Some(frac) = bucket.remaining_fraction {
-            min_fraction = Some(min_fraction.map_or(frac, |m| m.min(frac)));
             let pct = (frac * 100.0).round() as u32;
             if let Some(reset) = bucket
                 .reset_time
@@ -160,6 +191,17 @@ pub(crate) fn parse_antigravity_quota(
             "Available".to_string()
         };
 
+        quota_buckets.push(QuotaWindowBucket {
+            window: window_kind,
+            label: label.clone(),
+            used_fraction,
+            used_amount: None,
+            total_limit: None,
+            unit: bucket.window.clone(),
+            reset_at_ms,
+            reset_time_str: bucket.reset_time.clone(),
+        });
+
         metrics.push(UsageMetric {
             label,
             value: value_str,
@@ -167,7 +209,7 @@ pub(crate) fn parse_antigravity_quota(
         });
     }
 
-    let primary_balance = min_fraction
+    let primary_balance = min_remaining_fraction
         .map(|frac| {
             let pct = (frac * 100.0).round() as u32;
             format!("{pct}% Quota")
@@ -179,6 +221,9 @@ pub(crate) fn parse_antigravity_quota(
             body.description
                 .unwrap_or_else(|| "Google Antigravity".to_string()),
         ),
+        quota: Some(ProviderQuotaData::Periodic(PeriodicQuota {
+            buckets: quota_buckets,
+        })),
         primary_balance,
         metrics,
         updated_at_ms: now_epoch_ms(),
@@ -214,7 +259,7 @@ mod tests {
                         {
                             "bucketId": "gemini-3.1-pro",
                             "displayName": "Gemini 3.1 Pro",
-                            "window": "DAY",
+                            "window": "5h",
                             "remainingFraction": 0.60
                         }
                     ]
@@ -231,7 +276,18 @@ mod tests {
         assert_eq!(usage.metrics[0].label, "Gemini 3.7 Flash");
         assert_eq!(usage.metrics[0].value, "85% (Resets: 2026-09-01T12:00:00Z)");
         assert_eq!(usage.metrics[0].unit.as_deref(), Some("DAY"));
-        assert_eq!(usage.metrics[1].label, "Gemini 3.1 Pro");
-        assert_eq!(usage.metrics[1].value, "60%");
+
+        if let Some(ProviderQuotaData::Periodic(periodic)) = usage.quota {
+            assert_eq!(periodic.buckets.len(), 2);
+            assert_eq!(periodic.buckets[0].window, Some(QuotaWindowKind::Daily));
+            assert!((periodic.buckets[0].used_fraction - 0.15).abs() < 0.001);
+            assert_eq!(
+                periodic.buckets[1].window,
+                Some(QuotaWindowKind::Rolling5Hour)
+            );
+            assert!((periodic.buckets[1].used_fraction - 0.40).abs() < 0.001);
+        } else {
+            panic!("Expected Periodic quota data");
+        }
     }
 }

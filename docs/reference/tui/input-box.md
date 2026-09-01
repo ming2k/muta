@@ -1,6 +1,8 @@
 # Input box
 
-The live editable prompt at the bottom of the frame.
+The live editable prompt at the bottom of the frame. For design rationale,
+the intent state machine, zero-latency completion, and history pointer
+architecture, see [Composer and input architecture](../../explanation/composer.md).
 
 ## Appearance
 

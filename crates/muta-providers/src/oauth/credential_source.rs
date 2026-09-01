@@ -72,7 +72,7 @@ impl OAuthCredentialSource {
         ResolvedAuth {
             token: tokens.access.clone(),
             account_id: account_id.clone(),
-            project_id: tokens.project_id.clone().or_else(|| account_id),
+            project_id: tokens.project_id.clone().or(account_id),
             user_email: tokens.user_email.clone(),
         }
     }

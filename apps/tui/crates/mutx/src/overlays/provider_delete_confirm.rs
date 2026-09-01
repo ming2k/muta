@@ -18,7 +18,7 @@ use mutx_engine::{
 };
 
 use crate::modal::Recess;
-use crate::primitives::{modal_frame, recess_backdrop, viewport_rect};
+use crate::primitives::{centered_rect_h, modal_frame, recess_backdrop};
 use crate::view::Theme;
 
 /// Which button in the confirm overlay holds keyboard focus. Mirrors
@@ -33,8 +33,9 @@ pub enum ProviderDeleteChoice {
 ///
 /// `provider_name` is the human label of the provider staged for deletion
 /// (rendered in the body so the user sees exactly what Enter-on-Delete will
-/// destroy). `focus` selects which of the two buttons is highlighted. Returns
-/// the panel rect so the caller can record it for outside-click dismissal.
+/// remove); `focus` selects which of the two footer buttons is highlighted.
+///
+/// Returns the rect of the confirm panel (for hit-testing).
 pub fn draw_provider_delete_confirm(
     frame: &mut Frame,
     provider_name: &str,
@@ -48,12 +49,11 @@ pub fn draw_provider_delete_confirm(
     recess_backdrop(frame, Recess::Dim, theme);
 
     // Compact centered panel, sized to its content rather than a fixed slab of
-    // the viewport. Body = 1 prompt line; the frame adds header + footer rows
+    // the frame. Body = 1 prompt line; the frame adds header + footer rows
     // plus its own inner vertical padding. A modest fixed height keeps the
     // panel compact and visually distinct from the full provider picker.
-    let viewport = viewport_rect(frame);
     let panel_rows: u16 = 9;
-    let area = content_centered(48, panel_rows, viewport);
+    let area = centered_rect_h(48, panel_rows, frame.area());
 
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -157,30 +157,4 @@ fn button(frame: &mut Frame, area: Rect, label: &str, focused: bool, danger: boo
         Paragraph::new(Line::from(Span::styled(label, style))).alignment(Alignment::Center),
         area,
     );
-}
-
-/// Center a fixed-size rect inside `r` (a percentage width × explicit row
-/// count). Equivalent to the private `centered_rect_h` in `primitives`, kept
-/// local because the helper is `pub(super)`-scoped to the render module.
-fn content_centered(percent_x: u16, height: u16, r: Rect) -> Rect {
-    let height = height.min(r.height);
-    let top = r.y + r.height.saturating_sub(height) / 2;
-    let band = Rect {
-        x: r.x,
-        y: top,
-        width: r.width,
-        height,
-    };
-    let area = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(band)[1];
-    // Floor to an even width so full-width (CJK) glyphs tile flush.
-    let mut a = area;
-    a.width &= !1;
-    a
 }

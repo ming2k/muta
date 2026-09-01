@@ -187,7 +187,9 @@ impl OAuthConfig {
     pub fn is_antigravity(&self) -> bool {
         self.provider_id == "google-antigravity"
             || self.provider_id == "antigravity"
-            || self.client_id == GOOGLE_ANTIGRAVITY_CLIENT_ID
+            || self.provider_id == "antigravity-cli"
+            || self.client_id == GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID
+            || self.client_id == GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID
             || self.token_url.contains("oauth2.googleapis.com")
     }
 
@@ -456,28 +458,82 @@ impl OAuthConfigBuilder {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Built-in Battle-tested Provider Presets
-const GOOGLE_ANTIGRAVITY_CLIENT_ID: &str = concat!(
+
+/// Primary Antigravity CLI OAuth client ID (from agy binary).
+pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID: &str = concat!(
+    "884354919052-",
+    "36trc1jjb3tguiac32ov6cod268c5blh",
+    ".apps.googleusercontent.com"
+);
+
+/// Primary Antigravity CLI OAuth client secret (from agy binary).
+pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET: &str = concat!("GOCSPX-", "9YQWpF7RWDC0QTdj-YxKMwR0ZtsX");
+
+/// Enterprise / Cloud Code Companion OAuth client ID (from agy binary).
+pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
     "1071006060591-",
     "tmhssin2h21lcre235vtolojh4g403ep",
     ".apps.googleusercontent.com"
 );
-const GOOGLE_ANTIGRAVITY_CLIENT_SECRET: &str = concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
+
+/// Enterprise / Cloud Code Companion OAuth client secret (from agy binary).
+pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str = concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Google Antigravity OAuth client config.
+/// Google Antigravity (Cloud Code / Enterprise companion) OAuth client config.
 ///
-/// Official Client ID and Secret reverse-engineered and registered for Google Antigravity.
 /// Configured with PreferredOrDynamic port fallback to eliminate `AddrInUse` errors.
 pub fn google_antigravity_preset() -> OAuthConfig {
     OAuthConfig {
         provider_id: Cow::Borrowed("google-antigravity"),
-        client_id: Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLIENT_ID),
-        // NOTE: verified live against oauth2.googleapis.com — this client_id
-        // authenticates with the `GOCSPX-K58F…` secret. The `GOCSPX-9YQW…`
-        // secret belongs to the *other* built-in Antigravity client
-        // (884354919052-…) and yields HTTP 401 `invalid_client` here.
-        client_secret: Some(Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLIENT_SECRET)),
+        client_id: Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID),
+        client_secret: Some(Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET)),
+        client_auth_method: ClientAuthMethod::RequestBody,
+        authorize_url: Cow::Borrowed("https://accounts.google.com/o/oauth2/v2/auth"),
+        token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
+        device_authorization_url: Cow::Borrowed("https://oauth2.googleapis.com/device/code"),
+        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
+        scope: Cow::Borrowed(
+            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs openid",
+        ),
+        extra_authorize_params: vec![
+            (Cow::Borrowed("access_type"), Cow::Borrowed("offline")),
+            (Cow::Borrowed("prompt"), Cow::Borrowed("consent")),
+            (
+                Cow::Borrowed("include_granted_scopes"),
+                Cow::Borrowed("true"),
+            ),
+        ],
+        extra_token_params: Vec::new(),
+        extra_refresh_params: Vec::new(),
+        extra_headers: Vec::new(),
+        user_agent: Some(Cow::Borrowed(
+            muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
+        )),
+        browser_login: true,
+        default_login_method: LoginMethod::Browser,
+        oauth_host: Cow::Borrowed("127.0.0.1"),
+        oauth_port: 51121,
+        port_mode: PortMode::PreferredOrDynamic(51121),
+        oauth_path: Cow::Borrowed("/oauth-callback"),
+        redirect_host: Cow::Borrowed("127.0.0.1"),
+        custom_redirect_uri: None,
+        send_nonce: false,
+        pkce_mode: PkceMode::S256,
+        token_format: TokenRequestFormat::FormUrlEncoded,
+        device_flow: DeviceFlow::Disabled,
+        device_token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
+        device_redirect_uri: Cow::Borrowed(""),
+    }
+}
+
+/// Google Antigravity Primary CLI OAuth client config (matching agy standalone binary).
+pub fn google_antigravity_cli_preset() -> OAuthConfig {
+    OAuthConfig {
+        provider_id: Cow::Borrowed("antigravity-cli"),
+        client_id: Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID),
+        client_secret: Some(Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET)),
         client_auth_method: ClientAuthMethod::RequestBody,
         authorize_url: Cow::Borrowed("https://accounts.google.com/o/oauth2/v2/auth"),
         token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
@@ -639,6 +695,8 @@ pub fn copilot_preset() -> OAuthConfig {
 // Lazy/Const compatible static accessors
 pub static GOOGLE_ANTIGRAVITY: std::sync::LazyLock<OAuthConfig> =
     std::sync::LazyLock::new(google_antigravity_preset);
+pub static GOOGLE_ANTIGRAVITY_CLI: std::sync::LazyLock<OAuthConfig> =
+    std::sync::LazyLock::new(google_antigravity_cli_preset);
 pub static XAI: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(xai_preset);
 pub static CHATGPT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(chatgpt_preset);
 pub static COPILOT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(copilot_preset);
@@ -650,6 +708,7 @@ pub fn config_by_provider_id(id: &str) -> Option<OAuthConfig> {
         "chatgpt" => Some(chatgpt_preset()),
         "copilot" => Some(copilot_preset()),
         "google-antigravity" | "antigravity" => Some(google_antigravity_preset()),
+        "antigravity-cli" | "agy" => Some(google_antigravity_cli_preset()),
         _ => None,
     }
 }
@@ -761,10 +820,10 @@ mod tests {
     fn google_antigravity_preset_matches_official_specification() {
         let cfg = google_antigravity_preset();
         assert_eq!(cfg.provider_id, "google-antigravity");
-        assert_eq!(cfg.client_id, GOOGLE_ANTIGRAVITY_CLIENT_ID);
+        assert_eq!(cfg.client_id, GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID);
         assert_eq!(
             cfg.client_secret.as_deref(),
-            Some(GOOGLE_ANTIGRAVITY_CLIENT_SECRET)
+            Some(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET)
         );
         assert_eq!(
             cfg.authorize_url,
@@ -785,6 +844,15 @@ mod tests {
             cfg.user_agent.as_deref(),
             Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT)
         );
+
+        let cli_cfg = google_antigravity_cli_preset();
+        assert_eq!(cli_cfg.provider_id, "antigravity-cli");
+        assert_eq!(cli_cfg.client_id, GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID);
+        assert_eq!(
+            cli_cfg.client_secret.as_deref(),
+            Some(GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET)
+        );
+        assert!(cli_cfg.is_antigravity());
 
         // Test client customization / emulation
         let custom_agy = cfg

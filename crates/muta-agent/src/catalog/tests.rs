@@ -360,7 +360,7 @@ fn channel_model_info_effort_ladders_survive() {
         label: "gemini-3.7-flash".to_string(),
         transport: Transport::Google {
             base_url: "https://cloudcode-pa.googleapis.com".to_string(),
-            user_agent: "antigravity/1.23.2 windows/amd64".to_string(),
+            client_profile: muta_contracts::ClientProfile::Antigravity,
             effort: None,
             dialect: Default::default(),
         },
@@ -711,6 +711,6 @@ async fn discovery_never_resurrects_deleted_connection() {
     assert!(!outcome.changed);
 
     let final_cache = DiscoveryCache::load();
-    assert!(final_cache.connection_models.get("deleted-conn").is_none());
-    assert!(final_cache.model_lists.get("deleted-conn").is_none());
+    assert!(!final_cache.connection_models.contains_key("deleted-conn"));
+    assert!(!final_cache.model_lists.contains_key("deleted-conn"));
 }

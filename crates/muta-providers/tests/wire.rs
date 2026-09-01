@@ -565,7 +565,7 @@ async fn factory_publishes_explicit_high_effort() {
         label: "Opus".into(),
         transport: Transport::Anthropic {
             base_url: String::new(), // rewritten by the harness
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::High),
             thinking: None,
             dialect: Default::default(),
@@ -594,7 +594,7 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
         label: "Opus".into(),
         transport: Transport::Anthropic {
             base_url: String::new(),
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::Medium),
             thinking: Some(ThinkingMode::Off),
             dialect: Default::default(),
@@ -620,7 +620,7 @@ async fn factory_publishes_thinking_without_output_config() {
         label: "Opus".into(),
         transport: Transport::Anthropic {
             base_url: String::new(),
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: None,
             thinking: Some(ThinkingMode::Adaptive),
             dialect: Default::default(),
@@ -651,7 +651,7 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
         label: "Sonnet 5".into(),
         transport: Transport::Anthropic {
             base_url: String::new(),
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::High),
             thinking: Some(ThinkingMode::Off),
             dialect: Default::default(),
@@ -682,7 +682,7 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
         label: "Sonnet 5".into(),
         transport: Transport::Anthropic {
             base_url: String::new(),
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::Xhigh),
             thinking: Some(ThinkingMode::Adaptive),
             dialect: Default::default(),
@@ -714,7 +714,7 @@ async fn fable5_always_on_thinking_ignores_off_override() {
         label: "Fable 5".into(),
         transport: Transport::Anthropic {
             base_url: String::new(),
-            user_agent: "ua".into(),
+            client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: None,
             thinking: Some(ThinkingMode::Off),
             dialect: Default::default(),

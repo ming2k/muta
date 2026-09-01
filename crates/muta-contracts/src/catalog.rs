@@ -60,76 +60,35 @@ pub enum GoogleGenerateContentDialect {
 #[derive(Debug, Clone)]
 pub enum Transport {
     /// OpenAI-compatible chat-completions endpoint at `base_url`. The
-    /// `user_agent` is sent verbatim on every request. `effort`, when set,
-    /// becomes the OpenAI `reasoning_effort` field for models that expose that
-    /// throttle. `copilot` flips on GitHub Copilot's required per-request
-    /// headers for a Copilot OAuth channel that speaks chat-completions (the
-    /// GPT-4o family and Copilot Free accounts, which have no Responses access).
+    /// `client_profile` defines the User-Agent and client identity headers sent.
+    /// `effort`, when set, becomes the OpenAI `reasoning_effort` field.
     OpenAi {
         base_url: String,
-        user_agent: String,
+        client_profile: crate::ClientProfile,
         effort: Option<crate::Effort>,
         dialect: OpenAiChatDialect,
     },
     /// Anthropic-compatible `/messages` endpoint at `base_url` (the full URL).
-    /// Auth uses the `x-api-key` header plus `anthropic-version`. Models served
-    /// in this format (e.g. MiniMax/Qwen behind opencode-go's `/v1/messages`)
-    /// speak the Anthropic Messages wire protocol, not OpenAI chat-completions.
-    ///
-    /// Two orthogonal reasoning knobs ride on the transport, both optional and
-    /// both typed (they live in this crate — `Effort` and
-    /// [`crate::ThinkingMode`] — so there is no string↔enum shuffle at the
-    /// factory layer):
-    ///
-    /// - `effort` — reasoning **depth** (the throttle). Clamped to the
-    ///   resolved model's supported levels at request-build time.
-    /// - `thinking` — reasoning **on/off** (the switch). `None` is the opt-in
-    ///   default: the model does NOT reason (ADR-0046). `Some(Adaptive)` opts
-    ///   the model in to extended thinking; `Some(Off)` is an explicit off.
-    ///
-    /// The two are independent on the wire: a request may carry `effort`
-    /// without enabling thinking, or thinking at any depth. They are therefore
-    /// modeled and surfaced as separate controls — never coupled.
+    /// Auth uses the `x-api-key` header plus `anthropic-version`.
     Anthropic {
         base_url: String,
-        user_agent: String,
+        client_profile: crate::ClientProfile,
         effort: Option<crate::Effort>,
         thinking: Option<crate::ThinkingMode>,
-        /// GitHub Copilot's `/v1/messages` adapter uses a bearer and the
-        /// Copilot client headers rather than Anthropic's `x-api-key` auth.
         dialect: AnthropicMessagesDialect,
     },
-    /// Google native API (`generativelanguage.googleapis.com`). The model
-    /// id and API key are read from the owning [`Channel`]. `base_url` is the
-    /// versioned base (default `https://generativelanguage.googleapis.com/v1beta`);
-    /// the provider appends `/models/{model}:generateContent` (or the `:stream`
-    /// variant), so a 中转站/relay supplies its host with the `/v1beta` prefix.
-    ///
-    /// `effort`, when set, is the reasoning-depth override — the same
-    /// provider-independent [`crate::Effort`] the other transports carry, translated
-    /// onto Google's `thinkingConfig` at request-build time: Gemini 3.x maps it
-    /// to `thinkingLevel` (`minimal`/`low`/`medium`/`high`); Gemini 2.5 maps it
-    /// to a `thinkingBudget` token bucket. So effort reaches Google the same
-    /// way it reaches every other provider — through the single abstraction.
+    /// Google native API (`generativelanguage.googleapis.com` or Antigravity).
     Google {
         base_url: String,
-        user_agent: String,
+        client_profile: crate::ClientProfile,
         effort: Option<crate::Effort>,
         dialect: GoogleGenerateContentDialect,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
-    /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by
-    /// the GitHub Copilot subscription backend
-    /// (`api.githubcopilot.com/responses`). Unlike
-    /// [`OpenAi`](Self::OpenAi) (chat completions), the Responses
-    /// API takes `instructions` + an `input` items array and streams
-    /// `response.*` events. For ChatGPT connections (`chatgpt == true`),
-    /// `originator: muta` and `ChatGPT-Account-Id` (from resolved dynamic auth)
-    /// are attached. For Copilot connections (`copilot == true`), Copilot's
-    /// required headers are attached.
+    /// subscription backend and GitHub Copilot Responses backend.
     OpenAiResponses {
         base_url: String,
-        user_agent: String,
+        client_profile: crate::ClientProfile,
         effort: Option<crate::Effort>,
         dialect: OpenAiResponsesDialect,
     },
@@ -156,20 +115,22 @@ impl Transport {
         }
     }
 
-    /// The User-Agent header string for this transport.
-    pub fn user_agent(&self) -> &str {
+    /// The resolved client profile for this transport.
+    pub fn client_profile(&self) -> &crate::ClientProfile {
         match self {
-            Transport::OpenAi { user_agent, .. }
-            | Transport::Anthropic { user_agent, .. }
-            | Transport::OpenAiResponses { user_agent, .. } => user_agent,
-            Transport::Google { .. } => "",
+            Transport::OpenAi { client_profile, .. }
+            | Transport::Anthropic { client_profile, .. }
+            | Transport::Google { client_profile, .. }
+            | Transport::OpenAiResponses { client_profile, .. } => client_profile,
         }
     }
 
-    /// Whether this transport needs an API key at all. Every remaining transport
-    /// is a cloud transport, so all require a key. (A keyless OpenAI-compatible
-    /// relay still constructs fine — an empty `api_key` simply suppresses the
-    /// `Authorization` header in the provider.)
+    /// The User-Agent header string for this transport.
+    pub fn user_agent(&self) -> &str {
+        self.client_profile().user_agent()
+    }
+
+    /// Whether this transport needs an API key at all.
     pub fn needs_api_key(&self) -> bool {
         match self {
             Transport::OpenAi { .. }
@@ -367,7 +328,7 @@ mod tests {
                 label: "DeepSeek V4 Flash".to_string(),
                 transport: Transport::OpenAi {
                     base_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-                    user_agent: "agent".to_string(),
+                    client_profile: crate::ClientProfile::from("agent"),
                     effort: None,
                     dialect: Default::default(),
                 },
@@ -402,7 +363,7 @@ mod tests {
             label: "OpenAI".to_string(),
             transport: Transport::OpenAi {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: crate::ClientProfile::from("agent"),
                 effort: None,
                 dialect: Default::default(),
             },
@@ -422,7 +383,7 @@ mod tests {
         // report needing a key, and an empty key must not be "ready".
         let needs_key = Transport::Anthropic {
             base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
-            user_agent: "agent".to_string(),
+            client_profile: crate::ClientProfile::from("agent"),
             effort: None,
             thinking: None,
             dialect: Default::default(),
@@ -435,7 +396,7 @@ mod tests {
             label: "OpenCode Go (Messages)".to_string(),
             transport: Transport::Anthropic {
                 base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: crate::ClientProfile::from("agent"),
                 effort: None,
                 thinking: None,
                 dialect: Default::default(),
@@ -465,7 +426,7 @@ mod tests {
                     label: "GLM-5.2".to_string(),
                     transport: Transport::OpenAi {
                         base_url: "https://opencode.ai/zen/go/v1/chat/completions".to_string(),
-                        user_agent: "agent".to_string(),
+                        client_profile: crate::ClientProfile::from("agent"),
                         effort: None,
                         dialect: Default::default(),
                     },
@@ -481,7 +442,7 @@ mod tests {
                     label: "MiniMax M3".to_string(),
                     transport: Transport::Anthropic {
                         base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
-                        user_agent: "agent".to_string(),
+                        client_profile: crate::ClientProfile::from("agent"),
                         effort: None,
                         thinking: None,
                         dialect: Default::default(),
@@ -542,7 +503,7 @@ mod tests {
                 label: "Fixture".to_string(),
                 transport: Transport::OpenAi {
                     base_url: "https://example.com/v1/chat/completions".to_string(),
-                    user_agent: "agent".to_string(),
+                    client_profile: crate::ClientProfile::from("agent"),
                     effort: None,
                     dialect: Default::default(),
                 },

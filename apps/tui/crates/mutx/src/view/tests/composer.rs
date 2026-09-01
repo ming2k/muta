@@ -1331,8 +1331,8 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
     let mut terminal = mutx_engine::TestTerminal::new(width, 20);
 
     let messages = vec![
-        TranscriptMessage::new(muta_contracts::Role::User, "first queued").queued(),
-        TranscriptMessage::new(muta_contracts::Role::User, "second queued").queued(),
+        TranscriptMessage::new(muta_contracts::Role::User, "first steer message").queued(),
+        TranscriptMessage::new(muta_contracts::Role::User, "second steer message").queued(),
     ];
     terminal.draw(|f| {
         let mut layout_map = LayoutMap::new();
@@ -1392,16 +1392,20 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
         }
     }
 
-    // Each queued user message renders one "⏸ Queued" badge row OUTSIDE
+    // Each queued user message renders one queued status strip OUTSIDE
     // the panel (on plain `surface`, above the panel's top transition).
-    // The badge is the paused glyph at the text column, on a surface row.
-    let badge_count = (0..buffer.area().height)
-        .filter(|&y| buffer[(4, y)].symbol() == "⏸")
+    let row_text = |y: u16| -> String {
+        (0..buffer.area().width)
+            .map(|x| buffer[(x, y)].symbol().to_string())
+            .collect()
+    };
+    let queued_headers = (0..buffer.area().height)
+        .filter(|&y| row_text(y).contains("queued"))
         .count();
     assert_eq!(
-        badge_count, 2,
-        "each queued user message must render one badge row, got {}",
-        badge_count
+        queued_headers, 2,
+        "each queued user message must render one queued header row, got {}",
+        queued_headers
     );
 }
 
@@ -1477,7 +1481,7 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
             );
         }
     }
-    // The full label renders (spelled out, unlike the compact `⏸ Queued`).
+    // The full label renders (spelled out as upright status).
     let row_text = |y: u16| -> String {
         (0..buffer.area().width)
             .map(|x| buffer[(x, y)].symbol().to_string())
@@ -1485,10 +1489,10 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
     };
     let rendered = (0..buffer.area().height)
         .map(row_text)
-        .any(|row| row.contains("Held for next round"));
+        .any(|row| row.contains("held for next round"));
     assert!(
         rendered,
-        "the held entry must spell out its fate (⏸ Held for next round)"
+        "the held entry must spell out its fate (held for next round)"
     );
 }
 

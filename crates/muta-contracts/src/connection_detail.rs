@@ -2,13 +2,134 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Time window categorization for periodic rate limits / quotas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum QuotaWindowKind {
+    /// 5-hour rolling limit window (e.g. Antigravity / Claude / Codex).
+    Rolling5Hour,
+    /// Daily 24-hour quota window.
+    Daily,
+    /// Weekly quota window.
+    Weekly,
+    /// Monthly tier quota window.
+    Monthly,
+    /// Custom interval window.
+    Custom,
+}
+
+impl QuotaWindowKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Rolling5Hour => "5h Window",
+            Self::Daily => "Daily",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+            Self::Custom => "Custom Window",
+        }
+    }
+}
+
+/// Detailed state of one periodic quota bucket / window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct QuotaWindowBucket {
+    /// Window type (5h rolling, daily, weekly, monthly, custom).
+    pub window: Option<QuotaWindowKind>,
+    /// Human-friendly label (e.g. "Gemini 3.7 Flash", "5h Rolling Limit", "Daily Budget").
+    pub label: String,
+    /// Used fraction from 0.0 (0% used) to 1.0 (100% depleted).
+    pub used_fraction: f32,
+    /// Optional absolute used amount (e.g. 15 requests, 12000 tokens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_amount: Option<f64>,
+    /// Optional absolute total limit amount (e.g. 50 requests, 100000 tokens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_limit: Option<f64>,
+    /// Unit for amounts (e.g. "requests", "tokens", "USD").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Epoch milliseconds when this quota window resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at_ms: Option<u64>,
+    /// Raw reset time string if parsed from provider (e.g. "2026-09-01T12:00:00Z").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_time_str: Option<String>,
+}
+
+/// A set of periodic quota buckets (e.g. per-model or multi-window combinations).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct PeriodicQuota {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<QuotaWindowBucket>,
+}
+
+/// Balance, credits, and spending limit details for pay-as-you-go or prepaid accounts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct BalanceQuota {
+    /// Currency code (e.g. "CNY", "USD") or credit unit.
+    pub currency: String,
+    /// Available total balance (for prepaid accounts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_balance: Option<f64>,
+    /// Cash / topped-up / recharge balance component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash_balance: Option<f64>,
+    /// Voucher / granted / gift balance component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voucher_balance: Option<f64>,
+    /// Credit limit ceiling (e.g. OpenRouter limit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit_limit: Option<f64>,
+    /// Consumed amount against the credit limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumed_amount: Option<f64>,
+    /// Formatted primary balance string for display (e.g. "¥100.50", "$1.23 / $10.00").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_primary: Option<String>,
+}
+
+/// Concurrency and request / token rate limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RateLimitSpec {
+    pub requests: i64,
+    pub interval: String,
+}
+
+/// Typed classification of a provider's quota / billing architecture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum ProviderQuotaData {
+    /// Pure periodic window limits (e.g. Antigravity, Claude, ChatGPT subscription).
+    Periodic(PeriodicQuota),
+    /// Pure prepaid / pay-as-you-go balance (e.g. DeepSeek, Kimi, SiliconFlow).
+    Balance(BalanceQuota),
+    /// Hybrid: combined periodic windows, balances, and/or rate limits (e.g. OpenRouter).
+    Composite {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        balance: Option<BalanceQuota>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        periodic: Option<PeriodicQuota>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rate_limits: Vec<RateLimitSpec>,
+    },
+}
+
 /// Generic normalized provider usage / quota / balance info.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ProviderUsage {
-    /// High-level plan / account status (e.g. "Active", "Available", "Free Tier", "Tier 2", "Pay-as-you-go").
+    /// High-level plan / account tier badge (e.g. "Google AI Premium", "Pay-as-you-go", "Tier 2").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Typed structured quota / balance data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<ProviderQuotaData>,
     /// Primary balance / credit summary (e.g. "¥10.00", "$5.20", "10.00 CNY").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_balance: Option<String>,
@@ -34,7 +155,7 @@ pub struct UsageMetric {
 }
 
 /// State of a connection's usage / quota retrieval.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "status", content = "data", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ConnectionUsageState {
@@ -44,13 +165,13 @@ pub enum ConnectionUsageState {
     /// Usage query is currently in progress.
     Fetching,
     /// Usage data retrieved successfully.
-    Available(ProviderUsage),
+    Available(Box<ProviderUsage>),
     /// Usage query failed with an error message.
     Error(String),
 }
 
 /// Full inspection detail for one connection in the `/connections` modal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ConnectionDetail {
     /// Canonical connection id.

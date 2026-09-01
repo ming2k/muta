@@ -90,7 +90,7 @@ jobs:
           mkdir "$dirname"
           cp target/${{ matrix.target }}/release/muta "$dirname/"
           cp target/${{ matrix.target }}/release/mutx "$dirname/"
-          cp muta-ui.sh README.md LICENSE "$dirname/"
+          cp README.md LICENSE "$dirname/"
           tar -czf "$dirname.tar.gz" "$dirname"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$dirname.tar.gz" > "$dirname.tar.gz.sha256"
@@ -106,7 +106,7 @@ jobs:
           New-Item -ItemType Directory -Path $dirname | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/muta.exe" "$dirname/"
           Copy-Item "target/${{ matrix.target }}/release/mutx.exe" "$dirname/"
-          Copy-Item muta-ui.bat, README.md, LICENSE "$dirname/"
+          Copy-Item README.md, LICENSE "$dirname/"
           Compress-Archive -Path $dirname -DestinationPath "$dirname.zip"
           $hash = (Get-FileHash "$dirname.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $dirname.zip" | Set-Content -NoNewline "$dirname.zip.sha256"

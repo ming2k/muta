@@ -8,6 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod clipboard;
+pub mod environment;
 pub mod fs;
 pub mod ipc;
 pub mod lock;
@@ -17,6 +18,8 @@ pub mod process;
 pub mod secure_file;
 pub mod shell;
 pub mod workspace_sandbox;
+
+pub use environment::{detect_device_fingerprint, detect_runtime_environment, generate_session_id};
 
 #[cfg(windows)]
 mod windows_security;

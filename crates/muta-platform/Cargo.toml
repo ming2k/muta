@@ -11,7 +11,9 @@ base64 = { workspace = true }
 dirs = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "process", "rt"] }
+uuid = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

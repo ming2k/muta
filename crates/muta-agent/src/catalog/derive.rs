@@ -15,13 +15,13 @@
 
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
-    AnthropicMessagesDialect, ConnectionAuth, Effort, GoogleGenerateContentDialect,
+    AnthropicMessagesDialect, ClientProfile, ConnectionAuth, Effort, GoogleGenerateContentDialect,
     OpenAiChatDialect, OpenAiResponsesDialect, SecretString, ThinkingMode, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
-use muta_providers::{MUTA_USER_AGENT, provider_preset_spec, route_for_model as preset_route};
+use muta_providers::{provider_preset_spec, route_for_model as preset_route};
 
 pub(super) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -127,61 +127,70 @@ pub fn derive_channel(
         };
 
     let transport = match connection.auth {
-        ConnectionAuth::ChatGptOAuth => Transport::OpenAiResponses {
-            base_url: connection
-                .base_url
-                .clone()
-                .unwrap_or_else(|| CHATGPT_RESPONSES_URL.to_string()),
-            user_agent: connection
-                .user_agent
-                .clone()
-                .unwrap_or_else(|| connection.client_identity.user_agent().to_string()),
-            effort,
-            dialect: OpenAiResponsesDialect::ChatGpt,
-        },
+        ConnectionAuth::ChatGptOAuth => {
+            let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+                ClientProfile::from_user_agent(ua)
+            } else if connection.client_identity != ClientProfile::Native {
+                connection.client_identity.clone()
+            } else {
+                ClientProfile::Native
+            };
+            Transport::OpenAiResponses {
+                base_url: connection
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| CHATGPT_RESPONSES_URL.to_string()),
+                client_profile,
+                effort,
+                dialect: OpenAiResponsesDialect::ChatGpt,
+            }
+        }
         ConnectionAuth::CopilotOAuth => {
             copilot_route(connection, remote.as_ref(), effort, thinking)
         }
-        ConnectionAuth::AntigravityOAuth => Transport::Google {
-            base_url: connection
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://daily-cloudcode-pa.googleapis.com".to_string()),
-            user_agent: connection.user_agent.clone().unwrap_or_else(|| {
-                if connection.client_identity != muta_contracts::ClientIdentity::Native {
-                    connection.client_identity.user_agent().to_string()
-                } else {
-                    muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT.to_string()
-                }
-            }),
-            effort,
-            dialect: GoogleGenerateContentDialect::Antigravity,
-        },
+        ConnectionAuth::AntigravityOAuth => {
+            let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+                ClientProfile::from_user_agent(ua)
+            } else if connection.client_identity != ClientProfile::Native {
+                connection.client_identity.clone()
+            } else {
+                ClientProfile::Antigravity
+            };
+            Transport::Google {
+                base_url: connection
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://daily-cloudcode-pa.googleapis.com".to_string()),
+                client_profile,
+                effort,
+                dialect: GoogleGenerateContentDialect::Antigravity,
+            }
+        }
         _ => {
-            let (protocol, base_url, user_agent) = base_route(connection, model);
+            let (protocol, base_url, client_profile) = base_route(connection, model);
             match protocol {
                 WireProtocol::GoogleGenerateContent => Transport::Google {
                     base_url,
-                    user_agent,
+                    client_profile,
                     effort,
                     dialect: GoogleGenerateContentDialect::GenerativeLanguage,
                 },
                 WireProtocol::AnthropicMessages => Transport::Anthropic {
                     base_url,
-                    user_agent,
+                    client_profile,
                     effort,
                     thinking,
                     dialect: AnthropicMessagesDialect::Standard,
                 },
                 WireProtocol::OpenAiResponses => Transport::OpenAiResponses {
                     base_url,
-                    user_agent,
+                    client_profile,
                     effort,
                     dialect: OpenAiResponsesDialect::Standard,
                 },
                 WireProtocol::OpenAiChatCompletions => Transport::OpenAi {
                     base_url,
-                    user_agent,
+                    client_profile,
                     effort,
                     dialect: OpenAiChatDialect::Standard,
                 },
@@ -207,23 +216,21 @@ pub fn derive_channel(
 /// The base transport for a non-OAuth connection: preset route (always derived
 /// from the hardcoded preset spec) or the pure-custom declaration.
 #[allow(clippy::expect_used)] // `route_models` validates preset IDs before this derivation step.
-fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, String) {
+fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, ClientProfile) {
     if let Some(pid) = connection.preset_id.as_deref() {
         let preset = provider_preset_spec(pid)
             .expect("route_models rejects unknown provider presets before route derivation");
         let (protocol, preset_base_url, preset_ua) =
             preset_route(pid, model).unwrap_or((preset.protocol, "", preset.user_agent));
-        let user_agent = connection
-            .user_agent
-            .clone()
-            .or_else(|| {
-                if connection.client_identity != muta_contracts::ClientIdentity::Native {
-                    Some(connection.client_identity.user_agent().to_string())
-                } else {
-                    preset_ua.map(str::to_string)
-                }
-            })
-            .unwrap_or_else(|| connection.client_identity.user_agent().to_string());
+        let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+            ClientProfile::from_user_agent(ua)
+        } else if connection.client_identity != ClientProfile::Native {
+            connection.client_identity.clone()
+        } else if let Some(pua) = preset_ua {
+            ClientProfile::from_user_agent(pua)
+        } else {
+            connection.client_identity.clone()
+        };
         let base_url = if preset_base_url.is_empty() {
             connection
                 .base_url
@@ -233,7 +240,7 @@ fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, St
         } else {
             preset_base_url.to_string()
         };
-        (protocol, base_url, user_agent)
+        (protocol, base_url, client_profile)
     } else {
         let protocol = connection
             .protocol
@@ -243,11 +250,12 @@ fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, St
             .clone()
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| default_endpoint(protocol));
-        let user_agent = connection
-            .user_agent
-            .clone()
-            .unwrap_or_else(|| connection.client_identity.user_agent().to_string());
-        (protocol, base_url, user_agent)
+        let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+            ClientProfile::from_user_agent(ua)
+        } else {
+            connection.client_identity.clone()
+        };
+        (protocol, base_url, client_profile)
     }
 }
 
@@ -259,29 +267,30 @@ fn copilot_route(
     effort: Option<Effort>,
     thinking: Option<ThinkingMode>,
 ) -> Transport {
-    let ua = || {
-        connection
-            .user_agent
-            .clone()
-            .unwrap_or_else(|| MUTA_USER_AGENT.to_string())
+    let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+        ClientProfile::from_user_agent(ua)
+    } else if connection.client_identity != ClientProfile::Native {
+        connection.client_identity.clone()
+    } else {
+        ClientProfile::Copilot
     };
     match remote.and_then(|r| r.protocol) {
         Some(WireProtocol::OpenAiResponses) => Transport::OpenAiResponses {
             base_url: "https://api.githubcopilot.com/responses".to_string(),
-            user_agent: ua(),
+            client_profile,
             effort,
             dialect: OpenAiResponsesDialect::Copilot,
         },
         Some(WireProtocol::AnthropicMessages) => Transport::Anthropic {
             base_url: "https://api.githubcopilot.com/v1/messages".to_string(),
-            user_agent: ua(),
+            client_profile,
             effort,
             thinking,
             dialect: AnthropicMessagesDialect::Copilot,
         },
         Some(WireProtocol::OpenAiChatCompletions) | None => Transport::OpenAi {
             base_url: "https://api.githubcopilot.com/chat/completions".to_string(),
-            user_agent: ua(),
+            client_profile,
             effort,
             dialect: OpenAiChatDialect::Copilot,
         },

@@ -281,7 +281,7 @@ pub fn build_provider_for_channel(
     match &channel.transport {
         Transport::Google {
             base_url,
-            user_agent,
+            client_profile,
             effort,
             dialect,
         } => {
@@ -290,7 +290,7 @@ pub fn build_provider_for_channel(
                 credentials,
                 channel.model.clone(),
                 base_url,
-                user_agent,
+                client_profile.clone(),
             )
             .with_reasoning_effort(*effort)
             .with_model_capabilities(capabilities)
@@ -301,7 +301,7 @@ pub fn build_provider_for_channel(
         }
         Transport::Anthropic {
             base_url,
-            user_agent,
+            client_profile,
             effort,
             thinking,
             dialect,
@@ -310,7 +310,7 @@ pub fn build_provider_for_channel(
                 credentials,
                 channel.model.clone(),
                 base_url,
-                user_agent,
+                client_profile.clone(),
             )
             .with_id(entry_id.to_string());
             // Cap the response length at the model's registered output limit so
@@ -347,7 +347,7 @@ pub fn build_provider_for_channel(
         }
         Transport::OpenAi {
             base_url,
-            user_agent,
+            client_profile,
             effort,
             dialect,
         } => {
@@ -365,7 +365,7 @@ pub fn build_provider_for_channel(
                 credentials,
                 channel.model.clone(),
                 base_url,
-                user_agent,
+                client_profile.clone(),
             )
             .with_reasoning_effort(effective_effort)
             .with_prompt_cache(prompt_cache)
@@ -376,7 +376,7 @@ pub fn build_provider_for_channel(
         }
         Transport::OpenAiResponses {
             base_url,
-            user_agent,
+            client_profile,
             effort,
             dialect,
         } => {
@@ -389,7 +389,7 @@ pub fn build_provider_for_channel(
                 channel.model.clone(),
                 base_url,
             )
-            .with_user_agent(user_agent)
+            .with_client_profile(client_profile.clone())
             .with_reasoning_effort(effective_effort)
             .with_model_capabilities(capabilities)
             .with_prompt_cache(prompt_cache)
@@ -541,7 +541,7 @@ mod build_tests {
             label: "OpenAI".to_string(),
             transport: Transport::OpenAi {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: muta_contracts::ClientProfile::from("agent"),
                 effort: None,
                 dialect: Default::default(),
             },
@@ -570,7 +570,7 @@ mod build_tests {
             transport: Transport::OpenAi {
                 base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
                     .to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: muta_contracts::ClientProfile::from("agent"),
                 effort: None,
                 dialect: Default::default(),
             },
@@ -603,7 +603,7 @@ mod build_tests {
             label: "OpenAI".to_string(),
             transport: Transport::OpenAi {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: muta_contracts::ClientProfile::from("agent"),
                 effort: None,
                 dialect: Default::default(),
             },
@@ -628,7 +628,7 @@ mod build_tests {
             label: "MiniMax M3".to_string(),
             transport: Transport::Anthropic {
                 base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
-                user_agent: "agent".to_string(),
+                client_profile: muta_contracts::ClientProfile::from("agent"),
                 effort: None,
                 thinking: None,
                 dialect: Default::default(),

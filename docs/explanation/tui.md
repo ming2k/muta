@@ -416,6 +416,9 @@ live in the lookup reference:
 
 - [Terminal UI reference](../reference/tui/) — frame layout, every
   component, color tokens, key measurements, source-file map.
+- [Composer and input architecture](composer.md) — the unified input surface,
+  intent-driven state machine, zero-latency two-tier completion, and multi-slot
+  history model.
 - [Step state machine](../reference/tui/step-state.md) — the formal
   state diagrams for the disclosure / interaction / lifecycle axes.
 - [Harness architecture](agent-design/harness.md) — the control plane whose state the

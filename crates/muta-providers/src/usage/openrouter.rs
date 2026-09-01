@@ -3,7 +3,9 @@
 //! Query endpoint: `GET https://openrouter.ai/api/v1/auth/key`
 
 use muta_contracts::async_trait;
-use muta_contracts::{ProviderUsage, UsageMetric};
+use muta_contracts::{
+    BalanceQuota, ProviderQuotaData, ProviderUsage, RateLimitSpec, UsageMetric,
+};
 use serde::Deserialize;
 
 use super::ProviderUsageFetcher;
@@ -99,6 +101,24 @@ pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<Provid
         format!("${:.2} used", data.usage)
     };
 
+    let balance_quota = BalanceQuota {
+        currency: "USD".to_string(),
+        total_balance: data.limit.map(|lim| (lim - data.usage).max(0.0)),
+        cash_balance: None,
+        voucher_balance: None,
+        credit_limit: data.limit,
+        consumed_amount: Some(data.usage),
+        display_primary: Some(primary_balance.clone()),
+    };
+
+    let mut rate_limits = Vec::new();
+    if let Some(rl) = &data.rate_limit {
+        rate_limits.push(RateLimitSpec {
+            requests: rl.requests,
+            interval: rl.interval.clone(),
+        });
+    }
+
     let mut metrics = Vec::new();
     if let Some(lbl) = data.label
         && !lbl.is_empty()
@@ -121,7 +141,7 @@ pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<Provid
             unit: Some("USD".to_string()),
         });
     }
-    if let Some(rl) = data.rate_limit {
+    if let Some(rl) = &data.rate_limit {
         metrics.push(UsageMetric {
             label: "Rate Limit".to_string(),
             value: format!("{} req / {}", rl.requests, rl.interval),
@@ -136,6 +156,11 @@ pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<Provid
 
     Ok(ProviderUsage {
         plan,
+        quota: Some(ProviderQuotaData::Composite {
+            balance: Some(balance_quota),
+            periodic: None,
+            rate_limits,
+        }),
         primary_balance: Some(primary_balance),
         metrics,
         updated_at_ms: now_ms,
@@ -169,5 +194,22 @@ mod tests {
         assert_eq!(usage.metrics.len(), 4);
         assert_eq!(usage.metrics[0].label, "Key Label");
         assert_eq!(usage.metrics[0].value, "Work project");
+
+        if let Some(ProviderQuotaData::Composite {
+            balance,
+            rate_limits,
+            ..
+        }) = usage.quota
+        {
+            let bal = balance.unwrap();
+            assert_eq!(bal.currency, "USD");
+            assert_eq!(bal.credit_limit, Some(10.0));
+            assert_eq!(bal.consumed_amount, Some(1.2345));
+            assert_eq!(rate_limits.len(), 1);
+            assert_eq!(rate_limits[0].requests, 200);
+            assert_eq!(rate_limits[0].interval, "10s");
+        } else {
+            panic!("Expected Composite quota data");
+        }
     }
 }

@@ -24,7 +24,7 @@ use muta_contracts::{
 };
 
 use crate::transport::{decode_response_json, ensure_success, transport_error};
-use crate::{Client, Endpoint};
+use crate::{Client, ClientProfile, Endpoint};
 
 pub mod request;
 pub mod response;
@@ -101,13 +101,13 @@ impl AnthropicMessagesProvider {
         credentials: std::sync::Arc<dyn CredentialSource>,
         model: String,
         base_url: &str,
-        user_agent: &str,
+        client_profile: impl Into<ClientProfile>,
     ) -> Self {
         let thinking = ThinkingConfig::for_model(&muta_contracts::model::resolve(&model));
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint::with_credentials(credentials, model, base_url, "anthropic")
-                .with_user_agent(user_agent),
+                .with_client_profile(client_profile),
             client: Client::new(),
             max_tokens: 8192,
             thinking,
@@ -183,7 +183,7 @@ impl AnthropicMessagesProvider {
         ) {
             req = req.header(name, value);
         }
-        for (name, value) in self.endpoint.client_identity().headers() {
+        for (name, value) in self.endpoint.headers() {
             if self.dialect != muta_contracts::AnthropicMessagesDialect::Copilot
                 || !crate::COPILOT_CLIENT_HEADERS
                     .iter()

@@ -3,7 +3,7 @@
 //! Query endpoint: `GET https://api.deepseek.com/user/balance`
 
 use muta_contracts::async_trait;
-use muta_contracts::{ProviderUsage, UsageMetric};
+use muta_contracts::{BalanceQuota, ProviderQuotaData, ProviderUsage, UsageMetric};
 use serde::Deserialize;
 
 use super::ProviderUsageFetcher;
@@ -103,9 +103,23 @@ pub(crate) fn parse_deepseek_balance(
     };
 
     let plan = if body.is_available {
-        Some("Available".to_string())
+        Some("Pay-as-you-go".to_string())
     } else {
         Some("Unavailable".to_string())
+    };
+
+    let total_num = info.total_balance.parse::<f64>().ok();
+    let cash_num = info.topped_up_balance.parse::<f64>().ok();
+    let voucher_num = info.granted_balance.parse::<f64>().ok();
+
+    let balance_quota = BalanceQuota {
+        currency: currency.clone(),
+        total_balance: total_num,
+        cash_balance: cash_num,
+        voucher_balance: voucher_num,
+        credit_limit: None,
+        consumed_amount: None,
+        display_primary: Some(primary_balance.clone()),
     };
 
     let mut metrics = Vec::new();
@@ -141,6 +155,7 @@ pub(crate) fn parse_deepseek_balance(
 
     Ok(ProviderUsage {
         plan,
+        quota: Some(ProviderQuotaData::Balance(balance_quota)),
         primary_balance: Some(primary_balance),
         metrics,
         updated_at_ms: now_ms,
@@ -168,11 +183,20 @@ mod tests {
         let parsed: DeepSeekBalanceResponse = serde_json::from_str(json).unwrap();
         let usage = parse_deepseek_balance(parsed).unwrap();
 
-        assert_eq!(usage.plan.as_deref(), Some("Available"));
+        assert_eq!(usage.plan.as_deref(), Some("Pay-as-you-go"));
         assert_eq!(usage.primary_balance.as_deref(), Some("¥100.50"));
         assert_eq!(usage.metrics.len(), 4);
         assert_eq!(usage.metrics[0].label, "Total Balance");
         assert_eq!(usage.metrics[0].value, "100.50");
         assert_eq!(usage.metrics[0].unit.as_deref(), Some("CNY"));
+
+        if let Some(ProviderQuotaData::Balance(bal)) = usage.quota {
+            assert_eq!(bal.currency, "CNY");
+            assert_eq!(bal.total_balance, Some(100.50));
+            assert_eq!(bal.cash_balance, Some(100.50));
+            assert_eq!(bal.voucher_balance, Some(0.0));
+        } else {
+            panic!("Expected Balance quota data");
+        }
     }
 }

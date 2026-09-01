@@ -1,10 +1,8 @@
 ---
 source: apps/tui/crates/mutx/src/question_model.rs
-assertion_line: 1241
 expression: film
 ---
 === open: Question 1/2 ===
-
 
 
 
@@ -22,7 +20,6 @@ expression: film
 
 
 
-
           Question 2/2
 
           second?
@@ -34,7 +31,6 @@ expression: film
           ↑↓ navigate  Enter submit  Esc cancel
 
 === Shift+Tab → Question 1/2 ===
-
 
 
 

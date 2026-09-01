@@ -44,22 +44,16 @@ fn display_width_u16(s: &str) -> u16 {
 /// treatment the assistant turn header uses. The strip leads with a `<` gutter rail (accent
 /// tone) representing Unix stdin redirection, matching the Unix pipeline visual language.
 ///
-fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
-    // The anchor is the first token of the header (the round provenance), drawn
-    // in info-tone bold. Empty when there is no anchor (e.g. a queued message,
-    // which renders its own pending marker instead).
-    if is_queued {
-        return String::new();
-    }
+fn sent_header_anchor(msg: &TranscriptMessage) -> String {
     if let Some(ref origin) = msg.injection_origin {
         match origin.kind {
             muta_contracts::InjectionKind::Hook(event) => {
                 return format!("hook:{}", format!("{event:?}").to_lowercase());
             }
             muta_contracts::InjectionKind::InterAgent => return "inter-agent".to_string(),
-            muta_contracts::InjectionKind::RunnerSteer => return "↳ runner steer".to_string(),
+            muta_contracts::InjectionKind::RunnerSteer => return "runner steer".to_string(),
             muta_contracts::InjectionKind::RunnerTask => return "runner task".to_string(),
-            muta_contracts::InjectionKind::UserSteer => return "↳ steer".to_string(),
+            muta_contracts::InjectionKind::UserSteer => return "steer".to_string(),
             muta_contracts::InjectionKind::LoopReviewNudge => return "guard:loop".to_string(),
             muta_contracts::InjectionKind::SystemReminder => return "system:reminder".to_string(),
             muta_contracts::InjectionKind::CompactionCheckpoint => return "checkpoint".to_string(),
@@ -68,45 +62,39 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
             _ => {}
         }
     }
-    if msg.origin == crate::model::document::UserMessageOrigin::Steer {
-        return "↳ steer".to_string();
-    }
-    if msg.origin == crate::model::document::UserMessageOrigin::FollowUp {
-        return "↳ follow-up".to_string();
-    }
-    if let Some(round) = msg.round {
-        format!("round {}", round)
-    } else {
-        match msg.origin {
-            crate::model::document::UserMessageOrigin::Slash => "cmd".to_string(),
-            _ => "prompt".to_string(),
+    match msg.origin {
+        crate::model::document::UserMessageOrigin::Steer => "steer".to_string(),
+        crate::model::document::UserMessageOrigin::FollowUp => "follow-up".to_string(),
+        crate::model::document::UserMessageOrigin::Slash => "cmd".to_string(),
+        _ => {
+            if let Some(round) = msg.round {
+                format!("round {}", round)
+            } else {
+                "prompt".to_string()
+            }
         }
     }
 }
 
-fn sent_header_context(msg: &TranscriptMessage, is_queued: bool) -> String {
-    // The trailing metadata after the anchor, drawn muted (grey, no bold).
-    // Return only the chip text: `MetaStrip::detail` owns the separator between
-    // visible chips. Queued messages render no meta — the anchor path emits
-    // their `Queued` marker instead.
-    if is_queued {
-        return String::new();
-    }
+fn sent_header_context(msg: &TranscriptMessage) -> String {
     if let Some(ref origin) = msg.injection_origin
         && let Some(reason) = &origin.reason
         && !reason.is_empty()
     {
         return reason.clone();
     }
-    if msg.origin == crate::model::document::UserMessageOrigin::Steer
-        || msg.origin == crate::model::document::UserMessageOrigin::FollowUp
-    {
-        return msg
-            .turn
-            .map(|turn| format!("round {turn}"))
-            .unwrap_or_default();
+    match msg.origin {
+        crate::model::document::UserMessageOrigin::Steer => match (msg.round, msg.turn) {
+            (Some(r), Some(t)) => format!("round {r} › turn {t}"),
+            (Some(r), None) => format!("round {r}"),
+            (None, Some(t)) => format!("turn {t}"),
+            (None, None) => String::new(),
+        },
+        crate::model::document::UserMessageOrigin::FollowUp => {
+            msg.round.map(|r| format!("round {r}")).unwrap_or_default()
+        }
+        _ => String::new(),
     }
-    String::new()
 }
 
 fn table_line_hidden_ranges(line_text: &str, info: &TableRowInfo) -> Vec<(usize, usize)> {
@@ -368,31 +356,26 @@ pub fn draw_message_body(
                                     ))
                                 )
                             };
-                            let strip = if is_queued {
+                            let mut strip = MetaStrip::new()
+                                .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
+                                .lead(round_gutter, MetaTone::Accent)
+                                .anchor(sent_header_anchor(msg))
+                                .fill_tail(theme.surface());
+                            if is_queued {
                                 let label = match msg.delivery {
-                                    DeliveryStatus::HeldNextRound => "⏸ Held for next round",
-                                    _ => "⏸ Queued",
+                                    DeliveryStatus::HeldNextRound => "held for next round",
+                                    _ => "queued",
                                 };
-                                MetaStrip::new()
-                                    .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
-                                    .lead(round_gutter.clone(), MetaTone::Accent)
-                                    .status(label, MetaTone::WarningItalic)
-                                    .fill_tail(theme.surface())
+                                strip = strip.status(label);
                             } else {
-                                let mut strip = MetaStrip::new()
-                                    .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
-                                    .lead(round_gutter, MetaTone::Accent)
-                                    .anchor(sent_header_anchor(msg, is_queued))
-                                    .fill_tail(theme.surface());
-                                let context = sent_header_context(msg, is_queued);
+                                let context = sent_header_context(msg);
                                 if !context.is_empty() {
                                     strip = strip.detail(context);
                                 }
-                                if let Some(sent_at_ms) = msg.sent_at_ms {
-                                    strip = strip.trailing_detail(sent_time_label(sent_at_ms));
-                                }
-                                strip
-                            };
+                            }
+                            if let Some(sent_at_ms) = msg.sent_at_ms {
+                                strip = strip.trailing_detail(sent_time_label(sent_at_ms));
+                            }
                             let rect = Rect::new(area.x, *current_y, area.width, 1);
                             strip.render(frame, rect, theme);
                             *current_y += 1;

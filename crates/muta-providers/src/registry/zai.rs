@@ -166,7 +166,7 @@ mod tests {
         let provider = spec.build("test-key".to_string(), None, None);
         assert_eq!(provider.endpoint.user_agent(), crate::ZCODE_USER_AGENT);
         let identity = provider.endpoint.client_identity();
-        assert_eq!(identity, crate::ClientIdentity::ZCode);
+        assert_eq!(*identity, crate::ClientIdentity::ZCode);
         assert!(
             identity
                 .headers()

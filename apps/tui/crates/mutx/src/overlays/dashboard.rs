@@ -989,8 +989,7 @@ pub fn draw_session_preview(
     scroll: &mut usize,
     theme: &Theme,
 ) {
-    let viewport = viewport_rect(frame);
-    let area = crate::primitives::centered_rect(70, 75, viewport);
+    let area = crate::primitives::centered_rect(70, 75, frame.area());
     // Occlude the dashboard beneath and paint the panel.
     frame.render_widget(Clear, area);
     frame.render_widget(

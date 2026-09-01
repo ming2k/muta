@@ -39,9 +39,8 @@ parent_call_id: string | null, } } | { "UserQuestionReply": { request_id: string
  */
 parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchProvider": { provider_type: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddProvider": { name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, user_agent: string | null, models: Array<string>, 
 /**
- * How the connection authenticates. Default (`ApiKey`) keeps the
- * historical behavior; `XaiOAuth` marks SuperGrok connections whose live
- * access token is resolved from `auth.toml`.
+ * How the connection authenticates. OAuth credentials are owned by
+ * this exact connection id.
  */
 auth: ConnectionAuth, 
 /**
@@ -51,7 +50,7 @@ preset_id: string | null,
 /**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
-client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientIdentity | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
+client_identity: ClientProfile | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientProfile | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1): `None` keeps the stored
  * overrides untouched; `Some(record)` replaces them wholesale (an
@@ -104,9 +103,47 @@ summary: string,
 log_path?: string | null, };
 
 /**
- * First-class client identity presets and custom identity for connection impersonation.
+ * Balance, credits, and spending limit details for pay-as-you-go or prepaid accounts.
  */
-export type ClientIdentity = "Native" | "OpenCode" | "ClaudeCode" | "Codex" | "Cline" | "Cursor" | "KiloCode" | "RooCode" | "Windsurf" | "Aider" | "ZCode" | "Copilot" | "Antigravity" | { "Custom": { user_agent: string, extra_headers: Array<[string, string]>, } };
+export type BalanceQuota = { 
+/**
+ * Currency code (e.g. "CNY", "USD") or credit unit.
+ */
+currency: string, 
+/**
+ * Available total balance (for prepaid accounts).
+ */
+total_balance?: number | null, 
+/**
+ * Cash / topped-up / recharge balance component.
+ */
+cash_balance?: number | null, 
+/**
+ * Voucher / granted / gift balance component.
+ */
+voucher_balance?: number | null, 
+/**
+ * Credit limit ceiling (e.g. OpenRouter limit).
+ */
+credit_limit?: number | null, 
+/**
+ * Consumed amount against the credit limit.
+ */
+consumed_amount?: number | null, 
+/**
+ * Formatted primary balance string for display (e.g. "¥100.50", "$1.23 / $10.00").
+ */
+display_primary?: string | null, };
+
+/**
+ * Standard client identity presets supported by muta.
+ */
+export type ClientPreset = "Native" | "OpenCode" | "ClaudeCode" | "Codex" | "Cline" | "Cursor" | "KiloCode" | "RooCode" | "Windsurf" | "Aider" | "ZCode" | "Copilot" | "Antigravity";
+
+/**
+ * First-class client profile presets and custom identity for connection emulation.
+ */
+export type ClientProfile = "Native" | "OpenCode" | "ClaudeCode" | "Codex" | "Cline" | "Cursor" | "KiloCode" | "RooCode" | "Windsurf" | "Aider" | "ZCode" | "Copilot" | "Antigravity" | { "Custom": { user_agent: string, extra_headers: Array<[string, string]>, } };
 
 /**
  * User-editable semantic colors for a custom frontend palette.
@@ -333,7 +370,7 @@ api_key_source: string,
 /**
  * Client identity configuration.
  */
-client_identity: ClientIdentity, 
+client_identity: ClientProfile, 
 /**
  * Effective User-Agent string sent with requests.
  */
@@ -794,6 +831,11 @@ export type PatchOp = "Create" | "Edit" | "Delete";
  */
 export type PerformanceTimingSource = "unknown" | "client_observed" | "provider";
 
+/**
+ * A set of periodic quota buckets (e.g. per-model or multi-window combinations).
+ */
+export type PeriodicQuota = { buckets?: Array<QuotaWindowBucket>, };
+
 export type PermissionDecision = "Once" | "Session" | "Always" | "Reject";
 
 export type PermissionRequest = { id: string, tool: string, 
@@ -947,7 +989,7 @@ preset_id: string,
 /**
  * Client identity configured for this connection.
  */
-client_identity: ClientIdentity, 
+client_identity: ClientProfile, 
 /**
  * Unix epoch milliseconds of the last activation. `None` if never activated.
  */
@@ -972,13 +1014,22 @@ export type ProviderPickerSnapshot = {
 default_id: string, rows: Array<ProviderPickerRow>, };
 
 /**
+ * Typed classification of a provider's quota / billing architecture.
+ */
+export type ProviderQuotaData = { "kind": "periodic" } & PeriodicQuota | { "kind": "balance" } & BalanceQuota | { "kind": "composite", balance?: BalanceQuota | null, periodic?: PeriodicQuota | null, rate_limits?: Array<RateLimitSpec>, };
+
+/**
  * Generic normalized provider usage / quota / balance info.
  */
 export type ProviderUsage = { 
 /**
- * High-level plan / account status (e.g. "Active", "Available", "Free Tier", "Tier 2", "Pay-as-you-go").
+ * High-level plan / account tier badge (e.g. "Google AI Premium", "Pay-as-you-go", "Tier 2").
  */
 plan?: string | null, 
+/**
+ * Typed structured quota / balance data.
+ */
+quota?: ProviderQuotaData | null, 
 /**
  * Primary balance / credit summary (e.g. "¥10.00", "$5.20", "10.00 CNY").
  */
@@ -1006,6 +1057,53 @@ export type QueueMode = "OneAtATime" | "All";
  * makes admission/cancellation races deterministic.
  */
 export type QueuedMessage = { id: string, text: string, display_text?: string, images?: Array<ImagePart>, sent_at_ms?: number, };
+
+/**
+ * Detailed state of one periodic quota bucket / window.
+ */
+export type QuotaWindowBucket = { 
+/**
+ * Window type (5h rolling, daily, weekly, monthly, custom).
+ */
+window: QuotaWindowKind | null, 
+/**
+ * Human-friendly label (e.g. "Gemini 3.7 Flash", "5h Rolling Limit", "Daily Budget").
+ */
+label: string, 
+/**
+ * Used fraction from 0.0 (0% used) to 1.0 (100% depleted).
+ */
+used_fraction: number, 
+/**
+ * Optional absolute used amount (e.g. 15 requests, 12000 tokens).
+ */
+used_amount?: number | null, 
+/**
+ * Optional absolute total limit amount (e.g. 50 requests, 100000 tokens).
+ */
+total_limit?: number | null, 
+/**
+ * Unit for amounts (e.g. "requests", "tokens", "USD").
+ */
+unit?: string | null, 
+/**
+ * Epoch milliseconds when this quota window resets.
+ */
+reset_at_ms?: number | null, 
+/**
+ * Raw reset time string if parsed from provider (e.g. "2026-09-01T12:00:00Z").
+ */
+reset_time_str?: string | null, };
+
+/**
+ * Time window categorization for periodic rate limits / quotas.
+ */
+export type QuotaWindowKind = "rolling5_hour" | "daily" | "weekly" | "monthly" | "custom";
+
+/**
+ * Concurrency and request / token rate limits.
+ */
+export type RateLimitSpec = { requests: number, interval: string, };
 
 /**
  * Who actually settled a parked human request. The anti-fabrication
@@ -1699,47 +1797,37 @@ export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>,
 origin?: string | null, };
 
 /**
- * A persisted Web Connection record, declaring how to connect to a search or reader provider.
- * Stored in `$XDG_STATE_HOME/muta/web_connections.toml`.
+ * A persisted Web Reader Connection record (`reader_connections` in `web_connections.toml`).
  */
-export type WebConnection = { 
+export type WebReaderConnection = { 
 /**
- * Stable, unique connection identifier (e.g. "exa-default", "work-searxng").
+ * Stable, unique connection identifier (e.g. "my-jina", "corp-firecrawl").
  */
 id: string, 
 /**
  * Human-readable display name shown in pickers and UI.
  */
-name?: string | null, 
+name?: string, 
 /**
- * Capability kind (Search, Reader, Dual).
+ * Builtin preset identifier (e.g. "jina", "firecrawl").
  */
-kind: WebConnectionKind, 
-/**
- * Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "jina").
- */
-preset_id?: string | null, 
+preset_id?: string, 
 /**
  * Optional environment variable name supplying the API key (12-factor override).
  */
-api_key_env?: string | null, 
+api_key_env?: string, 
 /**
- * Custom base URL / endpoint (e.g. SearXNG endpoint or private Firecrawl server).
+ * Custom reader base URL / endpoint (e.g. self-hosted Firecrawl or Crawl4AI).
  */
-base_url?: string | null, 
+base_url?: string, 
 /**
  * Optional custom HTTP headers sent with requests.
  */
-custom_headers?: { [key in string]: string } | null, 
+custom_headers?: { [key in string]: string }, 
 /**
- * Whether this connection is active and enabled for routing.
+ * Whether this connection is active and enabled for fetch routing.
  */
 enabled: boolean, };
-
-/**
- * Type of capability provided by a web connection.
- */
-export type WebConnectionKind = "search" | "reader" | "dual";
 
 /**
  * A partial update to the `[websearch]` table. Every field is optional:
@@ -1797,13 +1885,21 @@ bocha_api_key?: string,
  */
 jina_api_key?: string, 
 /**
- * Optional new or updated connection to upsert into `web_connections.toml`.
+ * Optional search connection to upsert into `search_connections` in `web_connections.toml`.
  */
-upsert_connection?: WebConnection, 
+upsert_search_connection?: WebSearchConnection, 
 /**
- * Optional connection ID to delete from `web_connections.toml`.
+ * Optional search connection ID to delete from `web_connections.toml`.
  */
-delete_connection?: string, };
+delete_search_connection?: string, 
+/**
+ * Optional reader connection to upsert into `reader_connections` in `web_connections.toml`.
+ */
+upsert_reader_connection?: WebReaderConnection, 
+/**
+ * Optional reader connection ID to delete from `web_connections.toml`.
+ */
+delete_reader_connection?: string, };
 
 /**
  * The frontend-facing view of the effective `[websearch]` configuration.
@@ -1814,9 +1910,46 @@ delete_connection?: string, };
  */
 export type WebSearchConfigView = { provider: string, reader: string, proxy?: string, timeout_secs: number, searxng_url?: string, exa_api_key_set: boolean, parallel_api_key_set: boolean, tavily_api_key_set: boolean, bocha_api_key_set: boolean, jina_api_key_set: boolean, 
 /**
- * Configured web connection instances from `web_connections.toml`.
+ * Configured search connection instances from `search_connections` in `web_connections.toml`.
  */
-connections: Array<WebConnection>, };
+search_connections: Array<WebSearchConnection>, 
+/**
+ * Configured reader connection instances from `reader_connections` in `web_connections.toml`.
+ */
+reader_connections: Array<WebReaderConnection>, };
+
+/**
+ * A persisted Web Search Connection record (`search_connections` in `web_connections.toml`).
+ */
+export type WebSearchConnection = { 
+/**
+ * Stable, unique connection identifier (e.g. "exa-default", "corp-searxng").
+ */
+id: string, 
+/**
+ * Human-readable display name shown in pickers and UI.
+ */
+name?: string, 
+/**
+ * Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "duckduckgo").
+ */
+preset_id?: string, 
+/**
+ * Optional environment variable name supplying the API key (12-factor override).
+ */
+api_key_env?: string, 
+/**
+ * Custom search base URL / endpoint (e.g. SearXNG endpoint or private search cluster).
+ */
+base_url?: string, 
+/**
+ * Optional custom HTTP headers sent with requests.
+ */
+custom_headers?: { [key in string]: string }, 
+/**
+ * Whether this connection is active and enabled for search routing.
+ */
+enabled: boolean, };
 
 /**
  * First-class security state attached to every harness snapshot.

@@ -232,7 +232,18 @@ pub(crate) async fn add(
         })
         .unwrap_or_default();
 
-    let client_identity = client_identity.unwrap_or_default();
+    let client_identity = client_identity.unwrap_or_else(|| {
+        if auth == muta_contracts::ConnectionAuth::AntigravityOAuth {
+            ClientIdentity::Antigravity
+        } else {
+            resolved_preset_id
+                .as_deref()
+                .and_then(muta_providers::provider_preset_spec)
+                .and_then(|spec| spec.user_agent)
+                .map(ClientIdentity::from_user_agent)
+                .unwrap_or_default()
+        }
+    });
 
     // Pre-connection authorization is a single-use, session-local value. It
     // never enters the global store under a generic provider namespace.
@@ -1317,7 +1328,7 @@ fn mask_api_key(key: &str) -> Option<String> {
     }
 }
 
-/// `AgentRequest::QueryConnectionDetail` — return connection details and query live provider usage.
+/// `AgentRequest::QueryConnectionDetail` — return connection details immediately and query live provider usage in background.
 pub(crate) async fn query_connection_detail(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     id: String,
@@ -1390,13 +1401,6 @@ pub(crate) async fn query_connection_detail(
         .collect::<Vec<_>>();
     let active_model = entry.default_channel().map(|c| c.model.clone());
 
-    let usage = muta_providers::fetch_provider_usage(
-        connection.preset_id.as_deref(),
-        &base_url,
-        raw_key.expose_secret(),
-    )
-    .await;
-
     let auth_type = if connection.auth.is_oauth() {
         format!("OAuth ({:?})", connection.auth)
     } else if connection.api_key_env.is_some() {
@@ -1405,24 +1409,49 @@ pub(crate) async fn query_connection_detail(
         "API Key".to_string()
     };
 
-    let detail = muta_contracts::ConnectionDetail {
+    let mut initial_detail = muta_contracts::ConnectionDetail {
         id: connection.id.clone(),
         name: connection.display_name().to_string(),
         preset_id: connection.preset_id.clone(),
         preset_label,
         protocol,
-        base_url,
+        base_url: base_url.clone(),
         auth_type,
         api_key_masked,
         api_key_source,
-        client_identity: connection.client_identity.clone(),
+        client_identity: if connection.client_identity != ClientIdentity::Native {
+            connection.client_identity.clone()
+        } else if connection.auth == muta_contracts::ConnectionAuth::AntigravityOAuth
+            || connection.preset_id.as_deref() == Some("antigravity-oauth")
+        {
+            ClientIdentity::Antigravity
+        } else {
+            connection.client_identity.clone()
+        },
         user_agent,
         models,
         active_model,
-        usage,
+        usage: muta_contracts::ConnectionUsageState::Fetching,
     };
 
-    let _ = resp_tx.send(AgentResponse::ConnectionDetail(detail));
+    // Phase 1: Send local detail snapshot immediately so UI renders instantly.
+    let _ = resp_tx.send(AgentResponse::ConnectionDetail(initial_detail.clone()));
+
+    // Phase 2: Async remote query in background task.
+    let resp_tx_bg = resp_tx.clone();
+    let preset_id = connection.preset_id.clone();
+    let raw_key_str = raw_key.expose_secret().to_string();
+    tokio::spawn(async move {
+        let usage = muta_providers::fetch_provider_usage(
+            preset_id.as_deref(),
+            &base_url,
+            &raw_key_str,
+        )
+        .await;
+
+        initial_detail.usage = usage;
+        let _ = resp_tx_bg.send(AgentResponse::ConnectionDetail(initial_detail));
+    });
 }
 
 #[cfg(test)]

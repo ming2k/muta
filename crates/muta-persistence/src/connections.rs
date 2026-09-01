@@ -49,9 +49,9 @@ pub struct Connection {
     /// `credentials.toml`. Declared once per connection, never per route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
-    /// Client identity to use (Native/muta, OpenCode, ZCode, Claude Code, etc.).
-    /// Defaults to [`ClientIdentity::Native`].
-    #[serde(default)]
+    /// Client profile specifying User-Agent and client identity headers (Native/muta, OpenCode, ZCode, Claude Code, etc.).
+    /// Defaults to [`ClientProfile::Native`].
+    #[serde(default, alias = "client_profile")]
     pub client_identity: ClientIdentity,
     // ── Pure-custom declaration (only for `preset_id = None`) ─────────────
     /// Wire transport for a custom connection's routes.

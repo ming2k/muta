@@ -29,9 +29,9 @@ the shared modal component in
   `theme.modal_dim_factor()` (background stays visible); for **Takeover** it
   clears + fills with `theme.backdrop()` (full occlusion); for **None** it is a
   no-op.
-- `centered_rect(px_w, px_h, viewport)` carves the modal rectangle out of
-  the viewport (the frame minus the global 1-row top/bottom margin). The
-  surrounding gutters are kept as `app_bg`.
+- `centered_rect(px_w, px_h, frame.area())` carves the modal rectangle out of
+  the terminal frame area so the modal is symmetrically centered both
+  horizontally and vertically. The surrounding gutters are kept as `app_bg`.
 - `modal_frame(area, theme.panel(), header, footer)` produces a borderless
   solid-bg panel with 3-col horizontal and 1-row vertical inner padding
   (`MODAL_INNER_H_PADDING` and `MODAL_INNER_V_PADDING`), vertically split into

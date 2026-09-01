@@ -22,7 +22,7 @@ use muta_contracts::{
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
-use crate::{Client, Endpoint};
+use crate::{Client, ClientProfile, Endpoint};
 use crate::{decode_response_json, ensure_success, transport_error};
 
 pub mod request;
@@ -129,7 +129,7 @@ impl GoogleProvider {
         credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
         model: String,
         base_url: &str,
-        user_agent: &str,
+        client_profile: impl Into<ClientProfile>,
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
@@ -139,7 +139,7 @@ impl GoogleProvider {
                 base_url.trim_end_matches('/'),
                 "google",
             )
-            .with_user_agent(user_agent),
+            .with_client_profile(client_profile),
             client: Client::new(),
             capabilities,
             reasoning_effort: None,
@@ -519,13 +519,22 @@ impl GoogleProvider {
         );
 
         let mut headers = reqwest::header::HeaderMap::new();
-        if let Ok(ua) = self.endpoint.user_agent.parse() {
+        if let Ok(ua) = self.endpoint.user_agent().parse() {
             headers.insert("User-Agent", ua);
         }
         headers.insert(
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
+
+        for (k, v) in self.endpoint.headers() {
+            if let (Ok(hname), Ok(hval)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                headers.insert(hname, hval);
+            }
+        }
 
         if self.is_antigravity() {
             let action = if is_stream {
@@ -552,15 +561,6 @@ impl GoogleProvider {
                 reqwest::header::HeaderValue::from_static("gl-go/1.23.2 gdcl/0.1"),
             );
 
-            for (k, v) in self.endpoint.client_identity().headers() {
-                if let (Ok(hname), Ok(hval)) = (
-                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                    reqwest::header::HeaderValue::from_str(v),
-                ) {
-                    headers.insert(hname, hval);
-                }
-            }
-
             let project = auth
                 .project_id
                 .as_deref()
@@ -584,7 +584,7 @@ impl GoogleProvider {
             let wrapped_body = serde_json::json!({
                 "project": project,
                 "requestId": uuid::Uuid::new_v4().to_string(),
-                "userAgent": self.endpoint.user_agent,
+                "userAgent": self.endpoint.user_agent(),
                 "model": wire_model,
                 "request": raw_body
             });

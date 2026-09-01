@@ -367,12 +367,12 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
         }
     }
 
-    if cache_dirty {
-        if let Err(error) = locked_cache.save() {
-            tracing::error!(?error, "could not persist model-discovery cache");
-            failures.push(("model-discovery-cache".to_string(), error.to_string()));
-            changed = false;
-        }
+    if cache_dirty
+        && let Err(error) = locked_cache.save()
+    {
+        tracing::error!(?error, "could not persist model-discovery cache");
+        failures.push(("model-discovery-cache".to_string(), error.to_string()));
+        changed = false;
     }
 
     DiscoveryOutcome { changed, failures }

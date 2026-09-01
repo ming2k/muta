@@ -26,6 +26,7 @@ pub const fn protocol_accepts(client: u32) -> bool {
 /// The unified wire envelope on every connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum Wire {
     /// Handshake frame declaring role, scope, and capabilities.
     Select {

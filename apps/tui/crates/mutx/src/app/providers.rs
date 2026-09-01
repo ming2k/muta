@@ -54,7 +54,10 @@ impl App {
         self.custom_fields = preset.fields();
         self.custom_field = 0;
         self.custom_protocol_wire = preset.protocol.to_string();
-        self.custom_client_identity = muta_contracts::ClientIdentity::Native;
+        self.custom_client_identity = preset
+            .user_agent
+            .map(muta_contracts::ClientIdentity::from_user_agent)
+            .unwrap_or(muta_contracts::ClientIdentity::Native);
         self.custom_models = preset.models.iter().map(|m| m.to_string()).collect();
         self.custom_url_hint = preset.url_hint.to_string();
         self.custom_user_agent = preset.user_agent.map(str::to_string);

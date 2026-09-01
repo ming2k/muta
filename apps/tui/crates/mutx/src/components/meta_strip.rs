@@ -17,12 +17,12 @@ use crate::view::Theme;
 /// Semantic visual tone for a metadata chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetaTone {
-    /// Info-tone, bold primary anchor (`round N`, `turn N`).
+    /// Info-tone, bold primary anchor (`round N`, `turn N`, `steer`, `follow-up`).
     Accent,
-    /// Secondary metadata (`model`, `HH:MM`, fallback labels).
+    /// Secondary metadata (`model`, `HH:MM`, fallback labels, upright status).
     Muted,
-    /// Warning-tone italic status (`⏸ Queued`).
-    WarningItalic,
+    /// Status tone for pending or highlight states (upright text).
+    Status,
 }
 
 impl MetaTone {
@@ -32,9 +32,7 @@ impl MetaTone {
                 .fg(theme.info())
                 .add_modifier(Modifier::BOLD),
             Self::Muted => Style::default().fg(theme.muted()),
-            Self::WarningItalic => Style::default()
-                .fg(theme.warn())
-                .add_modifier(Modifier::ITALIC),
+            Self::Status => Style::default().fg(theme.info()),
         }
     }
 }
@@ -124,9 +122,13 @@ impl<'a> MetaStrip<'a> {
         self.chip(text, MetaTone::Accent)
     }
 
-    /// Add a status chip such as `⏸ Queued`.
-    pub(crate) fn status(self, text: impl Into<Cow<'a, str>>, tone: MetaTone) -> Self {
-        self.chip(text, tone)
+    /// Add an upright status chip such as `queued` or `held for next round`.
+    pub(crate) fn status(mut self, text: impl Into<Cow<'a, str>>) -> Self {
+        let text = text.into();
+        if !text.as_ref().is_empty() {
+            self.chips.push(MetaChip::new(text, MetaTone::Status, true));
+        }
+        self
     }
 
     /// Add muted trailing metadata. The separator is inserted only when a
