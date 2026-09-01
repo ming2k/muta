@@ -1089,8 +1089,8 @@ async fn oauth_browser_login_validates_oidc_nonce() {
         "nonce": login_good.nonce,
         "exp": 2_000_000_000
     });
-    let good_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(good_claims.to_string().as_bytes());
+    let good_payload =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(good_claims.to_string().as_bytes());
     let good_id_token = format!("eyJhbGciOiJub25lIn0.{good_payload}.sig");
 
     let _mock_good = server
@@ -1125,8 +1125,8 @@ async fn oauth_browser_login_validates_oidc_nonce() {
         "nonce": "mismatched_nonce_from_attacker",
         "exp": 2_000_000_000
     });
-    let bad_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(bad_claims.to_string().as_bytes());
+    let bad_payload =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bad_claims.to_string().as_bytes());
     let bad_id_token = format!("eyJhbGciOiJub25lIn0.{bad_payload}.sig");
 
     let _mock_bad = server

@@ -61,206 +61,7 @@ impl InputCompletionEngine {
     }
 
     fn complete_slash(&self, input: &str, cursor_byte: usize) -> Vec<InputCompletion> {
-        // Slash commands occupy the whole composer. Matching against the
-        // prefix through the cursor keeps mid-input caret behavior stable.
-        let current = input[..cursor_byte].to_lowercase();
-        let Some(trigger) = current.strip_prefix('/') else {
-            return Vec::new();
-        };
-        let replace_end = input.chars().count();
-
-        // ---- Second stage: `/cmd <cursor>` completes first-token verbs ----
-        // Progressive disclosure: the command menu stays a lean list of
-        // canonical names; the subcommand tier (with its own introductions)
-        // only appears once the user has committed to a parent and typed a
-        // space.
-        if current.contains(char::is_whitespace) {
-            return self.complete_subcommand(input, &current, replace_end);
-        }
-
-        // ---- First stage: `/pre<cursor>` completes command names ----
-        //
-        // Aliases are first-class candidates: typing `/yolo` surfaces a row
-        // labelled with the alias spelling, visually marked as one (see
-        // `alias_of`), that commits the canonical `/delegate` when accepted.
-        // Dispatch still resolves any alias submitted verbatim.
-        let mut items = Vec::new();
-        for spec in &self.catalog.commands {
-            if spec.name.to_lowercase().starts_with(&current) {
-                items.push(slash_item(
-                    &spec.name,
-                    &spec.summary,
-                    replace_end,
-                    spec,
-                    false,
-                ));
-            }
-        }
-        for alias in &self.catalog.aliases {
-            let name = alias.name.to_lowercase();
-            if !name.starts_with(&current) {
-                continue;
-            }
-            let target_spec = self.catalog.find(&alias.target);
-            // The row keeps the alias as its label (the user typed that
-            // spelling), but the committed edit is the canonical target —
-            // accepting `/yolo` puts `/delegate` in the composer, so the
-            // transcript records the command that actually runs. `alias_of`
-            // lets frontends render the row distinctly without sniffing the
-            // description.
-            items.push(InputCompletion {
-                label: alias.name.clone(),
-                description: target_spec
-                    .map(|spec| spec.summary.clone())
-                    .unwrap_or_else(|| alias.target.clone()),
-                insert_text: alias.target.clone(),
-                replace_start: 0,
-                replace_end,
-                kind: InputCompletionKind::SlashAlias,
-                alias_of: Some(alias.target.clone()),
-                command: target_spec.cloned(),
-            });
-        }
-
-        // Trigger-word steering ("did you mean" for retired foreign idioms)
-        // keeps intent completion from duplicating the steered target.
-        let trigger_suggestion = self
-            .catalog
-            .suggestions
-            .iter()
-            .find(|suggestion| suggestion.trigger.eq_ignore_ascii_case(trigger))
-            .map(|suggestion| {
-                let command = self.catalog.find(&suggestion.target).cloned();
-                InputCompletion {
-                    label: suggestion.target.clone(),
-                    description: suggestion.reason.clone(),
-                    insert_text: suggestion.target.clone(),
-                    replace_start: 0,
-                    replace_end,
-                    kind: InputCompletionKind::Intent,
-                    alias_of: None,
-                    command,
-                }
-            });
-        let trigger_target = trigger_suggestion.as_ref().map(|item| item.label.clone());
-        items.extend(trigger_suggestion);
-
-        // Intent keywords ("fork" → /tree) still steer toward canonical
-        // commands, but only where no exact/prefix/alias candidate already
-        // covers the query. Collected first so `items` is only borrowed
-        // immutably here.
-        let intent: Vec<InputCompletion> = (!trigger.is_empty())
-            .then(|| {
-                self.catalog.commands.iter().filter_map(|spec| {
-                    if spec.name.to_lowercase().starts_with(&current)
-                        || trigger_target.as_deref() == Some(spec.name.as_str())
-                        || items.iter().any(|item| item.label == spec.name)
-                    {
-                        return None;
-                    }
-                    let matched = spec.intent_keywords.iter().find(|keyword| {
-                        keyword.eq_ignore_ascii_case(trigger)
-                            || (trigger.len() >= 3 && keyword.to_lowercase().starts_with(trigger))
-                    })?;
-                    Some(slash_item(
-                        &spec.name,
-                        &format!("(via '{matched}') {}", spec.summary),
-                        replace_end,
-                        spec,
-                        true,
-                    ))
-                })
-            })
-            .into_iter()
-            .flatten()
-            .collect();
-
-        items.extend(intent);
-        items
-    }
-
-    /// Complete the second token of `/cmd <query>` against the parent's
-    /// declared [`CommandSpec::subcommands`]. The returned rows carry their
-    /// own one-line introduction instead of repeating the parent summary.
-    /// When a parent declares nothing, fall back to expanding bracketed
-    /// options (`[on|off]`) out of the usage signatures so legacy tables keep
-    /// offering something.
-    fn complete_subcommand(
-        &self,
-        input: &str,
-        current_lower: &str,
-        replace_end: usize,
-    ) -> Vec<InputCompletion> {
-        // Only the second token is completable. `/trust ` (trailing space,
-        // empty verb) or `/trust st<cursor>` qualify; anything deeper
-        // (`/debug trace on<cursor>`) is already a real argument, not a
-        // subcommand position.
-        let mut tokens = current_lower.split_whitespace();
-        let command_name = tokens.next().unwrap_or_default().to_string();
-        let Some(spec) = self.catalog.find(&command_name) else {
-            return Vec::new();
-        };
-        let cursor_in_trailing_space = current_lower.ends_with(char::is_whitespace);
-        let token_count = current_lower.split_whitespace().count();
-        let matches_second_token_position = matches!(
-            (cursor_in_trailing_space, token_count),
-            (true, 1) | (false, 2)
-        );
-        // The in-progress verb ("" when the caret sits right after the
-        // separating space).
-        let trailing = if cursor_in_trailing_space {
-            ""
-        } else {
-            current_lower.split_whitespace().nth(1).unwrap_or("")
-        };
-
-        if matches_second_token_position && !spec.subcommands.is_empty() {
-            let typed_parent_len = command_name.len(); // bytes, ASCII-safe (slash + name)
-            return spec
-                .subcommands
-                .iter()
-                .filter(|sub| sub.name.starts_with(trailing))
-                .map(|sub| InputCompletion {
-                    label: format!("{} {}", command_name, sub.name),
-                    description: sub.summary.clone(),
-                    insert_text: format!(
-                        "{} {}",
-                        &input[..typed_parent_len.min(input.len())],
-                        sub.name
-                    ),
-                    replace_start: 0,
-                    replace_end,
-                    kind: InputCompletionKind::Slash,
-                    alias_of: None,
-                    command: Some(spec.clone()),
-                })
-                .collect();
-        }
-
-        // Legacy fallback: expand `[a|b]` options out of the usage strings
-        // as full-command candidates. Covers bracketed parameter slots
-        // beyond the verb position (`/debug trace <cursor>` → on|off) and
-        // parents that declare no verbs. Alias spellings stay transparent
-        // here (`/session o` completes against /sessions' usage), because
-        // every accepted row visibly carries its full literal text.
-        let mut candidates = Vec::new();
-        for usage in &spec.usage {
-            for expanded in expand_usage_options(usage) {
-                if !candidates.contains(&expanded) {
-                    candidates.push(expanded);
-                }
-            }
-        }
-        let canonical_input = self
-            .catalog
-            .alias(&command_name)
-            .map(|alias| current_lower.replacen(command_name.as_str(), &alias.target, 1))
-            .unwrap_or_else(|| current_lower.to_string());
-        candidates
-            .into_iter()
-            .filter(|cand| cand.to_lowercase().starts_with(&canonical_input))
-            .map(|cand| slash_item(&cand, &spec.summary, replace_end, spec, false))
-            .collect()
+        complete_slash_items(&self.catalog, input, cursor_byte)
     }
 
     async fn complete_project_path(
@@ -339,6 +140,180 @@ impl InputCompletionEngine {
         sort_path_completions(&mut items);
         items
     }
+}
+
+/// Complete slash commands and subcommands synchronously against a `CommandCatalog`.
+///
+/// This is a pure-domain, zero-I/O computation that guarantees instant (< 1µs) execution
+/// for both the daemon and frontend applications without transient latency (ADR-0162).
+pub fn complete_slash_items(
+    catalog: &CommandCatalog,
+    input: &str,
+    cursor_byte: usize,
+) -> Vec<InputCompletion> {
+    let current = input[..cursor_byte.min(input.len())].to_lowercase();
+    let Some(trigger) = current.strip_prefix('/') else {
+        return Vec::new();
+    };
+    let replace_end = input.chars().count();
+
+    // ---- Second stage: `/cmd <cursor>` completes first-token verbs ----
+    // Progressive disclosure: the command menu stays a lean list of
+    // canonical names; the subcommand tier (with its own introductions)
+    // only appears once the user has committed to a parent and typed a
+    // space.
+    if current.contains(char::is_whitespace) {
+        return complete_subcommand_items(catalog, input, &current, replace_end);
+    }
+
+    // ---- First stage: `/pre<cursor>` completes command names ----
+    let mut items = Vec::new();
+    for spec in &catalog.commands {
+        if spec.name.to_lowercase().starts_with(&current) {
+            items.push(slash_item(
+                &spec.name,
+                &spec.summary,
+                replace_end,
+                spec,
+                false,
+            ));
+        }
+    }
+    for alias in &catalog.aliases {
+        let name = alias.name.to_lowercase();
+        if !name.starts_with(&current) {
+            continue;
+        }
+        let target_spec = catalog.find(&alias.target);
+        items.push(InputCompletion {
+            label: alias.name.clone(),
+            description: target_spec
+                .map(|spec| spec.summary.clone())
+                .unwrap_or_else(|| alias.target.clone()),
+            insert_text: alias.target.clone(),
+            replace_start: 0,
+            replace_end,
+            kind: InputCompletionKind::SlashAlias,
+            alias_of: Some(alias.target.clone()),
+            command: target_spec.cloned(),
+        });
+    }
+
+    // Trigger-word steering ("did you mean" for retired foreign idioms)
+    let trigger_suggestion = catalog
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.trigger.eq_ignore_ascii_case(trigger))
+        .map(|suggestion| {
+            let command = catalog.find(&suggestion.target).cloned();
+            InputCompletion {
+                label: suggestion.target.clone(),
+                description: suggestion.reason.clone(),
+                insert_text: suggestion.target.clone(),
+                replace_start: 0,
+                replace_end,
+                kind: InputCompletionKind::Intent,
+                alias_of: None,
+                command,
+            }
+        });
+    let trigger_target = trigger_suggestion.as_ref().map(|item| item.label.clone());
+    items.extend(trigger_suggestion);
+
+    // Intent keywords ("fork" → /tree)
+    let intent: Vec<InputCompletion> = (!trigger.is_empty())
+        .then(|| {
+            catalog.commands.iter().filter_map(|spec| {
+                if spec.name.to_lowercase().starts_with(&current)
+                    || trigger_target.as_deref() == Some(spec.name.as_str())
+                    || items.iter().any(|item| item.label == spec.name)
+                {
+                    return None;
+                }
+                let matched = spec.intent_keywords.iter().find(|keyword| {
+                    keyword.eq_ignore_ascii_case(trigger)
+                        || (trigger.len() >= 3 && keyword.to_lowercase().starts_with(trigger))
+                })?;
+                Some(slash_item(
+                    &spec.name,
+                    &format!("(via '{matched}') {}", spec.summary),
+                    replace_end,
+                    spec,
+                    true,
+                ))
+            })
+        })
+        .into_iter()
+        .flatten()
+        .collect();
+
+    items.extend(intent);
+    items
+}
+
+fn complete_subcommand_items(
+    catalog: &CommandCatalog,
+    input: &str,
+    current_lower: &str,
+    replace_end: usize,
+) -> Vec<InputCompletion> {
+    let mut tokens = current_lower.split_whitespace();
+    let command_name = tokens.next().unwrap_or_default().to_string();
+    let Some(spec) = catalog.find(&command_name) else {
+        return Vec::new();
+    };
+    let cursor_in_trailing_space = current_lower.ends_with(char::is_whitespace);
+    let token_count = current_lower.split_whitespace().count();
+    let matches_second_token_position = matches!(
+        (cursor_in_trailing_space, token_count),
+        (true, 1) | (false, 2)
+    );
+    let trailing = if cursor_in_trailing_space {
+        ""
+    } else {
+        current_lower.split_whitespace().nth(1).unwrap_or("")
+    };
+
+    if matches_second_token_position && !spec.subcommands.is_empty() {
+        let typed_parent_len = command_name.len();
+        return spec
+            .subcommands
+            .iter()
+            .filter(|sub| sub.name.starts_with(trailing))
+            .map(|sub| InputCompletion {
+                label: format!("{} {}", command_name, sub.name),
+                description: sub.summary.clone(),
+                insert_text: format!(
+                    "{} {}",
+                    &input[..typed_parent_len.min(input.len())],
+                    sub.name
+                ),
+                replace_start: 0,
+                replace_end,
+                kind: InputCompletionKind::Slash,
+                alias_of: None,
+                command: Some(spec.clone()),
+            })
+            .collect();
+    }
+
+    let mut candidates = Vec::new();
+    for usage in &spec.usage {
+        for expanded in expand_usage_options(usage) {
+            if !candidates.contains(&expanded) {
+                candidates.push(expanded);
+            }
+        }
+    }
+    let canonical_input = catalog
+        .alias(&command_name)
+        .map(|alias| current_lower.replacen(command_name.as_str(), &alias.target, 1))
+        .unwrap_or_else(|| current_lower.to_string());
+    candidates
+        .into_iter()
+        .filter(|cand| cand.to_lowercase().starts_with(&canonical_input))
+        .map(|cand| slash_item(&cand, &spec.summary, replace_end, spec, false))
+        .collect()
 }
 
 /// Synchronous adapter used by frontend unit tests to exercise the daemon's

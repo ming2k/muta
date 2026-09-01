@@ -290,9 +290,7 @@ pub(crate) async fn add(
         creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
         let save_err = creds.save().err().map(|e| e.to_string());
         if let Some(error_msg) = save_err {
-            if stored_oauth
-                && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await
-            {
+            if stored_oauth && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await {
                 store.remove(&id);
                 let _ = store.save();
             }
@@ -328,9 +326,7 @@ pub(crate) async fn add(
     let conn_save_err = connections.save().err().map(|e| e.to_string());
     if let Some(error_msg) = conn_save_err {
         tracing::error!(%error_msg, "add: could not persist connection; rolling back credentials");
-        if stored_oauth
-            && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await
-        {
+        if stored_oauth && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await {
             store.remove(&id);
             let _ = store.save();
         }

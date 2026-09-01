@@ -135,13 +135,21 @@ pub(crate) fn parse_antigravity_quota(
         let value_str = if let Some(frac) = bucket.remaining_fraction {
             min_fraction = Some(min_fraction.map_or(frac, |m| m.min(frac)));
             let pct = (frac * 100.0).round() as u32;
-            if let Some(reset) = bucket.reset_time.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(reset) = bucket
+                .reset_time
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 format!("{pct}% (Resets: {reset})")
             } else {
                 format!("{pct}%")
             }
         } else if let Some(amt) = bucket.remaining_amount {
-            if let Some(reset) = bucket.reset_time.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(reset) = bucket
+                .reset_time
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 format!("{amt} (Resets: {reset})")
             } else {
                 format!("{amt}")
@@ -159,13 +167,18 @@ pub(crate) fn parse_antigravity_quota(
         });
     }
 
-    let primary_balance = min_fraction.map(|frac| {
-        let pct = (frac * 100.0).round() as u32;
-        format!("{pct}% Quota")
-    }).or_else(|| Some("Active".to_string()));
+    let primary_balance = min_fraction
+        .map(|frac| {
+            let pct = (frac * 100.0).round() as u32;
+            format!("{pct}% Quota")
+        })
+        .or_else(|| Some("Active".to_string()));
 
     Ok(ProviderUsage {
-        plan: Some(body.description.unwrap_or_else(|| "Google Antigravity".to_string())),
+        plan: Some(
+            body.description
+                .unwrap_or_else(|| "Google Antigravity".to_string()),
+        ),
         primary_balance,
         metrics,
         updated_at_ms: now_epoch_ms(),

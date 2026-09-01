@@ -1838,9 +1838,9 @@ pub fn relay_agent_event(
         AgentEvent::CatalogInvalidated => {
             let config = muta_persistence::config::Config::load();
             let usage = muta_persistence::connection_usage::ConnectionUsage::load();
-            let _ = tx.send(AgentResponse::ProviderPicker(crate::catalog::build_picker_state(
-                &config, &usage,
-            )));
+            let _ = tx.send(AgentResponse::ProviderPicker(
+                crate::catalog::build_picker_state(&config, &usage),
+            ));
             return;
         }
     };

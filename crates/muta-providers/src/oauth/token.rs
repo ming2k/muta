@@ -341,8 +341,9 @@ pub(crate) async fn post_form(
             body: text,
         });
     }
-    let parsed = serde_json::from_str::<TokenResponse>(&text)
-        .map_err(|e| crate::oauth::AuthError::Decode(format!("token response parse failed: {e}")))?;
+    let parsed = serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
+        crate::oauth::AuthError::Decode(format!("token response parse failed: {e}"))
+    })?;
     parsed.validate()
 }
 
@@ -565,13 +566,19 @@ pub async fn retrieve_antigravity_quota_summary(
         .json(&req_body)
         .send()
         .await
-        .map_err(|e| crate::oauth::AuthError::Transport(format!("retrieveUserQuotaSummary failed: {e}")))?;
+        .map_err(|e| {
+            crate::oauth::AuthError::Transport(format!("retrieveUserQuotaSummary failed: {e}"))
+        })?;
 
     if resp.status().is_success() {
         let quota = resp
             .json::<crate::usage::AntigravityQuotaSummaryResponse>()
             .await
-            .map_err(|e| crate::oauth::AuthError::Decode(format!("retrieveUserQuotaSummary parse failed: {e}")))?;
+            .map_err(|e| {
+                crate::oauth::AuthError::Decode(format!(
+                    "retrieveUserQuotaSummary parse failed: {e}"
+                ))
+            })?;
         Ok(quota)
     } else {
         let status = resp.status().as_u16();

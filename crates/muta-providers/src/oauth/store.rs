@@ -286,7 +286,8 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_locked_read_modify_write_does_not_lose_tokens() {
-        let dir = std::env::temp_dir().join(format!("muta-auth-concurrency-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("muta-auth-concurrency-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("auth.toml");
 

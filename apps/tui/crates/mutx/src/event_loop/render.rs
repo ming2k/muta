@@ -534,7 +534,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                             }
                             _ => (QueueEditKind::FollowUp, number),
                         }),
-                        slash_len.is_some(),
+                        slash_len.is_some() || app.input.starts_with('/'),
                         completion_active,
                         is_history_search,
                     ),

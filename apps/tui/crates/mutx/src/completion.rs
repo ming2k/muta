@@ -222,12 +222,35 @@ impl App {
         }
     }
 
-    /// Current daemon response translated into renderer-native byte edits.
+    /// Current completions translated into renderer-native byte edits.
+    ///
+    /// Implements Two-Tier Completion (ADR-0162):
+    /// - Tier 1: Zero-latency synchronous execution for slash and harness commands.
+    /// - Tier 2: Path mentions and dynamic queries with SWR (Stale-While-Revalidate) cache retention.
     pub fn completions(&mut self) -> Vec<Completion> {
         let cursor = self.cursor_position;
+
+        // Tier 1: Synchronous zero-latency matching for slash and harness commands (ADR-0162)
+        if self.input.starts_with('/') {
+            let cursor_byte = char_to_byte(&self.input, cursor).unwrap_or(self.input.len());
+            let items = muta_runtime::input_completion::complete_slash_items(
+                &self.command_catalog,
+                &self.input,
+                cursor_byte,
+            );
+            return items
+                .iter()
+                .filter_map(|item| Completion::from_backend(&self.input, item))
+                .collect();
+        }
+
+        // Tier 2: Path mentions and dynamic queries from backend (SWR with cache retention)
         let items = if self.completion_response_input.as_deref() == Some(self.input.as_str())
             && self.completion_response_cursor == cursor
         {
+            self.backend_completions.clone()
+        } else if self.active_mention_range().is_some() && !self.backend_completions.is_empty() {
+            // SWR: Retain active backend completions while in-flight
             self.backend_completions.clone()
         } else {
             #[cfg(test)]
@@ -244,6 +267,7 @@ impl App {
                 Vec::new()
             }
         };
+
         items
             .iter()
             .filter_map(|item| Completion::from_backend(&self.input, item))
@@ -258,17 +282,28 @@ impl App {
             return;
         }
         self.completion_requested = Some(state.clone());
-        self.backend_completions.clear();
-        self.completion_response_input = None;
-        self.completion_response_cursor = 0;
-        self.completion_request_id = self.completion_request_id.wrapping_add(1);
-        let _ = self
-            .tx
-            .send(muta_contracts::AgentRequest::CompleteComposer {
-                request_id: self.completion_request_id,
-                text: state.0,
-                cursor,
-            });
+
+        // When not inside an active mention, clean up stale backend completions.
+        // Slash commands are handled synchronously by Tier 1 with zero latency (ADR-0162).
+        if !self.input.starts_with('/') && self.active_mention_range().is_none() {
+            self.backend_completions.clear();
+            self.completion_response_input = None;
+            self.completion_response_cursor = 0;
+            return;
+        }
+
+        // Retain `backend_completions` during typing (ADR-0162 SWR).
+        // Only bump generation request ID and send request if dynamic path completion is needed.
+        if self.active_mention_range().is_some() {
+            self.completion_request_id = self.completion_request_id.wrapping_add(1);
+            let _ = self
+                .tx
+                .send(muta_contracts::AgentRequest::CompleteComposer {
+                    request_id: self.completion_request_id,
+                    text: state.0,
+                    cursor,
+                });
+        }
     }
 
     pub fn apply_backend_completions(

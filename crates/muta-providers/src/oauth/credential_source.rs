@@ -262,8 +262,8 @@ mod tests {
             },
             "exp": 2_000_000_000
         });
-        let encoded_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(payload.to_string().as_bytes());
+        let encoded_payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         let fake_jwt = format!("eyJhbGciOiJub25lIn0.{}.signature", encoded_payload);
 
         let source = OAuthCredentialSource::new("custom-chatgpt-123", ConnectionAuth::ChatGptOAuth);

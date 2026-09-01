@@ -970,3 +970,64 @@ fn range_selection_cjk_left_arrow_snaps_grapheme() {
     assert_eq!(app.selection, SelectionState::None);
     assert_eq!(app.cursor_position, 0, "← steps left from char 1 to char 0");
 }
+
+// ----- ADR-0162 Zero-Latency Two-Tier Completion & SWR Tests -----
+
+#[test]
+fn adr0162_slash_completions_are_synchronous_and_zero_latency() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "/m".to_string();
+    app.cursor_position = 2;
+
+    // Zero-latency Tier 1: completions available immediately on frame 1
+    let completions = app.completions();
+    assert!(
+        !completions.is_empty(),
+        "Slash completions must be computed synchronously"
+    );
+    assert!(
+        completions
+            .iter()
+            .any(|c| c.label.starts_with("/model") || c.label.starts_with("/m"))
+    );
+
+    // Keypress does not wipe backend state
+    app.refresh_backend_completion_request();
+    let completions_after_refresh = app.completions();
+    assert_eq!(completions.len(), completions_after_refresh.len());
+}
+
+#[test]
+fn adr0162_swr_retains_backend_completions_during_path_mention_typing() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "look at @src/".to_string();
+    app.cursor_position = app.input.len();
+
+    // Simulate backend response arriving for @src/
+    let item = muta_contracts::InputCompletion {
+        label: "src/main.rs".to_string(),
+        description: "main entrypoint".to_string(),
+        insert_text: "src/main.rs".to_string(),
+        replace_start: 8,
+        replace_end: 13,
+        kind: muta_contracts::InputCompletionKind::PathFile,
+        alias_of: None,
+        command: None,
+    };
+    app.apply_backend_completions(0, app.input.clone(), app.cursor_position, vec![item]);
+
+    assert_eq!(app.completions().len(), 1);
+
+    // User types 'm' -> input becomes @src/m
+    app.input = "look at @src/m".to_string();
+    app.cursor_position = app.input.len();
+    app.refresh_backend_completion_request();
+
+    // SWR: completions are retained during in-flight request, not dropped to 0
+    let retained = app.completions();
+    assert_eq!(
+        retained.len(),
+        1,
+        "SWR must retain active completions during in-flight typing"
+    );
+}

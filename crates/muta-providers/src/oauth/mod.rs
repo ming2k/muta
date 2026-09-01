@@ -198,7 +198,9 @@ impl OAuth {
             .connect_timeout(OAUTH_CONNECT_TIMEOUT)
             .timeout(OAUTH_REQUEST_TIMEOUT)
             .build()
-            .expect("OAuth HTTP client configuration is static and valid; client builder must succeed");
+            .expect(
+                "OAuth HTTP client configuration is static and valid; client builder must succeed",
+            );
         Self::with_client(config, client)
     }
 
@@ -529,7 +531,8 @@ impl BrowserLogin {
                 if self.config.send_nonce {
                     let Some(id_token) = &tokens.id_token else {
                         return Err(AuthError::Authorization(
-                            "id_token missing in token response when nonce was requested".to_string(),
+                            "id_token missing in token response when nonce was requested"
+                                .to_string(),
                         ));
                     };
                     let claims = token::jwt_claims(id_token.expose_secret()).ok_or_else(|| {
