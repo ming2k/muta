@@ -129,11 +129,11 @@ impl CarouselPage {
     /// tokens in the info tone and connectives muted.
     fn line(&self, theme: &Theme) -> Line<'static> {
         let muted = Style::default().fg(theme.muted());
-        let info = Style::default().fg(theme.info());
+        let key_style = theme.keycap_style();
         let mut spans = vec![Span::styled(self.lead, muted)];
         for token in &self.tokens {
             match token {
-                CarouselToken::Key(key) => spans.push(Span::styled(*key, info)),
+                CarouselToken::Key(key) => spans.push(Span::styled(*key, key_style)),
                 CarouselToken::Text(text) => spans.push(Span::styled(*text, muted)),
             }
         }

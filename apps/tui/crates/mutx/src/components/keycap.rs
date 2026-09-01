@@ -1,31 +1,77 @@
-//! Unified keyboard-key ("keycap") styling.
+//! Unified keyboard-key ("keycap") styling and affordances.
 //!
 //! Every surface that shows a keybinding label to the user — the activity-bar
-//! interrupt hint, the Help modal rows, the in-modal keymap page, and the
-//! footer hint strip — must route its key text through here so there is a
-//! single, consistent key affordance across the app instead of each call site
-//! hand-rolling its own `fg`/`bold` combination.
+//! interrupt hint, the Help modal rows, the in-modal keymap page, the header
+//! hint strips, and the footer hint bar — routes through here so there is a
+//! single, consistent, theme-driven affordance across the app.
 //!
-//! The canonical treatment is **brand color + bold**: enough to read as "this
-//! is a key you can press" without competing with primary content, and it
-//! respects the active theme's accent rather than hard-coding the strongest
-//! foreground tone.
+//! Visual hierarchy (Visual Language R0):
+//! - Keycaps use high-contrast neutral/crisp glyphs (`theme.keycap_fg()`) + BOLD,
+//!   or micro-elevated pill badges (`theme.keycap_bg()`).
+//! - Action labels use dedicated readable silver/sage tones (`theme.keycap_label()`)
+//!   rather than fading into the background `muted` or `dim`.
+//! - Semantic intents (Accent/Warn) allow primary submit (`Enter`) or interrupt
+//!   (`Esc Esc`) to stand out naturally.
 
 use mutx_engine::{Color, Modifier, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
 use super::super::Theme;
 
-/// The single, theme-aware style applied to every keycap label.
+/// Semantic tone for keycap affordances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum KeycapTone {
+    #[default]
+    Normal,
+    Accent,
+    Warn,
+}
+
+/// The single, theme-aware style applied to standard keycap labels.
 pub(crate) fn keycap_style(theme: &Theme) -> Style {
+    theme.keycap_style()
+}
+
+/// The theme-aware style applied to keycap badges with micro-elevated background.
+#[allow(dead_code)]
+pub(crate) fn keycap_badge_style(theme: &Theme) -> Style {
+    theme.keycap_badge_style()
+}
+
+#[allow(dead_code)]
+pub(crate) fn keycap_accent_style(theme: &Theme) -> Style {
     Style::default()
-        .fg(theme.brand())
+        .fg(theme.keycap_accent())
+        .add_modifier(Modifier::BOLD)
+}
+
+#[allow(dead_code)]
+pub(crate) fn keycap_warn_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.keycap_warn())
         .add_modifier(Modifier::BOLD)
 }
 
 /// A styled keycap span for `text`.
 pub(crate) fn keycap_span<'a>(theme: &Theme, text: &str) -> Span<'a> {
     Span::styled(text.to_string(), keycap_style(theme))
+}
+
+#[allow(dead_code)]
+/// A styled badge keycap span for `text`.
+pub(crate) fn keycap_badge_span<'a>(theme: &Theme, text: &str) -> Span<'a> {
+    Span::styled(text.to_string(), keycap_badge_style(theme))
+}
+
+#[allow(dead_code)]
+/// A styled accent keycap span for `text`.
+pub(crate) fn keycap_accent_span<'a>(theme: &Theme, text: &str) -> Span<'a> {
+    Span::styled(text.to_string(), keycap_accent_style(theme))
+}
+
+/// A styled warn keycap span for `text`.
+pub(crate) fn keycap_warn_span<'a>(theme: &Theme, text: &str) -> Span<'a> {
+    Span::styled(text.to_string(), keycap_warn_style(theme))
 }
 
 /// An atomic keycap + action label pair, strictly adhering to Visual Language R0.
@@ -36,12 +82,23 @@ pub(crate) fn keycap_span<'a>(theme: &Theme, text: &str) -> Span<'a> {
 pub(crate) struct KeyAffordance {
     pub key: &'static str,
     pub label: &'static str,
+    pub tone: KeycapTone,
 }
 
 impl KeyAffordance {
     /// Construct a new typed KeyAffordance from a canonical [`Key`].
     pub const fn from_key(key: crate::keymap::Key, label: &'static str) -> Self {
         Self::new(key.display(), label)
+    }
+
+    #[allow(dead_code)]
+    /// Construct a new typed KeyAffordance from a canonical [`Key`] with a specific tone.
+    pub const fn from_key_with_tone(
+        key: crate::keymap::Key,
+        label: &'static str,
+        tone: KeycapTone,
+    ) -> Self {
+        Self::with_tone(key.display(), label, tone)
     }
 
     /// Construct a new typed KeyAffordance from a non-single-key glyph (e.g. `keyvocab::ARROWS_UD`).
@@ -54,12 +111,29 @@ impl KeyAffordance {
     /// # Panics
     /// Panics if `key` or `label` is empty — key affordances require a descriptive action label.
     pub const fn new(key: &'static str, label: &'static str) -> Self {
+        Self::with_tone(key, label, KeycapTone::Normal)
+    }
+
+    /// Construct a new typed KeyAffordance with explicit tone.
+    pub const fn with_tone(key: &'static str, label: &'static str, tone: KeycapTone) -> Self {
         assert!(!key.is_empty(), "key token must not be empty");
         assert!(
             !label.is_empty(),
             "label must not be empty — key affordances require a descriptive action"
         );
-        Self { key, label }
+        Self { key, label, tone }
+    }
+
+    #[allow(dead_code)]
+    /// Construct an accent KeyAffordance.
+    pub const fn accent(key: &'static str, label: &'static str) -> Self {
+        Self::with_tone(key, label, KeycapTone::Accent)
+    }
+
+    #[allow(dead_code)]
+    /// Construct a warning/interrupt KeyAffordance.
+    pub const fn warn(key: &'static str, label: &'static str) -> Self {
+        Self::with_tone(key, label, KeycapTone::Warn)
     }
 
     /// The visual column width of the keycap + space + label unit.
@@ -67,10 +141,34 @@ impl KeyAffordance {
         self.key.width() + 1 + self.label.width()
     }
 
-    /// Render this affordance as a pair of styled spans: keycap (brand + bold) + space + label (muted).
+    /// Render this affordance as a pair of styled spans: keycap (keycap_fg + bold) + space + label (keycap_label).
     pub fn render_spans(&self, theme: &Theme, bg: Color) -> [Span<'static>; 2] {
-        let key_style = keycap_style(theme).bg(bg);
-        let label_style = Style::default().bg(bg).fg(theme.muted());
+        let key_fg = match self.tone {
+            KeycapTone::Normal => theme.keycap_fg(),
+            KeycapTone::Accent => theme.keycap_accent(),
+            KeycapTone::Warn => theme.keycap_warn(),
+        };
+        let key_style = Style::default().fg(key_fg).bg(bg).add_modifier(Modifier::BOLD);
+        let label_style = theme.keycap_label_style().bg(bg);
+        [
+            Span::styled(self.key.to_string(), key_style),
+            Span::styled(format!(" {}", self.label), label_style),
+        ]
+    }
+
+    #[allow(dead_code)]
+    /// Render this affordance with a badge/pill background on the keycap.
+    pub fn render_badge_spans(&self, theme: &Theme, bg: Color) -> [Span<'static>; 2] {
+        let (key_fg, key_bg) = match self.tone {
+            KeycapTone::Normal => (theme.keycap_fg(), theme.keycap_bg()),
+            KeycapTone::Accent => (theme.keycap_accent(), theme.keycap_bg()),
+            KeycapTone::Warn => (theme.keycap_warn(), theme.keycap_bg()),
+        };
+        let key_style = Style::default()
+            .fg(key_fg)
+            .bg(key_bg)
+            .add_modifier(Modifier::BOLD);
+        let label_style = theme.keycap_label_style().bg(bg);
         [
             Span::styled(self.key.to_string(), key_style),
             Span::styled(format!(" {}", self.label), label_style),
@@ -83,10 +181,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keycap_style_uses_brand_and_bold() {
+    fn keycap_style_uses_keycap_fg_and_bold() {
         let theme = Theme::default();
         let style = keycap_style(&theme);
-        assert_eq!(style.fg, theme.brand());
+        assert_eq!(style.fg, theme.keycap_fg());
         assert!(style.add.contains(Modifier::BOLD));
     }
 
@@ -98,7 +196,28 @@ mod tests {
 
         let [key_span, label_span] = affordance.render_spans(&theme, theme.body());
         assert_eq!(key_span.content, "Ctrl+X");
+        assert_eq!(key_span.style.fg, theme.keycap_fg());
         assert_eq!(label_span.content, " menu");
+        assert_eq!(label_span.style.fg, theme.keycap_label());
+    }
+
+    #[test]
+    fn key_affordance_renders_tones_and_badges() {
+        let theme = Theme::default();
+        let normal = KeyAffordance::new("Enter", "send");
+        let accent = KeyAffordance::accent("Enter", "send");
+        let warn = KeyAffordance::warn("Esc", "cancel");
+
+        let [n_key, n_label] = normal.render_badge_spans(&theme, theme.body());
+        assert_eq!(n_key.style.fg, theme.keycap_fg());
+        assert_eq!(n_key.style.bg, theme.keycap_bg());
+        assert_eq!(n_label.style.fg, theme.keycap_label());
+
+        let [a_key, _] = accent.render_spans(&theme, theme.body());
+        assert_eq!(a_key.style.fg, theme.keycap_accent());
+
+        let [w_key, _] = warn.render_spans(&theme, theme.body());
+        assert_eq!(w_key.style.fg, theme.keycap_warn());
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub fn draw_todo_bar(
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(keycap_span(theme, Key::CTRL_T.display()));
         if matches!(density, TodoLegendDensity::Full) {
-            spans.push(Span::styled(" expand", dim));
+            spans.push(Span::styled(" expand", theme.keycap_label_style()));
         }
         spans
     };

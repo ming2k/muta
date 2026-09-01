@@ -31,7 +31,7 @@ use muta_persistence::{
     config::Config, connection_usage, embedding, paths, session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
 };
-use muta_skills::{SkillCatalog, SkillRegistry};
+use muta_skills::SkillRegistry;
 
 use crate::startup::SessionStart;
 use crate::{SessionDriver, UiBridge};
@@ -347,7 +347,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             }
         })));
     }
-    muta_agent::dynamic::spawn_refresh(SkillCatalog::new((*skills_registry).clone()));
+    skills_registry.spawn_reactive_watcher();
 
     // Built-in tools self-register via `inventory` (most tools carry a
     // `register_tool!` submission at its definition site) and are collected

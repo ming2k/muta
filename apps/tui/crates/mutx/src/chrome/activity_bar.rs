@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthStr;
 use super::common::{
     classify_liveness, dot_color, format_elapsed, spinner_glyph, truncate_for_bar,
 };
-use crate::components::keycap::keycap_span;
+use crate::components::keycap::keycap_warn_span;
 use crate::keymap::Key;
 use crate::view::Theme;
 
@@ -171,11 +171,11 @@ pub fn draw_activity_bar(
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
     if show_interrupt_keys {
-        right_spans.push(keycap_span(theme, Key::ESC.display()));
+        right_spans.push(keycap_warn_span(theme, Key::ESC.display()));
         right_spans.push(Span::styled(" ", dim));
-        right_spans.push(keycap_span(theme, Key::ESC.display()));
+        right_spans.push(keycap_warn_span(theme, Key::ESC.display()));
         if show_interrupt_words {
-            right_spans.push(Span::styled(" interrupt", dim));
+            right_spans.push(Span::styled(" interrupt", theme.keycap_label_style()));
         }
     }
 

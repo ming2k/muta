@@ -33,7 +33,7 @@ use muta_contracts::{
     AgentRequest, AgentResponse, CommandResult, CronExpr, LoopStatus, Message, RoundEvent,
     ScheduledJob, Tool, TrustDomain, estimate_tokens, repeat::parse_schedule_arg,
 };
-use muta_skills::{ListSkillsTool, UseSkillTool};
+use muta_skills::ListSkillsTool;
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
@@ -1329,115 +1329,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         ),
                     )
                     .await;
-                }
-            }
-        }
-        Some(BuiltinCmd::Skill) => {
-            let rest = cmd.strip_prefix("/skill").unwrap_or("").trim();
-            let mut iter = rest.split_whitespace();
-            let first = iter.next().unwrap_or("");
-            let (action, target_skill) = match first {
-                "show" => ("show", iter.next().unwrap_or("")),
-                "info" => ("info", iter.next().unwrap_or("")),
-                "run" => ("run", iter.next().unwrap_or("")),
-                other => ("run", other),
-            };
-
-            if target_skill.is_empty() {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "Usage: /skill <name> | /skill show <name> | /skill info <name>",
-                )
-                .await;
-            } else if action == "info" {
-                let info_opt = {
-                    let guard = skills_registry_for_commands.lock();
-                    guard.get(target_skill).map(|skill| {
-                        let version = skill.version.as_deref().unwrap_or("–");
-                        let status = if skill.quarantined {
-                            "Quarantined (run /trust skills to enable)"
-                        } else if skill.enabled {
-                            "Enabled"
-                        } else {
-                            "Disabled"
-                        };
-                        let tags = if skill.tags.is_empty() {
-                            "none".to_string()
-                        } else {
-                            skill.tags.join(", ")
-                        };
-                        format!(
-                            "Skill: {}\n\
-                             Scope: {}\n\
-                             Version: {}\n\
-                             Status: {}\n\
-                             Tags: {}\n\
-                             Source: {}\n\
-                             Description: {}",
-                            skill.name,
-                            skill.scope,
-                            version,
-                            status,
-                            tags,
-                            skill.source.display(),
-                            skill.description
-                        )
-                    })
-                };
-                if let Some(info) = info_opt {
-                    record_command(session, resp_tx, name, args, CommandResult::Text(info)).await;
-                } else {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        format!("Skill '{target_skill}' not found. Use `/skills` to see available skills."),
-                    )
-                    .await;
-                }
-            } else if action == "show" {
-                let show_opt = {
-                    let guard = skills_registry_for_commands.lock();
-                    guard.get(target_skill).map(|skill| {
-                        let body = skill.load_body().unwrap_or_default();
-                        format!(
-                            "# Skill: {} ({})\n\n{}\n\n---\n\n{}",
-                            skill.name,
-                            skill.scope,
-                            skill.description,
-                            body
-                        )
-                    })
-                };
-                if let Some(output) = show_opt {
-                    record_command(session, resp_tx, name, args, CommandResult::Text(output)).await;
-                } else {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        format!("Skill '{target_skill}' not found. Use `/skills` to see available skills."),
-                    )
-                    .await;
-                }
-            } else {
-                let args_json = serde_json::json!({ "name": target_skill }).to_string();
-                let tool = UseSkillTool {
-                    registry: (*skills_registry_for_commands).clone(),
-                };
-                match tool.call(&args_json).await {
-                    Ok(output) => {
-                        record_command(session, resp_tx, name, args, CommandResult::Text(output))
-                            .await;
-                    }
-                    Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
-                    }
                 }
             }
         }

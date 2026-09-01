@@ -77,6 +77,18 @@ pub struct CommandThemeConfig {
     pub hover_bg: Option<String>,
 }
 
+/// Component-specific override for keyboard shortcut keys and affordance labels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct KeycapThemeConfig {
+    pub key_fg: Option<String>,
+    pub key_bg: Option<String>,
+    pub label_fg: Option<String>,
+    pub accent_fg: Option<String>,
+    pub warn_fg: Option<String>,
+}
+
 /// View/canvas surface overrides (Layer 0: Full-screen destinations).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(default)]
@@ -158,6 +170,7 @@ pub struct ComponentThemesConfig {
     pub crate_component: Option<CrateThemeConfig>,
     pub diff: Option<DiffThemeConfig>,
     pub command: Option<CommandThemeConfig>,
+    pub keycap: Option<KeycapThemeConfig>,
 }
 
 /// Full standalone theme file loaded from `$XDG_CONFIG_HOME/mutx/themes/<id>.toml`.
@@ -223,6 +236,11 @@ caret = "#c0caf5"
 [components.crate]
 fg = "#bb9af7"
 badge_bg = "#283457"
+
+[components.keycap]
+key_fg = "#e2e4dc"
+key_bg = "#1c1f1d"
+label_fg = "#9ea69b"
 "##;
         let parsed: ThemeFile = toml::from_str(raw).expect("theme file should parse");
         assert_eq!(parsed.name, "Tokyo Night");
@@ -233,6 +251,10 @@ badge_bg = "#283457"
         assert_eq!(input.caret.as_deref(), Some("#c0caf5"));
         let crate_c = components.crate_component.expect("crate should exist");
         assert_eq!(crate_c.fg.as_deref(), Some("#bb9af7"));
+        let keycap = components.keycap.expect("keycap should exist");
+        assert_eq!(keycap.key_fg.as_deref(), Some("#e2e4dc"));
+        assert_eq!(keycap.key_bg.as_deref(), Some("#1c1f1d"));
+        assert_eq!(keycap.label_fg.as_deref(), Some("#9ea69b"));
     }
 
     #[test]

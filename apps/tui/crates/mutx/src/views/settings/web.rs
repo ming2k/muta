@@ -287,6 +287,12 @@ pub(super) fn draw_websearch_detail(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
+    lines.push(Line::from(Span::styled(
+        "Search & fetch connections, routing & proxy — Backend providers and reader routing.",
+        Style::default().fg(props.theme.muted()),
+    )));
+    lines.push(Line::from(""));
+
     let Some(ws) = props.websearch else {
         lines.push(Line::from(Span::styled(
             "Loading web tools configuration…",
@@ -301,33 +307,32 @@ pub(super) fn draw_websearch_detail(
 
     let search_tab_style = if is_search_tab {
         Style::default()
-            .bg(props.theme.body())
+            .bg(props.theme.panel())
             .fg(props.theme.brand())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .bg(props.theme.surface())
+            .bg(props.theme.body())
             .fg(props.theme.muted())
     };
 
     let reader_tab_style = if !is_search_tab {
         Style::default()
-            .bg(props.theme.body())
+            .bg(props.theme.panel())
             .fg(props.theme.brand())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .bg(props.theme.surface())
+            .bg(props.theme.body())
             .fg(props.theme.muted())
     };
 
     lines.push(Line::from(vec![
-        Span::styled("   ", Style::default().bg(props.theme.surface())),
-        Span::styled(" [ Search ] ", search_tab_style),
-        Span::styled(" ", Style::default().bg(props.theme.surface())),
-        Span::styled(" [ Reader ] ", reader_tab_style),
-        Span::styled("   ", Style::default().bg(props.theme.surface())),
-        Span::styled(" [←/→ switch tab]", Style::default().fg(props.theme.dim())),
+        Span::styled("[ Search ]", search_tab_style),
+        Span::raw("  "),
+        Span::styled("[ Reader ]", reader_tab_style),
+        Span::raw("   "),
+        Span::styled("[←/→ switch tab]", Style::default().fg(props.theme.dim())),
     ]));
     lines.push(Line::from(""));
 

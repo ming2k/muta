@@ -303,7 +303,10 @@ fn test_build_overview_and_sticky_table_headers() {
         .join("\n");
 
     assert!(ov_text.contains("CONTEXT WINDOW"));
-    assert!(ov_text.contains("24.5k / 200.0k (12%)"));
+    assert!(ov_text.contains("Used Tokens"));
+    assert!(ov_text.contains("24500 tokens (12.2%)"));
+    assert!(ov_text.contains("Capacity"));
+    assert!(ov_text.contains("200000 tokens"));
     assert!(ov_text.contains("SESSION TOKEN TOTALS"));
     assert!(ov_text.contains("Grand Total"));
     assert!(ov_text.contains("4.3k (4300)"));

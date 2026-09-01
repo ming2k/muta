@@ -919,7 +919,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &mut app.oauth_scroll,
                 Some(&mut app.modal_hit_map),
                 &app.selection,
-                &mut app.layout_map,
+                &mut layout_map,
             ))
         }
         Modal::CustomProvider => {

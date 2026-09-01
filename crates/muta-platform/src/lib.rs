@@ -10,6 +10,7 @@
 pub mod clipboard;
 pub mod environment;
 pub mod fs;
+pub mod fs_watcher;
 pub mod ipc;
 pub mod lock;
 pub mod opener;
@@ -20,6 +21,7 @@ pub mod shell;
 pub mod workspace_sandbox;
 
 pub use environment::{detect_device_fingerprint, detect_runtime_environment, generate_session_id};
+pub use fs_watcher::{FsEvent, FsEventKind, FsWatcher};
 
 #[cfg(windows)]
 mod windows_security;

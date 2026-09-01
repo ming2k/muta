@@ -52,7 +52,7 @@ pub use crate::theme::{COLOR_SCHEMES, Theme};
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, SettingsHead, ViewHeader, ViewHints, ViewKind,
+    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind,
     draw_runner_footer, draw_view_header, draw_view_header_hints,
 };
 #[allow(unused_imports)]

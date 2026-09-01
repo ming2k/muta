@@ -101,7 +101,7 @@ There are two paths from identifying a skill to placing its body in context:
    ignored because common words would otherwise pull large bodies into context
    accidentally. Already implicitly loaded skills are not re-injected.
 
-3. **Progressive Disclosure & Workspace Admission.** Available skills are surfaced to the model in system prompt metadata blocks (`<available_skills>`). Global user skill roots (`~/.local/share/muta/skills/`, `~/.agents/skills/`, etc.) are natively admitted to the execution workspace sandbox so the model can inspect skill definitions on demand without permission denials.
+3. **Dynamic Discovery & Runner Delegation.** The system prompt stays clean and free of static `<available_skills>` catalog bloat. Instead, when domain expertise is required, the principal agent can spawn a dedicated runner with `role: "skill"` (`RUNNER_SKILL`) to dynamically discover, inspect, and extract instructions from project (`.muta/skills/`) and user (`$XDG_DATA_HOME/muta/skills/`) skill trees, returning synthesized guidelines directly into the execution flow. Global and local skill roots are natively admitted to the sandbox.
 
 Both paths emit the same marker, so persisted context remains auditable even
 though one path is a tool result and the other is harness-authored user context.

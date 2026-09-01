@@ -20,8 +20,9 @@ pub use cron::CronExpr;
 pub mod color_scheme_config;
 pub use color_scheme_config::{
     ColorSchemeConfig, CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig,
-    DiffThemeConfig, FeedbackThemeConfig, FeedbackToneConfig, InputThemeConfig, ModalThemeConfig,
-    OverlayThemeConfig, SheetThemeConfig, SurfacesThemeConfig, ThemeFile, ViewThemeConfig,
+    DiffThemeConfig, FeedbackThemeConfig, FeedbackToneConfig, InputThemeConfig, KeycapThemeConfig,
+    ModalThemeConfig, OverlayThemeConfig, SheetThemeConfig, SurfacesThemeConfig, ThemeFile,
+    ViewThemeConfig,
 };
 pub mod cache;
 pub use cache::{

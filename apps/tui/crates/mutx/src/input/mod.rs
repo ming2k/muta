@@ -513,12 +513,12 @@ pub enum InputAction {
     /// bar's context meter and rate gauge. Keyboard twin of clicking those gauges (`Ctrl+O`).
     OpenTelemetry,
     /// Move keyboard focus to the next activatable target. When no target is
-    /// focused yet, focuses the first (oldest) step. Driven by `Ctrl+↓` and by
+    /// focused yet, focuses the first (oldest) step. Driven by `Alt+↓` and by
     /// `↓` while a step is already focused.
     FocusNextTarget,
     /// Move keyboard focus to the previous activatable target. When no target
     /// is focused yet, focuses the last (nearest-to-prompt) step. Driven by
-    /// `Ctrl+↑` and by `↑` while a step is already focused.
+    /// `Alt+↑`, `Alt+O`, and by `↑` while a step is already focused.
     FocusPrevTarget,
     /// Activate the current keyboard-focused target (`Enter`).
     ActivateFocusedTarget,
@@ -1904,13 +1904,18 @@ pub fn process_event(
                     InputAction::None
                 }
                 // Ctrl+K: delete from the caret to the end of the current
-                // logical line (readline `kill-line`). Stops at the next
-                // newline so multi-line drafts keep their other lines.
+                // logical line (readline `kill-line`). If already at the end
+                // of the line (before a newline), deletes the newline to join
+                // the next line.
                 KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if edits_input_field(&context) {
-                        let mut end = *cursor_position;
-                        cursor_line_end(input, &mut end);
-                        if end > *cursor_position {
+                        let char_count = input.chars().count();
+                        if *cursor_position < char_count {
+                            let mut end = *cursor_position;
+                            cursor_line_end(input, &mut end);
+                            if end == *cursor_position {
+                                end = *cursor_position + 1;
+                            }
                             let start_byte = input
                                 .char_indices()
                                 .nth(*cursor_position)
@@ -1968,6 +1973,39 @@ pub fn process_event(
                         }
                     }
                     InputAction::None
+                }
+                // Alt+O: toggle focus between Composer and Transcript.
+                KeyCode::Char('o') | KeyCode::Char('O')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && context.active_modal == super::Modal::None =>
+                {
+                    if context.has_focused_target {
+                        InputAction::ClearFocusedTarget
+                    } else {
+                        InputAction::FocusPrevTarget
+                    }
+                }
+                // Alt+P: previous prompt history (or queue pointer prev if armed).
+                KeyCode::Char('p') | KeyCode::Char('P')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && context.active_modal == super::Modal::None =>
+                {
+                    if context.has_queued || context.queue_pointer_armed {
+                        InputAction::QueuePointerPrev
+                    } else {
+                        InputAction::HistoryPrev
+                    }
+                }
+                // Alt+N: next prompt history (or queue pointer next if armed).
+                KeyCode::Char('n') | KeyCode::Char('N')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && context.active_modal == super::Modal::None =>
+                {
+                    if context.queue_pointer_armed {
+                        InputAction::QueuePointerNext
+                    } else {
+                        InputAction::HistoryNext
+                    }
                 }
                 KeyCode::Char(c) => {
                     // The quick switcher's filter owns every printable key
@@ -2495,34 +2533,32 @@ pub fn process_event(
                     }
                     InputAction::None
                 }
-                // Ctrl+↑ / Ctrl+↓: the gesture that drives transcript item
-                // focus. From the input box it focuses the step closest to the
-                // prompt (the last interactive target → `FocusPrevTarget` lands
-                // on the last entry when nothing is focused yet); once a step is
-                // focused it cycles like the bare arrows. This keeps the bare
-                // ↑/↓ free for history / caret motion until a step is focused.
-                // No-op while a modal owns focus.
+                // Alt+↑ / Alt+↓: the gesture that drives transcript item
+                // focus switching. From the composer, Alt+↑ enters transcript
+                // focus at the step closest to the prompt (or walks steps
+                // up if already focused). Alt+↓ clears focus back to the
+                // composer.
                 KeyCode::Up
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                    if key.modifiers.contains(KeyModifiers::ALT)
                         && context.active_modal == super::Modal::None =>
                 {
                     InputAction::FocusPrevTarget
                 }
                 KeyCode::Down
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                    if key.modifiers.contains(KeyModifiers::ALT)
                         && context.active_modal == super::Modal::None =>
                 {
-                    InputAction::FocusNextTarget
+                    if context.has_focused_target {
+                        InputAction::ClearFocusedTarget
+                    } else {
+                        InputAction::None
+                    }
                 }
                 // Ctrl+↑ / Ctrl+↓ inside a modal scroll the modal body by one
                 // page — the same gesture a pager or editor binds to a
                 // half-page jump. Mirrors PageUp / PageDown so users have both
                 // the dedicated keys and the chord (useful on keyboards without
-                // Page keys, and consistent with the transcript's Ctrl+↑/↓
-                // focus gesture on the no-modal baseline). Routed through the
-                // shared `Scroll*` actions so the same per-modal field advances
-                // as every other scroll input. Must precede the bare ↑/↓ arms
-                // because those match any modifier.
+                // Page keys). Routed through the shared `Scroll*` actions.
                 KeyCode::Up
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && scrolls_own_body(context.active_modal) =>
@@ -2588,37 +2624,17 @@ pub fn process_event(
                                 InputAction::FocusPrevTarget
                             } else if context.completion_kind != super::CompletionKind::None
                                 && context.suggestion_count > 0
-                                // A fully-typed known `/command` is a *resolved*
-                                // state — the composer paints it in bold + accent
-                                // and the completion popup has nothing left to
-                                // navigate (its exact match is the text already in
-                                // the box). In that state ↑ keeps its ordinary
-                                // history role instead of being captured as a
-                                // no-op suggestion move, so switching to a command
-                                // never deadens the arrow keys.
                                 && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestPrev
-                            } else if context.has_queued || context.queue_pointer_armed {
-                                // The outbox holds next-round items: ↑ walks a
-                                // non-destructive **pointer** over them (newest
-                                // first), projecting each item into the composer
-                                // for editing. Enter writes the edit back into
-                                // the pointed-at item in place — the queue's
-                                // length and order are untouched. Only an
-                                // exhausted queue hands ↑ on to input history.
-                                // (`queue_pointer_armed` keeps the gesture alive
-                                // even if the queue momentarily reads empty —
-                                // e.g. the target vanished mid-edit.)
-                                InputAction::QueuePointerPrev
                             } else if cursor_line_up(input, cursor_position) {
-                                // Multi-line draft: ↑ first walks the caret to the
-                                // previous line (preserving the column). Only when
-                                // the caret is already on the first line does ↑
-                                // hand off to input-history navigation below.
+                                // Multi-line draft: ↑ walks the caret to the
+                                // previous line (preserving the column).
                                 InputAction::None
                             } else {
-                                InputAction::HistoryPrev
+                                // Sitting on top line: stays on top line
+                                // (prompt history navigation is on PageUp / Alt+P).
+                                InputAction::None
                             }
                         }
                     }
@@ -2671,50 +2687,57 @@ pub fn process_event(
                                 InputAction::FocusNextTarget
                             } else if context.completion_kind != super::CompletionKind::None
                                 && context.suggestion_count > 0
-                                // Mirror of the ↑ arm: an exact-match command is
-                                // resolved, so ↓ walks history forward rather than
-                                // cycling a single-candidate popup that cannot move.
                                 && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestNext
-                            } else if context.queue_pointer_armed {
-                                // The composer is a projection of a queue item:
-                                // ↓ steps the queue pointer toward newer items
-                                // (dissolving it — restoring the draft — past the
-                                // newest) instead of touching history.
-                                InputAction::QueuePointerNext
                             } else if cursor_line_down(input, cursor_position) {
-                                // Multi-line draft: ↓ first walks the caret to the
-                                // next line (preserving the column). Only when the
-                                // caret is already on the last line does ↓ hand
-                                // off to input-history navigation below.
+                                // Multi-line draft: ↓ walks the caret to the
+                                // next line (preserving the column).
                                 InputAction::None
                             } else {
-                                InputAction::HistoryNext
+                                // Sitting on bottom line: stays on bottom line
+                                // (prompt history navigation is on PageDown / Alt+N).
+                                InputAction::None
                             }
                         }
                     }
                 }
-                // PageUp / PageDown scroll by one viewport page. On the
-                // no-modal baseline and the inline permission sheet this means
-                // the transcript behind the prompt; for every modal that paints
-                // its own scrollable body it means that body. Modals that
-                // neither scroll the transcript nor own a body (the caret-
-                // owning text editors) fall through to caret / no-op handling
-                // via the `_` arm below.
-                KeyCode::PageUp
-                    if context.active_modal == super::Modal::None
-                        || context.active_modal == super::Modal::Permission
-                        || scrolls_own_body(context.active_modal) =>
-                {
-                    InputAction::ScrollPageUp
+                // PageUp / PageDown: In composer, PageUp / PageDown walk prompt history
+                // (or queue items when queued). When a transcript step is focused or
+                // inside a scrollable modal, PageUp / PageDown scroll by one viewport page.
+                KeyCode::PageUp => {
+                    if context.active_modal == super::Modal::None {
+                        if context.has_focused_target {
+                            InputAction::ScrollPageUp
+                        } else if context.has_queued || context.queue_pointer_armed {
+                            InputAction::QueuePointerPrev
+                        } else {
+                            InputAction::HistoryPrev
+                        }
+                    } else if context.active_modal == super::Modal::Permission
+                        || scrolls_own_body(context.active_modal)
+                    {
+                        InputAction::ScrollPageUp
+                    } else {
+                        InputAction::None
+                    }
                 }
-                KeyCode::PageDown
-                    if context.active_modal == super::Modal::None
-                        || context.active_modal == super::Modal::Permission
-                        || scrolls_own_body(context.active_modal) =>
-                {
-                    InputAction::ScrollPageDown
+                KeyCode::PageDown => {
+                    if context.active_modal == super::Modal::None {
+                        if context.has_focused_target {
+                            InputAction::ScrollPageDown
+                        } else if context.queue_pointer_armed {
+                            InputAction::QueuePointerNext
+                        } else {
+                            InputAction::HistoryNext
+                        }
+                    } else if context.active_modal == super::Modal::Permission
+                        || scrolls_own_body(context.active_modal)
+                    {
+                        InputAction::ScrollPageDown
+                    } else {
+                        InputAction::None
+                    }
                 }
                 KeyCode::Home
                     if key.modifiers.contains(KeyModifiers::CONTROL)

@@ -944,7 +944,7 @@ fn ctrl_k_deletes_to_line_end() {
 }
 
 #[test]
-fn ctrl_k_does_not_eat_next_line() {
+fn ctrl_k_does_not_eat_next_line_on_first_press() {
     let mut input = "first\nsecond".to_string();
     let mut cursor = 3;
     run_key(
@@ -957,6 +957,40 @@ fn ctrl_k_does_not_eat_next_line() {
     );
     assert_eq!(input, "fir\nsecond");
     assert_eq!(cursor, 3);
+}
+
+#[test]
+fn ctrl_k_eats_newline_when_already_at_line_end() {
+    let mut input = "fir\nsecond".to_string();
+    let mut cursor = 3;
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('k'),
+        KeyModifiers::CONTROL,
+        crate::Modal::None,
+        false,
+    );
+    assert_eq!(action, InputAction::Backspace);
+    assert_eq!(input, "firsecond");
+    assert_eq!(cursor, 3);
+}
+
+#[test]
+fn ctrl_k_at_buffer_end_is_noop() {
+    let mut input = "hello".to_string();
+    let mut cursor = 5;
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('k'),
+        KeyModifiers::CONTROL,
+        crate::Modal::None,
+        false,
+    );
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "hello");
+    assert_eq!(cursor, 5);
 }
 
 #[test]

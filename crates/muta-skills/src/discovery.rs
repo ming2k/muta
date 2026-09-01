@@ -211,6 +211,30 @@ pub fn project_skills_present(project_root: &Path) -> bool {
         })
 }
 
+/// Collect all directory roots that may hold discoverable skills for reactive file watching.
+pub fn discoverable_skill_directories(config: &SkillsConfig) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let paths_helper = paths::get();
+
+    // 1. User-global muta skills ($XDG_DATA_HOME/muta/skills)
+    dirs.push(paths_helper.user_skills_dir());
+
+    // 2. Configured extra paths
+    for path in &config.paths {
+        dirs.push(expand_tilde(path));
+    }
+
+    // 3. Project-local roots (.muta/skills, skills)
+    let project_root = resolve_project_root(config);
+    dirs.push(project_root.join(PROJECT_MUTA_SKILLS_DIR));
+    dirs.push(project_root.join(PROJECT_GENERIC_SKILLS_DIR));
+
+    // 4. Remote cache root ($XDG_CACHE_HOME/muta/skills/remote)
+    dirs.push(paths_helper.remote_skills_cache());
+
+    dirs
+}
+
 /// Insert a skill, or — when a higher-priority source already claimed the
 /// same name — override the earlier entry in place. Scanning runs from lowest
 /// to highest priority, so the last source to claim a name wins, while the
@@ -341,7 +365,6 @@ fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format_skills_for_prompt;
 
     #[test]
     fn project_root_detects_git() {
@@ -427,9 +450,6 @@ mod tests {
         assert!(evil.quarantined, "untrusted repo skill must be marked quarantined");
         assert!(!evil.enabled, "quarantined skill must be disabled");
         assert!(!evil.allows_implicit_invocation(), "quarantined skill must not allow implicit invocation");
-
-        let prompt_skills = format_skills_for_prompt(&result.skills);
-        assert!(!prompt_skills.contains("evil"), "quarantined skills must not appear in prompt");
 
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         let evil_trusted = result.skills.iter().find(|s| s.name == "evil").expect("evil should be discovered");

@@ -699,7 +699,7 @@ fn render_footer(
     let bg = theme.body();
     let fill = Style::default().bg(bg);
     let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
-    let hint_style = fill.fg(theme.muted());
+    let hint_style = fill.fg(theme.keycap_label());
     let width = rect.width as usize;
 
     if prompting {

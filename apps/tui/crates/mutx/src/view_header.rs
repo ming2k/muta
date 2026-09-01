@@ -25,17 +25,8 @@ pub(crate) enum ViewHeader<'a> {
     /// its shortcuts live on row 2 via [`draw_view_header_hints`].
     Btw(BtwHead),
     Runner(&'a RunnerBarInfo),
-    /// Full-screen Settings View (ADR-0141): `SETTINGS` identity + workspace on
-    /// the left; active category on the right.
-    Settings(&'a SettingsHead<'a>),
-}
-
-/// Row-1 content for the Settings view's head.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SettingsHead<'a> {
-    pub workspace: &'a str,
-    pub category: &'a str,
-    pub subtitle: &'a str,
+    /// Full-screen Settings View (ADR-0141): `SETTINGS` identity.
+    Settings,
 }
 
 /// Row-1 content for the `/btw` aside view's head.
@@ -123,7 +114,7 @@ impl From<&ViewHeader<'_>> for ViewKind {
             ViewHeader::Session(_) => ViewKind::Main,
             ViewHeader::Btw(_) => ViewKind::Btw,
             ViewHeader::Runner(_) => ViewKind::Runner,
-            ViewHeader::Settings(_) => ViewKind::Settings,
+            ViewHeader::Settings => ViewKind::Settings,
         }
     }
 }
@@ -229,12 +220,12 @@ pub(crate) fn draw_view_header(
                 String::new()
             },
         },
-        ViewHeader::Settings(head) => HeaderContent {
+        ViewHeader::Settings => HeaderContent {
             title: " SETTINGS ",
-            tag: head.workspace.to_string(),
+            tag: String::new(),
             badge: String::new(),
-            primary: head.category.to_string(),
-            meta: head.subtitle.to_string(),
+            primary: String::new(),
+            meta: String::new(),
             action: String::new(),
         },
     };

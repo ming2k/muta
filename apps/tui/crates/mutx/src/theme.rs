@@ -61,6 +61,11 @@ pub const COLOR_SCHEMES: [ColorSchemePreset; 5] = [
 pub const DEFAULT_CRATE_FG: Color = Color::Rgb(180, 190, 254);
 pub const DEFAULT_CARET_FG: Color = Color::Rgb(213, 213, 205);
 pub const DEFAULT_INPUT_PLACEHOLDER_FG: Color = Color::Rgb(119, 125, 117);
+pub const DEFAULT_KEYCAP_FG: Color = Color::Rgb(226, 228, 220);
+pub const DEFAULT_KEYCAP_BG: Color = Color::Rgb(28, 31, 29);
+pub const DEFAULT_KEYCAP_LABEL_FG: Color = Color::Rgb(158, 166, 155);
+pub const DEFAULT_KEYCAP_ACCENT_FG: Color = Color::Rgb(163, 184, 153);
+pub const DEFAULT_KEYCAP_WARN_FG: Color = Color::Rgb(201, 165, 110);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SemanticPalette {
@@ -170,6 +175,11 @@ pub struct Theme {
     pub input_placeholder_fg: Color,
     pub crate_fg: Color,
     pub crate_bg: Color,
+    pub keycap_fg: Color,
+    pub keycap_bg: Color,
+    pub keycap_label_fg: Color,
+    pub keycap_accent_fg: Color,
+    pub keycap_warn_fg: Color,
 }
 
 impl Default for Theme {
@@ -216,6 +226,11 @@ impl Default for Theme {
             input_placeholder_fg: DEFAULT_INPUT_PLACEHOLDER_FG,
             crate_fg: DEFAULT_CRATE_FG,
             crate_bg: Color::Rgb(25, 27, 34),
+            keycap_fg: DEFAULT_KEYCAP_FG,
+            keycap_bg: DEFAULT_KEYCAP_BG,
+            keycap_label_fg: DEFAULT_KEYCAP_LABEL_FG,
+            keycap_accent_fg: DEFAULT_KEYCAP_ACCENT_FG,
+            keycap_warn_fg: DEFAULT_KEYCAP_WARN_FG,
         }
     }
 }
@@ -456,6 +471,23 @@ impl Theme {
                 self.command_band_bg_hover = val;
             }
         }
+        if let Some(ref keycap) = components.keycap {
+            if let Some(val) = keycap.key_fg.as_deref().and_then(Self::color_from_hex) {
+                self.keycap_fg = val;
+            }
+            if let Some(val) = keycap.key_bg.as_deref().and_then(Self::color_from_hex) {
+                self.keycap_bg = val;
+            }
+            if let Some(val) = keycap.label_fg.as_deref().and_then(Self::color_from_hex) {
+                self.keycap_label_fg = val;
+            }
+            if let Some(val) = keycap.accent_fg.as_deref().and_then(Self::color_from_hex) {
+                self.keycap_accent_fg = val;
+            }
+            if let Some(val) = keycap.warn_fg.as_deref().and_then(Self::color_from_hex) {
+                self.keycap_warn_fg = val;
+            }
+        }
     }
 
     /// Colors used by the compact scheme preview in `/config`.
@@ -565,6 +597,11 @@ impl Theme {
             input_placeholder_fg: muted,
             crate_fg: mix(accent, Color::Rgb(180, 190, 254), 0.65),
             crate_bg: mix(background, accent, if light { 0.08 } else { 0.12 }),
+            keycap_fg: mix(text, Color::White, if light { 0.15 } else { 0.22 }),
+            keycap_bg: mix(surface, text, if light { 0.06 } else { 0.08 }),
+            keycap_label_fg: mix(muted, text, 0.45),
+            keycap_accent_fg: mix(accent, text, 0.25),
+            keycap_warn_fg: mix(warning, text, 0.15),
         }
     }
 
@@ -748,6 +785,43 @@ impl Theme {
     /// Crate badge background tint.
     pub fn crate_badge(&self) -> Color {
         self.crate_bg
+    }
+    /// Keyboard keycap glyph foreground (crisp, high-luminance neutral).
+    pub fn keycap_fg(&self) -> Color {
+        self.keycap_fg
+    }
+    /// Keyboard keycap badge/pill background (micro-elevated affordance).
+    pub fn keycap_bg(&self) -> Color {
+        self.keycap_bg
+    }
+    /// Keyboard affordance action label foreground (readable silver/muted-plus).
+    pub fn keycap_label(&self) -> Color {
+        self.keycap_label_fg
+    }
+    /// Keyboard primary action keycap accent (e.g. Enter send).
+    pub fn keycap_accent(&self) -> Color {
+        self.keycap_accent_fg
+    }
+    /// Keyboard interrupt / exit / warning keycap color (e.g. Esc Esc, Ctrl+C).
+    pub fn keycap_warn(&self) -> Color {
+        self.keycap_warn_fg
+    }
+    /// Standard keycap style (crisp keycap fg + bold).
+    pub fn keycap_style(&self) -> mutx_engine::Style {
+        mutx_engine::Style::default()
+            .fg(self.keycap_fg)
+            .add_modifier(mutx_engine::Modifier::BOLD)
+    }
+    /// Keycap badge/pill style with background lift.
+    pub fn keycap_badge_style(&self) -> mutx_engine::Style {
+        mutx_engine::Style::default()
+            .fg(self.keycap_fg)
+            .bg(self.keycap_bg)
+            .add_modifier(mutx_engine::Modifier::BOLD)
+    }
+    /// Keycap affordance action label style.
+    pub fn keycap_label_style(&self) -> mutx_engine::Style {
+        mutx_engine::Style::default().fg(self.keycap_label_fg)
     }
 
     // ── 4-Layer Spatial Surfaces Tokens ──
@@ -1164,5 +1238,37 @@ dim_factor = 0.65
         assert_eq!(theme.surfaces().view.header_bg, Color::Rgb(17, 17, 17));
         assert_eq!(theme.surfaces().modal.surface, Color::Rgb(34, 34, 34));
         assert_eq!(theme.surfaces().modal.dim_factor, 0.65);
+    }
+
+    #[test]
+    fn parses_and_applies_theme_keycap_overrides() {
+        let raw = r##"
+name = "Keycap Test Theme"
+description = "Test"
+
+[palette]
+background = "#050505"
+surface = "#101010"
+text = "#ffffff"
+muted = "#888888"
+accent = "#00ffcc"
+success = "#00cc00"
+warning = "#cccc00"
+error = "#cc0000"
+
+[components.keycap]
+key_fg = "#ffffff"
+key_bg = "#222222"
+label_fg = "#aaaaaa"
+accent_fg = "#00ffcc"
+warn_fg = "#ff8800"
+"##;
+        let file: ThemeFile = toml::from_str(raw).expect("should parse");
+        let theme = Theme::from_theme_file(&file);
+        assert_eq!(theme.keycap_fg(), Color::Rgb(255, 255, 255));
+        assert_eq!(theme.keycap_bg(), Color::Rgb(34, 34, 34));
+        assert_eq!(theme.keycap_label(), Color::Rgb(170, 170, 170));
+        assert_eq!(theme.keycap_accent(), Color::Rgb(0, 255, 204));
+        assert_eq!(theme.keycap_warn(), Color::Rgb(255, 136, 0));
     }
 }

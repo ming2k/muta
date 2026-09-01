@@ -37,8 +37,6 @@ pub struct SystemPromptContext {
     /// Whether the agent is running in YOLO mode this round — with all tool
     /// permissions auto-approved and ask_user reclaimed.
     pub delegated: bool,
-    /// Available skills formatted as XML metadata for progressive disclosure.
-    pub available_skills: String,
     /// Content-attested project instructions. Empty while the Rules asset
     /// domain is absent, quarantined, or changed.
     pub project_rules: String,
@@ -255,7 +253,6 @@ fn fingerprint_context(ctx: &SystemPromptContext) -> (u64, u64) {
     ctx.tool_names.hash(&mut h2);
     ctx.model_guidance.hash(&mut h1);
     ctx.provider_guidance.hash(&mut h2);
-    ctx.available_skills.hash(&mut h1);
     ctx.delegated.hash(&mut h2);
     ctx.project_rules.hash(&mut h1);
     ctx.additional_workspace_roots.hash(&mut h2);

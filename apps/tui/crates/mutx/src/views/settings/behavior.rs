@@ -14,7 +14,7 @@ pub(super) fn draw_behavior_detail(
     let mut selected_line = None;
 
     lines.push(Line::from(Span::styled(
-        "Application interactivity rules, dismiss triggers, and mouse behaviors.",
+        "Click-outside dismiss & interaction rules — Dismiss triggers and mouse behaviors.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));

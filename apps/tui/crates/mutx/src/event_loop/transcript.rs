@@ -181,10 +181,17 @@ pub(crate) fn extract_selection_text(
             }
             return None;
         }
+        if start.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX {
+            return layout_map.extract_text_for_range(sel);
+        }
     } else if let SelectionState::Block { message_idx, .. } = sel
         && *message_idx == crate::view::INPUT_MSG_IDX
     {
         return Some(input.to_string());
+    } else if let SelectionState::Block { message_idx, .. } = sel
+        && *message_idx == crate::model::layout::MODAL_DOC_MSG_IDX
+    {
+        return layout_map.extract_text_for_range(sel);
     }
 
     let grid = |mi, bi| layout_map.table_grid(mi, bi);

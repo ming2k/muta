@@ -66,7 +66,8 @@ pub(crate) fn line_selection(
 ) -> Option<(usize, usize)> {
     let (s, e) = range?;
     if let Some(e) = e
-        && e < wl.start_byte
+        && e <= wl.start_byte
+        && !(e == wl.start_byte && wl.text.is_empty())
     {
         return None;
     }

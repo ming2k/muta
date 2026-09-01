@@ -164,7 +164,7 @@ impl SessionDriver {
         agent.install_token_ledger(token_ledger.clone());
         // The old inline block captured two clones of the skills registry —
         // `skills_registry` (read for the session-context snapshot) and
-        // `skills_registry_for_commands` (handed to the `/skills` / `/skill`
+        // `skills_registry_for_commands` (handed to the `/skills`
         // tools). One driver field backs both; re-create the alias here.
         let skills_registry_for_commands = skills_registry.clone();
         let completion_engine = crate::input_completion::InputCompletionEngine::new(

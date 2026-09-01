@@ -25,8 +25,8 @@ use crate::agent::{Agent, RunnerHandle};
 pub const RUNNER_TOOL_DESCRIPTION: &str = "\
 Spawn an isolated Tier-2 Runner agent to perform a focused subtask in a separate \
 context window and return a consolidated summary. Set 'role' to 'explore' for read-only \
-research (default), 'code' for full implementation and testing, or 'mcp' for specialized \
-tool integrations.";
+research (default), 'code' for full implementation and testing, 'mcp' for specialized \
+tool integrations, or 'skill' for skill discovery, inspection, and domain guideline synthesis.";
 
 /// Description of the write-capable `runner_code` dispatch tool (bound to the
 /// [`muta_contracts::RUNNER_CODE`] profile). Distinct from `RUNNER_TOOL_DESCRIPTION` so
@@ -460,13 +460,13 @@ impl Tool for RunnerTool {
                 "prompt": { "type": "string", "description": "The full, self-contained instructions for the runner" },
                 "role": {
                     "type": "string",
-                    "enum": ["explore", "code", "mcp"],
-                    "description": "Optional runner role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), or 'mcp' (specialized tool integration). Defaults to 'explore'."
+                    "enum": ["explore", "code", "mcp", "skill"],
+                    "description": "Optional runner role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), 'mcp' (specialized tool integration), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
                 },
                 "preset": { "type": "string", "description": "Legacy alias for role." },
                 "background": {
                     "type": "boolean",
-                    "description": "Set to true to dispatch this sub-runner asynchronously in the background. Only supported for role 'explore'. You will be notified automatically when the exploration completes."
+                    "description": "Set to true to dispatch this sub-runner asynchronously in the background. Only supported for read-only roles ('explore', 'skill'). You will be notified automatically when the exploration completes."
                 }
             },
             "required": ["description", "prompt"]
@@ -628,9 +628,9 @@ impl RunnerTool {
             .get("background")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
-        if is_background && profile.name != "explore" {
+        if is_background && profile.name != "explore" && profile.name != "skill" {
             return Err(format!(
-                "Background execution is only permitted for read-only 'explore' runners to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
+                "Background execution is only permitted for read-only runners ('explore', 'skill') to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
                 profile.name
             ));
         }
@@ -1883,5 +1883,22 @@ mod tests {
 
         let mcp = RunnerTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
         assert_eq!(mcp.name(), "runner_mcp");
+    }
+
+    #[tokio::test]
+    async fn skill_runner_role_execution() {
+        let provider = std::sync::Arc::new(CannedProvider);
+        let tool = RunnerTool::new(
+            provider.clone(),
+            muta_contracts::ToolSet::default(),
+            &RUNNER_EXPLORE,
+        );
+
+        let summary = tool
+            .call(r#"{"description":"find rust skill","prompt":"locate rust guidelines in .muta/skills","role":"skill"}"#)
+            .await
+            .expect("skill runner dispatch succeeds");
+
+        assert_eq!(summary, "found 3 relevant files");
     }
 }

@@ -92,14 +92,14 @@ pub fn draw_queue_bar(
         if matches!(density, LegendDensity::Full) {
             spans.push(Span::styled(
                 if blocked { " resume" } else { " block" },
-                dim,
+                theme.keycap_label_style(),
             ));
         }
         if !matches!(density, LegendDensity::Tiny) {
             sep(&mut spans);
             spans.push(keycap_span(theme, Key::CTRL_Q.display()));
             if matches!(density, LegendDensity::Full) {
-                spans.push(Span::styled(" expand", dim));
+                spans.push(Span::styled(" expand", theme.keycap_label_style()));
             }
         }
         spans

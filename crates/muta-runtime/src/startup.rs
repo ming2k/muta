@@ -393,21 +393,6 @@ define_builtin_commands! {
             ("status", "Show skills health and trust state"),
         ],
     },
-    Skill = "/skill" : {
-        summary: "Inspect or load a skill by name",
-        usage: ["/skill <name>", "/skill show <name>", "/skill info <name>"],
-        examples: [
-            ("/skill rust-expert", "Load the rust-expert skill"),
-            ("/skill show rust-expert", "Display full skill instructions"),
-            ("/skill info rust-expert", "Show skill diagnostics and status"),
-        ],
-        intent_keywords: ["skill", "load-skill", "show-skill", "use-skill", "skill-info"],
-        category: Tools,
-        subcommands: [
-            ("show", "Display the full content of a skill"),
-            ("info", "Display diagnostics and trust state of a skill"),
-        ],
-    },
     Init = "/init" : {
         summary: "Scaffold a project-local .muta/ config tree",
         usage: ["/init [path]"],

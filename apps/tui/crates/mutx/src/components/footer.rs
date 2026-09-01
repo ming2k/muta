@@ -234,7 +234,7 @@ pub(crate) fn keymap_body_lines<'a>(
         let key_cell = format!("  {}{}", key, " ".repeat(pad));
         lines.push(Line::from(vec![
             Span::styled(key_cell, keycap_style(theme)),
-            Span::styled(format!("  {}", label), Style::default().fg(theme.fg())),
+            Span::styled(format!("  {}", label), theme.keycap_label_style()),
         ]));
     }
     lines
@@ -275,15 +275,15 @@ fn segs_to_string(segs: &[FooterSeg]) -> String {
 }
 
 /// Materialize the segment list as styled spans: keys take the unified keycap
-/// style, everything else is muted. This is the single place that decides how
+/// style, hint labels take the keycap label style. This is the single place that decides how
 /// footer keys look, so it can never drift from the activity bar / Help modal.
 fn segs_to_spans(segs: &[FooterSeg], theme: &Theme) -> Vec<Span<'static>> {
     let key_style = keycap_style(theme);
-    let dim = Style::default().fg(theme.muted());
+    let label_style = theme.keycap_label_style();
     segs.iter()
         .map(|seg| match seg {
             FooterSeg::Key(s) => Span::styled(s.clone(), key_style),
-            FooterSeg::Text(s) => Span::styled(s.clone(), dim),
+            FooterSeg::Text(s) => Span::styled(s.clone(), label_style),
         })
         .collect()
 }

@@ -128,9 +128,9 @@ pub(crate) fn draw_which_key_overlay(
             _ => " ",
         };
         let desc_style = if item.is_primary {
-            Style::default().fg(theme.fg())
+            theme.keycap_label_style()
         } else {
-            Style::default().fg(theme.dim())
+            Style::default().fg(theme.muted())
         };
         lines.push(Line::from(vec![
             Span::raw(" "),

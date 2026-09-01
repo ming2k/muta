@@ -313,29 +313,6 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
     }
 }
 
-/// Guidance and metadata for available skills (progressive disclosure).
-/// Injected when skills are present in the catalog.
-struct SkillsGuidance;
-
-impl SystemPromptSection for SkillsGuidance {
-    fn id(&self) -> &'static str {
-        "system.skills"
-    }
-    fn rank(&self) -> u32 {
-        60
-    }
-    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        !ctx.available_skills.is_empty()
-    }
-    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
-        if ctx.available_skills.is_empty() {
-            None
-        } else {
-            Some(ctx.available_skills.clone())
-        }
-    }
-}
-
 /// Cross-project admission notice (ADR-0142). Active only when the session
 /// admitted additional workspace roots, so the default single-root prompt is
 /// byte-for-byte unchanged.
@@ -420,7 +397,6 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(FileEditingGuidance);
     registry.register(WorkspaceRootsGuidance);
     registry.register(WebUntrustedContentGuidance);
-    registry.register(SkillsGuidance);
     registry
 }
 

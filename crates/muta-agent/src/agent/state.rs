@@ -260,11 +260,6 @@ impl Agent {
         let model_guidance = muta_contracts::resolve_model(&self.provider.model()).model_guidance;
         let provider_guidance = self.provider.prompt_hints().system_guidance;
 
-        let available_skills = {
-            let list = self.skills_registry.lock().list();
-            muta_skills::render::format_skills_for_prompt(&list)
-        };
-
         crate::SystemPromptContext {
             identity_preamble: self
                 .identity
@@ -275,7 +270,6 @@ impl Agent {
             model_guidance,
             provider_guidance,
             delegated: self.delegated(),
-            available_skills,
             project_rules: self
                 .project_rules
                 .read()

@@ -77,6 +77,11 @@ Specialized UI components have dedicated tokens and fallback constants:
 | `input_placeholder_fg` | `theme.input_placeholder()` | `DEFAULT_INPUT_PLACEHOLDER_FG` (119, 125, 117) | Color for empty input placeholder prompts |
 | `crate_fg` | `theme.crate_tag()` | `DEFAULT_CRATE_FG` (180, 190, 254) | Foreground identifier for crate / cargo tags |
 | `crate_bg` | `theme.crate_badge()` | (25, 27, 34) | Background badge pill behind crate tags |
+| `keycap_fg` | `theme.keycap_fg()` | `DEFAULT_KEYCAP_FG` (226, 228, 220) | Foreground for keycap labels (crisp high-luminance neutral) |
+| `keycap_bg` | `theme.keycap_bg()` | `DEFAULT_KEYCAP_BG` (28, 31, 29) | Micro-elevated background for keycap badge/pill treatments |
+| `keycap_label_fg` | `theme.keycap_label()` | `DEFAULT_KEYCAP_LABEL_FG` (158, 166, 155) | High-contrast readable foreground for affordance action labels |
+| `keycap_accent_fg` | `theme.keycap_accent()` | `DEFAULT_KEYCAP_ACCENT_FG` (163, 184, 153) | Primary submit/action keycap accent tone (e.g. Enter send) |
+| `keycap_warn_fg` | `theme.keycap_warn()` | `DEFAULT_KEYCAP_WARN_FG` (201, 165, 110) | Interrupt/danger keycap tone (e.g. Esc Esc, Ctrl+C) |
 
 ---
 
@@ -152,6 +157,13 @@ del_hl = "#541b30"
 [components.command]
 idle_bg  = "#10121d"
 hover_bg = "#181c2d"
+
+[components.keycap]
+key_fg    = "#ffffff"
+key_bg    = "#181c2d"
+label_fg  = "#a0a8b6"
+accent_fg = "#00f0ff"
+warn_fg   = "#ffd700"
 ```
 
 ### Loading & Discovery

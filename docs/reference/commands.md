@@ -37,8 +37,7 @@ Project and user-defined commands are covered under
 | `/untrust` | Revoke all project asset-domain grants and unload their contributions |
 
 
-| `/skills [list\|reload]` | List or reload available skills |
-| `/skill <name>` | Load a skill by name |
+| `/skills [list\|status]` | Browse or list available skills |
 | `/tools` | Toggle individual session tools on or off |
 | `/settings` | Open the Settings overlay (theme, appearance, layout, MCP). `/settings reload` re-reads config.toml and applies it live. `/config` is a hidden alias |
 | `/retry` | Retry the last failed request |
@@ -242,14 +241,6 @@ recalling earlier decisions inside one long session; cross-session recall is
 | `/skills` | Browse skills modal in TUI, or list all skills (with scope and trust status) in CLI |
 | `/skills list` | List available skills with scope, version, and status |
 | `/skills status` | Show aggregate health, trust state, and source distribution |
-
-### `/skill`
-
-| Form | Effect |
-|------|--------|
-| `/skill <name>` / `/skill run <name>` | Load and run a skill by name into the conversation context |
-| `/skill show <name>` | Display the full content and structure of a skill |
-| `/skill info <name>` | Show detailed diagnostics (source path, scope, trust status) |
 
 ### `/init`
 

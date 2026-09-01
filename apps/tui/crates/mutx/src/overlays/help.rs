@@ -51,11 +51,11 @@ pub fn draw_help_modal(
     layout_map: &mut LayoutMap,
 ) -> mutx_engine::Rect {
     let key = |k: &str| Span::styled(format!("{:<10}", k), keycap_style(theme));
-    let desc = |d: &str| Span::styled(d.to_string(), Style::default().fg(theme.muted()));
+    let desc = |d: &str| Span::styled(d.to_string(), theme.keycap_label_style());
     let section = |title: &str| {
         Span::styled(
             title.to_string(),
-            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
         )
     };
     let row = |k: &str, d: &str| Line::from(vec![key(k), desc(d)]);

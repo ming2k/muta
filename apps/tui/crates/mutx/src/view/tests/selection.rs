@@ -96,3 +96,69 @@ fn block_selection_covers_middle_blocks_fully() {
     assert_eq!(block_selection_range(&sel, 0, 3), None);
     assert_eq!(block_selection_range(&sel, 1, 0), None);
 }
+
+#[test]
+fn line_selection_does_not_bleed_into_next_line_at_exact_boundary() {
+    use crate::model::layout::SemanticCursor;
+    // Selection covers bytes 2..5 (exactly to the end of the first line).
+    let sel = SelectionState::Range {
+        anchor: SemanticCursor::new(0, 0, 2),
+        head: SemanticCursor::new(0, 0, 5),
+    };
+    let range = block_selection_range(&sel, 0, 0);
+
+    let first = WrappedLine {
+        text: "hello".to_string(),
+        start_byte: 0,
+        end_byte: 5,
+    };
+    assert_eq!(line_selection(range, &first), Some((2, 5)));
+
+    // Following line starting at byte 5 must NOT get any selection.
+    let second = WrappedLine {
+        text: "world".to_string(),
+        start_byte: 5,
+        end_byte: 10,
+    };
+    assert_eq!(line_selection(range, &second), None);
+}
+
+#[test]
+fn extract_selection_text_extracts_modal_document_selections() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crate::model::layout::{BlockRegion, LayoutMap, MODAL_DOC_MSG_IDX, SemanticCursor};
+    use mutx_engine::Rect;
+
+    let mut layout_map = LayoutMap::new();
+    layout_map.push(BlockRegion {
+        message_idx: MODAL_DOC_MSG_IDX,
+        block_idx: 1,
+        start_byte: 0,
+        end_byte: 25,
+        text: "https://example.com/auth".to_string(),
+        prefix_cols: 0,
+        rect: Rect::new(0, 0, 30, 1),
+        hidden_ranges: Vec::new(),
+    });
+    layout_map.push(BlockRegion {
+        message_idx: MODAL_DOC_MSG_IDX,
+        block_idx: 1,
+        start_byte: 25,
+        end_byte: 45,
+        text: "?client_id=123456789".to_string(),
+        prefix_cols: 0,
+        rect: Rect::new(0, 1, 30, 1),
+        hidden_ranges: Vec::new(),
+    });
+
+    let sel = SelectionState::Range {
+        anchor: SemanticCursor::new(MODAL_DOC_MSG_IDX, 1, 0),
+        head: SemanticCursor::new(MODAL_DOC_MSG_IDX, 1, 45),
+    };
+
+    let extracted = extract_selection_text(&sel, &[], "", &layout_map, None);
+    assert_eq!(
+        extracted,
+        Some("https://example.com/auth?client_id=123456789".to_string())
+    );
+}

@@ -414,6 +414,33 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
     allow_model_stdin: false,
 };
 
+/// The skill discovery and domain expertise runner role.
+///
+/// Specialized in dynamically locating, inspecting, and synthesizing guidelines,
+/// rules, workflows, and procedures from available project and user skills (`SKILL.md`)
+/// on demand without cluttering the parent agent's persistent system prompt.
+pub const RUNNER_SKILL: RunnerPreset = RunnerPreset {
+    name: "skill",
+    system_prompt: "\
+You are a skill discovery and domain guidance runner. Your role is to locate, \
+inspect, and synthesize specialized instructions and procedures from available \
+skills (project-local `.muta/skills/`, user-global `~/.local/share/muta/skills/`, \
+`.agents/skills/`, `.claude/skills/`, etc.) to guide the delegated task. Read the \
+relevant `SKILL.md` documents and associated reference files, extract the concrete \
+rules, tool sequences, edge cases, and best practices, and return an actionable, \
+well-structured domain briefing to the calling agent. Do not modify files or ask \
+questions of the user; focus strictly on skill discovery and instruction synthesis.",
+    tool_policy: ToolPolicy {
+        allowed_tools: Some(READ_ONLY_TOOLS),
+        allow_user_interaction: false,
+        write_paths: &[],
+        command_allowlist: &[],
+    },
+    variant_pins: &[],
+    delegated: true,
+    allow_model_stdin: false,
+};
+
 /// The pool of runner presets available for master delegation.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RunnerPresetPool;
@@ -425,6 +452,7 @@ impl RunnerPresetPool {
         &RUNNER_TITLE,
         &RUNNER_CODE,
         &RUNNER_MCP_SPECIALIST,
+        &RUNNER_SKILL,
     ];
 
     /// Find a runner preset by name.
@@ -717,22 +745,23 @@ mod tests {
 
     #[test]
     fn runner_preset_pool_catalog_and_filtering() {
-        assert_eq!(RunnerPresetPool::ALL.len(), 4);
+        assert_eq!(RunnerPresetPool::ALL.len(), 5);
         assert_eq!(
             RunnerPresetPool::find("explore").map(|p| p.name),
             Some("explore")
         );
         assert_eq!(RunnerPresetPool::find("code").map(|p| p.name), Some("code"));
+        assert_eq!(RunnerPresetPool::find("skill").map(|p| p.name), Some("skill"));
         assert_eq!(RunnerPresetPool::find("nonexistent"), None);
 
         let dev_delegation = crate::MASTER_DEVELOPER;
         let dev_runners = RunnerPresetPool::admitted_for_master(&dev_delegation);
-        assert_eq!(dev_runners.len(), 4);
+        assert_eq!(dev_runners.len(), 5);
 
         let analyst_delegation = crate::MASTER_CODE_ANALYST;
         let analyst_runners = RunnerPresetPool::admitted_for_master(&analyst_delegation);
-        assert_eq!(analyst_runners.len(), 2);
+        assert_eq!(analyst_runners.len(), 3);
         let names: Vec<&str> = analyst_runners.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["explore", "title"]);
+        assert_eq!(names, vec!["explore", "title", "skill"]);
     }
 }

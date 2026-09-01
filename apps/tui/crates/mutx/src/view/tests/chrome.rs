@@ -358,7 +358,8 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
     });
     assert!(grid_row(&terminal, 0).contains("SETTINGS"));
     assert!(!grid_row(&terminal, 0).contains("⚙"));
-    assert!(grid_row(&terminal, 0).contains("Appearance"));
+    assert!(!grid_row(&terminal, 0).contains("~/workspace"));
+    assert!(!grid_row(&terminal, 0).contains("Appearance"));
     assert!(
         grid_row(&terminal, 1).contains("Main › Settings"),
         "Row 1 must show the view stack breadcrumbs"

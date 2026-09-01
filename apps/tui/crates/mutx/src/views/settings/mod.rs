@@ -27,7 +27,7 @@ use mutx_engine::{
 use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
 use crate::view::Theme;
 use crate::view_header::{
-    SettingsHead, ViewHeader, ViewHints, ViewKind, draw_view_header, draw_view_header_hints,
+    ViewHeader, ViewHints, ViewKind, draw_view_header, draw_view_header_hints,
 };
 
 /// Which pane of the Settings View currently owns keyboard focus.
@@ -170,31 +170,26 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
         area,
     );
 
-    // 5 vertical zones: Top Header (1 row), Breadcrumbs Subhead (1 row), Gap (1 row), Center Body (flexible), Bottom Footer (3 rows).
+    // 4 vertical zones: Top Header (1 row), Breadcrumbs Subhead (1 row), Center Body (flexible), Bottom Footer (3 rows).
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(8),
+            Constraint::Min(6),
             Constraint::Length(3),
         ])
         .split(area);
 
     let header_rect = vertical_chunks[0];
     let subhead_rect = vertical_chunks[1];
-    let body_rect = vertical_chunks[3];
-    let footer_rect = vertical_chunks[4];
+    let body_rect = vertical_chunks[2];
+    let footer_rect = vertical_chunks[3];
 
     let category = ConfigCategory::from_index(props.category_index);
 
-    // 1. Top Header Row
-    let header = ViewHeader::Settings(&SettingsHead {
-        workspace: props.workspace,
-        category: category.title(),
-        subtitle: category.subtitle(),
-    });
+    // 1. Top Header Row (Settings only)
+    let header = ViewHeader::Settings;
     draw_view_header(frame, header_rect, &header, props.theme);
 
     // 2. View Stack Breadcrumbs & Affordance
@@ -207,31 +202,32 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
     };
     draw_view_header_hints(frame, subhead_rect, &view_hints, props.theme);
 
-    // 3. Center Body (Dual-Pane Master-Detail Split with Contrasting Tones & Divider)
+    // 3. Center Body (Inset by 2 columns horizontally and 1 row vertically)
+    let inner_body = Rect {
+        x: body_rect.x.saturating_add(2),
+        y: body_rect.y.saturating_add(1),
+        width: body_rect.width.saturating_sub(4),
+        height: body_rect.height.saturating_sub(2),
+    };
+
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(24),
-            Constraint::Length(1),
-            Constraint::Min(40),
+            Constraint::Length(22),
+            Constraint::Min(20),
         ])
-        .split(body_rect);
+        .split(inner_body);
 
     let category_rect = body_chunks[0];
-    let divider_rect = body_chunks[1];
-    let detail_rect = body_chunks[2];
+    let detail_rect = body_chunks[1];
 
-    // Left pane contrasting surface
+    // Left pane contrasting surface (panel tone, distinct from view surface)
     frame.render_widget(
-        RtBlock::default().style(Style::default().bg(props.theme.surface())),
+        RtBlock::default().style(Style::default().bg(props.theme.panel())),
         category_rect,
     );
-    // Vertical subtle divider
-    let divider_lines: Vec<Line<'static>> = (0..divider_rect.height)
-        .map(|_| Line::from(Span::styled("│", Style::default().fg(props.theme.dim()).bg(props.theme.surface()))))
-        .collect();
-    frame.render_widget(Paragraph::new(divider_lines), divider_rect);
-    // Right pane main canvas body
+
+    // Right pane main canvas body (body tone, distinct from view surface and left nav)
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(props.theme.body())),
         detail_rect,
@@ -239,26 +235,34 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
 
     draw_categories_pane(frame, category_rect, &mut props);
 
+    // Right pane interior padding: 2 columns left & right
+    let detail_inner_rect = Rect {
+        x: detail_rect.x.saturating_add(2),
+        y: detail_rect.y,
+        width: detail_rect.width.saturating_sub(4),
+        height: detail_rect.height,
+    };
+
     let focused = props.focus == ConfigFocus::Detail;
     match category {
         ConfigCategory::Appearance => {
-            appearance::draw_appearance_detail(frame, detail_rect, &mut props, focused)
+            appearance::draw_appearance_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::Transcript => {
-            transcript::draw_transcript_detail(frame, detail_rect, &mut props, focused)
+            transcript::draw_transcript_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::Behavior => {
-            behavior::draw_behavior_detail(frame, detail_rect, &mut props, focused)
+            behavior::draw_behavior_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::WebSearch => {
-            web::draw_websearch_detail(frame, detail_rect, &mut props, focused)
+            web::draw_websearch_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::System => {
-            system::draw_system_detail(frame, detail_rect, &mut props, focused)
+            system::draw_system_detail(frame, detail_inner_rect, &mut props, focused)
         }
     }
 
-    // 4. Bottom Footer (3-Row Runner-Style)
+    // 4. Bottom Footer (3-Row Runner-Style with raised background)
     draw_footer(frame, footer_rect, props.focus, props.theme);
 
     ConfigRects {
@@ -276,7 +280,6 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
 
     for (i, cat) in ConfigCategory::ALL.iter().enumerate() {
         let is_selected = i == props.category_index;
-        let cursor = if is_selected { "›" } else { " " };
 
         let style = if is_selected && is_focused {
             Style::default()
@@ -290,17 +293,8 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
             Style::default().fg(props.theme.muted())
         };
 
-        let cursor_style = if is_selected {
-            Style::default()
-                .fg(props.theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(props.theme.dim())
-        };
-
         lines.push(Line::from(vec![
-            Span::styled(format!(" {cursor} "), cursor_style),
-            Span::styled(cat.title(), style),
+            Span::styled(format!("  {}", cat.title()), style),
         ]));
         lines.push(Line::from(""));
     }
@@ -318,7 +312,7 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
 
     let p = Paragraph::new(lines)
         .scroll(content_offset as u16, 0)
-        .style(Style::default().bg(props.theme.surface()));
+        .style(Style::default().bg(props.theme.panel()));
     frame.render_widget(p, area);
 
     if max_scroll > 0 {

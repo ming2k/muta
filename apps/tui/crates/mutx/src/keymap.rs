@@ -404,6 +404,11 @@ impl Key {
                 KeyCode::Char('b') | KeyCode::Char('B') => "alt+b",
                 KeyCode::Char('d') | KeyCode::Char('D') => "alt+d",
                 KeyCode::Char('f') | KeyCode::Char('F') => "alt+f",
+                KeyCode::Char('o') | KeyCode::Char('O') => "alt+o",
+                KeyCode::Char('p') | KeyCode::Char('P') => "alt+p",
+                KeyCode::Char('n') | KeyCode::Char('N') => "alt+n",
+                KeyCode::Up => "alt+↑",
+                KeyCode::Down => "alt+↓",
                 KeyCode::Backspace => "alt+backspace",
                 _ => "·",
             }
@@ -486,6 +491,11 @@ impl Key {
                 KeyCode::Char('b') | KeyCode::Char('B') => "Alt+B",
                 KeyCode::Char('d') | KeyCode::Char('D') => "Alt+D",
                 KeyCode::Char('f') | KeyCode::Char('F') => "Alt+F",
+                KeyCode::Char('o') | KeyCode::Char('O') => "Alt+O",
+                KeyCode::Char('p') | KeyCode::Char('P') => "Alt+P",
+                KeyCode::Char('n') | KeyCode::Char('N') => "Alt+N",
+                KeyCode::Up => "Alt+↑",
+                KeyCode::Down => "Alt+↓",
                 KeyCode::Backspace => "Alt+Backspace",
                 _ => "·",
             }
@@ -574,6 +584,31 @@ impl Key {
     pub const F5: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::F(5),
+    };
+    /// Page Up.
+    pub const PAGE_UP: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::PageUp,
+    };
+    /// Page Down.
+    pub const PAGE_DOWN: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::PageDown,
+    };
+    /// Alt+Up.
+    pub const ALT_UP: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Up,
+    };
+    /// Alt+Down.
+    pub const ALT_DOWN: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Down,
+    };
+    /// Alt+O.
+    pub const ALT_O: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Char('o'),
     };
     /// Ctrl+A.
     pub const CTRL_A: Key = Key::ctrl('a');

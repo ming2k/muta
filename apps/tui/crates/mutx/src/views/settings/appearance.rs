@@ -18,7 +18,7 @@ pub(super) fn draw_appearance_detail(
     let mut selected_line = None;
 
     lines.push(Line::from(Span::styled(
-        "Select an active color palette. Changes apply live to all panels.",
+        "Themes & palette swatches — Select an active color palette.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));

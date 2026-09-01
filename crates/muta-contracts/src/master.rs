@@ -269,6 +269,7 @@ pub const MASTER_DEVELOPER: MasterPresetDelegation = MasterPresetDelegation {
         crate::runner::RUNNER_TITLE.name,
         crate::runner::RUNNER_CODE.name,
         crate::runner::RUNNER_MCP_SPECIALIST.name,
+        crate::runner::RUNNER_SKILL.name,
     ],
     // Declared tools: everything (the host `execute_command` variant included).
     tool_scope: ToolScope::All,
@@ -286,6 +287,7 @@ pub const MASTER_CODE_ANALYST: MasterPresetDelegation = MasterPresetDelegation {
     runner_presets: &[
         crate::runner::RUNNER_EXPLORE.name,
         crate::runner::RUNNER_TITLE.name,
+        crate::runner::RUNNER_SKILL.name,
     ],
     tool_scope: ToolScope::All,
 };

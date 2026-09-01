@@ -55,7 +55,6 @@ pub trait DynamicToolSource: Send + Sync {
 /// A dynamically-discoverable list that refreshes from a source of truth.
 ///
 /// Implementations:
-/// - `muta_skills::SkillCatalog` — skills from local and remote sources.
 /// - `muta_mcp::McpCatalog` — tools from connected MCP servers.
 ///
 /// The trait is intentionally minimal: `refresh` + cadence. Each implementation

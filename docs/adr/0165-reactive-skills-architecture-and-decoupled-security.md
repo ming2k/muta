@@ -17,10 +17,11 @@ Muta's skill system has evolved through several milestones (ADR-0013, ADR-0058, 
 1. **Decouple Tool Checks from Skills Guidance**: Remove the requirement for `read_text` or `read_file` in `SkillsGuidance::is_active`. Skills metadata availability is an infrastructure-level domain property, independent of session tool allocations.
 2. **Transparent Quarantine Discovery**: Discover all project-local skills regardless of workspace trust state. If the workspace trust state for the skills domain is `Quarantined`, the skills are recorded with `enabled: false` and explicitly surfaced in TUI modals and CLI listings with a `Quarantined` status badge and clear actionable remediation (`Run /trust skills to enable`).
 3. **Eliminate Manual Reload**: Remove the `/skills reload` command and TUI `r` keybinding. Lifecycle updates are driven purely by reactive workspace events and authoritative `/trust` attestation state transitions.
-4. **Command Grammar Orthogonalization**:
+4. **Command Grammar and Discovery Simplification**:
    - `/skills`: Read-only aggregate inspection (opens the centered TUI modal or prints summary tables).
-   - `/skill show <name>` and `/skill info <name>`: Inspect individual skill documents and metadata.
-   - `muta skill init <name>` & `muta skill check <path>`: First-party CLI tooling for authoring and validating skills based on `assets/skills/skill-creator`.
+   - `@skill:<name>` (and `@name`): First-class mention syntax for binding skills directly into user prompts.
+   - `RUNNER_SKILL` (`role: "skill"`): Dedicated sub-runner role for dynamic discovery, extraction, and synthesis of skill procedures on demand, removing static catalog clutter from the system prompt.
+   - `muta skill init <name>` & `muta skill check <path>`: First-party CLI tooling for authoring and validating skills. Singular slash command `/skill` is completely retired.
 
 ## Alternatives considered
 
@@ -36,7 +37,7 @@ Rejected. Silent omission breaks user feedback loops when creating or editing pr
 - Skills are visible and discoverable across all agent profiles, including restricted agents.
 - Quarantined project skills provide clear, immediate feedback with self-serve `/trust skills` hints.
 - Zero manual reload churn; state transitions are reactive and authoritative.
-- Clear separation between plural aggregate inspection (`/skills`) and singular entity manipulation (`/skill`).
+- Clear, unified entry point: `/skills` for browsing, `@skill:<name>` for prompt binding, and `RUNNER_SKILL` for dynamic agent discovery.
 
 **Negative.**
 - Users accustomed to typing `/skills reload` or pressing `r` in the modal must rely on reactive updates or `/trust`.

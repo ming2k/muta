@@ -339,7 +339,7 @@ pub(crate) fn build_overview_body(
     report: &TokenSourceReport,
     rounds: &[TelemetryRound],
     context: ContextUsageView,
-    width: usize,
+    _width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -354,44 +354,16 @@ pub(crate) fn build_overview_body(
     } else {
         ((used as f64) / (window_max as f64)).clamp(0.0, 1.0)
     };
-    let pct = (ratio * 100.0).round() as u32;
 
-    let bar_width = 30.min(width.saturating_sub(30)).max(10);
-    let filled = ((ratio * bar_width as f64).round() as usize).min(bar_width);
-    let empty = bar_width.saturating_sub(filled);
-
-    let bar_color = if ratio < 0.70 {
-        theme.muted()
-    } else if ratio < 0.90 {
-        theme.warn()
+    let used_text = if window_max > 0 {
+        format!("{} tokens ({:.1}%)", used, ratio * 100.0)
     } else {
-        theme.err()
+        format!("{} tokens", used)
     };
-
-    let gauge_spans = vec![
-        Span::styled("    [", Style::default().fg(theme.dim())),
-        Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
-        Span::styled("░".repeat(empty), Style::default().fg(theme.dim())),
-        Span::styled("] ", Style::default().fg(theme.dim())),
-        Span::styled(
-            format!(
-                "{} / {} ({}%)",
-                fmt_tokens(used as u64),
-                if window_max > 0 {
-                    fmt_tokens(window_max as u64)
-                } else {
-                    "∞".to_string()
-                },
-                pct
-            ),
-            Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
-        ),
-    ];
-    lines.push(Line::from(gauge_spans));
 
     lines.push(kv_overview_line(
         "Used Tokens",
-        &format!("{} tokens", used),
+        &used_text,
         Style::default().fg(theme.fg()),
         theme,
     ));
@@ -399,13 +371,6 @@ pub(crate) fn build_overview_body(
         lines.push(kv_overview_line(
             "Capacity",
             &format!("{} tokens", window_max),
-            Style::default().fg(theme.muted()),
-            theme,
-        ));
-        let remaining = window_max.saturating_sub(used);
-        lines.push(kv_overview_line(
-            "Remaining",
-            &format!("{} tokens ({:.1}%)", remaining, (1.0 - ratio) * 100.0),
             Style::default().fg(theme.muted()),
             theme,
         ));
@@ -505,10 +470,9 @@ pub(crate) fn build_overview_body(
 
     if !tps_values.is_empty() {
         let avg_tps = tps_values.iter().sum::<f64>() / (tps_values.len() as f64);
-        let peak_tps = tps_values.iter().cloned().fold(0.0_f64, f64::max);
         lines.push(kv_overview_line(
             "Avg Stream Rate",
-            &format!("{:.1} tok/s  (Peak: {:.1} tok/s)", avg_tps, peak_tps),
+            &format!("{:.1} tok/s", avg_tps),
             Style::default().fg(theme.fg()),
             theme,
         ));

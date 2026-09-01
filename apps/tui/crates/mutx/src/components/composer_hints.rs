@@ -202,7 +202,7 @@ pub(crate) fn hint_row_spans(
     bg: Color,
 ) -> Vec<Span<'static>> {
     let key_style = keycap_style(theme).bg(bg);
-    let hint_style = Style::default().fg(theme.muted()).bg(bg);
+    let hint_style = theme.keycap_label_style().bg(bg);
     let verb_style = Style::default().bg(bg);
     let compact = density.compact();
 
@@ -307,9 +307,42 @@ pub(crate) fn hint_row_spans(
                 }
             } else {
                 spans.push(Span::styled(" prompt", hint_style));
+                if !compact {
+                    spans.push(Span::styled("  ", hint_style));
+                    spans.push(Span::styled(Key::PAGE_UP.display(), key_style));
+                    spans.push(Span::styled(" history", hint_style));
+                    spans.push(Span::styled("  ", hint_style));
+                    spans.push(Span::styled(Key::ALT_UP.display(), key_style));
+                    spans.push(Span::styled(" transcript", hint_style));
+                }
             }
         }
         _ => {}
+    }
+    spans
+}
+
+/// Build the hint row when a transcript step is focused (composer unfocused).
+pub(crate) fn step_focused_hint_spans(
+    density: ActionDensity,
+    theme: &Theme,
+    bg: Color,
+) -> Vec<Span<'static>> {
+    let key_style = keycap_style(theme).bg(bg);
+    let hint_style = theme.keycap_label_style().bg(bg);
+    let compact = density.compact();
+
+    let mut spans = vec![
+        Span::styled(keyvocab::ARROWS_UD, key_style),
+        Span::styled(" select", hint_style),
+        Span::styled("  ", hint_style),
+        Span::styled(Key::ENTER.display(), key_style),
+        Span::styled(" toggle", hint_style),
+    ];
+    if !compact {
+        spans.push(Span::styled("  ", hint_style));
+        spans.push(Span::styled(Key::ESC.display(), key_style));
+        spans.push(Span::styled(" compose", hint_style));
     }
     spans
 }
