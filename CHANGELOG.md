@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.27] - 2026-09-01
+
 ### Fixed
 
 - Preserve the composer input viewport during mouse-wheel browsing and
@@ -5834,7 +5836,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.26...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.27...HEAD
+[0.37.27]: https://github.com/ming2k/muta/compare/v0.37.26...v0.37.27
 [0.37.26]: https://github.com/ming2k/muta/compare/v0.37.25...v0.37.26
 [0.37.25]: https://github.com/ming2k/muta/compare/v0.37.24...v0.37.25
 [0.37.24]: https://github.com/ming2k/muta/compare/v0.37.23...v0.37.24
