@@ -67,9 +67,9 @@ mod tests {
     }
 
     #[test]
-    fn reader_field_parses_and_defaults_to_jina() {
+    fn reader_field_parses_and_defaults_to_none() {
         let cfg = WebSearchConfig::default();
-        assert_eq!(cfg.reader, "jina");
+        assert_eq!(cfg.reader, "none");
         assert!(cfg.jina_api_key.is_none());
 
         let toml = r#"

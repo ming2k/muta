@@ -155,7 +155,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         id: "chatgpt-oauth",
         label: "ChatGPT subscription",
         description: "Uses your ChatGPT Plus or Pro subscription for Codex and flagship GPT models; authorizes in the browser, no API key.",
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::OpenAiResponses,
         models: muta_providers::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://chatgpt.com/backend-api/codex/responses",
@@ -1390,11 +1390,11 @@ mod tests {
             .iter()
             .find(|t| t.id == "chatgpt-oauth")
             .unwrap();
-        assert_eq!(chatgpt.label, "ChatGPT subscription");
-        assert_eq!(openai.protocol, chatgpt.protocol);
+        assert_eq!(openai.protocol, WireProtocol::OpenAiChatCompletions);
+        assert_eq!(chatgpt.protocol, WireProtocol::OpenAiResponses);
         assert!(
-            chatgpt.models.contains(&"gpt-5.3-codex-spark"),
-            "the subscription preset must expose the Codex model allowed by OpenCode"
+            chatgpt.models.contains(&"gpt-5.6-sol"),
+            "the subscription preset must expose the Sol model seed"
         );
     }
 

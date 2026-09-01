@@ -7,15 +7,20 @@
 //! - Manual code/URL injection support for seamless CLI paste integration.
 
 use crate::oauth::config::{OAuthConfig, PortMode};
+use std::collections::HashMap;
+use std::io::{Error, ErrorKind};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+
+const MAX_CALLBACK_REQUEST_BYTES: usize = 8 * 1024;
+const CALLBACK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The outcome of an authorization attempt.
 #[derive(Debug, Clone)]
 pub enum CallbackOutcome {
     /// The authorization `code`, ready to exchange for tokens.
     Code(String),
-    /// The user denied, or the request was malformed / a CSRF mismatch.
+    /// The authorization server denied the request, or a newer login superseded it.
     Failed(String),
 }
 
@@ -142,128 +147,211 @@ async fn serve_one(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut buf = vec![0u8; 8192];
-    let n = stream.read(&mut buf).await?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let mut request_bytes = Vec::with_capacity(1024);
+    loop {
+        let mut chunk = [0u8; 1024];
+        let n = tokio::time::timeout(CALLBACK_READ_TIMEOUT, stream.read(&mut chunk))
+            .await
+            .map_err(|_| Error::new(ErrorKind::TimedOut, "OAuth callback request timed out"))??;
+        if n == 0 {
+            break;
+        }
+        request_bytes.extend_from_slice(&chunk[..n]);
+        if request_bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if request_bytes.len() >= MAX_CALLBACK_REQUEST_BYTES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "OAuth callback request headers are too large",
+            )
+            .into());
+        }
+    }
+    if request_bytes.len() > MAX_CALLBACK_REQUEST_BYTES {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "OAuth callback request headers are too large",
+        )
+        .into());
+    }
+    let request = std::str::from_utf8(&request_bytes).map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidData,
+            "OAuth callback request is not UTF-8",
+        )
+    })?;
 
     let request_line = request.lines().next().unwrap_or("");
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or("");
+    let path = request_parts.next().unwrap_or("/");
     let (pathname, query) = path.split_once('?').unwrap_or((path, ""));
 
-    let params = parse_query(query);
+    // Validate the HTTP envelope before inspecting OAuth parameters or
+    // touching the one-shot pending state. Browser probes such as /favicon.ico
+    // must be unable to cancel or complete a login.
+    if method != "GET" {
+        stream
+            .write_all(
+                b"HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\nConnection: close\r\n\r\n",
+            )
+            .await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+    if pathname != redirect_path {
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 9\r\n\r\nNot found")
+            .await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+
+    let params = match parse_query(query) {
+        Ok(params) => params,
+        Err(message) => {
+            write_html_response(
+                &mut stream,
+                "400 Bad Request",
+                &render_page(label, &message, false),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     let code = params.get("code").cloned();
     let state = params.get("state").cloned();
     let error = params.get("error").cloned();
     let error_description = params.get("error_description").cloned();
 
-    let body = {
+    let (status, body) = {
         let mut guard = pending.lock().unwrap_or_else(|e| e.into_inner());
-        let (outcome, body) = match (error.as_deref(), code.as_deref(), state.as_deref()) {
-            (Some(err), _, _) => {
+        let state_matches = guard
+            .as_ref()
+            .zip(state.as_deref())
+            .is_some_and(|(pending, actual)| pending.state == actual);
+        let (outcome, status, body) = match (error.as_deref(), code.as_deref()) {
+            (Some(err), _) if state_matches => {
                 let msg = error_description.unwrap_or_else(|| err.to_string());
                 (
                     Some(CallbackOutcome::Failed(msg.clone())),
+                    "400 Bad Request",
                     render_page(label, &msg, false),
                 )
             }
-            (_, None, _) => {
-                let msg = "missing authorization code";
-                (
-                    Some(CallbackOutcome::Failed(msg.to_string())),
-                    render_page(label, msg, false),
-                )
+            (Some(_), _) | (_, Some(_)) if !state_matches => {
+                let msg = "invalid state - potential CSRF mismatch";
+                (None, "400 Bad Request", render_page(label, msg, false))
             }
-            (_, Some(c), Some(s)) => {
-                if let Some(p) = guard.as_ref()
-                    && p.state == s
-                {
-                    (
-                        Some(CallbackOutcome::Code(c.to_string())),
-                        render_page(
-                            label,
-                            "Authorization successful! You may now close this tab and return to the terminal.",
-                            true,
-                        ),
-                    )
-                } else {
-                    (
-                        Some(CallbackOutcome::Failed(
-                            "invalid state - potential CSRF mismatch".to_string(),
-                        )),
-                        render_page(
-                            label,
-                            "Security check failed: invalid authorization state.",
-                            false,
-                        ),
-                    )
-                }
-            }
-            _ => (
-                None,
+            (_, Some(code)) => (
+                Some(CallbackOutcome::Code(code.to_string())),
+                "200 OK",
                 render_page(
                     label,
-                    "Invalid or unrecognized authorization request.",
-                    false,
+                    "Authorization successful! You may now close this tab and return to the terminal.",
+                    true,
                 ),
             ),
+            _ => {
+                let msg = "missing authorization code";
+                (None, "400 Bad Request", render_page(label, msg, false))
+            }
         };
-        if let Some(p) = guard.take()
-            && let Some(outcome) = outcome
+        if let Some(outcome) = outcome
+            && let Some(pending) = guard.take()
         {
-            let _ = p.tx.send(outcome);
+            let _ = pending.tx.send(outcome);
         }
-        body
+        (status, body)
     };
 
-    let response = if pathname == redirect_path || redirect_path.ends_with(pathname) {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-    } else if pathname == "/cancel" {
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nLogin cancelled"
-            .to_string()
-    } else {
-        "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot found".to_string()
-    };
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
+    write_html_response(&mut stream, status, &body).await?;
     Ok(())
 }
 
-fn parse_query(query: &str) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    for pair in query.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            map.insert(decode(k), decode(v));
-        }
-    }
-    map
+async fn write_html_response(
+    stream: &mut tokio::net::TcpStream,
+    status: &str,
+    body: &str,
+) -> Result<(), std::io::Error> {
+    use tokio::io::AsyncWriteExt;
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'\r\n\
+         Cache-Control: no-store\r\n\
+         Pragma: no-cache\r\n\
+         Referrer-Policy: no-referrer\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Connection: close\r\n\
+         Content-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await
 }
 
-fn decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '+' => out.push(' '),
-            '%' => {
-                let hi = chars.next();
-                let lo = chars.next();
-                if let (Some(hi), Some(lo)) = (hi, lo)
-                    && let Ok(byte) = u8::from_str_radix(&format!("{hi}{lo}"), 16)
-                {
-                    out.push(byte as char);
-                }
-            }
-            _ => out.push(c),
+fn parse_query(query: &str) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| "malformed authorization response".to_string())?;
+        let key = decode(key)?;
+        let value = decode(value)?;
+        if map.insert(key, value).is_some() {
+            return Err("duplicate authorization parameter".to_string());
         }
     }
-    out
+    Ok(map)
+}
+
+fn decode(value: &str) -> Result<String, String> {
+    let input = value.as_bytes();
+    let mut output = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        match input[index] {
+            b'+' => {
+                output.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < input.len() => {
+                let encoded = std::str::from_utf8(&input[index + 1..index + 3])
+                    .map_err(|_| "invalid percent encoding".to_string())?;
+                let byte = u8::from_str_radix(encoded, 16)
+                    .map_err(|_| "invalid percent encoding".to_string())?;
+                output.push(byte);
+                index += 3;
+            }
+            b'%' => return Err("truncated percent encoding".to_string()),
+            byte => {
+                output.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(output).map_err(|_| "authorization response is not UTF-8".to_string())
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn render_page(label: &str, message: &str, ok: bool) -> String {
+    let label = escape_html(label);
+    let message = escape_html(message);
     let title = if ok {
         format!("{label} • Authorization Successful")
     } else {
@@ -356,16 +444,45 @@ fn render_page(label: &str, message: &str, ok: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn get(port: u16, target: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    }
 
     #[test]
     fn parse_query_decodes_percent_and_plus() {
-        let q = parse_query("code=abc&state=ST&error_description=bad+request%3A+denied");
+        let q = parse_query("code=abc&state=ST&error_description=bad+request%3A+denied").unwrap();
         assert_eq!(q.get("code").map(String::as_str), Some("abc"));
         assert_eq!(q.get("state").map(String::as_str), Some("ST"));
         assert_eq!(
             q.get("error_description").map(String::as_str),
             Some("bad request: denied")
         );
+    }
+
+    #[test]
+    fn query_parser_rejects_duplicates_and_malformed_encoding() {
+        assert!(parse_query("state=a&state=b").is_err());
+        assert!(parse_query("state=%ZZ").is_err());
+        assert!(parse_query("state=%F0%9F%94%90").is_ok());
+    }
+
+    #[test]
+    fn rendered_page_escapes_provider_controlled_text() {
+        let page = render_page("<provider>", "denied<script>alert(1)</script>", false);
+        assert!(!page.contains("<provider>"));
+        assert!(!page.contains("<script>"));
+        assert!(page.contains("&lt;provider&gt;"));
     }
 
     #[tokio::test]
@@ -403,5 +520,114 @@ mod tests {
         let server = CallbackServer::start_for(&cfg).await.expect("dynamic bind");
         assert!(server.bound_port() > 0);
         drop(server);
+    }
+
+    #[tokio::test]
+    async fn unrelated_and_invalid_state_requests_do_not_consume_login() {
+        let cfg = OAuthConfig::builder("strict_callback")
+            .oauth_host("127.0.0.1")
+            .port_mode(PortMode::Dynamic)
+            .oauth_path("/auth/callback")
+            .build();
+        let server = CallbackServer::start_for(&cfg).await.unwrap();
+        let mut outcome = server.wait_for_code("expected-state".to_string());
+
+        assert!(
+            get(server.bound_port(), "/favicon.ico")
+                .await
+                .starts_with("HTTP/1.1 404")
+        );
+        assert!(
+            get(
+                server.bound_port(),
+                "/auth/callback?code=attacker&state=wrong"
+            )
+            .await
+            .starts_with("HTTP/1.1 400")
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut outcome)
+                .await
+                .is_err(),
+            "invalid requests must leave the real callback pending"
+        );
+
+        let success = get(
+            server.bound_port(),
+            "/auth/callback?code=real-code&state=expected-state",
+        )
+        .await;
+        assert!(success.starts_with("HTTP/1.1 200"));
+        assert!(success.contains("Cache-Control: no-store\r\n"));
+        assert!(success.contains("Pragma: no-cache\r\n"));
+        assert!(success.contains("X-Content-Type-Options: nosniff\r\n"));
+        assert!(success.contains("Content-Security-Policy:"));
+        assert!(
+            matches!(outcome.await.unwrap(), CallbackOutcome::Code(code) if code == "real-code")
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_missing_state_duplicate_params_and_invalid_encoding_are_rejected() {
+        let cfg = OAuthConfig::builder("hardening_callback")
+            .oauth_host("127.0.0.1")
+            .port_mode(PortMode::Dynamic)
+            .oauth_path("/callback")
+            .build();
+        let server = CallbackServer::start_for(&cfg).await.unwrap();
+        let outcome = server.wait_for_code("expected-state".to_string());
+
+        // 1. Missing state
+        let resp = get(server.bound_port(), "/callback?code=mycode").await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+        assert!(resp.contains("Cache-Control: no-store"));
+
+        // 2. Duplicate code parameter
+        let resp = get(
+            server.bound_port(),
+            "/callback?code=c1&code=c2&state=expected-state",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+
+        // 3. Duplicate state parameter
+        let resp = get(
+            server.bound_port(),
+            "/callback?code=mycode&state=s1&state=expected-state",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+
+        // 4. Invalid percent encoding in code or state
+        let resp = get(
+            server.bound_port(),
+            "/callback?code=%ZZ&state=expected-state",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+
+        // 5. Truncated percent encoding
+        let resp = get(
+            server.bound_port(),
+            "/callback?code=test%2&state=expected-state",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+
+        // 6. HTML injection in error description
+        let resp = get(
+            server.bound_port(),
+            "/callback?error=access_denied&error_description=%3Cscript%3Ealert(1)%3C%2Fscript%3E&state=expected-state",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 400"));
+        assert!(!resp.contains("<script>alert(1)</script>"));
+        assert!(resp.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+
+        // The outcome channel received the failure without crashing
+        assert!(matches!(
+            outcome.await.unwrap(),
+            CallbackOutcome::Failed(msg) if msg.contains("<script>")
+        ));
     }
 }

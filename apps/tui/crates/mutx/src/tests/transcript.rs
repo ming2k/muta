@@ -459,3 +459,40 @@ async fn unsent_restore_preserves_in_progress_draft() {
     );
     assert_eq!(app.input, "recalled from queue");
 }
+
+#[test]
+fn render_frame_computes_max_scroll_for_overflowing_transcript() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "test-session".to_string();
+
+    // Create enough messages to overflow the viewport
+    let mut messages = Vec::new();
+    for i in 0..50 {
+        messages.push(TranscriptMessage::new(
+            Role::User,
+            format!("Message line {i}: some reasonably long content that takes up vertical space in the transcript area"),
+        ));
+    }
+    app.messages = messages;
+
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+    terminal.draw(|f| {
+        crate::event_loop::render_frame(&mut app, f, "test-session");
+    });
+
+    assert!(
+        app.content_lines > app.view_height as usize,
+        "content should exceed view height"
+    );
+    assert!(
+        app.max_scroll > 0,
+        "max_scroll should be non-zero when content overflows viewport"
+    );
+    assert_eq!(
+        app.max_scroll,
+        app.content_lines
+            .saturating_sub(app.view_height as usize)
+            .min(u16::MAX as usize) as u16,
+        "max_scroll must equal content_lines - view_height"
+    );
+}

@@ -342,7 +342,7 @@ async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
     let mut server = Server::new_async().await;
     let url = format!("{}/v1/chat/completions", server.url());
     let body = sse_body(&[
-        r#"{"choices":[{"delta":{"content":"{\"tool\":\"bash\",\"arguments\":{\"command\":\"ls\"}}"}}"#,
+        r#"{"choices":[{"delta":{"content":"{\"tool\":\"bash\",\"arguments\":{\"command\":\"ls\"}}"}}]}"#,
         r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}]}"#,
         "[DONE]",
     ]);
@@ -1030,4 +1030,121 @@ async fn list_models_returns_empty_error_when_data_array_is_empty() {
     // An empty live list is reported as Empty (a failure), so the catalog
     // keeps the snapshot rather than blanking the instance.
     assert!(matches!(list_models(req).await, Err(ModelListError::Empty)));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// OAuth wire & concurrency validation
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn oauth_token_endpoint_with_empty_access_token_fails() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/token")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"access_token":"","token_type":"Bearer"}"#)
+        .create_async()
+        .await;
+
+    let cfg = muta_providers::oauth::OAuthConfig::builder("test_empty")
+        .token_url(format!("{}/token", server.url()))
+        .build();
+
+    let client = reqwest::Client::new();
+    let pkce = muta_providers::oauth::PkceCodes::generate();
+    let res = muta_providers::oauth::token::exchange_code(
+        &client,
+        &cfg,
+        "test_code",
+        &pkce,
+        "http://localhost:1234/callback",
+    )
+    .await;
+
+    assert!(
+        matches!(res, Err(muta_providers::oauth::AuthError::Decode(msg)) if msg.contains("empty access_token")),
+        "empty access token must fail decode validation"
+    );
+}
+
+#[tokio::test]
+async fn oauth_browser_login_validates_oidc_nonce() {
+    use base64::Engine;
+    let mut server = Server::new_async().await;
+    let client = reqwest::Client::new();
+
+    // 1. Correct nonce succeeds
+    let cfg_good = muta_providers::oauth::OAuthConfig::builder("test_oidc_good")
+        .token_url(format!("{}/token_good", server.url()))
+        .send_nonce(true)
+        .build();
+    let login_good = muta_providers::oauth::OAuth::new(cfg_good)
+        .begin_browser_login()
+        .await
+        .unwrap();
+
+    let good_claims = serde_json::json!({
+        "sub": "user_123",
+        "nonce": login_good.nonce,
+        "exp": 2_000_000_000
+    });
+    let good_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(good_claims.to_string().as_bytes());
+    let good_id_token = format!("eyJhbGciOiJub25lIn0.{good_payload}.sig");
+
+    let _mock_good = server
+        .mock("POST", "/token_good")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{"access_token":"valid_tok","id_token":"{good_id_token}","token_type":"Bearer"}}"#
+        ))
+        .create_async()
+        .await;
+
+    let expected_state = login_good.state.clone();
+    login_good
+        .inject_manual_input(&format!("code=mycode&state={expected_state}"))
+        .unwrap();
+    let tok_good = login_good.complete(&client).await;
+    assert!(tok_good.is_ok());
+
+    // 2. Mismatched nonce fails
+    let cfg_bad = muta_providers::oauth::OAuthConfig::builder("test_oidc_bad")
+        .token_url(format!("{}/token_bad", server.url()))
+        .send_nonce(true)
+        .build();
+    let login_bad = muta_providers::oauth::OAuth::new(cfg_bad)
+        .begin_browser_login()
+        .await
+        .unwrap();
+
+    let bad_claims = serde_json::json!({
+        "sub": "user_123",
+        "nonce": "mismatched_nonce_from_attacker",
+        "exp": 2_000_000_000
+    });
+    let bad_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(bad_claims.to_string().as_bytes());
+    let bad_id_token = format!("eyJhbGciOiJub25lIn0.{bad_payload}.sig");
+
+    let _mock_bad = server
+        .mock("POST", "/token_bad")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{"access_token":"valid_tok","id_token":"{bad_id_token}","token_type":"Bearer"}}"#
+        ))
+        .create_async()
+        .await;
+
+    let expected_state = login_bad.state.clone();
+    login_bad
+        .inject_manual_input(&format!("code=mycode&state={expected_state}"))
+        .unwrap();
+    let tok_bad = login_bad.complete(&client).await;
+    assert!(
+        matches!(tok_bad, Err(muta_providers::oauth::AuthError::Authorization(msg)) if msg.contains("OIDC nonce mismatch"))
+    );
 }

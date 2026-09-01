@@ -6,19 +6,10 @@ use muta_contracts::{Model, WireProtocol};
 
 use super::ProviderPresetSpec;
 
-/// GPT-5.x models served over the ChatGPT subscription backend (the Codex
-/// Responses API). These are the models a ChatGPT Pro/PLUS plan unlocks; the
-/// Responses transport routes them to `chatgpt.com/backend-api/codex/responses`.
-/// Each id exists in the model registry.
-pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.3-codex-spark",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-];
+/// Entitlement-neutral seed for the ChatGPT subscription backend. Live Codex
+/// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
+/// signed-in account; the static seed never guesses plan-specific access.
+pub const CHATGPT_BUILTIN_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -27,7 +18,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -38,7 +29,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-terra",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -49,7 +40,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-luna",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -57,11 +48,8 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
-    // ── GPT (OpenAI) ───────────────────────────────────────────────────────
-    // The current frontier chat family served over the OpenAI chat-completions
-    // API. All reason (surfaced via the `reasoning_content` stream) and take
-    // text+image input. Context windows and pricing per OpenAI's model docs;
-    // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
+    // Non-seeded models retained solely as metadata for ids returned by the
+    // account-specific live Codex catalog.
     Model {
         id: "gpt-5.5",
         family: "gpt",
@@ -84,34 +72,12 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
-    Model {
-        id: "gpt-5.4",
-        family: "gpt",
-        context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningSummary,
-        tool_call: true,
-        vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
-    },
-    Model {
-        id: "gpt-5.4-mini",
-        family: "gpt",
-        context_window: 400_000,
-        thinking: ThinkingSupport::ReasoningSummary,
-        tool_call: true,
-        vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
-    },
 ];
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: super::unsupported_prompt_cache,
+    prompt_cache: super::openai::prompt_cache_for_model,
     id: "chatgpt-oauth",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
@@ -120,8 +86,33 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
     // for each account and its capability metadata is trusted.
-    protocol: WireProtocol::OpenAiChatCompletions,
+    protocol: WireProtocol::OpenAiResponses,
     models: CHATGPT_BUILTIN_MODELS,
     discovery: true,
     fitting: true,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muta_contracts::CacheRetention;
+
+    #[test]
+    fn seed_is_entitlement_neutral_and_uses_responses() {
+        assert_eq!(
+            CHATGPT_BUILTIN_MODELS,
+            &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        );
+        assert_eq!(PRESET_SPEC.protocol, WireProtocol::OpenAiResponses);
+    }
+
+    #[test]
+    fn gpt_5_6_uses_codex_prompt_cache_controls() {
+        let capabilities = (PRESET_SPEC.prompt_cache)("gpt-5.6-sol").materialize();
+        assert_eq!(
+            capabilities.default_retention,
+            Some(CacheRetention::ThirtyMinutes)
+        );
+        assert!(capabilities.routing_key_supported);
+    }
+}

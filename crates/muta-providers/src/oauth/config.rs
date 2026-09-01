@@ -84,7 +84,7 @@ pub enum TokenRequestFormat {
 /// Fully flexible OAuth2 client configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthConfig {
-    /// `auth.toml` key under which this provider's tokens persist.
+    /// Stable integration id used for endpoint selection and diagnostics.
     pub provider_id: Cow<'static, str>,
     /// Public OAuth client id registered with the provider.
     pub client_id: Cow<'static, str>,
@@ -567,7 +567,9 @@ pub fn chatgpt_preset() -> OAuthConfig {
             "https://auth.openai.com/api/accounts/deviceauth/usercode",
         ),
         grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed("openid profile email offline_access"),
+        scope: Cow::Borrowed(
+            "openid profile email offline_access api.connectors.read api.connectors.invoke",
+        ),
         extra_authorize_params: vec![
             (
                 Cow::Borrowed("id_token_add_organizations"),
@@ -641,8 +643,7 @@ pub static XAI: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(xai_
 pub static CHATGPT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(chatgpt_preset);
 pub static COPILOT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(copilot_preset);
 
-/// Resolve a config by its `auth.toml` provider-id key (`"xai"` / `"chatgpt"`
-/// / `"copilot"` / `"google-antigravity"`).
+/// Resolve a config by its stable OAuth integration id.
 pub fn config_by_provider_id(id: &str) -> Option<OAuthConfig> {
     match id {
         "xai" => Some(xai_preset()),
@@ -682,6 +683,16 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "codex_cli_simplified_flow" && v == "true"),
             "codex_cli_simplified_flow=true must be present"
+        );
+        assert!(
+            cfg.scope
+                .split_whitespace()
+                .any(|scope| scope == "api.connectors.read")
+        );
+        assert!(
+            cfg.scope
+                .split_whitespace()
+                .any(|scope| scope == "api.connectors.invoke")
         );
     }
 

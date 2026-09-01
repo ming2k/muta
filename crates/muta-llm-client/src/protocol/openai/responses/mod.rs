@@ -24,6 +24,41 @@ use std::sync::{Arc, Mutex};
 use crate::transport::{decode_response_json, ensure_success, transport_error};
 use crate::{Client, Endpoint};
 
+fn decode_stream_payload(
+    data: &str,
+    label: &'static str,
+) -> Result<serde_json::Value, ProviderError> {
+    let value = serde_json::from_str::<serde_json::Value>(data).map_err(|error| {
+        ProviderError::new(
+            label,
+            ProviderErrorKind::Decode,
+            format!("Invalid JSON in Responses stream: {error}"),
+        )
+    })?;
+    match value["type"].as_str() {
+        Some("response.failed") => Err(ProviderError::new(
+            label,
+            ProviderErrorKind::Protocol,
+            format!("Responses stream failed: {}", value["response"]["error"]),
+        )),
+        Some("error") => Err(ProviderError::new(
+            label,
+            ProviderErrorKind::Protocol,
+            format!("Responses stream error: {}", value["error"]),
+        )),
+        _ => Ok(value),
+    }
+}
+
+fn models_etag(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("x-models-etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// OpenAI Responses-API provider (ChatGPT subscription backend).
 pub struct OpenAiResponsesProvider {
     pub endpoint: Endpoint,
@@ -192,15 +227,20 @@ impl OpenAiResponsesProvider {
                 "OAuth token rejected by {} (401 Unauthorized); attempting force-refresh and retry",
                 self.label()
             );
-            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
-                let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
-                if !is_stream {
-                    retry_req = retry_req.timeout(self.client.request_timeout());
-                }
-                if let Ok(retried_resp) = retry_req.send().await {
-                    return ensure_success(retried_resp, self.label()).await;
-                }
+            let refreshed_auth = self
+                .endpoint
+                .force_refresh_auth_after(&auth.token)
+                .await
+                .map_err(|error| ProviderError::authentication(self.label(), error))?;
+            let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+            if !is_stream {
+                retry_req = retry_req.timeout(self.client.request_timeout());
             }
+            let retried_resp = retry_req
+                .send()
+                .await
+                .map_err(|error| transport_error(self.label(), error))?;
+            return ensure_success(retried_resp, self.label()).await;
         }
 
         ensure_success(response, self.label()).await
@@ -330,10 +370,9 @@ impl Provider for OpenAiResponsesProvider {
         let label = self.label();
         let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
-
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
-            let value: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
+            let value = decode_stream_payload(&data, label)?;
             // Accumulate only output_text deltas on the text-only path.
             if value["type"].as_str() == Some("response.output_text.delta") {
                 Ok(value["delta"].as_str().unwrap_or("").to_string())
@@ -354,6 +393,7 @@ impl Provider for OpenAiResponsesProvider {
         let label = self.label();
         let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
+        let model_catalog_etag = models_etag(resp.headers());
 
         // One stateful parser threads the function-call item state across the
         // whole stream; each SSE payload becomes zero or more events. Terminal
@@ -364,15 +404,9 @@ impl Provider for OpenAiResponsesProvider {
         let route = self.route_fingerprint();
         let stream = crate::sse::data_payloads(resp, label).map(move |item| {
             let data = item?;
-            if serde_json::from_str::<serde_json::Value>(&data).is_err() {
-                return Err(ProviderError::new(
-                    label,
-                    ProviderErrorKind::Decode,
-                    "Invalid JSON in stream payload",
-                ));
-            }
+            let value = decode_stream_payload(&data, label)?;
             let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
-            let mut events = p.parse(&data);
+            let mut events = p.parse_value(&value);
             for event in &mut events {
                 if let ProviderStreamEvent::Completed(meta) = event
                     && let Some(artifacts) = meta.artifacts.as_mut()
@@ -389,11 +423,44 @@ impl Provider for OpenAiResponsesProvider {
             }
             Ok::<_, ProviderError>(events)
         });
-        Ok(stream
-            .flat_map(|result| match result {
-                Ok(events) => futures::stream::iter(events.into_iter().map(Ok).collect::<Vec<_>>()),
-                Err(error) => futures::stream::iter(vec![Err(error)]),
-            })
-            .boxed())
+        let events = stream.flat_map(|result| match result {
+            Ok(events) => futures::stream::iter(events.into_iter().map(Ok).collect::<Vec<_>>()),
+            Err(error) => futures::stream::iter(vec![Err(error)]),
+        });
+        let controls = futures::stream::iter(
+            model_catalog_etag
+                .into_iter()
+                .map(|etag| Ok(ProviderStreamEvent::ModelCatalogEtag(etag))),
+        );
+        Ok(controls.chain(events).boxed())
+    }
+}
+
+#[cfg(test)]
+mod stream_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_sse_payload_is_a_decode_error() {
+        let error = decode_stream_payload("{", "ChatGPT").unwrap_err();
+        assert_eq!(error.kind(), ProviderErrorKind::Decode);
+    }
+
+    #[test]
+    fn terminal_sse_failures_are_not_silently_ignored() {
+        for payload in [
+            r#"{"type":"response.failed","response":{"error":{"message":"denied"}}}"#,
+            r#"{"type":"error","error":{"message":"denied"}}"#,
+        ] {
+            let error = decode_stream_payload(payload, "ChatGPT").unwrap_err();
+            assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+        }
+    }
+
+    #[test]
+    fn models_etag_header_becomes_a_catalog_control_event() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("X-Models-Etag", "  etag-42  ".parse().unwrap());
+        assert_eq!(models_etag(&headers).as_deref(), Some("etag-42"));
     }
 }

@@ -78,7 +78,7 @@ pub async fn request_device_code_at(
             crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
         })?;
     let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let text = crate::oauth::token::read_response_text(response, "device code response").await?;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
@@ -152,7 +152,8 @@ where
             })?;
 
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+        let text =
+            crate::oauth::token::read_response_text(response, "device token response").await?;
 
         match classify_token_response(status.as_u16(), &text) {
             TokenPollOutcome::Success(tokens) => return Ok(tokens),

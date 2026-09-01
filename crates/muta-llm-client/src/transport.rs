@@ -49,20 +49,79 @@ pub async fn ensure_success(
         Some(detail) => format!("{provider} HTTP {status}: {detail}"),
         None => format!("{provider} HTTP {status}"),
     };
-    let kind = match status.as_u16() {
-        401 | 403 => ProviderErrorKind::Authentication,
-        408 => ProviderErrorKind::Timeout,
-        429 => ProviderErrorKind::RateLimited,
-        400 | 404 | 405 | 409 | 410 | 413 | 415 | 422 => ProviderErrorKind::InvalidRequest,
-        _ if status.is_server_error() => ProviderErrorKind::Upstream,
-        _ => ProviderErrorKind::Protocol,
-    };
+    let kind = classify_http_error(status, &body);
     let error = ProviderError::new(provider, kind, message).with_status(status.as_u16());
     if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
         Err(error.retryable(retry_after))
     } else {
         Err(error)
     }
+}
+
+fn classify_http_error(status: reqwest::StatusCode, body: &str) -> ProviderErrorKind {
+    match status.as_u16() {
+        401 | 403 => ProviderErrorKind::Authentication,
+        408 => ProviderErrorKind::Timeout,
+        429 => ProviderErrorKind::RateLimited,
+        400 | 413 | 422 if is_context_overflow_payload(body) => ProviderErrorKind::ContextOverflow,
+        400 | 404 | 405 | 409 | 410 | 413 | 415 | 422 => ProviderErrorKind::InvalidRequest,
+        _ if status.is_server_error() => ProviderErrorKind::Upstream,
+        _ => ProviderErrorKind::Protocol,
+    }
+}
+
+/// Conservatively recognize the untyped context-overflow errors returned by
+/// OpenAI-compatible, Anthropic-compatible, and Google-compatible endpoints.
+/// Error codes are exact; prose requires both a context/token subject and an
+/// overflow predicate so unrelated `max_tokens` validation errors stay 400s.
+fn is_context_overflow_payload(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let has_known_code = lower
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|token| {
+            matches!(
+                token,
+                "context_length_exceeded"
+                    | "context_window_exceeded"
+                    | "prompt_too_long"
+                    | "input_too_long"
+            )
+        });
+    if has_known_code {
+        return true;
+    }
+
+    let explicitly_too_long = [
+        "prompt is too long",
+        "prompt too long",
+        "input is too long",
+        "too many input tokens",
+        "too many tokens",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+    let context_subject = [
+        "context length",
+        "context window",
+        "context limit",
+        "context size",
+        "input token count",
+        "token limit",
+    ]
+    .iter()
+    .any(|subject| lower.contains(subject));
+    let overflow_predicate = [
+        "exceed",
+        "maximum",
+        "too long",
+        "too large",
+        "over limit",
+        "greater than",
+    ]
+    .iter()
+    .any(|predicate| lower.contains(predicate));
+
+    explicitly_too_long || (context_subject && overflow_predicate)
 }
 
 /// Keep structured provider diagnostics, but do not surface a reverse
@@ -540,6 +599,45 @@ mod tests {
         assert_eq!(
             redact_url_credentials("(https://x.test/?key=)"),
             "(https://x.test/?key=)"
+        );
+    }
+
+    #[test]
+    fn context_overflow_payload_detection_is_conservative() {
+        assert!(is_context_overflow_payload(
+            "{\"error\":{\"message\":\"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.\"}}"
+        ));
+        assert!(is_context_overflow_payload(
+            "{\"error\":{\"message\":\"prompt is too long for model\"}}"
+        ));
+        assert!(is_context_overflow_payload("context_length_exceeded"));
+        assert!(is_context_overflow_payload(
+            "The input token count exceeds the maximum number of tokens allowed"
+        ));
+        assert!(!is_context_overflow_payload(
+            "{\"error\":{\"message\":\"invalid api key provided\"}}"
+        ));
+        assert!(!is_context_overflow_payload(
+            "{\"error\":{\"message\":\"max_tokens must be greater than zero\"}}"
+        ));
+    }
+
+    #[test]
+    fn http_error_classification_promotes_only_context_failures() {
+        assert_eq!(
+            classify_http_error(reqwest::StatusCode::BAD_REQUEST, "context_length_exceeded"),
+            ProviderErrorKind::ContextOverflow
+        );
+        assert_eq!(
+            classify_http_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                "max_tokens must be greater than zero"
+            ),
+            ProviderErrorKind::InvalidRequest
+        );
+        assert_eq!(
+            classify_http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "too many tokens"),
+            ProviderErrorKind::RateLimited
         );
     }
 }

@@ -38,7 +38,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -49,7 +49,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -60,7 +60,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-terra",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -71,7 +71,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-luna",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -252,7 +252,7 @@ const OPENAI_IN_MEMORY_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::
     reports_misses: false,
 };
 
-fn prompt_cache_for_model(model: &str) -> muta_contracts::PromptCacheSpec {
+pub(super) fn prompt_cache_for_model(model: &str) -> muta_contracts::PromptCacheSpec {
     if model == "gpt-5.6" || model.starts_with("gpt-5.6-") {
         OPENAI_GPT_56_CACHE
     } else if model == "gpt-5.5" || model.starts_with("gpt-5.5-") {

@@ -181,9 +181,12 @@ impl Provider for RetryOnceProvider {
                 .retryable(Some(1))),
             ])))
         } else {
-            Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::TextDelta("done".to_string()),
-            )])))
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("done".to_string())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ])))
         }
     }
 }
@@ -237,9 +240,12 @@ impl Provider for PartialToolRetryProvider {
                 .retryable(None)),
             ])))
         } else {
-            Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::TextDelta("done".to_string()),
-            )])))
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("done".to_string())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ])))
         }
     }
 }
@@ -283,14 +289,17 @@ impl Provider for ToolThenRetryProvider {
             .push(provider_history_snapshot(&request.messages));
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         match attempt {
-            0 | 2 => Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::ToolCallDelta {
+            0 | 2 => Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::ToolCallDelta {
                     index: 0,
                     id: Some(if attempt == 0 { "call" } else { "retry-call" }.to_string()),
                     name: Some("retry_read".to_string()),
                     arguments: "{}".to_string(),
-                },
-            )]))),
+                }),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ]))),
             1 => Ok(Box::pin(stream::iter(vec![Err(
                 muta_contracts::ProviderError::new(
                     "mock",
@@ -299,9 +308,12 @@ impl Provider for ToolThenRetryProvider {
                 )
                 .retryable(None),
             )]))),
-            _ => Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::TextDelta("done".to_string()),
-            )]))),
+            _ => Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("done".to_string())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ]))),
         }
     }
 }

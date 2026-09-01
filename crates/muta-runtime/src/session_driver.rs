@@ -313,12 +313,21 @@ impl SessionDriver {
                 build_sessions_overview(&session).await,
             ));
         }
-        #[derive(Debug)]
         enum OAuthResult {
-            Authorize,
-            Connect { provider_id: String, success: bool },
+            Authorize {
+                auth: muta_contracts::ConnectionAuth,
+                provider: String,
+                tokens: Option<muta_providers::oauth::TokenSet>,
+            },
+            Connect {
+                provider_id: String,
+                success: bool,
+            },
         }
         let mut active_oauth_task: Option<tokio::task::JoinHandle<OAuthResult>> = None;
+        let mut pending_oauth_authorization: Option<
+            crate::handlers_provider::PendingOAuthAuthorization,
+        > = None;
         loop {
             let req = tokio::select! {
                 res_opt = req_rx.recv() => {
@@ -335,7 +344,19 @@ impl SessionDriver {
                     active_oauth_task = None;
                     if let Ok(res) = oauth_res {
                         match res {
-                            OAuthResult::Authorize => {}
+                            OAuthResult::Authorize { auth, provider, tokens } => {
+                                pending_oauth_authorization = tokens.map(|tokens| {
+                                    crate::handlers_provider::PendingOAuthAuthorization {
+                                        auth,
+                                        tokens,
+                                    }
+                                });
+                                if pending_oauth_authorization.is_some() {
+                                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                                        muta_contracts::ConnectStatus::Done { provider },
+                                    ));
+                                }
+                            }
                             OAuthResult::Connect { provider_id, success } => {
                                 if success {
                                     crate::handlers_provider::connect_post_oauth(
@@ -461,6 +482,7 @@ impl SessionDriver {
                     preset_id,
                     client_identity,
                 } => {
+                    let pending_authorization = pending_oauth_authorization.take();
                     crate::handlers_provider::add(
                         crate::handlers_provider::ProviderEnv {
                             config: &mut config,
@@ -481,6 +503,7 @@ impl SessionDriver {
                             preset_id,
                             client_identity,
                         },
+                        pending_authorization,
                     )
                     .await;
                 }
@@ -507,16 +530,24 @@ impl SessionDriver {
                     if let Some(task) = active_oauth_task.take() {
                         task.abort();
                     }
+                    pending_oauth_authorization = None;
                     let resp_tx_clone = resp_tx.clone();
+                    let provider = auth.oauth_provider_id().unwrap_or("oauth").to_string();
                     active_oauth_task = Some(tokio::spawn(async move {
-                        crate::handlers_provider::authorize(&resp_tx_clone, method, auth).await;
-                        OAuthResult::Authorize
+                        let tokens =
+                            crate::handlers_provider::authorize(&resp_tx_clone, method, auth).await;
+                        OAuthResult::Authorize {
+                            auth,
+                            provider,
+                            tokens,
+                        }
                     }));
                 }
                 AgentRequest::CancelAuthorizeOAuth => {
                     if let Some(task) = active_oauth_task.take() {
                         task.abort();
                     }
+                    pending_oauth_authorization = None;
                     let _ = resp_tx.send(AgentResponse::ConnectStatus(
                         muta_contracts::ConnectStatus::Failed {
                             provider: "oauth".to_string(),

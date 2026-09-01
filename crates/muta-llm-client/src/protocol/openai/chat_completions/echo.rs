@@ -92,6 +92,9 @@ impl ToolCallEchoFilter {
     /// so a trailing echo is dropped at [`finish`](Self::finish)).
     pub fn observe(&mut self, event: ProviderStreamEvent) -> Vec<ProviderStreamEvent> {
         match event {
+            ProviderStreamEvent::ModelCatalogEtag(etag) => {
+                vec![ProviderStreamEvent::ModelCatalogEtag(etag)]
+            }
             ProviderStreamEvent::TextDelta(text) => {
                 let emitted = self.feed(&text);
                 if emitted.is_empty() {

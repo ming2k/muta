@@ -149,6 +149,12 @@ impl ResponsesStream {
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             return Vec::new();
         };
+        self.parse_value(&value)
+    }
+
+    /// Parse an already-decoded event. Transport adapters use this entry point
+    /// so validation and event assembly share one JSON decode.
+    pub fn parse_value(&mut self, value: &Value) -> Vec<ProviderStreamEvent> {
         let mut events = Vec::new();
         let event_type = value["type"].as_str().unwrap_or("");
         match event_type {
@@ -258,9 +264,9 @@ impl ResponsesStream {
                     },
                 ));
             }
-            // `response.created`, `response.in_progress`, `*.added`/`*.done`
-            // for text/reasoning parts, and `response.failed` carry no harness-
-            // relevant payload; they are intentionally ignored.
+            // `response.created`, `response.in_progress`, and `*.added`/`*.done`
+            // for text/reasoning parts carry no harness-relevant payload.
+            // Terminal failures are rejected by the transport before parsing.
             _ => {}
         }
         events

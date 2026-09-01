@@ -1915,6 +1915,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::BackgroundJobCompleted(outcome) => {
                 Some(format!("background-job-completed {}", outcome.job_id.0))
             }
+            AgentEvent::CatalogInvalidated => Some("catalog-invalidated".to_string()),
         })
         .collect()
 }

@@ -102,6 +102,31 @@ fn scroll_tick(app: &mut App, down: bool) {
     }
 }
 
+fn scroll_transcript_page(app: &mut App, down: bool) {
+    let step = app.view_height.saturating_sub(1).max(1);
+    app.pin_summary_line = None;
+    if down {
+        app.scroll = app.scroll.saturating_add(step).min(app.max_scroll);
+        if app.scroll >= app.max_scroll {
+            app.follow_bottom = true;
+        }
+    } else {
+        app.follow_bottom = false;
+        app.scroll = app.scroll.saturating_sub(step);
+    }
+}
+
+fn scroll_transcript_to_edge(app: &mut App, bottom: bool) {
+    app.pin_summary_line = None;
+    if bottom {
+        app.scroll = app.max_scroll;
+        app.follow_bottom = true;
+    } else {
+        app.scroll = 0;
+        app.follow_bottom = false;
+    }
+}
+
 fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts::LoginMethod>) {
     if app.active_modal() != Modal::ProviderPreset {
         return;
@@ -1486,10 +1511,7 @@ pub(super) async fn dispatch_action(
                 }
                 *scroll = scroll.saturating_sub(step);
             } else {
-                let step = app.view_height.saturating_sub(1).max(1);
-                app.follow_bottom = false;
-                app.pin_summary_line = None;
-                app.scroll = app.scroll.saturating_sub(step);
+                scroll_transcript_page(app, false);
             }
         }
         input::InputAction::ScrollPageDown => {
@@ -1502,12 +1524,7 @@ pub(super) async fn dispatch_action(
                 }
                 *scroll = scroll.saturating_add(step);
             } else {
-                let step = app.view_height.saturating_sub(1).max(1);
-                app.pin_summary_line = None;
-                app.scroll = app.scroll.saturating_add(step).min(app.max_scroll);
-                if app.scroll >= app.max_scroll {
-                    app.follow_bottom = true;
-                }
+                scroll_transcript_page(app, true);
             }
         }
         input::InputAction::ScrollTop => {
@@ -1517,9 +1534,7 @@ pub(super) async fn dispatch_action(
                 }
                 *scroll = 0;
             } else {
-                app.follow_bottom = false;
-                app.pin_summary_line = None;
-                app.scroll = 0;
+                scroll_transcript_to_edge(app, false);
             }
         }
         input::InputAction::ScrollBottom => {
@@ -1531,9 +1546,7 @@ pub(super) async fn dispatch_action(
                 }
                 *scroll = usize::MAX;
             } else {
-                app.pin_summary_line = None;
-                app.scroll = app.max_scroll;
-                app.follow_bottom = true;
+                scroll_transcript_to_edge(app, true);
             }
         }
         input::InputAction::PermissionDetailsUp => {
@@ -2469,6 +2482,59 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
         );
     }
     let _ = runtime;
+}
+
+#[cfg(test)]
+mod transcript_scroll_tests {
+    use super::*;
+
+    fn scrollable_app() -> App {
+        let mut app = crate::tests::new_app_for_relay_tests();
+        app.max_scroll = 100;
+        app.scroll = 100;
+        app.view_height = 20;
+        app.follow_bottom = true;
+        app
+    }
+
+    #[test]
+    fn wheel_ticks_move_the_transcript_and_rearm_bottom_follow() {
+        let mut app = scrollable_app();
+
+        scroll_tick(&mut app, false);
+        assert_eq!(app.scroll, 96);
+        assert!(!app.follow_bottom);
+
+        scroll_tick(&mut app, true);
+        assert_eq!(app.scroll, 100);
+        assert!(app.follow_bottom);
+    }
+
+    #[test]
+    fn page_navigation_uses_the_measured_viewport() {
+        let mut app = scrollable_app();
+
+        scroll_transcript_page(&mut app, false);
+        assert_eq!(app.scroll, 81);
+        assert!(!app.follow_bottom);
+
+        scroll_transcript_page(&mut app, true);
+        assert_eq!(app.scroll, 100);
+        assert!(app.follow_bottom);
+    }
+
+    #[test]
+    fn edge_navigation_updates_position_and_follow_mode_together() {
+        let mut app = scrollable_app();
+
+        scroll_transcript_to_edge(&mut app, false);
+        assert_eq!(app.scroll, 0);
+        assert!(!app.follow_bottom);
+
+        scroll_transcript_to_edge(&mut app, true);
+        assert_eq!(app.scroll, 100);
+        assert!(app.follow_bottom);
+    }
 }
 
 #[cfg(test)]

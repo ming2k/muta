@@ -160,8 +160,8 @@ impl Dirs {
         self.config_dir.join("credentials.toml")
     }
 
-    /// OAuth token sets, keyed by provider id (`auth.toml`, 0600). Stored in
-    /// `$XDG_STATE_HOME/muta/auth.toml` as dynamic runtime state.
+    /// OAuth token sets, keyed by exact connection id (`auth.toml`, 0600).
+    /// Stored in `$XDG_STATE_HOME/muta/auth.toml` as dynamic runtime state.
     pub fn auth_file(&self) -> PathBuf {
         self.state_dir.join("auth.toml")
     }
@@ -186,11 +186,6 @@ impl Dirs {
     /// [`crate::route_settings::RouteSettingsStore`].
     pub fn route_settings_file(&self) -> PathBuf {
         self.state_dir.join("route_settings.json")
-    }
-
-    /// Legacy location in config_dir for backward compatibility.
-    pub fn legacy_auth_file(&self) -> PathBuf {
-        self.config_dir.join("auth.toml")
     }
 
     /// Cached model discovery lists and capability metadata (`$XDG_CACHE_HOME/muta/models_discovery.json`).

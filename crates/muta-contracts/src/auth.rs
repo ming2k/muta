@@ -77,6 +77,16 @@ pub trait CredentialSource: Send + Sync + fmt::Debug {
     /// Force a fresh token from upstream (e.g. on 401 Unauthorized self-healing retry).
     fn force_refresh<'a>(&'a self) -> BoxFuture<'a, Result<ResolvedAuth, String>>;
 
+    /// Refresh after an upstream rejection of one exact access token. Dynamic
+    /// sources use the rejected value to detect that another request or process
+    /// already rotated it; static sources retain the default force behavior.
+    fn force_refresh_after_rejection<'a>(
+        &'a self,
+        _rejected_access: &'a SecretString,
+    ) -> BoxFuture<'a, Result<ResolvedAuth, String>> {
+        self.force_refresh()
+    }
+
     /// Whether this credential source is ready to be used (e.g. non-empty API key).
     fn is_ready(&self) -> bool {
         true

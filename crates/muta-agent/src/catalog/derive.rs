@@ -11,7 +11,7 @@
 //! Resolution precedence is the single source of truth shared by startup and
 //! runtime switching (ADR-0002): env var (`api_key_env`) →
 //! `credentials.toml` → empty. OAuth connections resolve their bearer from
-//! `auth.toml` (refreshed by the runtime before building).
+//! `auth.toml` through a dynamic, per-connection credential source.
 
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
@@ -119,7 +119,6 @@ pub fn derive_channel(
         if connection.auth.is_oauth() {
             std::sync::Arc::new(muta_providers::oauth::OAuthCredentialSource::new(
                 &connection.id,
-                connection.preset_id.as_deref(),
                 connection.auth,
             ))
         } else {
@@ -306,16 +305,25 @@ pub fn default_endpoint(protocol: WireProtocol) -> String {
 
 /// The resolved credential for a connection: env var (`api_key_env`) →
 /// `credentials.toml` → empty. OAuth connections resolve their live access token
-/// from `auth.toml` instead (refreshed by the runtime before building).
+/// from the exact connection namespace in `auth.toml` instead.
 pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> SecretString {
     if connection.auth.is_oauth() {
-        let store = muta_providers::oauth::AuthStore::load();
-        let tokens = store.get_for_provider(
-            &connection.id,
-            connection.preset_id.as_deref(),
-            connection.auth,
-        );
-        return tokens.map(|t| t.access.clone()).unwrap_or_default();
+        return muta_providers::oauth::AuthStore::load()
+            .map_err(|error| {
+                tracing::error!(
+                    connection_id = %connection.id,
+                    error = %error,
+                    "could not read OAuth credentials"
+                );
+                error
+            })
+            .ok()
+            .and_then(|store| {
+                store
+                    .get(&connection.id)
+                    .map(|tokens| tokens.access.clone())
+            })
+            .unwrap_or_default();
     }
     if let Some(env) = connection.api_key_env.as_deref()
         && let Ok(value) = std::env::var(env)

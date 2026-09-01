@@ -10,6 +10,7 @@
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
+use futures::stream::{self, StreamExt};
 use muta_contracts::{ConnectionAuth, WireProtocol};
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
@@ -21,6 +22,63 @@ use std::collections::HashSet;
 
 const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DISCOVERY_CONCURRENCY: usize = 8;
+
+struct DiscoveryJob {
+    connection: muta_persistence::connections::Connection,
+    spec: &'static ProviderPresetSpec,
+    protocol: DiscoveryProtocol,
+    base_url: String,
+    user_agent: Option<String>,
+    api_key: muta_contracts::SecretString,
+    cached_etag: Option<String>,
+}
+
+struct DiscoveryFetch {
+    connection: muta_persistence::connections::Connection,
+    spec: &'static ProviderPresetSpec,
+    update: Result<ModelDiscoveryUpdate, String>,
+}
+
+async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
+    let auth = if job.connection.auth.is_oauth() {
+        let source = muta_providers::oauth::OAuthCredentialSource::new(
+            &job.connection.id,
+            job.connection.auth,
+        );
+        match muta_contracts::CredentialSource::resolve_auth(&source).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                return DiscoveryFetch {
+                    connection: job.connection,
+                    spec: job.spec,
+                    update: Err(error),
+                };
+            }
+        }
+    } else {
+        muta_contracts::ResolvedAuth::new(job.api_key)
+    };
+    let request = ModelDiscoveryRequest {
+        protocol: job.protocol,
+        base_url: &job.base_url,
+        api_key: &auth.token,
+        account_id: auth.account_id.as_deref(),
+        user_agent: job.user_agent.as_deref(),
+        extra_headers: &[],
+    };
+    let options = ModelDiscoveryOptions {
+        etag: job.cached_etag.as_deref(),
+    };
+    let update = muta_providers::discover_models(request, options)
+        .await
+        .map_err(|error| error.to_string());
+    DiscoveryFetch {
+        connection: job.connection,
+        spec: job.spec,
+        update,
+    }
+}
 
 /// The result of a live model-discovery pass ([`discover_provider_models`]).
 #[derive(Debug, Default)]
@@ -34,13 +92,69 @@ pub struct DiscoveryOutcome {
 /// Fetch every discovery-capable connection's live model list and update the
 /// discovery cache.
 pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
-    let mut stores = Stores::load();
-    let mut changed = false;
-    let mut cache_dirty = false;
+    discover_models_matching(None, force).await
+}
+
+/// Refresh one exact connection. Login and add flows use this path so an
+/// unrelated slow provider cannot delay or contaminate their result.
+pub async fn discover_connection_models(connection_id: &str, force: bool) -> DiscoveryOutcome {
+    discover_models_matching(Some(connection_id), force).await
+}
+
+pub async fn refresh_connection_models_for_etag(
+    connection_id: &str,
+    advertised_etag: &str,
+) -> DiscoveryOutcome {
+    let cached = DiscoveryCache::load();
+    let Some(state) = cached.model_lists.get(connection_id) else {
+        return discover_connection_models(connection_id, true).await;
+    };
+    if state.etag.as_deref() != Some(advertised_etag) {
+        return discover_connection_models(connection_id, true).await;
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS / 2 {
+        return DiscoveryOutcome::default();
+    }
+    let mut locked = match DiscoveryCache::lock().await {
+        Ok(lock) => lock,
+        Err(error) => {
+            return DiscoveryOutcome {
+                changed: false,
+                failures: vec![(connection_id.to_string(), error)],
+            };
+        }
+    };
+    let Some(current) = locked.model_lists.get_mut(connection_id) else {
+        drop(locked);
+        return discover_connection_models(connection_id, true).await;
+    };
+    if current.etag.as_deref() != Some(advertised_etag) {
+        drop(locked);
+        return discover_connection_models(connection_id, true).await;
+    }
+    current.refreshed_at_ms = now_ms;
+    current.client_version = CLIENT_VERSION.to_string();
+    match locked.save() {
+        Ok(()) => DiscoveryOutcome::default(),
+        Err(error) => DiscoveryOutcome {
+            changed: false,
+            failures: vec![(connection_id.to_string(), error.to_string())],
+        },
+    }
+}
+
+async fn discover_models_matching(target: Option<&str>, force: bool) -> DiscoveryOutcome {
+    let stores = Stores::load();
     let mut failures: Vec<(String, String)> = Vec::new();
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut jobs = Vec::new();
 
     for connection in &stores.connections.connections {
+        if target.is_some_and(|target| target != connection.id) {
+            continue;
+        }
         let Some(pid) = connection.preset_id.as_deref() else {
             continue;
         };
@@ -99,44 +213,56 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             connection.auth,
             protocol,
         );
-        let auth = if connection.auth.is_oauth() {
-            let source = muta_providers::oauth::OAuthCredentialSource::new(
-                &connection.id,
-                connection.preset_id.as_deref(),
-                connection.auth,
-            );
-            match muta_contracts::CredentialSource::resolve_auth(&source).await {
-                Ok(auth) => auth,
-                Err(error) => {
-                    tracing::warn!(
-                        connection_id = %connection.id,
-                        error = %error,
-                        "could not resolve OAuth model-catalog authentication"
-                    );
-                    failures.push((connection.id.clone(), error));
-                    continue;
-                }
-            }
-        } else {
-            let key = resolve_credential(connection, &stores.creds);
-            muta_contracts::ResolvedAuth::new(key)
-        };
         let cached_etag = stores
             .cache
             .model_lists
             .get(&connection.id)
-            .and_then(|state| state.etag.as_deref());
-        let discovery_req = ModelDiscoveryRequest {
+            .and_then(|state| state.etag.clone());
+        jobs.push(DiscoveryJob {
+            connection: connection.clone(),
+            spec,
             protocol,
-            base_url: &base_url,
-            api_key: &auth.token,
-            account_id: auth.account_id.as_deref(),
-            user_agent: user_agent.as_deref(),
-            extra_headers: &[],
-        };
-        let options = ModelDiscoveryOptions { etag: cached_etag };
+            base_url,
+            user_agent,
+            api_key: resolve_credential(connection, &stores.creds),
+            cached_etag,
+        });
+    }
 
-        match muta_providers::discover_models(discovery_req, options).await {
+    if jobs.is_empty() {
+        return DiscoveryOutcome::default();
+    }
+
+    // Requests are independent and bounded by their own timeout. Fetch with a
+    // fixed concurrency ceiling outside any lock, preserving connection order.
+    let fetched = stream::iter(jobs.into_iter().map(fetch_models))
+        .buffered(DISCOVERY_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+
+    // Acquire lock to reconcile with fresh connections and update cache atomically.
+    let mut locked_cache = match DiscoveryCache::lock().await {
+        Ok(lock) => lock,
+        Err(error) => {
+            return DiscoveryOutcome {
+                changed: false,
+                failures: vec![(target.unwrap_or("model-discovery-cache").to_string(), error)],
+            };
+        }
+    };
+
+    let current_connections = Connections::load();
+    let mut changed = false;
+    let mut cache_dirty = false;
+
+    for fetched in fetched {
+        let connection = &fetched.connection;
+        // Never merge or resurrect if connection was deleted during the network fetch!
+        if current_connections.get(&connection.id).is_none() {
+            continue;
+        }
+        let spec = fetched.spec;
+        match fetched.update {
             Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {
                 let mut connection_changed = false;
                 let supported: Vec<String> = if spec.fitting {
@@ -146,9 +272,8 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
                         .filter(|model| muta_contracts::model::model_by_id(&model.id).is_none())
                         .map(|model| (model.id.clone(), fitted_model_info(model)))
                         .collect();
-                    if stores.cache.fitted_models.get(&connection.id) != Some(&fitted) {
-                        stores
-                            .cache
+                    if locked_cache.fitted_models.get(&connection.id) != Some(&fitted) {
+                        locked_cache
                             .fitted_models
                             .insert(connection.id.clone(), fitted);
                         connection_changed = true;
@@ -178,22 +303,19 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
                     .filter(|model| model.picker_enabled != Some(false))
                     .map(|model| (model.id.clone(), model.remote_metadata()))
                     .collect();
-                let prev_remote = stores
-                    .cache
+                let prev_remote = locked_cache
                     .remote_metadata
                     .get(&connection.id)
                     .cloned()
                     .unwrap_or_default();
                 if prev_remote != remote_metadata {
-                    stores
-                        .cache
+                    locked_cache
                         .remote_metadata
                         .insert(connection.id.clone(), remote_metadata);
                     connection_changed = true;
                 }
-                if stores.cache.connection_models.get(&connection.id) != Some(&supported) {
-                    stores
-                        .cache
+                if locked_cache.connection_models.get(&connection.id) != Some(&supported) {
+                    locked_cache
                         .connection_models
                         .insert(connection.id.clone(), supported);
                     connection_changed = true;
@@ -203,9 +325,8 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
                     client_version: CLIENT_VERSION.to_string(),
                     refreshed_at_ms: now_ms,
                 };
-                if stores.cache.model_lists.get(&connection.id) != Some(&state) {
-                    stores
-                        .cache
+                if locked_cache.model_lists.get(&connection.id) != Some(&state) {
+                    locked_cache
                         .model_lists
                         .insert(connection.id.clone(), state);
                     cache_dirty = true;
@@ -221,7 +342,7 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
                 }
             }
             Ok(ModelDiscoveryUpdate::NotModified { etag }) => {
-                stores.cache.model_lists.insert(
+                locked_cache.model_lists.insert(
                     connection.id.clone(),
                     ModelListCacheState {
                         etag,
@@ -247,7 +368,11 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
     }
 
     if cache_dirty {
-        let _ = stores.cache.save();
+        if let Err(error) = locked_cache.save() {
+            tracing::error!(?error, "could not persist model-discovery cache");
+            failures.push(("model-discovery-cache".to_string(), error.to_string()));
+            changed = false;
+        }
     }
 
     DiscoveryOutcome { changed, failures }

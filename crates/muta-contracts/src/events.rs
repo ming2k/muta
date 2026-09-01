@@ -121,9 +121,8 @@ pub enum AgentRequest {
         api_key: crate::SecretString,
         user_agent: Option<String>,
         models: Vec<String>,
-        /// How the connection authenticates. Default (`ApiKey`) keeps the
-        /// historical behavior; `XaiOAuth` marks SuperGrok connections whose live
-        /// access token is resolved from `auth.toml`.
+        /// How the connection authenticates. OAuth credentials are owned by
+        /// this exact connection id.
         auth: crate::ConnectionAuth,
         /// The stable preset id this connection is created from.
         #[serde(default)]
@@ -132,14 +131,15 @@ pub enum AgentRequest {
         #[serde(default)]
         client_identity: Option<crate::ClientIdentity>,
     },
-    /// Connect (authenticate) an OAuth provider — currently xAI SuperGrok. Runs
-    /// the browser-loopback or device-code flow, persists tokens to `auth.toml`,
-    /// then activates `id`. Progress streams via [`AgentResponse::ConnectStatus`].
+    /// Reauthenticate an existing OAuth connection. Runs the browser-loopback
+    /// or device-code flow, persists directly to `id`, then activates it.
+    /// Progress streams via [`AgentResponse::ConnectStatus`].
     ConnectProvider {
         id: String,
         method: crate::LoginMethod,
     },
-    /// Run an OAuth login **before** a connection instance exists.
+    /// Run OAuth before a connection exists. Successful credentials remain
+    /// session-local until the following `AddProvider` consumes them.
     AuthorizeOAuth {
         method: crate::LoginMethod,
         auth: crate::ConnectionAuth,
@@ -1855,6 +1855,8 @@ pub enum AgentEvent {
     },
     /// A background job completed.
     BackgroundJobCompleted(crate::job::BackgroundJobOutcome),
+    /// Model catalog or discovery cache was updated; attached frontends should refresh provider picker.
+    CatalogInvalidated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]

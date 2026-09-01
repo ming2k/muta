@@ -11,6 +11,8 @@ pub(crate) mod transcript;
 #[allow(unused_imports)]
 pub(crate) use actions::{effective_reasoning_effort, modal_page_step};
 pub(crate) use probes::probe_input_selection_relay;
+#[cfg(test)]
+pub(crate) use render::render_frame;
 pub(crate) use runtime::{
     CompletionSignal, NoticeToastSignal, OauthAddSignal, OutboxSignal, SideViewSignal, UiRuntime,
     UnsentInput, now_epoch_ms,
@@ -245,28 +247,56 @@ pub async fn run_app_loop(
             }
         }
 
-        if displayed_transcript_changed {
-            if app.follow_bottom {
-                app.scroll = app.max_scroll;
-                if stage_bottom_follow {
-                    terminal.draw(|f| render::render_frame(app, f, &viewed_session_id))?;
-                }
-            } else {
-                app.scroll = app.scroll.min(app.max_scroll);
-            }
+        // The renderer measured `max_scroll` from this frame's content and
+        // viewport. Keep a manual position in bounds while preserving the
+        // sticky-header exception used by collapsed runner summaries.
+        if !app.follow_bottom {
+            // A collapsed sticky header may leave too little content below it
+            // for `max_scroll` to reach the header line; while a pin is
+            // active, allow scrolling up to that line so the header stays at
+            // the top of the viewport instead of being dragged back down.
+            let limit = app
+                .pin_summary_line
+                .map(|line| app.max_scroll.max(line.min(u16::MAX as usize) as u16))
+                .unwrap_or(app.max_scroll);
+            app.scroll = app.scroll.min(limit);
         }
 
-        if app.scroll_settle_pending {
-            let max = app.max_scroll;
-            let current = app.scroll;
-            let clamped = current.min(max);
-            app.scroll = clamped;
-            let clamp_moved_viewport = clamped != current || clamped != painted_scroll;
-            if clamp_moved_viewport {
-                terminal.draw(|f| render::render_frame(app, f, &viewed_session_id))?;
+        // The staged pass above measured the new content but emitted no bytes.
+        // If the bottom moved, redraw immediately at the final offset. If it
+        // did not, commit the already-final staged grid without a second layout.
+        if stage_bottom_follow && needs_draw {
+            if app.scroll != app.max_scroll {
+                app.scroll = app.max_scroll;
+                input_redraw_pending = true;
+                continue;
             }
-            app.scroll_settle_pending = false;
+            terminal.commit_staged()?;
+            // Committed: the staged rect observation is now the published
+            // geometry. Nothing to do — the snapshot is simply dropped.
         }
+        // A disclosure toggle's scroll target has now been validated against
+        // the layout the staged pass just measured (the clamp above ran on the
+        // fresh `content_lines`). If the clamp moved the offset, the staged
+        // grid is stale — redraw at the settled position; otherwise commit the
+        // staged grid, which is already laid out at the correct offset,
+        // without a second layout pass.
+        if stage_settle && needs_draw {
+            app.scroll_settle_pending = false;
+            if app.scroll != painted_scroll {
+                input_redraw_pending = true;
+                continue;
+            }
+            terminal.commit_staged()?;
+        }
+        // A transcript shrink can clamp a manually positioned viewport after
+        // a normal draw. Repaint once at the newly valid offset instead of
+        // leaving the just-painted frame beyond the new end of the content.
+        if needs_draw && app.scroll != painted_scroll {
+            input_redraw_pending = true;
+            continue;
+        }
+        app.retain_visible_focused_target();
 
         let poll_interval = if animating {
             if copy_pending.load(Ordering::SeqCst) > 0 {

@@ -142,6 +142,7 @@ mod shared_config_tests {
 
         // Supplying jina_api_key makes fetch available.
         shared.set(WebSearchConfig {
+            reader: "jina".to_string(),
             jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
             ..WebSearchConfig::default()
         });
@@ -149,6 +150,7 @@ mod shared_config_tests {
 
         shared.set(WebSearchConfig {
             provider: "none".to_string(),
+            reader: "jina".to_string(),
             jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
             ..WebSearchConfig::default()
         });

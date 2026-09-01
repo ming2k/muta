@@ -339,8 +339,8 @@ impl RouteSettings {
 /// ```
 ///
 /// OAuth logins do **not** live here; their access/refresh token sets are
-/// runtime state in `auth.toml` (`[tokens.<provider>]`), also keyed by
-/// provider instance.
+/// runtime state in `auth.toml` (`[tokens.<connection-id>]`), also keyed by
+/// exact connection id.
 ///
 /// Resolution precedence is **`api_key_env` env var > credentials.toml**: the
 /// instance declares an optional `api_key_env` (a variable *name*) in
@@ -525,13 +525,13 @@ pub struct ModelListCacheState {
 }
 
 impl DiscoveryCache {
-    fn path() -> PathBuf {
+    pub fn file_path() -> PathBuf {
         paths::get().discovery_cache_file()
     }
 
     /// Read `models_discovery.json`, returning an empty value if missing or unparseable.
     pub fn load() -> Self {
-        let path = Self::path();
+        let path = Self::file_path();
         let Ok(content) = fs::read_to_string(&path) else {
             return Self::default();
         };
@@ -541,7 +541,7 @@ impl DiscoveryCache {
     /// Persist atomically to `$XDG_CACHE_HOME/muta/models_discovery.json`.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let bytes = serde_json::to_vec_pretty(self)?;
-        fsutil::atomic_write_bytes(&Self::path(), &bytes)?;
+        fsutil::atomic_write_bytes(&Self::file_path(), &bytes)?;
         Ok(())
     }
 
@@ -562,6 +562,61 @@ impl DiscoveryCache {
         self.remote_metadata
             .get(connection_id)
             .and_then(|models| models.get(model_id))
+    }
+
+    /// Acquire the cross-process lock on `models_discovery.json` and load the latest state under the lock.
+    pub async fn lock() -> Result<LockedDiscoveryCache, String> {
+        let path = Self::file_path();
+        let lock = tokio::task::spawn_blocking(move || fsutil::FileLock::acquire(&path))
+            .await
+            .map_err(|error| format!("model-discovery lock task failed: {error}"))?
+            .map_err(|error| format!("could not lock model-discovery cache: {error}"))?;
+        let cache = Self::load();
+        Ok(LockedDiscoveryCache { cache, _lock: lock })
+    }
+
+    /// Execute a transactional mutation on `DiscoveryCache` under the cross-process lock and save atomically.
+    pub async fn modify<F, R>(f: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut DiscoveryCache) -> R,
+    {
+        let mut locked = Self::lock().await?;
+        let result = f(&mut locked);
+        locked.save().map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+}
+
+/// An exclusive cross-process lock over `models_discovery.json`.
+pub struct LockedDiscoveryCache {
+    cache: DiscoveryCache,
+    _lock: fsutil::FileLock,
+}
+
+impl std::ops::Deref for LockedDiscoveryCache {
+    type Target = DiscoveryCache;
+    fn deref(&self) -> &Self::Target {
+        &self.cache
+    }
+}
+
+impl std::ops::DerefMut for LockedDiscoveryCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cache
+    }
+}
+
+impl LockedDiscoveryCache {
+    pub fn cache(&self) -> &DiscoveryCache {
+        &self.cache
+    }
+
+    pub fn cache_mut(&mut self) -> &mut DiscoveryCache {
+        &mut self.cache
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.cache.save()
     }
 }
 

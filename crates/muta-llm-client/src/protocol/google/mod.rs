@@ -249,24 +249,28 @@ impl GoogleProvider {
                 model = %self.endpoint.model,
                 "OAuth token rejected by Google (401 Unauthorized); attempting force-refresh and retry"
             );
-            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
-                let (retry_url, retry_headers, retry_body) = self.prepare_request_for_auth(
-                    request.clone(),
-                    is_stream,
-                    omit_thinking,
-                    &refreshed_auth,
-                );
-                let mut retry_builder = client
-                    .post(&retry_url)
-                    .headers(retry_headers)
-                    .json(&retry_body);
-                if let Some(t) = timeout {
-                    retry_builder = retry_builder.timeout(t);
-                }
-                if let Ok(retried_resp) = retry_builder.send().await {
-                    return Ok(retried_resp);
-                }
+            let refreshed_auth = self
+                .endpoint
+                .force_refresh_auth_after(&auth.token)
+                .await
+                .map_err(|error| ProviderError::authentication("Google", error))?;
+            let (retry_url, retry_headers, retry_body) = self.prepare_request_for_auth(
+                request.clone(),
+                is_stream,
+                omit_thinking,
+                &refreshed_auth,
+            );
+            let mut retry_builder = client
+                .post(&retry_url)
+                .headers(retry_headers)
+                .json(&retry_body);
+            if let Some(t) = timeout {
+                retry_builder = retry_builder.timeout(t);
             }
+            return retry_builder
+                .send()
+                .await
+                .map_err(|error| transport_error("Google", error));
         }
 
         Ok(response)

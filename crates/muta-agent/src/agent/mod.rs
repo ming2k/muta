@@ -760,6 +760,7 @@ impl RequestAccountingGuard {
     ) {
         let mut fragments: Vec<&str> = Vec::new();
         match event {
+            muta_contracts::ProviderStreamEvent::ModelCatalogEtag(_) => return,
             muta_contracts::ProviderStreamEvent::TextDelta(delta)
             | muta_contracts::ProviderStreamEvent::ReasoningDelta(delta) => {
                 if !delta.is_empty() {

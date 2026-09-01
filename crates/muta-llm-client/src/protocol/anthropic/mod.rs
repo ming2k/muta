@@ -222,15 +222,20 @@ impl AnthropicMessagesProvider {
                 model = %self.endpoint.model,
                 "OAuth token rejected by Anthropic (401 Unauthorized); attempting force-refresh and retry"
             );
-            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
-                let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
-                if !is_stream {
-                    retry_req = retry_req.timeout(self.client.request_timeout());
-                }
-                if let Ok(retried_resp) = retry_req.send().await {
-                    return ensure_success(retried_resp, "Anthropic").await;
-                }
+            let refreshed_auth = self
+                .endpoint
+                .force_refresh_auth_after(&auth.token)
+                .await
+                .map_err(|error| ProviderError::authentication("Anthropic", error))?;
+            let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+            if !is_stream {
+                retry_req = retry_req.timeout(self.client.request_timeout());
             }
+            let retried_resp = retry_req
+                .send()
+                .await
+                .map_err(|error| transport_error("Anthropic", error))?;
+            return ensure_success(retried_resp, "Anthropic").await;
         }
 
         ensure_success(response, "Anthropic").await

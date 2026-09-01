@@ -193,12 +193,12 @@ const PRE_MIGRATION: &[Model] = &[
     // standard OpenAI chat-completions API and reason via `reasoning_content`.
     // GPT-5.6 honors the `max` effort level, so these carry the 5.6-specific
     // effort set rather than the xhigh-capped `EFFORT_OPENAI_GPT`.
-    // OpenAI has not published the context window; use the GPT-5.5-class 1M
-    // window conservatively for all three tiers and the alias.
+    // OpenAI publishes a 1.05M context window for all three tiers and the
+    // alias.
     Model {
         id: "gpt-5.6",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -209,7 +209,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -220,7 +220,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gpt-5.6-terra",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
@@ -231,7 +231,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gpt-5.6-luna",
         family: "gpt",
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: true,

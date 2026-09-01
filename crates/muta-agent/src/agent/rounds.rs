@@ -556,11 +556,6 @@ impl Agent {
                                 return Err(HarnessError::Provider(muta_contracts::ProviderError::new("harness", muta_contracts::ProviderErrorKind::Timeout, err_msg).retryable(None)));
                             }
                         };
-                        // Any chunk — text, reasoning, tool-call bytes, or the
-                        // terminal `usage` event — proves this turn's stream
-                        // was delivering, so a subsequent cancellation opens
-                        // the settle window instead of discarding the turn.
-                        turn_streamed = true;
                         let event = match event {
                             Ok(event) => event,
                             Err(error) => {
@@ -568,6 +563,14 @@ impl Agent {
                                 return Err(HarnessError::from(error));
                             }
                         };
+                        // Content, tool-call bytes, usage, or completion proves
+                        // that this turn was delivering. Transport control
+                        // metadata does not: a catalog ETag arriving before any
+                        // model output must not convert an immediate interrupt
+                        // into a settle-window drain.
+                        if !matches!(&event, ProviderStreamEvent::ModelCatalogEtag(_)) {
+                            turn_streamed = true;
+                        }
                         if completion_meta.is_some() {
                             let err_msg = "Provider emitted data after the terminal completion event."
                                 .to_string();
@@ -579,6 +582,26 @@ impl Agent {
                             std::time::Instant::now(),
                         );
                         match event {
+                            ProviderStreamEvent::ModelCatalogEtag(etag) => {
+                                let connection_id = self.provider.provider_id();
+                                let outcome = crate::catalog::refresh_connection_models_for_etag(
+                                    &connection_id,
+                                    &etag,
+                                )
+                                .await;
+                                if outcome.changed {
+                                    crate::catalog::sync_fitted_model_registry();
+                                    crate::catalog::prune_stale_models_on_disk();
+                                    on_event(AgentEvent::CatalogInvalidated);
+                                }
+                                for (provider, error) in outcome.failures {
+                                    tracing::warn!(
+                                        connection_id = %provider,
+                                        error = %error,
+                                        "model catalog ETag refresh failed"
+                                    );
+                                }
+                            }
                             ProviderStreamEvent::TextDelta(delta) => {
                                 content.push_str(&delta);
                                 on_event(AgentEvent::AssistantDelta {

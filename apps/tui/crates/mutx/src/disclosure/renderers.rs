@@ -2284,9 +2284,6 @@ pub fn draw_command_result(
     _hovered: bool,
     _focused: bool,
 ) {
-    let _theme = ctx.theme;
-    let _transcript_area = ctx.area;
-
     let Some(invocation) = msg.command_result_summary() else {
         return;
     };
@@ -2338,13 +2335,7 @@ pub fn draw_command_result(
     }
 
     // 1-row blank gap between entry header and body
-    advance_plain_blank_rows(
-        ctx.area,
-        TURN_HEADER_BODY_GAP_ROWS,
-        &mut *ctx.skip_rows,
-        ctx.y,
-        &mut *ctx.content_lines,
-    );
+    ctx.advance_blank_rows(TURN_HEADER_BODY_GAP_ROWS);
 
     // Concrete command invocation inside the entry body. It is indented by
     // `TRANSCRIPT_BODY_LEADING_INDENT` so the invocation's first column lines
@@ -2406,9 +2397,6 @@ pub fn draw_ack_body(
     detail: &[String],
     family_tone: Color,
 ) {
-    let _theme = ctx.theme;
-    let _transcript_area = ctx.area;
-
     let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
     let wrap_width = (ctx.area.width as usize)
         .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
@@ -2428,31 +2416,18 @@ pub fn draw_ack_body(
 
     for (text, style) in regions {
         for wl in wrap_text(&text, wrap_width) {
-            *ctx.content_lines += 1;
-            if *ctx.skip_rows > 0 {
-                *ctx.skip_rows -= 1;
-                continue;
-            }
-            if *ctx.y >= ctx.area.y + ctx.area.height {
-                return;
-            }
             let line = Line::from(vec![
                 Span::styled(body_indent.clone(), style),
                 Span::styled(wl.text.clone(), style),
             ]);
-            let rect = Rect::new(ctx.area.x, *ctx.y, ctx.area.width, 1);
-            (*ctx.frame).render_widget(Paragraph::new(line), rect);
-            (*ctx.layout_map).push(BlockRegion {
-                message_idx: mi,
-                block_idx: COMMAND_RESULT_BLOCK_IDX,
-                start_byte: 0,
-                end_byte: text.len(),
-                text: wl.text.clone(),
-                prefix_cols: TRANSCRIPT_BODY_LEADING_INDENT,
-                rect,
-                hidden_ranges: Vec::new(),
-            });
-            *ctx.y += 1;
+            ctx.paint_text_row(
+                line,
+                mi,
+                COMMAND_RESULT_BLOCK_IDX,
+                &wl,
+                TRANSCRIPT_BODY_LEADING_INDENT,
+                &[],
+            );
         }
     }
 }

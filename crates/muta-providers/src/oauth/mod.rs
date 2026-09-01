@@ -36,22 +36,28 @@ pub use credential_source::OAuthCredentialSource;
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
 pub use manual::parse_authorization_response;
 pub use pkce::{PkceCodes, new_nonce, new_state};
-pub use store::{AuthStore, TokenSet};
+pub use store::{AuthStore, AuthStoreError, LockedAuthStore, TokenSet};
 pub use token::{
     ACCESS_TOKEN_REFRESH_SKEW_MS, ANTIGRAVITY_LOAD_CODE_ASSIST_URL, ANTIGRAVITY_ONBOARD_USER_URL,
     ANTIGRAVITY_USER_AGENT, GOOGLE_USERINFO_URL, GoogleUserInfo, TokenResponse,
-    access_token_is_expiring, build_authorize_url, chatgpt_account_id, exchange_code,
-    fetch_google_userinfo, jwt_exp_ms, refresh_access_token, resolve_antigravity_project,
+    access_token_expiry_ms, access_token_is_expiring, build_authorize_url, chatgpt_account_id,
+    exchange_code, fetch_google_userinfo, jwt_exp_ms, refresh_access_token,
+    resolve_antigravity_project,
 };
 
 pub use muta_contracts::LoginMethod;
 use muta_contracts::SecretString;
 use std::sync::{Arc, Mutex};
 
+const OAUTH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const OAUTH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const DEVICE_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 /// Errors from the auth flows. Surfaced in user-facing CLI and logs.
 #[derive(Debug)]
 pub enum AuthError {
     Transport(String),
+    Authorization(String),
     TokenEndpoint { status: u16, body: String },
     Decode(String),
     DeviceCode(String),
@@ -63,6 +69,7 @@ impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AuthError::Transport(msg) => write!(f, "network error: {msg}"),
+            AuthError::Authorization(msg) => write!(f, "authorization failed: {msg}"),
             AuthError::TokenEndpoint { status, body } => {
                 write!(f, "token endpoint returned HTTP {status}: {body}")
             }
@@ -79,14 +86,37 @@ impl AuthError {
     pub fn is_permanent_grant_error(&self) -> bool {
         match self {
             AuthError::TokenEndpoint { body, .. } => {
-                let lower = body.to_lowercase();
-                lower.contains("invalid_grant")
-                    || lower.contains("token_revoked")
-                    || lower.contains("unauthorized_client")
+                let Some(code) = token_error_code(body) else {
+                    return false;
+                };
+                matches!(
+                    code.as_str(),
+                    "invalid_grant"
+                        | "token_revoked"
+                        | "refresh_token_expired"
+                        | "refresh_token_reused"
+                        | "refresh_token_invalidated"
+                )
             }
             _ => false,
         }
     }
+}
+
+fn token_error_code(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value
+        .get("error")
+        .and_then(|error| {
+            error.as_str().or_else(|| {
+                error
+                    .get("code")
+                    .or_else(|| error.get("type"))
+                    .and_then(serde_json::Value::as_str)
+            })
+        })
+        .or_else(|| value.get("code").and_then(serde_json::Value::as_str))
+        .map(|code| code.trim().to_ascii_lowercase())
 }
 
 impl std::error::Error for AuthError {}
@@ -132,12 +162,19 @@ impl OAuthLoginSession {
     pub async fn complete(self) -> Result<TokenResponse, AuthError> {
         match self.flow {
             OAuthLoginFlow::Browser(login) => login.complete(&self.client).await,
-            OAuthLoginFlow::RfcDevice { config, device } => {
-                poll_device_code(&self.client, &config, &device).await
-            }
+            OAuthLoginFlow::RfcDevice { config, device } => tokio::time::timeout(
+                DEVICE_LOGIN_TIMEOUT,
+                poll_device_code(&self.client, &config, &device),
+            )
+            .await
+            .map_err(|_| AuthError::Timeout)?,
             OAuthLoginFlow::ChatGptDevice { config, device } => {
-                let token = poll_chatgpt_device_code(&self.client, &config, &device).await?;
-                exchange_chatgpt_device_code(&self.client, &config, &token).await
+                tokio::time::timeout(DEVICE_LOGIN_TIMEOUT, async {
+                    let token = poll_chatgpt_device_code(&self.client, &config, &device).await?;
+                    exchange_chatgpt_device_code(&self.client, &config, &token).await
+                })
+                .await
+                .map_err(|_| AuthError::Timeout)?
             }
         }
     }
@@ -158,8 +195,15 @@ impl OAuth {
     pub fn new(config: OAuthConfig) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(concat!("muta/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(OAUTH_CONNECT_TIMEOUT)
+            .timeout(OAUTH_REQUEST_TIMEOUT)
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .expect("OAuth HTTP client configuration is static and valid; client builder must succeed");
+        Self::with_client(config, client)
+    }
+
+    /// Construct with a provider configuration and a pre-configured HTTP client.
+    pub fn with_client(config: OAuthConfig, client: reqwest::Client) -> Self {
         Self {
             config,
             client,
@@ -296,6 +340,7 @@ impl OAuth {
             config: self.config.clone(),
             url,
             state,
+            nonce,
             pkce,
             redirect,
             rx,
@@ -337,7 +382,12 @@ impl OAuth {
         &self,
         stored: TokenSet,
     ) -> Result<(SecretString, TokenSet), AuthError> {
-        let now = now_ms();
+        if stored.refresh.is_empty() {
+            return Err(AuthError::Authorization(
+                "the access token expired and no refresh token is available; reconnect this connection"
+                    .to_string(),
+            ));
+        }
         let guard = {
             let mut slot = self
                 .refresh_in_flight
@@ -360,12 +410,17 @@ impl OAuth {
         let refreshed =
             refresh_access_token(&self.client, &self.config, stored.refresh.expose_secret())
                 .await?;
+        let now = now_ms();
         let new_refresh = refreshed
             .refresh_token
             .clone()
             .filter(|r| !r.is_empty())
             .unwrap_or_else(|| stored.refresh.clone());
-        let expires_ms = now + (refreshed.expires_in.unwrap_or(3600) as i64) * 1000;
+        let expires_ms = access_token_expiry_ms(
+            refreshed.access_token.expose_secret(),
+            refreshed.expires_in,
+            now,
+        );
 
         let mut account_id = if self.config.is_chatgpt() {
             refreshed
@@ -435,6 +490,8 @@ pub struct BrowserLogin {
     pub url: String,
     /// Expected CSRF state.
     pub state: String,
+    /// Generated OIDC nonce.
+    pub nonce: String,
     /// Generated PKCE pair.
     pub pkce: PkceCodes,
     /// The exact registered redirect URI used for this session.
@@ -467,9 +524,30 @@ impl BrowserLogin {
             .map_err(|_| AuthError::Cancelled)?;
         match outcome {
             CallbackOutcome::Code(code) => {
-                exchange_code(client, &self.config, &code, &self.pkce, &self.redirect).await
+                let tokens =
+                    exchange_code(client, &self.config, &code, &self.pkce, &self.redirect).await?;
+                if self.config.send_nonce {
+                    let Some(id_token) = &tokens.id_token else {
+                        return Err(AuthError::Authorization(
+                            "id_token missing in token response when nonce was requested".to_string(),
+                        ));
+                    };
+                    let claims = token::jwt_claims(id_token.expose_secret()).ok_or_else(|| {
+                        AuthError::Decode(
+                            "could not parse id_token claims for nonce validation".to_string(),
+                        )
+                    })?;
+                    let token_nonce = claims.get("nonce").and_then(|v| v.as_str());
+                    if token_nonce != Some(&self.nonce) {
+                        return Err(AuthError::Authorization(format!(
+                            "OIDC nonce mismatch: expected '{}', got {:?}",
+                            self.nonce, token_nonce
+                        )));
+                    }
+                }
+                Ok(tokens)
             }
-            CallbackOutcome::Failed(msg) => Err(AuthError::Transport(msg)),
+            CallbackOutcome::Failed(msg) => Err(AuthError::Authorization(msg)),
         }
     }
 }
@@ -480,4 +558,43 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_refresh_rotation_errors_are_permanent() {
+        for code in [
+            "invalid_grant",
+            "refresh_token_expired",
+            "refresh_token_reused",
+            "refresh_token_invalidated",
+        ] {
+            assert!(
+                AuthError::TokenEndpoint {
+                    status: 400,
+                    body: format!(r#"{{"error":{{"code":"{code}"}}}}"#),
+                }
+                .is_permanent_grant_error(),
+                "{code} must clear the unusable exact credential"
+            );
+        }
+
+        for body in [
+            r#"{"error":"unauthorized_client"}"#,
+            r#"{"error":{"message":"request mentioned invalid_grant"}}"#,
+            "invalid_grant",
+        ] {
+            assert!(
+                !AuthError::TokenEndpoint {
+                    status: 400,
+                    body: body.to_string(),
+                }
+                .is_permanent_grant_error(),
+                "only an exact structured grant code may delete a credential: {body}"
+            );
+        }
+    }
 }

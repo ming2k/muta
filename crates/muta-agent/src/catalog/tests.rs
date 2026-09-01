@@ -5,11 +5,14 @@
 use super::derive::{derive_channel, derive_entries, resolve_credential, route_models};
 use super::picker::channel_model_info;
 use super::{
-    build_catalog, build_picker_state, discover_provider_models, sync_fitted_model_registry,
+    build_catalog, build_picker_state, discover_connection_models, discover_provider_models,
+    refresh_connection_models_for_etag, sync_fitted_model_registry,
 };
 use muta_contracts::catalog::Transport;
 use muta_contracts::{Effort, OpenAiResponsesDialect, ThinkingMode, WireProtocol};
-use muta_persistence::config::{Config, Credentials, DiscoveryCache, FittedModelInfo};
+use muta_persistence::config::{
+    Config, Credentials, DiscoveryCache, FittedModelInfo, ModelListCacheState,
+};
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
 use muta_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
@@ -416,6 +419,69 @@ async fn live_discovery_writes_the_per_instance_cache() {
 }
 
 #[tokio::test]
+async fn connection_discovery_never_touches_unrelated_connections() {
+    let _sandbox = sandboxed_paths();
+    let mut selected_server = mockito::Server::new_async().await;
+    let selected_mock = selected_server
+        .mock("GET", "/v1/models")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"deepseek-v4-flash"}]}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    let mut unrelated_server = mockito::Server::new_async().await;
+    let unrelated_mock = unrelated_server
+        .mock("GET", "/v1/models")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"deepseek-v4-pro"}]}"#)
+        .expect(0)
+        .create_async()
+        .await;
+
+    Connections {
+        connections: vec![
+            Connection {
+                id: "selected".to_string(),
+                preset_id: Some("deepseek".to_string()),
+                base_url: Some(format!("{}/v1/responses", selected_server.url())),
+                ..Default::default()
+            },
+            Connection {
+                id: "unrelated".to_string(),
+                preset_id: Some("deepseek".to_string()),
+                base_url: Some(format!("{}/v1/responses", unrelated_server.url())),
+                ..Default::default()
+            },
+        ],
+    }
+    .save()
+    .unwrap();
+    let mut creds = Credentials::default();
+    creds.set_api_key("selected", Some("sk-selected".into()));
+    creds.set_api_key("unrelated", Some("sk-unrelated".into()));
+    creds.save().unwrap();
+
+    let outcome = discover_connection_models("selected", true).await;
+    assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
+    assert!(
+        outcome.failures.is_empty(),
+        "unexpected discovery failures: {:?}",
+        outcome.failures
+    );
+    selected_mock.assert_async().await;
+    unrelated_mock.assert_async().await;
+
+    let cache = DiscoveryCache::load();
+    assert_eq!(
+        cache.connection_models.get("selected"),
+        Some(&vec!["deepseek-v4-flash".to_string()])
+    );
+    assert!(!cache.connection_models.contains_key("unrelated"));
+}
+
+#[tokio::test]
 async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     let _sandbox = sandboxed_paths();
     let mut server = mockito::Server::new_async().await;
@@ -443,6 +509,31 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     // The previous subset is untouched (there was none → snapshot still wins).
     let cache = DiscoveryCache::load();
     assert!(cache.connection_models.is_empty());
+}
+
+#[tokio::test]
+async fn matching_response_etag_renews_stale_catalog_without_network() {
+    let _sandbox = sandboxed_paths();
+    let mut cache = DiscoveryCache::default();
+    cache.model_lists.insert(
+        "chatgpt".to_string(),
+        ModelListCacheState {
+            etag: Some("catalog-v2".to_string()),
+            client_version: "stale-client".to_string(),
+            refreshed_at_ms: 0,
+        },
+    );
+    cache.save().unwrap();
+
+    let outcome = refresh_connection_models_for_etag("chatgpt", "catalog-v2").await;
+    assert!(!outcome.changed);
+    assert!(outcome.failures.is_empty());
+
+    let renewed = DiscoveryCache::load();
+    let state = renewed.model_lists.get("chatgpt").expect("cache state");
+    assert_eq!(state.etag.as_deref(), Some("catalog-v2"));
+    assert_ne!(state.client_version, "stale-client");
+    assert!(state.refreshed_at_ms > 0);
 }
 
 #[test]
@@ -571,4 +662,55 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
     assert!(usage.model_recency("model-a") > 0);
     assert_eq!(usage.last_model_for("my-custom"), None);
     assert_eq!(usage.last_model_for("deleted-connection"), None);
+}
+
+#[tokio::test]
+async fn etag_matching_stale_renews_timestamp() {
+    let _sandbox = sandboxed_paths();
+    let conn = instance("test-etag-conn", Some("openai"));
+    let connections = Connections {
+        connections: vec![conn],
+    };
+    connections.save().unwrap();
+
+    let mut cache = DiscoveryCache::default();
+    cache.model_lists.insert(
+        "test-etag-conn".to_string(),
+        ModelListCacheState {
+            etag: Some("etag-abc".to_string()),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            refreshed_at_ms: 1000, // very stale
+        },
+    );
+    cache.save().unwrap();
+
+    let outcome = refresh_connection_models_for_etag("test-etag-conn", "etag-abc").await;
+    assert!(!outcome.changed);
+    assert!(outcome.failures.is_empty());
+
+    let reloaded = DiscoveryCache::load();
+    let state = reloaded.model_lists.get("test-etag-conn").unwrap();
+    assert_eq!(state.etag.as_deref(), Some("etag-abc"));
+    assert!(state.refreshed_at_ms > 1000);
+}
+
+#[tokio::test]
+async fn discovery_never_resurrects_deleted_connection() {
+    let _sandbox = sandboxed_paths();
+    // Do NOT add "deleted-conn" to Connections
+    let connections = Connections {
+        connections: Vec::new(),
+    };
+    connections.save().unwrap();
+
+    let mut locked_cache = DiscoveryCache::lock().await.unwrap();
+    locked_cache.remove_connection("deleted-conn");
+    locked_cache.save().unwrap();
+
+    let outcome = discover_connection_models("deleted-conn", true).await;
+    assert!(!outcome.changed);
+
+    let final_cache = DiscoveryCache::load();
+    assert!(final_cache.connection_models.get("deleted-conn").is_none());
+    assert!(final_cache.model_lists.get("deleted-conn").is_none());
 }

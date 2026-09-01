@@ -68,7 +68,7 @@ pub async fn request_device_code(
             crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
         })?;
     let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let text = crate::oauth::token::read_response_text(response, "device code response").await?;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
@@ -102,7 +102,12 @@ pub async fn poll_device_code(
     cfg: &OAuthConfig,
     device: &ChatGptDeviceCode,
 ) -> Result<ChatGptDeviceToken, crate::oauth::AuthError> {
-    poll_device_code_with(client, cfg, device, sleep_ms).await
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15 * 60),
+        poll_device_code_with(client, cfg, device, sleep_ms),
+    )
+    .await
+    .map_err(|_| crate::oauth::AuthError::Timeout)?
 }
 
 /// Test-injectable variant of [`poll_device_code`].
@@ -136,7 +141,8 @@ where
                 crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
             })?;
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+        let text =
+            crate::oauth::token::read_response_text(response, "device token response").await?;
         if status.is_success() {
             return serde_json::from_str::<ChatGptDeviceToken>(&text).map_err(|e| {
                 crate::oauth::AuthError::Decode(format!("device token response parse failed: {e}"))

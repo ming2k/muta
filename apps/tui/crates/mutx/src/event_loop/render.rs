@@ -17,7 +17,7 @@ use super::transcript::display_status;
 /// active modal panel, persisting per-frame layout state back onto `app`.
 /// Invoked through `Terminal::stage` (bottom-follow measurement pass) or
 /// `Terminal::draw`; extracted verbatim from the `render_frame` closure.
-pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str) {
+pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str) {
     let mut layout_map = LayoutMap::new();
 
     if app.startup_overlay == crate::StartupOverlay::SessionsPicker
@@ -616,6 +616,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     app.layout_height_cache = height_cache;
     app.content_lines = content_lines;
     app.view_height = view_height;
+    app.max_scroll = content_lines
+        .saturating_sub(view_height as usize)
+        .min(u16::MAX as usize) as u16;
     // Hit-test rects for the footer bars, resolved from the one registry the
     // renderer placed this frame (`TranscriptRender::footer`) — one source
     // of truth instead of per-bar plumbing.

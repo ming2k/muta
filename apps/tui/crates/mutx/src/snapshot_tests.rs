@@ -507,7 +507,19 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
 /// [`render_grid`], this exercises `draw_transcript` so the message-level
 /// spacing between consecutive steps is captured. Backgrounds are omitted:
 /// these tests are about row counts, not palette.
-fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u16) -> String {
+struct RenderedTranscript {
+    grid: String,
+    content_lines: usize,
+    view_height: u16,
+}
+
+fn render_transcript_frame(
+    messages: &[TranscriptMessage],
+    width: u16,
+    height: u16,
+    scroll: u16,
+    mut height_cache: Option<&mut super::HeightCache>,
+) -> RenderedTranscript {
     use super::{EmptyStateGuidance, QueueBarView, Theme, TranscriptView, draw_transcript};
     use crate::model::layout::LayoutMap;
 
@@ -515,13 +527,14 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
     let selection = SelectionState::default();
     let mut terminal = mutx_engine::TestTerminal::new(width, height);
     let mut layout_map = LayoutMap::new();
+    let mut render = None;
     terminal.draw(|f| {
-        let _ = draw_transcript(
+        render = Some(draw_transcript(
             f,
             &mut layout_map,
             TranscriptView {
                 messages,
-                scroll: 0,
+                scroll,
                 selection: &selection,
                 cell_selection: None,
                 backoff_clause: None,
@@ -550,9 +563,9 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 carousel_index: 0,
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
-                height_cache: None,
+                height_cache: height_cache.as_deref_mut(),
             },
-        );
+        ));
     });
 
     let buf = terminal.buffer();
@@ -568,7 +581,16 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
     while rows.last().is_some_and(|r| r.is_empty()) {
         rows.pop();
     }
-    rows.join("\n")
+    let render = render.expect("draw_transcript must return layout metrics");
+    RenderedTranscript {
+        grid: rows.join("\n"),
+        content_lines: render.content_lines,
+        view_height: render.view_height,
+    }
+}
+
+fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u16) -> String {
+    render_transcript_frame(messages, width, height, 0, None).grid
 }
 
 /// A discovery warning (model-list refresh failure) renders as a notification
@@ -867,6 +889,58 @@ fn command_entries_render_header_and_direct_body_without_folding() {
     assert!(
         grid.contains("• run_command"),
         "the body's list renders through the block renderer:\n{grid}"
+    );
+}
+
+/// A command Ack may be taller than the transcript viewport (narrow terminals
+/// can also turn a few long detail strings into many wrapped rows). Its
+/// renderer must measure every logical row regardless of clipping so the
+/// height cache and `max_scroll` can expose the complete result.
+#[test]
+fn command_ack_height_is_viewport_independent_and_last_row_is_reachable() {
+    let last_detail = "final delegated-mode detail";
+    let mut detail: Vec<String> = (0..24)
+        .map(|index| format!("delegated-mode detail {index:02}"))
+        .collect();
+    detail.push(last_detail.to_string());
+    let messages = vec![TranscriptMessage::command_result(
+        "delegate",
+        "on",
+        Some(muta_contracts::CommandResult::Ack {
+            title: "Delegated mode ON".to_string(),
+            detail: Some(detail),
+        }),
+    )];
+
+    // A tall viewport provides the reference logical height without clipping.
+    let full = render_transcript_frame(&messages, 60, 80, 0, None);
+
+    // Production keeps a height cache across frames. The first clipped frame
+    // must cache the same complete height, never just the painted prefix.
+    let mut height_cache = super::HeightCache::default();
+    let top = render_transcript_frame(&messages, 60, 12, 0, Some(&mut height_cache));
+    assert!(
+        top.content_lines > top.view_height as usize,
+        "the Ack fixture must overflow the transcript viewport"
+    );
+    assert_eq!(
+        top.content_lines, full.content_lines,
+        "logical command height must not depend on viewport clipping"
+    );
+
+    let max_scroll = top
+        .content_lines
+        .saturating_sub(top.view_height as usize)
+        .min(u16::MAX as usize) as u16;
+    let bottom = render_transcript_frame(&messages, 60, 12, max_scroll, Some(&mut height_cache));
+    assert_eq!(
+        bottom.content_lines, full.content_lines,
+        "cached command height must stay exact at the bottom offset"
+    );
+    assert!(
+        bottom.grid.contains(last_detail),
+        "the final Ack detail must be reachable at max_scroll:\n{}",
+        bottom.grid
     );
 }
 

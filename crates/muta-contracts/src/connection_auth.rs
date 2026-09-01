@@ -12,28 +12,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ConnectionAuth {
-    /// Bearer from `api_key_env` (env first) or inline `api_key`. The
-    /// historical behavior — every provider except OAuth ones.
+    /// Bearer from `api_key_env` (env first) or inline `api_key`.
     #[default]
     ApiKey,
-    /// xAI SuperGrok subscription: resolve the live OAuth access token from
-    /// `auth.toml` (key `"xai"`), refreshed at activate/switch time (see
-    /// `muta_providers::oauth`). Any user provider connection may set this; the
-    /// catalog always reads the shared xAI token set.
+    /// xAI SuperGrok subscription. The exact connection id owns its token set,
+    /// which is resolved and refreshed on demand.
     XaiOAuth,
-    /// ChatGPT/Codex subscription: resolve the live OAuth access token from
-    /// `auth.toml` (key `"chatgpt"`) and the `chatgpt_account_id`, then route
-    /// inference to the Responses backend
-    /// (`https://chatgpt.com/backend-api/codex/responses`). Refreshed at
-    /// activate/switch time.
+    /// ChatGPT/Codex subscription. The exact connection id owns its token set
+    /// and ChatGPT account id; inference uses the Codex Responses backend.
     ChatGptOAuth,
-    /// GitHub Copilot subscription: resolve the live OAuth access token from
-    /// `auth.toml` (key `"copilot"`) and route inference to the Copilot
-    /// Responses backend (`https://api.githubcopilot.com/responses`).
+    /// GitHub Copilot subscription. The exact connection id owns its token set;
+    /// inference uses the Copilot Responses backend.
     CopilotOAuth,
-    /// Google Antigravity subscription: resolve the live OAuth access token from
-    /// `auth.toml` (key `"google-antigravity"`), refreshed at activate/switch
-    /// time. Connects Google Antigravity models over native Google REST.
+    /// Google Antigravity subscription. The exact connection id owns its token
+    /// set; inference uses native Google REST.
     AntigravityOAuth,
 }
 
@@ -73,8 +65,8 @@ impl ConnectionAuth {
         matches!(self, ConnectionAuth::XaiOAuth)
     }
 
-    /// The `auth.toml` provider-id key for this OAuth variant, or `None` for
-    /// API-key connections. Used to load/refresh the shared token set.
+    /// Stable OAuth integration id used to select endpoints and protocol
+    /// configuration. It is never a runtime credential namespace.
     pub fn oauth_provider_id(self) -> Option<&'static str> {
         match self {
             ConnectionAuth::XaiOAuth => Some("xai"),

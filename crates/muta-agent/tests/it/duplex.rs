@@ -238,14 +238,24 @@ impl Provider for StreamWriteCallProvider {
     > {
         let round = self.0.fetch_add(1, Ordering::SeqCst);
         let events = if round == 0 {
-            vec![Ok(ProviderStreamEvent::ToolCallDelta {
-                index: 0,
-                id: Some("child_call".to_string()),
-                name: Some("gated_write".to_string()),
-                arguments: "{}".to_string(),
-            })]
+            vec![
+                Ok(ProviderStreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("child_call".to_string()),
+                    name: Some("gated_write".to_string()),
+                    arguments: "{}".to_string(),
+                }),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ]
         } else {
-            vec![Ok(ProviderStreamEvent::TextDelta("done".to_string()))]
+            vec![
+                Ok(ProviderStreamEvent::TextDelta("done".to_string())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ]
         };
         Ok(Box::pin(stream::iter(events)))
     }

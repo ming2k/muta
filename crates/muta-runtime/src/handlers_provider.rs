@@ -61,6 +61,11 @@ pub(crate) struct AddProviderParams {
     pub client_identity: Option<ClientIdentity>,
 }
 
+pub(crate) struct PendingOAuthAuthorization {
+    pub auth: muta_contracts::ConnectionAuth,
+    pub tokens: muta_providers::oauth::TokenSet,
+}
+
 pub(crate) struct ActivateEnv<'a> {
     pub config: &'a Config,
     pub agent: &'a Agent,
@@ -171,6 +176,7 @@ pub(crate) async fn add(
         provider_usage,
     }: ProviderEnv<'_>,
     params: AddProviderParams,
+    pending_authorization: Option<PendingOAuthAuthorization>,
 ) {
     let AddProviderParams {
         name,
@@ -228,6 +234,80 @@ pub(crate) async fn add(
 
     let client_identity = client_identity.unwrap_or_default();
 
+    // Pre-connection authorization is a single-use, session-local value. It
+    // never enters the global store under a generic provider namespace.
+    let pending_tokens = if auth.is_oauth() {
+        match pending_authorization {
+            Some(pending) if pending.auth == auth && pending.tokens.is_valid() => {
+                Some(pending.tokens)
+            }
+            _ => {
+                let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                    muta_contracts::ConnectStatus::Failed {
+                        provider: id.clone(),
+                        message: "OAuth authorization is missing or invalid; authorize this connection again"
+                            .to_string(),
+                    },
+                ));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    // Step 1: Write credentials to disk FIRST so a visible connection never exists without credentials.
+    let mut stored_oauth = false;
+    if let Some(tokens) = pending_tokens {
+        let mut store = match muta_providers::oauth::AuthStore::lock().await {
+            Ok(store) => store,
+            Err(error) => {
+                let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                    muta_contracts::ConnectStatus::Failed {
+                        provider: id.clone(),
+                        message: format!("could not lock OAuth credential store: {error}"),
+                    },
+                ));
+                return;
+            }
+        };
+        store.set(&id, tokens);
+        if let Err(error) = store.save() {
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                muta_contracts::ConnectStatus::Failed {
+                    provider: id.clone(),
+                    message: format!("could not persist OAuth credentials: {error}"),
+                },
+            ));
+            return;
+        }
+        stored_oauth = true;
+    }
+
+    let mut stored_api_key = false;
+    if auth == muta_contracts::ConnectionAuth::ApiKey && !trimmed_key.is_empty() {
+        let mut creds = Credentials::load();
+        creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
+        let save_err = creds.save().err().map(|e| e.to_string());
+        if let Some(error_msg) = save_err {
+            if stored_oauth
+                && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await
+            {
+                store.remove(&id);
+                let _ = store.save();
+            }
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                muta_contracts::ConnectStatus::Failed {
+                    provider: id.clone(),
+                    message: format!("could not persist API key: {error_msg}"),
+                },
+            ));
+            return;
+        }
+        stored_api_key = true;
+    }
+
+    // Step 2: Publish connection to Connections store.
     let connection = Connection {
         id: id.clone(),
         name: (!name.trim().is_empty()).then(|| name.trim().to_string()),
@@ -245,16 +325,27 @@ pub(crate) async fn add(
         },
     };
     connections.connections.push(connection);
-    if connections.save().is_err() {
-        tracing::warn!("add: could not persist connection");
-    }
-    // The connection's credential, if the user supplied one.
-    if auth == muta_contracts::ConnectionAuth::ApiKey && !trimmed_key.is_empty() {
-        let mut creds = Credentials::load();
-        creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
-        if creds.save().is_err() {
-            tracing::warn!("add: could not persist credential");
+    let conn_save_err = connections.save().err().map(|e| e.to_string());
+    if let Some(error_msg) = conn_save_err {
+        tracing::error!(%error_msg, "add: could not persist connection; rolling back credentials");
+        if stored_oauth
+            && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await
+        {
+            store.remove(&id);
+            let _ = store.save();
         }
+        if stored_api_key {
+            let mut creds = Credentials::load();
+            creds.remove_api_key(&id);
+            let _ = creds.save();
+        }
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            muta_contracts::ConnectStatus::Failed {
+                provider: id.clone(),
+                message: format!("could not persist connection store: {error_msg}"),
+            },
+        ));
+        return;
     }
 
     config.default_connection = id.clone();
@@ -278,7 +369,7 @@ pub(crate) async fn add(
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
     if auth.is_oauth() && auth != muta_contracts::ConnectionAuth::AntigravityOAuth {
-        let outcome = catalog::discover_provider_models(true).await;
+        let outcome = catalog::discover_connection_models(&id, true).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
             catalog::prune_stale_models_on_disk();
@@ -608,14 +699,20 @@ pub(crate) async fn delete(
     if creds.save().is_err() {
         tracing::warn!("delete: could not persist credentials");
     }
-    let mut auth_store = muta_providers::oauth::AuthStore::load();
-    if auth_store.remove(&id).is_some() {
-        let _ = auth_store.save();
+    match muta_providers::oauth::AuthStore::lock().await {
+        Ok(mut auth_store) => {
+            if auth_store.remove(&id).is_some()
+                && let Err(error) = auth_store.save()
+            {
+                tracing::error!(?error, connection_id = %id, "could not remove OAuth credential");
+            }
+        }
+        Err(error) => {
+            tracing::error!(?error, connection_id = %id, "could not open OAuth credential store");
+        }
     }
-    let mut cache = DiscoveryCache::load();
-    cache.remove_connection(&id);
-    if cache.save().is_err() {
-        tracing::warn!("delete: could not persist discovery cache");
+    if let Err(error) = DiscoveryCache::modify(|cache| cache.remove_connection(&id)).await {
+        tracing::warn!(?error, connection_id = %id, "could not persist discovery cache on delete");
     }
     // The deleted connection's route settings go with it (state, not cache).
     let mut routes = RouteSettingsStore::load();
@@ -716,13 +813,13 @@ pub async fn reapply_session_selection(
 
 /// `AgentRequest::AuthorizeOAuth` — run an OAuth login before a connection
 /// exists ("+ Add connection → xAI OAuth / ChatGPT OAuth"). `auth`
-/// selects which provider's flow to run; tokens persist under that provider's
-/// `auth.toml` key.
+/// selects which provider's flow to run. The returned token set remains
+/// session-local until `AddProvider` consumes it into the final connection id.
 pub async fn authorize(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     method: muta_contracts::LoginMethod,
     auth: muta_contracts::ConnectionAuth,
-) {
+) -> Option<muta_providers::oauth::TokenSet> {
     let Some(cfg) = auth
         .oauth_provider_id()
         .and_then(muta_providers::oauth::config_by_provider_id)
@@ -733,14 +830,10 @@ pub async fn authorize(
                 message: "not an OAuth provider".to_string(),
             },
         ));
-        return;
+        return None;
     };
     let label = cfg.provider_id.to_string();
-    if run_oauth(resp_tx, &label, method, cfg).await {
-        let _ = resp_tx.send(AgentResponse::ConnectStatus(
-            muta_contracts::ConnectStatus::Done { provider: label },
-        ));
-    }
+    run_oauth(resp_tx, &label, method, cfg).await
 }
 
 /// `AgentRequest::ConnectProvider` — re-auth an existing OAuth connection, then
@@ -783,7 +876,7 @@ pub async fn run_oauth_for_connect(
         .get(&provider_id)
         .map(|p| p.auth)
         .unwrap_or_default();
-    let Some(mut cfg) = auth_mode
+    let Some(cfg) = auth_mode
         .oauth_provider_id()
         .and_then(muta_providers::oauth::config_by_provider_id)
     else {
@@ -795,8 +888,35 @@ pub async fn run_oauth_for_connect(
         ));
         return false;
     };
-    cfg.provider_id = std::borrow::Cow::Owned(provider_id.clone());
-    if !run_oauth(resp_tx, &provider_id, method, cfg).await {
+    let Some(mut tokens) = run_oauth(resp_tx, &provider_id, method, cfg).await else {
+        return false;
+    };
+    let mut store = match muta_providers::oauth::AuthStore::lock().await {
+        Ok(store) => store,
+        Err(error) => {
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                muta_contracts::ConnectStatus::Failed {
+                    provider: provider_id,
+                    message: format!("could not lock OAuth credential store: {error}"),
+                },
+            ));
+            return false;
+        }
+    };
+    if tokens.refresh.is_empty()
+        && let Some(previous) = store.get(&provider_id)
+        && !previous.refresh.is_empty()
+    {
+        tokens.refresh = previous.refresh.clone();
+    }
+    store.set(&provider_id, tokens);
+    if let Err(error) = store.save() {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            muta_contracts::ConnectStatus::Failed {
+                provider: provider_id,
+                message: format!("could not persist OAuth credentials: {error}"),
+            },
+        ));
         return false;
     }
     let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -820,7 +940,7 @@ pub async fn connect_post_oauth(
     // fresh token so the picker shows the account's real entitlements right
     // away. A failure keeps the previous subset; each failure is reported back
     // as a warning so the user knows *why* the list did not refresh.
-    let outcome = catalog::discover_provider_models(true).await;
+    let outcome = catalog::discover_connection_models(&provider_id, true).await;
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
@@ -854,20 +974,18 @@ pub async fn connect_post_oauth(
     .await;
 }
 
-/// Shared OAuth body for any provider: browser loopback (PKCE) or device-code,
-/// parameterized by the provider's [`muta_providers::oauth::OAuthConfig`]. Persists the resulting token
-/// set (plus the ChatGPT account id, when present) under the provider's
-/// `auth.toml` key.
+/// Shared OAuth exchange for any provider: browser loopback (PKCE) or device
+/// code. Persistence belongs to the caller because only it knows the final,
+/// exact connection namespace.
 async fn run_oauth(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     label: &str,
     method: muta_contracts::LoginMethod,
     cfg: muta_providers::oauth::OAuthConfig,
-) -> bool {
-    use muta_providers::oauth::{AuthStore, OAuth};
+) -> Option<muta_providers::oauth::TokenSet> {
+    use muta_providers::oauth::OAuth;
 
     let oauth = OAuth::new(cfg.clone());
-    let now_ms = chrono::Utc::now().timestamp_millis();
 
     let login = match oauth.begin_login(method).await {
         Ok(login) => login,
@@ -878,7 +996,7 @@ async fn run_oauth(
                     message: error.to_string(),
                 },
             ));
-            return false;
+            return None;
         }
     };
     let prompt = login.prompt();
@@ -900,9 +1018,10 @@ async fn run_oauth(
                     message: error.to_string(),
                 },
             ));
-            return false;
+            return None;
         }
     };
+    let now_ms = chrono::Utc::now().timestamp_millis();
 
     // Capture the ChatGPT account id from the id_token/access_token so the
     // Responses transport can send the `ChatGPT-Account-Id` header. xAI tokens
@@ -944,75 +1063,35 @@ async fn run_oauth(
         }
     }
 
-    let set = muta_providers::oauth::TokenSet {
+    let expires_ms = muta_providers::oauth::access_token_expiry_ms(
+        tokens.access_token.expose_secret(),
+        tokens.expires_in,
+        now_ms,
+    );
+    Some(muta_providers::oauth::TokenSet {
         access: tokens.access_token,
         refresh: tokens.refresh_token.unwrap_or_default(),
-        expires_ms: now_ms + (tokens.expires_in.unwrap_or(3600) as i64) * 1000,
+        expires_ms,
         account_id,
         id_token: tokens.id_token,
         token_type: tokens.token_type,
         scope: tokens.scope,
         project_id,
         user_email,
-    };
-    let mut store = AuthStore::load();
-    store.set(&cfg.provider_id, set);
-    if let Err(e) = store.save() {
-        let _ = resp_tx.send(AgentResponse::ConnectStatus(
-            muta_contracts::ConnectStatus::Failed {
-                provider: label.to_string(),
-                message: format!("could not save tokens: {e}"),
-            },
-        ));
-        return false;
-    }
-    true
+    })
 }
 
 pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
-    use muta_providers::oauth::{AuthStore, OAuth};
-
     let connections = Connections::load();
     let Some(instance) = connections.get(provider_id) else {
         return;
     };
-    let auth = instance.auth;
-    let preset_id = instance.preset_id.as_deref();
-
-    let Some(mut cfg) = auth
-        .oauth_provider_id()
-        .and_then(muta_providers::oauth::config_by_provider_id)
-    else {
-        return;
-    };
-    cfg.provider_id = std::borrow::Cow::Owned(provider_id.to_string());
-
-    let store = AuthStore::load();
-    let Some(stored) = store
-        .get_for_provider(provider_id, preset_id, auth)
-        .cloned()
-    else {
-        return;
-    };
-    if stored.access.is_empty() || stored.refresh.is_empty() {
+    if !instance.auth.is_oauth() {
         return;
     }
-    let oauth = OAuth::new(cfg.clone());
-    match oauth.resolve_access_token(stored).await {
-        Ok((_access, tokens)) => {
-            let mut store = AuthStore::load();
-            store.set(provider_id, tokens);
-            let _ = store.save();
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, provider = %provider_id, "OAuth: token refresh failed");
-            if e.is_permanent_grant_error() {
-                tracing::error!(provider = %provider_id, "OAuth: refresh token permanently invalid; clearing store");
-                let mut store = AuthStore::load();
-                store.remove(provider_id);
-                let _ = store.save();
-            }
-        }
+    let source = muta_providers::oauth::OAuthCredentialSource::new(provider_id, instance.auth);
+    if let Err(error) = muta_contracts::CredentialSource::resolve_auth(&source).await {
+        tracing::warn!(error = %error, provider = %provider_id, "OAuth token resolution failed");
     }
 }
 
@@ -1405,5 +1484,86 @@ mod tests {
         assert_eq!(connections.unique_id("  Acme  AI  "), "acme-ai");
         assert_eq!(connections.unique_id("***"), "custom");
         assert_eq!(connections.unique_id(""), "custom");
+    }
+
+    #[tokio::test]
+    async fn add_provider_oauth_auth_mismatch_never_writes_connection_or_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
+        let session = SessionStore::for_path(dir.path().join("session.json"));
+        let mut config = Config::default();
+        let mut usage = ConnectionUsage::default();
+        let agent = muta_agent::Agent::builder(
+            Arc::new(muta_agent::NoProvider),
+            Vec::new(),
+            muta_agent::AgentIdentity::default(),
+        )
+        .build();
+        let provider_for_task = Arc::new(std::sync::RwLock::new(agent.provider.clone()));
+
+        let env = ProviderEnv {
+            config: &mut config,
+            agent: &agent,
+            provider_for_task: &provider_for_task,
+            session: &session,
+            resp_tx: &resp_tx,
+            provider_usage: &mut usage,
+        };
+
+        // Pending auth is for AntigravityOAuth, but params requests ChatGptOAuth
+        let pending = PendingOAuthAuthorization {
+            auth: muta_contracts::ConnectionAuth::AntigravityOAuth,
+            tokens: muta_providers::oauth::TokenSet {
+                access: "tok".into(),
+                refresh: "ref".into(),
+                expires_ms: 1000,
+                account_id: None,
+                id_token: None,
+                token_type: None,
+                scope: None,
+                project_id: None,
+                user_email: None,
+            },
+        };
+
+        let params = AddProviderParams {
+            name: "Mismatched Provider".to_string(),
+            protocol: WireProtocol::OpenAiResponses,
+            base_url: "https://api.openai.com".to_string(),
+            api_key: "".into(),
+            user_agent: None,
+            models: vec!["gpt-5.6".to_string()],
+            auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
+            preset_id: Some("chatgpt".to_string()),
+            client_identity: None,
+        };
+
+        add(env, params, Some(pending)).await;
+
+        // Verify response was ConnectStatus::Failed
+        let resp = resp_rx.recv().await.unwrap();
+        assert!(matches!(
+            resp,
+            AgentResponse::ConnectStatus(muta_contracts::ConnectStatus::Failed { .. })
+        ));
+
+        // Verify no connection was written
+        let conns = Connections::load();
+        assert!(conns.connections.is_empty());
+
+        // Verify no token was written
+        let store = muta_providers::oauth::AuthStore::load().unwrap();
+        assert!(store.tokens.is_empty());
+
+        muta_persistence::paths::set_test_default(None);
     }
 }

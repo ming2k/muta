@@ -49,6 +49,17 @@ pub struct TokenResponse {
     pub scope: Option<String>,
 }
 
+impl TokenResponse {
+    pub fn validate(self) -> Result<Self, crate::oauth::AuthError> {
+        if self.access_token.expose_secret().trim().is_empty() {
+            return Err(crate::oauth::AuthError::Decode(
+                "token endpoint returned an empty access_token".to_string(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
 /// Google UserInfo response.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GoogleUserInfo {
@@ -214,16 +225,17 @@ async fn execute_token_request(
                 crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
             })?;
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = read_response_text(resp, "token response").await?;
             if !status.is_success() {
                 return Err(crate::oauth::AuthError::TokenEndpoint {
                     status: status.as_u16(),
                     body: text,
                 });
             }
-            serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
+            let parsed = serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
                 crate::oauth::AuthError::Decode(format!("token response parse failed: {e}"))
-            })
+            })?;
+            parsed.validate()
         }
         TokenRequestFormat::Json => {
             let mut map = serde_json::Map::new();
@@ -250,16 +262,17 @@ async fn execute_token_request(
                 crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
             })?;
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = read_response_text(resp, "token response").await?;
             if !status.is_success() {
                 return Err(crate::oauth::AuthError::TokenEndpoint {
                     status: status.as_u16(),
                     body: text,
                 });
             }
-            serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
+            let parsed = serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
                 crate::oauth::AuthError::Decode(format!("token response parse failed: {e}"))
-            })
+            })?;
+            parsed.validate()
         }
     }
 }
@@ -321,15 +334,16 @@ pub(crate) async fn post_form(
         .await
         .map_err(|e| crate::oauth::AuthError::Transport(format!("token request failed: {e}")))?;
     let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let text = read_response_text(response, "token response").await?;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
             body: text,
         });
     }
-    serde_json::from_str::<TokenResponse>(&text)
-        .map_err(|e| crate::oauth::AuthError::Decode(format!("token response parse failed: {e}")))
+    let parsed = serde_json::from_str::<TokenResponse>(&text)
+        .map_err(|e| crate::oauth::AuthError::Decode(format!("token response parse failed: {e}")))?;
+    parsed.validate()
 }
 
 /// Whether a stored access token is expiring within `skew_ms` of now.
@@ -347,6 +361,21 @@ pub fn jwt_exp_ms(token: &str) -> Option<i64> {
     let claims = jwt_claims(token)?;
     let exp = claims.get("exp")?.as_i64()?;
     Some(exp * 1000)
+}
+
+/// Resolve an access token's absolute expiration without inventing a TTL.
+/// Explicit OAuth metadata wins, JWT `exp` is the fallback, and an opaque
+/// token with neither is treated as non-expiring.
+pub fn access_token_expiry_ms(access_token: &str, expires_in: Option<u64>, now_ms: i64) -> i64 {
+    expires_in
+        .and_then(|seconds| {
+            i64::try_from(seconds)
+                .ok()
+                .and_then(|seconds| seconds.checked_mul(1_000))
+                .and_then(|ttl| now_ms.checked_add(ttl))
+        })
+        .or_else(|| jwt_exp_ms(access_token))
+        .unwrap_or(i64::MAX)
 }
 
 /// Decode a JWT's payload claims (without signature verification) as JSON.
@@ -391,11 +420,21 @@ pub async fn fetch_google_userinfo(
             .map_err(|e| crate::oauth::AuthError::Decode(format!("userinfo parse failed: {e}")))?;
         Ok(info)
     } else {
+        let status = resp.status().as_u16();
         Err(crate::oauth::AuthError::TokenEndpoint {
-            status: resp.status().as_u16(),
-            body: resp.text().await.unwrap_or_default(),
+            status,
+            body: read_response_text(resp, "userinfo error response").await?,
         })
     }
+}
+
+pub(crate) async fn read_response_text(
+    response: reqwest::Response,
+    context: &str,
+) -> Result<String, crate::oauth::AuthError> {
+    response.text().await.map_err(|error| {
+        crate::oauth::AuthError::Transport(format!("could not read {context}: {error}"))
+    })
 }
 
 /// Discover or onboard the user's Antigravity `cloudaicompanionProject`.
@@ -667,6 +706,19 @@ mod tests {
     fn jwt_exp_none_for_opaque_token() {
         assert!(jwt_exp_ms("opaque-token-no-dots").is_none());
         assert!(jwt_exp_ms("aaa.bbb").is_none());
+    }
+
+    #[test]
+    fn token_expiry_never_invents_a_ttl_for_opaque_tokens() {
+        assert_eq!(access_token_expiry_ms("opaque", None, 123), i64::MAX);
+        assert_eq!(access_token_expiry_ms("opaque", Some(60), 1_000), 61_000);
+    }
+
+    #[test]
+    fn token_expiry_uses_jwt_exp_when_oauth_ttl_is_absent() {
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"exp":2000000000}"#);
+        let token = format!("header.{payload}.sig");
+        assert_eq!(access_token_expiry_ms(&token, None, 1), 2_000_000_000_000);
     }
 
     #[test]

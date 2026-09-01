@@ -222,6 +222,9 @@ pub fn empty_variant_selection() -> &'static VariantSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderStreamEvent {
+    /// Upstream model-catalog version advertised on an inference response.
+    /// The harness consumes this control event internally; it is not content.
+    ModelCatalogEtag(String),
     TextDelta(String),
     ReasoningDelta(String),
     ToolCallDelta {

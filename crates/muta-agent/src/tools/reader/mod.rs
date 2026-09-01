@@ -76,7 +76,8 @@ mod tests {
 
     #[test]
     fn build_reader_defaults_to_jina_for_unknown_name() {
-        let cfg = muta_contracts::WebSearchConfig::default();
+        let mut cfg = muta_contracts::WebSearchConfig::default();
+        cfg.reader = "unknown".to_string();
         assert_eq!(build_reader(&cfg).name(), "jina");
 
         let cfg: muta_contracts::WebSearchConfig =

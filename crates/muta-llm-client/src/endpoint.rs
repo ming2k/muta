@@ -89,9 +89,14 @@ impl Endpoint {
         self.credentials.resolve_auth().await
     }
 
-    /// Force a fresh token exchange with upstream (e.g. for reactive 401 recovery).
-    pub async fn force_refresh_auth(&self) -> Result<ResolvedAuth, String> {
-        self.credentials.force_refresh().await
+    /// Refresh in reaction to a rejection of the token used by this request.
+    pub async fn force_refresh_auth_after(
+        &self,
+        rejected_access: &muta_contracts::SecretString,
+    ) -> Result<ResolvedAuth, String> {
+        self.credentials
+            .force_refresh_after_rejection(rejected_access)
+            .await
     }
 
     /// Whether this endpoint uses dynamic OAuth credentials.

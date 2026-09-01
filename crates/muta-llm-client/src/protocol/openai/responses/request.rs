@@ -186,6 +186,11 @@ pub fn body_with_capabilities(
         //   response objects and enables `previous_response_id` continuation chains.
         "store": store,
     });
+    if !store {
+        // Stateless Responses continuation requires opaque reasoning items in
+        // the returned output. The next turn replays that output verbatim.
+        body["include"] = json!(["reasoning.encrypted_content"]);
+    }
     if let muta_contracts::RequestDelivery::RemoteContinuation {
         previous_response_id,
         ..
@@ -199,6 +204,7 @@ pub fn body_with_capabilities(
     if let Some(specs) = flatten_tools(tool_specs) {
         body["tools"] = specs;
         body["tool_choice"] = json!("auto");
+        body["parallel_tool_calls"] = json!(true);
     }
     // Reasoning: GPT-5 models always reason. Request the most verbose summaries
     // the backend offers (`detailed`) so the reasoning trace carries real
@@ -467,6 +473,32 @@ mod tests {
         // thought is never exposed, so `detailed` is the ceiling.
         assert_eq!(body["reasoning"]["summary"], "detailed");
         assert_eq!(body["reasoning"]["effort"], "medium");
+    }
+
+    #[test]
+    fn stateless_requests_preserve_encrypted_reasoning_and_parallel_tools() {
+        let request = body_with_capabilities(
+            vec![Message::new(Role::User, "hi")],
+            BodyInput {
+                model: "gpt-5.6-sol",
+                tool_specs: Some(&[muta_contracts::ToolSpec {
+                    name: "lookup".to_string(),
+                    description: "lookup".to_string(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }]),
+                stream: true,
+                reasoning_effort: None,
+                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
+                store: false,
+                cache_plan: &muta_contracts::ResolvedCachePlan::Unsupported,
+            },
+            &muta_contracts::ModelCapabilities::for_channel("gpt-5.6-sol", None),
+        );
+        assert_eq!(
+            request["include"],
+            serde_json::json!(["reasoning.encrypted_content"])
+        );
+        assert_eq!(request["parallel_tool_calls"], true);
     }
 
     #[test]
