@@ -118,6 +118,7 @@ pub(crate) fn parse_kimi_balance(body: KimiBalanceResponse) -> Result<ProviderUs
         } else {
             None
         },
+        description: None,
         quota: Some(ProviderQuotaData::Balance(balance_quota)),
         primary_balance: Some(primary_balance),
         metrics,

@@ -1609,8 +1609,9 @@ fn user_steer_and_followup_render_clean_unified_headers() {
     );
 
     // Queued follow-up
-    let mut queued_followup = TranscriptMessage::new(muta_contracts::Role::User, "Queued next step")
-        .with_sent_at_ms(epoch_ms);
+    let mut queued_followup =
+        TranscriptMessage::new(muta_contracts::Role::User, "Queued next step")
+            .with_sent_at_ms(epoch_ms);
     queued_followup.origin = UserMessageOrigin::FollowUp;
     queued_followup.delivery = DeliveryStatus::Queued;
 

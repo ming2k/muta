@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the composer input viewport during mouse-wheel browsing and
+  drag-selection edge autoscroll instead of snapping back to the hidden caret
+  on the next render. Editing or moving the caret resumes caret following.
+- Reconcile OpenAI Responses tool traces by occurrence, remap colliding call
+  ids without mutating session history, and preserve tool outputs whose parent
+  calls are stored behind `previous_response_id` continuations.
+
 ## [0.37.26] - 2026-09-01
 
 ### Added

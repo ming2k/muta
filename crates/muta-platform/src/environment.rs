@@ -18,9 +18,7 @@ pub fn detect_runtime_environment() -> &'static str {
     }
 
     // 2. WSL environment detection
-    if std::env::var_os("WSL_DISTRO_NAME").is_some()
-        || std::env::var_os("WSL_INTEROP").is_some()
-    {
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some() {
         return "WSL environment";
     }
 

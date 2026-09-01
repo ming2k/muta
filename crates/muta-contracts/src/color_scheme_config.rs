@@ -77,6 +77,77 @@ pub struct CommandThemeConfig {
     pub hover_bg: Option<String>,
 }
 
+/// View/canvas surface overrides (Layer 0: Full-screen destinations).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct ViewThemeConfig {
+    pub canvas: Option<String>,
+    pub header_bg: Option<String>,
+    pub header_fg: Option<String>,
+}
+
+/// Sheet surface overrides (Layer 1: Edge-anchored drawers like Permission).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct SheetThemeConfig {
+    pub surface: Option<String>,
+    pub border: Option<String>,
+}
+
+/// Modal surface overrides (Layer 2: Center-anchored dialogs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct ModalThemeConfig {
+    pub surface: Option<String>,
+    pub border: Option<String>,
+    pub backdrop: Option<String>,
+    pub dim_factor: Option<f32>,
+}
+
+/// Overlay surface overrides (Layer 3: Corner floats, toasts, popups).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct OverlayThemeConfig {
+    pub toast_bg: Option<String>,
+    pub shadow: Option<String>,
+}
+
+/// Spatial 4-layer surface theme overrides container.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct SurfacesThemeConfig {
+    pub view: Option<ViewThemeConfig>,
+    pub sheet: Option<SheetThemeConfig>,
+    pub modal: Option<ModalThemeConfig>,
+    pub overlay: Option<OverlayThemeConfig>,
+}
+
+/// Feedback tone container and border colors (Info / Warning / Error / Success).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct FeedbackToneConfig {
+    pub container: Option<String>,
+    pub border: Option<String>,
+    pub text: Option<String>,
+}
+
+/// Structured feedback notification theme container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct FeedbackThemeConfig {
+    pub info: Option<FeedbackToneConfig>,
+    pub warning: Option<FeedbackToneConfig>,
+    pub error: Option<FeedbackToneConfig>,
+    pub success: Option<FeedbackToneConfig>,
+}
+
 /// Specialized component theme overrides container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(default)]
@@ -89,8 +160,8 @@ pub struct ComponentThemesConfig {
     pub command: Option<CommandThemeConfig>,
 }
 
-/// Full standalone theme file loaded from `$XDG_CONFIG_HOME/muta/themes/<id>.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+/// Full standalone theme file loaded from `$XDG_CONFIG_HOME/mutx/themes/<id>.toml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ThemeFile {
@@ -99,7 +170,10 @@ pub struct ThemeFile {
     pub description: String,
     pub author: Option<String>,
     pub version: Option<String>,
+    #[serde(alias = "palette")]
     pub colors: ColorSchemeConfig,
+    pub surfaces: Option<SurfacesThemeConfig>,
+    pub feedback: Option<FeedbackThemeConfig>,
     pub components: Option<ComponentThemesConfig>,
 }
 
@@ -112,6 +186,8 @@ impl Default for ThemeFile {
             author: None,
             version: None,
             colors: ColorSchemeConfig::default(),
+            surfaces: None,
+            feedback: None,
             components: None,
         }
     }
@@ -157,5 +233,57 @@ badge_bg = "#283457"
         assert_eq!(input.caret.as_deref(), Some("#c0caf5"));
         let crate_c = components.crate_component.expect("crate should exist");
         assert_eq!(crate_c.fg.as_deref(), Some("#bb9af7"));
+    }
+
+    #[test]
+    fn parses_new_surfaces_and_feedback_theme_file() {
+        let raw = r##"
+name = "Cyberpunk Obsidian"
+description = "Clean modern cyberpunk palette"
+
+[palette]
+background = "#090a10"
+surface = "#141724"
+text = "#e6edf3"
+muted = "#7d8590"
+accent = "#00f0ff"
+success = "#00ff88"
+warning = "#ffd700"
+error = "#ff0055"
+
+[surfaces.view]
+canvas = "#090a10"
+header_bg = "#10121d"
+
+[surfaces.sheet]
+surface = "#181c2d"
+border = "#2d3552"
+
+[surfaces.modal]
+surface = "#141724"
+border = "#00f0ff"
+dim_factor = 0.55
+
+[feedback.warning]
+container = "#26200a"
+border = "#ffd700"
+
+[components.input]
+caret = "#00f0ff"
+"##;
+        let parsed: ThemeFile = toml::from_str(raw).expect("new theme schema should parse");
+        assert_eq!(parsed.name, "Cyberpunk Obsidian");
+        assert_eq!(parsed.colors.background, "#090a10");
+        let surfaces = parsed.surfaces.expect("surfaces should exist");
+        assert_eq!(
+            surfaces.view.and_then(|v| v.canvas).as_deref(),
+            Some("#090a10")
+        );
+        assert_eq!(surfaces.modal.and_then(|m| m.dim_factor), Some(0.55));
+        let feedback = parsed.feedback.expect("feedback should exist");
+        assert_eq!(
+            feedback.warning.and_then(|w| w.container).as_deref(),
+            Some("#26200a")
+        );
     }
 }

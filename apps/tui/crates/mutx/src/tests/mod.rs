@@ -150,6 +150,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         completion_request_id: 0,
         cursor_position: 0,
         input_scroll: 0,
+        input_scroll_follow_cursor: true,
         leader_chord: crate::app::LeaderChord::None,
         input_rect: None,
         input_drag_scroll: None,

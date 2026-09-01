@@ -467,7 +467,8 @@ pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID: &str = concat!(
 );
 
 /// Primary Antigravity CLI OAuth client secret (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET: &str = concat!("GOCSPX-", "9YQWpF7RWDC0QTdj-YxKMwR0ZtsX");
+pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET: &str =
+    concat!("GOCSPX-", "9YQWpF7RWDC0QTdj-YxKMwR0ZtsX");
 
 /// Enterprise / Cloud Code Companion OAuth client ID (from agy binary).
 pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
@@ -477,7 +478,8 @@ pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
 );
 
 /// Enterprise / Cloud Code Companion OAuth client secret (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str = concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
+pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str =
+    concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
 
 // ─────────────────────────────────────────────────────────────────────────────
 

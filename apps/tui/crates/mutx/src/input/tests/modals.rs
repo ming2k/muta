@@ -535,3 +535,55 @@ fn mouse_wheel_still_scrolls_when_no_modal_open() {
         }
     );
 }
+
+#[test]
+fn composer_mouse_drag_emits_complete_selection_lifecycle() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut input = "first\nsecond".to_string();
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    let event = |kind, column, row| {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+
+    assert_eq!(
+        process_event(
+            event(MouseEventKind::Down(MouseButton::Left), 5, 20),
+            &mut input,
+            &mut cursor,
+            mouse_ctx_for(crate::Modal::None),
+            &mut drag,
+        ),
+        InputAction::SelectionStart { x: 5, y: 20 }
+    );
+    assert!(drag.active);
+
+    assert_eq!(
+        process_event(
+            event(MouseEventKind::Drag(MouseButton::Left), 5, 19),
+            &mut input,
+            &mut cursor,
+            mouse_ctx_for(crate::Modal::None),
+            &mut drag,
+        ),
+        InputAction::SelectionUpdate { x: 5, y: 19 }
+    );
+
+    assert_eq!(
+        process_event(
+            event(MouseEventKind::Up(MouseButton::Left), 5, 19),
+            &mut input,
+            &mut cursor,
+            mouse_ctx_for(crate::Modal::None),
+            &mut drag,
+        ),
+        InputAction::SelectionEnd
+    );
+    assert!(!drag.active);
+}

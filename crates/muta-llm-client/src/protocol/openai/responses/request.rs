@@ -14,6 +14,8 @@
 use muta_contracts::{Effort, Message, Role};
 use serde_json::{Value, json};
 
+use super::tool_trace::{self, InputItem};
+
 /// Inputs to [`body`]: the model id, whether this is a streaming request, the
 /// prepared tool schemas (OpenAI function-spec shape, optional), the optional
 /// reasoning-effort override, and the ChatGPT account id.
@@ -58,8 +60,14 @@ pub fn body_with_capabilities(
         cache_plan,
     } = input;
 
+    // A remote continuation already owns the anchor assistant's function calls
+    // server-side. Its new input therefore carries only their outputs, which
+    // the tool-trace projection must retain without looking for local calls.
+    let remote_call_ids = remote_parent_call_ids(&messages, delivery);
+
     // Fold system messages into `instructions`, strip images on non-vision
-    // models (the Responses API rejects `input_image` on them).
+    // models (the Responses API rejects `input_image` on them), and project a
+    // remote continuation down to only the locally new suffix.
     let mut instructions = String::new();
     let mut working: Vec<Message> = Vec::with_capacity(messages.len());
     for (index, mut m) in messages.into_iter().enumerate() {
@@ -85,46 +93,13 @@ pub fn body_with_capabilities(
         }
     }
 
-    // Reconcile tool calls/results so the request is wire-valid (same rules as
-    // the chat-completions builder): drop orphan tool results and strip
-    // unanswered tool calls.
-    let mut known_ids = std::collections::HashSet::new();
-    let working: Vec<Message> = working
-        .into_iter()
-        .filter(valid_message)
-        .filter(|message| match message.role {
-            Role::Assistant => {
-                if let Some(calls) = message.tool_calls.as_ref() {
-                    for call in calls {
-                        known_ids.insert(call.id.clone());
-                    }
-                }
-                true
-            }
-            Role::Tool => message
-                .tool_call_id
-                .as_ref()
-                .is_some_and(|id| !id.is_empty() && known_ids.contains(id)),
-            _ => true,
-        })
-        .collect();
+    let working: Vec<Message> = working.into_iter().filter(valid_message).collect();
 
-    let answered: std::collections::HashSet<String> = working
-        .iter()
-        .filter_map(|m| {
-            if m.role == Role::Tool {
-                m.tool_call_id.clone()
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let mut input_items: Vec<Value> = Vec::new();
-    for mut m in working {
+    let mut input_items: Vec<InputItem> = Vec::new();
+    for m in working {
         match m.role {
             Role::User => {
-                input_items.push(message_item("user", &m, "input_text"));
+                input_items.push(InputItem::plain(message_item("user", &m, "input_text")));
             }
             Role::Assistant => {
                 if matches!(delivery, muta_contracts::RequestDelivery::OpaqueReplay)
@@ -136,43 +111,38 @@ pub fn body_with_capabilities(
                         })
                         .and_then(Value::as_array)
                 {
-                    input_items.extend(items.iter().cloned());
+                    input_items.extend(items.iter().cloned().map(InputItem::provider_owned));
                     continue;
-                }
-                // Strip unanswered tool calls from this assistant turn.
-                if let Some(calls) = m.tool_calls.as_mut() {
-                    calls.retain(|c| answered.contains(&c.id));
                 }
                 // Emit an assistant message item for any text content...
                 if !m.content.is_empty() {
-                    input_items.push(message_item("assistant", &m, "output_text"));
+                    input_items.push(InputItem::plain(message_item(
+                        "assistant",
+                        &m,
+                        "output_text",
+                    )));
                 }
-                // ...then one function_call item per surviving call, in order.
+                // ...then one typed function-call item per call, in order.
                 // The Responses API requires a function_call item to precede its
                 // function_call_output, and interleaves them with the message
                 // flow, so emitting them right after the assistant text matches.
                 if let Some(calls) = m.tool_calls.as_ref() {
                     for call in calls {
-                        input_items.push(json!({
-                            "type": "function_call",
-                            "call_id": call.id,
-                            "name": call.name,
-                            "arguments": call.arguments,
-                        }));
+                        input_items.push(InputItem::function_call(call));
                     }
                 }
             }
             Role::Tool => {
                 let call_id = m.tool_call_id.clone().unwrap_or_default();
-                input_items.push(json!({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": m.content,
-                }));
+                input_items.push(InputItem::function_call_output(call_id, m.content));
             }
             Role::System => {} // folded into instructions above
         }
     }
+    let input_items: Vec<Value> = tool_trace::project(input_items, remote_call_ids)
+        .into_iter()
+        .map(InputItem::into_wire)
+        .collect();
 
     let mut body = json!({
         "model": model_id,
@@ -226,6 +196,28 @@ pub fn body_with_capabilities(
     super::super::cache::project_responses_instructions_for_explicit_mode(&mut body, cache_plan);
     super::super::cache::apply(&mut body, cache_plan, "input");
     body
+}
+
+/// Calls already stored behind `previous_response_id` are valid parents for
+/// tool outputs in the locally new suffix. Only the cursor anchor can own such
+/// calls; older calls are already settled inside the remote chain.
+fn remote_parent_call_ids(
+    messages: &[Message],
+    delivery: &muta_contracts::RequestDelivery,
+) -> Vec<String> {
+    let muta_contracts::RequestDelivery::RemoteContinuation { input_start, .. } = delivery else {
+        return Vec::new();
+    };
+    let Some(anchor_index) = input_start.checked_sub(1) else {
+        return Vec::new();
+    };
+    messages
+        .get(anchor_index)
+        .and_then(|message| message.tool_calls.as_ref())
+        .into_iter()
+        .flatten()
+        .map(|call| call.id.clone())
+        .collect()
 }
 
 /// Discard assistant turns that are completely empty (no content, no tool
@@ -425,6 +417,152 @@ mod tests {
         assert_eq!(input[2]["call_id"], "call_1");
         assert_eq!(input[3]["type"], "function_call_output");
         assert_eq!(input[3]["output"], "file.txt");
+    }
+
+    #[test]
+    fn duplicate_provider_call_ids_are_uniquified_with_their_outputs() {
+        let first_call = ToolCall {
+            id: "call_244115".into(),
+            name: "first".into(),
+            arguments: "{}".into(),
+        };
+        let second_call = ToolCall {
+            id: "call_244115".into(),
+            name: "second".into(),
+            arguments: "{}".into(),
+        };
+        let body = body(
+            vec![
+                Message::new(Role::User, "first turn"),
+                assistant_with_call(first_call.clone(), ""),
+                Message::tool_result(&first_call, "first result"),
+                Message::new(Role::User, "second turn"),
+                assistant_with_call(second_call.clone(), ""),
+                Message::tool_result(&second_call, "second result"),
+            ],
+            BodyInput {
+                model: "deepseek-v4-flash",
+                stream: true,
+                tool_specs: None,
+                reasoning_effort: None,
+                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
+                store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+        );
+
+        let input = body["input"].as_array().unwrap();
+        let calls: Vec<&Value> = input
+            .iter()
+            .filter(|item| item["type"] == "function_call")
+            .collect();
+        let outputs: Vec<&Value> = input
+            .iter()
+            .filter(|item| item["type"] == "function_call_output")
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(calls[0]["call_id"], "call_244115");
+        assert_ne!(calls[0]["call_id"], calls[1]["call_id"]);
+        assert_eq!(outputs[0]["call_id"], calls[0]["call_id"]);
+        assert_eq!(outputs[1]["call_id"], calls[1]["call_id"]);
+    }
+
+    #[test]
+    fn duplicate_ids_inside_opaque_replay_preserve_provider_items() {
+        fn opaque_assistant(call: ToolCall, item_id: &str) -> Message {
+            let mut provider_meta = serde_json::Map::new();
+            provider_meta.insert(
+                muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
+                serde_json::json!([{
+                    "id": item_id,
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "status": "completed"
+                }]),
+            );
+            Message {
+                tool_calls: Some(vec![call]),
+                provider_meta: Some(provider_meta),
+                ..Message::new(Role::Assistant, "")
+            }
+        }
+
+        let first = ToolCall {
+            id: "duplicate".into(),
+            name: "first".into(),
+            arguments: "{}".into(),
+        };
+        let second = ToolCall {
+            id: "duplicate".into(),
+            name: "second".into(),
+            arguments: "{}".into(),
+        };
+        let body = body(
+            vec![
+                opaque_assistant(first.clone(), "fc_1"),
+                Message::tool_result(&first, "one"),
+                opaque_assistant(second.clone(), "fc_2"),
+                Message::tool_result(&second, "two"),
+            ],
+            BodyInput {
+                model: "deepseek-v4-flash",
+                stream: true,
+                tool_specs: None,
+                reasoning_effort: None,
+                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
+                store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+        );
+
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["id"], "fc_1");
+        assert_eq!(input[0]["status"], "completed");
+        assert_eq!(input[0]["call_id"], "duplicate");
+        assert_eq!(input[1]["call_id"], "duplicate");
+        assert_eq!(input[2]["id"], "fc_2");
+        assert_eq!(input[2]["status"], "completed");
+        assert_eq!(input[2]["call_id"], "call_muta_1");
+        assert_eq!(input[3]["call_id"], "call_muta_1");
+    }
+
+    #[test]
+    fn remote_continuation_keeps_outputs_for_calls_in_the_cursor_anchor() {
+        let call = ToolCall {
+            id: "remote_call".into(),
+            name: "lookup".into(),
+            arguments: "{}".into(),
+        };
+        let delivery = muta_contracts::RequestDelivery::RemoteContinuation {
+            previous_response_id: "resp_1".into(),
+            input_start: 2,
+        };
+        let body = body(
+            vec![
+                Message::new(Role::User, "look it up"),
+                assistant_with_call(call.clone(), ""),
+                Message::tool_result(&call, "done"),
+            ],
+            BodyInput {
+                model: "gpt-5.6-sol",
+                stream: true,
+                tool_specs: None,
+                reasoning_effort: None,
+                delivery: &delivery,
+                store: true,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+        );
+
+        assert_eq!(body["previous_response_id"], "resp_1");
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "function_call_output");
+        assert_eq!(input[0]["call_id"], "remote_call");
+        assert_eq!(input[0]["output"], "done");
     }
 
     #[test]

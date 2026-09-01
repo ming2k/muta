@@ -20,6 +20,16 @@
 use crate::modal::Modal;
 use std::collections::HashMap;
 
+/// 4-Layer Surface Taxonomy:
+/// - Layer 0: `ViewId` (full-screen destinations)
+/// - Layer 1: `SheetId` (edge-anchored action sheets like permission)
+/// - Layer 2: `ModalId` (center-anchored modal dialogs)
+/// - Layer 3: `OverlayKind` (corner floats and toasts)
+#[allow(dead_code)]
+pub(crate) type ViewId = View;
+#[allow(dead_code)]
+pub(crate) type ModalId = PanelId;
+
 /// An independent, full-screen destination (ADR-0141). The set is closed:
 /// everything else is an overlay. `Session` is the home view; `Runner` and
 /// `Side` are session-scoped contexts whose *frame data* (zoom stack, side

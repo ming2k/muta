@@ -155,6 +155,7 @@ pub(crate) fn parse_deepseek_balance(
 
     Ok(ProviderUsage {
         plan,
+        description: None,
         quota: Some(ProviderQuotaData::Balance(balance_quota)),
         primary_balance: Some(primary_balance),
         metrics,

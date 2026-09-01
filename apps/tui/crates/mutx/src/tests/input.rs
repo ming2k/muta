@@ -294,6 +294,10 @@ fn input_viewport_wheel_steps_clamp_to_hidden_rows() {
     assert_eq!(app.input_scroll_max(), Some(5), "8 rows − 3 visible");
 
     assert_eq!(app.step_input_scroll(false, 4), Some(4));
+    assert!(
+        !app.input_scroll_follow_cursor,
+        "manual scrolling suspends caret-follow until the next edit"
+    );
     assert_eq!(
         app.step_input_scroll(false, 4),
         Some(5),
@@ -305,11 +309,28 @@ fn input_viewport_wheel_steps_clamp_to_hidden_rows() {
         Some(0),
         "scrolling up clamps at the top"
     );
+    app.set_cursor(0);
+    assert!(
+        app.input_scroll_follow_cursor,
+        "caret movement re-arms viewport following"
+    );
 
     // No composer on screen (overlay modal, first frame): not scrollable.
     app.input_rect = None;
     assert_eq!(app.input_scroll_max(), None);
     assert_eq!(app.step_input_scroll(false, 1), None);
+}
+
+#[test]
+fn input_viewport_does_not_consume_wheel_when_every_row_is_visible() {
+    let (mut app, _tmp) = app_with_input_viewport(2, 3);
+    assert_eq!(app.input_scroll_max(), Some(0));
+    assert_eq!(
+        app.step_input_scroll(false, 4),
+        None,
+        "a non-scrollable composer must let the wheel fall through to the transcript"
+    );
+    assert!(app.input_scroll_follow_cursor);
 }
 
 #[test]
@@ -334,6 +355,10 @@ fn input_edge_autoscroll_arms_beyond_text_rows_and_extends_selection() {
     app.input_drag_scroll = Some(true);
     assert!(app.step_input_drag_scroll());
     assert_eq!(app.input_scroll, 5);
+    assert!(
+        !app.input_scroll_follow_cursor,
+        "edge-autoscroll must survive the next composer render"
+    );
     let SelectionState::Range { head, .. } = &app.selection else {
         panic!("selection survives the edge step");
     };
@@ -357,6 +382,10 @@ fn input_edge_autoscroll_arms_beyond_text_rows_and_extends_selection() {
     app.input_drag_scroll = Some(false);
     while app.step_input_drag_scroll() {}
     assert_eq!(app.input_scroll, 6, "down-arm marches to the max scroll");
+    assert_eq!(
+        app.input_drag_scroll, None,
+        "reaching the viewport boundary must stop the animation heartbeat"
+    );
     assert_eq!(
         app.input_drag_scroll_edge(43),
         None,

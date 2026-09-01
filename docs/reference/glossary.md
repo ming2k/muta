@@ -81,7 +81,7 @@ The architecture defines a two-axis, three-plane model: **`Supervisor`** (fleet 
 | **runtime permission grant** | Authority for one concrete hazardous operation scope, granted Once, for the Session, or Always. It does not trust project assets or widen filesystem roots. |
 | **workspace sandbox** | The isolated variant of `execute_command` (`shell_isolation: Workspace`): commands run inside a container confined to the admitted workspace roots, with no host file or network access. Offered automatically when `muta_platform::workspace_sandbox::available()`. |
 | **delegated autonomous mode** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. Formerly `autopilot` (and earlier, an internal spelling now retired); the legacy words remain input aliases. [Delegated autonomous execution](../explanation/agent-design/delegated-mode.md) |
-| **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **`tool_call_id` pairing** | The requirement that every result references its call. Provider ids are correlation labels rather than session-global identities; request projection may remap a colliding pair without changing durable history. [Tool-call wire formats](../explanation/tool-call-wire-formats.md#call-identity-across-provider-boundaries) |
 
 ## Skills
 

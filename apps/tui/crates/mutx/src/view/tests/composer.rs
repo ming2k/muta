@@ -265,6 +265,7 @@ fn draw_composer_highlighted_accents_only_the_command_token() {
             ComposerDrawOptions {
                 focused: true,
                 show_caret: true,
+                follow_caret: true,
                 record: false,
                 image_count: 0,
                 paste_count: 0,
@@ -320,6 +321,7 @@ fn draw_composer_highlight_clamps_at_wrap_boundary() {
             ComposerDrawOptions {
                 focused: true,
                 show_caret: true,
+                follow_caret: true,
                 record: false,
                 image_count: 0,
                 paste_count: 0,
@@ -750,7 +752,7 @@ fn cursor_screen_pos_matches_drawn_caret() {
 
         // What the authoritative geometry function resolves.
         let mut scroll = 0usize;
-        let resolved = cursor_screen_pos(rect, input, byte_cursor, &mut scroll)
+        let resolved = cursor_screen_pos(rect, input, byte_cursor, &mut scroll, true)
             .unwrap_or_else(|| panic!("{label}: cursor_screen_pos returned None"));
 
         assert_eq!(
@@ -774,8 +776,8 @@ fn cursor_screen_pos_clamps_scroll_like_draw() {
     let byte_cursor = input.len();
 
     let mut scroll = 0usize;
-    let resolved =
-        cursor_screen_pos(rect, &input, byte_cursor, &mut scroll).expect("caret position resolves");
+    let resolved = cursor_screen_pos(rect, &input, byte_cursor, &mut scroll, true)
+        .expect("caret position resolves");
 
     // The resolved caret must sit on a visible row (within the box's text
     // rows), proving scroll advanced to track it.
@@ -788,6 +790,101 @@ fn cursor_screen_pos_clamps_scroll_like_draw() {
         "resolved caret row {caret_row} outside the {visible_rows} visible rows"
     );
     assert!(scroll > 0, "scroll should have advanced to track the caret");
+}
+
+/// A render must preserve a viewport that the user moved away from the
+/// logical caret. This is the integration boundary the scroll-state tests do
+/// not cover: before this regression test existed, wheel/drag code advanced
+/// `input_scroll`, then the very next draw silently snapped it back.
+#[test]
+fn composer_render_preserves_scroll_excursion_until_caret_follow_rearms() {
+    let theme = Theme::default();
+    let rect = Rect::new(0, 0, 24, 5); // two visible text rows + chrome
+    let input = "a\nb\nc\nd\ne\nf\ng\nh";
+
+    let mut scroll = 0usize;
+    let mut layout_map = LayoutMap::new();
+    let mut terminal = mutx_engine::TestTerminal::new(rect.width, rect.height);
+    terminal.draw(|f| {
+        draw_composer_with_options(
+            ComposerView {
+                frame: f,
+                input_rect: rect,
+                theme: &theme,
+                layout_map: &mut layout_map,
+                input_scroll: &mut scroll,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input,
+                byte_cursor: input.len(),
+            },
+            ComposerDrawOptions {
+                focused: true,
+                show_caret: true,
+                follow_caret: false,
+                record: true,
+                image_count: 0,
+                paste_count: 0,
+                hints: crate::components::composer_hints::ComposerHints::default(),
+            },
+        );
+    });
+
+    assert_eq!(scroll, 0, "render must preserve the user's top viewport");
+    assert!(
+        matches!(terminal.cursor(), mutx_engine::CursorState::Hidden),
+        "a caret outside the preserved viewport must not leak into another surface"
+    );
+    let text_x = rect.x + COMPOSER_PROMPT_PREFIX_COLS as u16;
+    let text_y = rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET;
+    assert_eq!(
+        layout_map
+            .cursor_at(text_x, text_y)
+            .expect("first preserved input row")
+            .byte_offset,
+        0
+    );
+    assert_eq!(
+        layout_map
+            .cursor_at(text_x, text_y + 1)
+            .expect("second preserved input row")
+            .byte_offset,
+        2
+    );
+
+    let mut follow_scroll = 0usize;
+    let mut follow_terminal = mutx_engine::TestTerminal::new(rect.width, rect.height);
+    follow_terminal.draw(|f| {
+        draw_composer_with_options(
+            ComposerView {
+                frame: f,
+                input_rect: rect,
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut follow_scroll,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input,
+                byte_cursor: input.len(),
+            },
+            ComposerDrawOptions {
+                focused: true,
+                show_caret: true,
+                follow_caret: true,
+                record: false,
+                image_count: 0,
+                paste_count: 0,
+                hints: crate::components::composer_hints::ComposerHints::default(),
+            },
+        );
+    });
+    assert_eq!(follow_scroll, 6, "re-armed following must reveal the caret");
+    assert!(matches!(
+        follow_terminal.cursor(),
+        mutx_engine::CursorState::Visible(_, _)
+    ));
 }
 
 /// (head + continuation), cover exactly the selected glyphs, and leave the

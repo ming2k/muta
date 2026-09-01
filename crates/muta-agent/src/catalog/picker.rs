@@ -239,7 +239,7 @@ pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, Strin
     }
 }
 
-pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
+pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..

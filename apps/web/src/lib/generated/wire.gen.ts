@@ -380,9 +380,21 @@ user_agent: string,
  */
 models: Array<string>, 
 /**
+ * Detailed model settings for served models in the same order as `models`.
+ */
+model_info?: Array<ProviderModelInfo>, 
+/**
  * Active / default model for this connection if known.
  */
 active_model?: string | null, 
+/**
+ * Active / default model reasoning effort if configured (e.g. "high", "medium", "max").
+ */
+active_model_effort?: string | null, 
+/**
+ * Active / default model thinking state if configured (e.g. true for adaptive thinking).
+ */
+active_model_thinking?: boolean | null, 
 /**
  * Remote provider usage / quota / balance state.
  */
@@ -1027,6 +1039,10 @@ export type ProviderUsage = {
  */
 plan?: string | null, 
 /**
+ * Optional descriptive text or policy note from provider.
+ */
+description?: string | null, 
+/**
  * Typed structured quota / balance data.
  */
 quota?: ProviderQuotaData | null, 
@@ -1070,6 +1086,10 @@ window: QuotaWindowKind | null,
  * Human-friendly label (e.g. "Gemini 3.7 Flash", "5h Rolling Limit", "Daily Budget").
  */
 label: string, 
+/**
+ * Logical group / model family this bucket belongs to (e.g. "Chat Models", "Claude Models").
+ */
+group?: string | null, 
 /**
  * Used fraction from 0.0 (0% used) to 1.0 (100% depleted).
  */

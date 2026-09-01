@@ -30,8 +30,8 @@ pub use chatgpt_device::{
 pub use config::{
     CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, GOOGLE_ANTIGRAVITY_CLI,
     OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
-    config_by_provider_id, copilot_preset, google_antigravity_cli_preset, google_antigravity_preset,
-    xai_preset,
+    config_by_provider_id, copilot_preset, google_antigravity_cli_preset,
+    google_antigravity_preset, xai_preset,
 };
 pub use credential_source::OAuthCredentialSource;
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};

@@ -159,9 +159,8 @@ pub const ANTIGRAVITY_REMOTE_CONTROL_UA_HEADER: &str = "X-Jetski-Remote-Control-
 pub const ANTIGRAVITY_REMOTE_CONTROL_TRANSPORT_HEADER: &str = "X-Jetski-Remote-Control-Transport";
 
 /// Client identity headers used for Google Antigravity profile.
-pub const ANTIGRAVITY_CLIENT_HEADERS: &[(&str, &str)] = &[
-    ("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER),
-];
+pub const ANTIGRAVITY_CLIENT_HEADERS: &[(&str, &str)] =
+    &[("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)];
 
 /// Antigravity client environment and session metadata (emulating agy internal `exa.codeium_common_pb.Metadata`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,7 +209,11 @@ impl Default for AntigravityClientMetadata {
 
 impl AntigravityClientMetadata {
     /// Create a new Antigravity client metadata record with session and fingerprint.
-    pub fn new(session_id: impl Into<String>, device_fingerprint: impl Into<String>, runtime_env: impl Into<String>) -> Self {
+    pub fn new(
+        session_id: impl Into<String>,
+        device_fingerprint: impl Into<String>,
+        runtime_env: impl Into<String>,
+    ) -> Self {
         Self {
             session_id: session_id.into(),
             device_fingerprint: device_fingerprint.into(),
@@ -524,10 +527,22 @@ impl ClientProfile {
         Self::Custom {
             user_agent: ANTIGRAVITY_USER_AGENT.to_string(),
             extra_headers: vec![
-                (ANTIGRAVITY_REMOTE_CONTROL_VIA_HEADER.to_string(), "true".to_string()),
-                (ANTIGRAVITY_REMOTE_CONTROL_UA_HEADER.to_string(), ANTIGRAVITY_USER_AGENT.to_string()),
-                (ANTIGRAVITY_REMOTE_CONTROL_TRANSPORT_HEADER.to_string(), transport.into()),
-                ("x-goog-api-client".to_string(), ANTIGRAVITY_API_CLIENT_HEADER.to_string()),
+                (
+                    ANTIGRAVITY_REMOTE_CONTROL_VIA_HEADER.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    ANTIGRAVITY_REMOTE_CONTROL_UA_HEADER.to_string(),
+                    ANTIGRAVITY_USER_AGENT.to_string(),
+                ),
+                (
+                    ANTIGRAVITY_REMOTE_CONTROL_TRANSPORT_HEADER.to_string(),
+                    transport.into(),
+                ),
+                (
+                    "x-goog-api-client".to_string(),
+                    ANTIGRAVITY_API_CLIENT_HEADER.to_string(),
+                ),
             ],
         }
     }
@@ -637,9 +652,8 @@ impl ClientProfile {
             "aider" => Some(Self::Aider),
             "zcode" | "z-code" | "zai" => Some(Self::ZCode),
             "copilot" | "github-copilot" | "vscode" => Some(Self::Copilot),
-            "antigravity" | "agy" | "google-antigravity" | "jetski" | "jetski-cli" | "cloudcode" | "cloud-code" => {
-                Some(Self::Antigravity)
-            }
+            "antigravity" | "agy" | "google-antigravity" | "jetski" | "jetski-cli"
+            | "cloudcode" | "cloud-code" => Some(Self::Antigravity),
             _ => None,
         }
     }
@@ -671,7 +685,10 @@ impl ClientProfile {
             Self::ZCode
         } else if trimmed.contains("Copilot") || trimmed.contains("copilot") {
             Self::Copilot
-        } else if trimmed.starts_with("antigravity") || trimmed.starts_with("agy") || trimmed.starts_with("jetski") {
+        } else if trimmed.starts_with("antigravity")
+            || trimmed.starts_with("agy")
+            || trimmed.starts_with("jetski")
+        {
             Self::Antigravity
         } else {
             Self::Custom {
@@ -824,20 +841,47 @@ mod tests {
         assert!(zcode.capabilities().has_client_headers);
         assert!(zcode.capabilities().coding_platform_compatible);
         let headers = zcode.headers();
-        assert!(headers.iter().any(|(k, v)| *k == "X-Title" && *v == "Z Code"));
-        assert!(headers.iter().any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Z Code")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
+        );
 
         let claude = ClientProfile::ClaudeCode;
-        assert!(claude.headers().iter().any(|(k, v)| *k == "x-app" && *v == "claude-code"));
+        assert!(
+            claude
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "x-app" && *v == "claude-code")
+        );
 
         let agy = ClientProfile::Antigravity;
-        assert!(agy.headers().iter().any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1"));
+        assert!(
+            agy.headers()
+                .iter()
+                .any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1")
+        );
 
         let cline = ClientProfile::Cline;
-        assert!(cline.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Cline"));
+        assert!(
+            cline
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Cline")
+        );
 
         let cursor = ClientProfile::Cursor;
-        assert!(cursor.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Cursor"));
+        assert!(
+            cursor
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Cursor")
+        );
     }
 
     #[test]
@@ -865,7 +909,8 @@ mod tests {
         assert_eq!(deserialized, ClientProfile::ClaudeCode);
 
         // Also accepts CamelCase and alias forms
-        let from_alias: ClientProfile = serde_json::from_str("\"ClaudeCode\"").expect("deserialize alias");
+        let from_alias: ClientProfile =
+            serde_json::from_str("\"ClaudeCode\"").expect("deserialize alias");
         assert_eq!(from_alias, ClientProfile::ClaudeCode);
 
         let custom = ClientProfile::custom(
@@ -873,20 +918,37 @@ mod tests {
             vec![("X-Custom".to_string(), "val".to_string())],
         );
         let custom_json = serde_json::to_string(&custom).expect("serialize custom");
-        let custom_deserialized: ClientProfile = serde_json::from_str(&custom_json).expect("deserialize custom");
+        let custom_deserialized: ClientProfile =
+            serde_json::from_str(&custom_json).expect("deserialize custom");
         assert_eq!(custom_deserialized.user_agent(), "agent/1.0");
         assert_eq!(custom_deserialized.headers(), vec![("X-Custom", "val")]);
     }
 
     #[test]
     fn antigravity_identity_and_metadata() {
-        assert_eq!(ClientProfile::from_id("agy"), Some(ClientProfile::Antigravity));
-        assert_eq!(ClientProfile::from_id("jetski"), Some(ClientProfile::Antigravity));
-        assert_eq!(ClientProfile::from_id("jetski-cli"), Some(ClientProfile::Antigravity));
-        assert_eq!(ClientProfile::from_id("cloudcode"), Some(ClientProfile::Antigravity));
-        assert_eq!(ClientProfile::from_user_agent("jetski/1.23.2 linux/amd64"), ClientProfile::Antigravity);
+        assert_eq!(
+            ClientProfile::from_id("agy"),
+            Some(ClientProfile::Antigravity)
+        );
+        assert_eq!(
+            ClientProfile::from_id("jetski"),
+            Some(ClientProfile::Antigravity)
+        );
+        assert_eq!(
+            ClientProfile::from_id("jetski-cli"),
+            Some(ClientProfile::Antigravity)
+        );
+        assert_eq!(
+            ClientProfile::from_id("cloudcode"),
+            Some(ClientProfile::Antigravity)
+        );
+        assert_eq!(
+            ClientProfile::from_user_agent("jetski/1.23.2 linux/amd64"),
+            ClientProfile::Antigravity
+        );
 
-        let meta = AntigravityClientMetadata::new("test-session-123", "fp-abcd-5678", "SSH session");
+        let meta =
+            AntigravityClientMetadata::new("test-session-123", "fp-abcd-5678", "SSH session");
         assert_eq!(meta.ide_name, "antigravity");
         assert_eq!(meta.ide_version, ANTIGRAVITY_VERSION);
         assert_eq!(meta.session_id, "test-session-123");
@@ -896,8 +958,21 @@ mod tests {
 
         let remote = ClientProfile::antigravity_remote_control("webchannel");
         let headers = remote.headers();
-        assert!(headers.iter().any(|(k, v)| *k == ANTIGRAVITY_REMOTE_CONTROL_VIA_HEADER && *v == "true"));
-        assert!(headers.iter().any(|(k, v)| *k == ANTIGRAVITY_REMOTE_CONTROL_TRANSPORT_HEADER && *v == "webchannel"));
-        assert!(headers.iter().any(|(k, v)| *k == "x-goog-api-client" && *v == ANTIGRAVITY_API_CLIENT_HEADER));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == ANTIGRAVITY_REMOTE_CONTROL_VIA_HEADER && *v == "true")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == ANTIGRAVITY_REMOTE_CONTROL_TRANSPORT_HEADER
+                    && *v == "webchannel")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "x-goog-api-client" && *v == ANTIGRAVITY_API_CLIENT_HEADER)
+        );
     }
 }

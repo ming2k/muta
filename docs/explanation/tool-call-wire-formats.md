@@ -110,6 +110,27 @@ On the way back, both providers reassemble the response into one
 provider walks the `content` blocks, turning each `tool_use` into a `ToolCall`
 and each `text`/`thinking` block into content/reasoning.
 
+### Call identity across provider boundaries
+
+A provider-issued call id is a correlation label for one call and its result,
+not a session-global identity. Long histories and provider switches can
+therefore contain separate completed calls that happen to carry the same id.
+The durable transcript preserves the ids exactly as returned because it is the
+audit and resume source of truth.
+
+The provider-facing request is stricter than the durable transcript. Before a
+tool trace reaches the Responses wire, its adapter pairs calls and results by
+their occurrences, removes unpaired halves, and assigns deterministic
+request-local ids. A remap always changes both the call and its result, so
+their relationship stays intact. The remap exists only in the request
+projection and never mutates session history. Other adapters enforce the
+validity rules of their own wire protocols at the same projection boundary.
+
+Stored Responses continuations are a special case. When a
+`previous_response_id` already carries the parent call, the new request sends
+only its result and retains the original call id needed by the remote chain.
+Locally replayed calls must still avoid colliding with ids in that chain.
+
 ### Streaming deltas differ too
 
 Parallel calls stream as fragments that the client must reassemble by index:

@@ -88,33 +88,56 @@ Specialized UI components have dedicated tokens and fallback constants:
 ~/.config/mutx/themes/*.toml
 ```
 
-Each theme file must adhere to the formal `ThemeFile` contract:
+Each theme file adheres to the clean 4-scope `ThemeFile` schema:
 
 ### TOML Schema Structure
 
 ```toml
 # Metadata
-name = "Cyberpunk Neon"
-description = "High-contrast neon cyberpunk palette"
+name = "Cyberpunk Obsidian"
+description = "High-contrast modern cyberpunk palette"
 
 # 1. Foundation Palette (8 hex colors required)
-[colors]
-background = "#0d0f18"
-surface    = "#181b28"
-text       = "#f0f6fc"
-muted      = "#8b949e"
+[palette]
+background = "#090a10"
+surface    = "#141724"
+text       = "#e6edf3"
+muted      = "#7d8590"
 accent     = "#00f0ff"
 success    = "#00ff88"
-warning    = "#ffe600"
+warning    = "#ffd700"
 error      = "#ff0055"
 
-# 2. Component Token Overrides (optional)
+# 2. Spatial Surfaces (Layer 0 to Layer 3 overrides)
+[surfaces.view]
+canvas    = "#090a10"
+header_bg = "#10121d"
+
+[surfaces.sheet]
+surface = "#181c2d"
+border  = "#2d3552"
+
+[surfaces.modal]
+surface    = "#141724"
+border     = "#00f0ff"
+dim_factor = 0.55
+
+# 3. Feedback Tones (container & border)
+[feedback.warning]
+container = "#26200a"
+border    = "#ffd700"
+
+[feedback.error]
+container = "#2b0d18"
+border    = "#ff0055"
+
+# 4. Component Token Overrides (optional)
 [components.input]
-bg_active   = "#222638"
-bg_inactive = "#141622"
+bg_active   = "#1f2438"
+bg_inactive = "#121522"
 caret       = "#00f0ff"
-selection   = "#333852"
-placeholder = "#6e7681"
+selection   = "#2d3552"
+placeholder = "#7d8590"
 
 [components.crate]
 fg       = "#ff00a0"
@@ -127,8 +150,8 @@ add_hl = "#1b5433"
 del_hl = "#541b30"
 
 [components.command]
-idle_bg  = "#1a1d2e"
-hover_bg = "#252940"
+idle_bg  = "#10121d"
+hover_bg = "#181c2d"
 ```
 
 ### Loading & Discovery

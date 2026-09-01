@@ -138,6 +138,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn implicit_mode_without_retention_emits_only_affinity_key() {
+        let mut body = json!({"input": []});
+        apply(
+            &mut body,
+            &ResolvedCachePlan::Enabled {
+                mode: PromptCacheMode::Implicit,
+                retention: None,
+                routing_key: Some("session-42".into()),
+                max_breakpoints: None,
+            },
+            "input",
+        );
+
+        assert_eq!(body["prompt_cache_key"], "session-42");
+        assert!(body.get("prompt_cache_options").is_none());
+        assert!(body.get("prompt_cache_retention").is_none());
+    }
+
+    #[test]
     fn explicit_mode_marks_the_stable_message_not_the_request_tail() {
         let mut body = json!({
             "messages": [

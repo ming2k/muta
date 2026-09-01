@@ -139,11 +139,18 @@ impl App {
     /// never yanks the view back.
     pub fn step_input_scroll(&mut self, up: bool, lines: usize) -> Option<usize> {
         let max = self.input_scroll_max()?;
-        self.input_scroll = if up {
+        if max == 0 {
+            return None;
+        }
+        let target = if up {
             self.input_scroll.saturating_sub(lines)
         } else {
             (self.input_scroll + lines).min(max)
         };
+        if target != self.input_scroll {
+            self.input_scroll = target;
+            self.input_scroll_follow_cursor = false;
+        }
         Some(self.input_scroll)
     }
 
@@ -210,6 +217,7 @@ impl App {
             return false;
         }
         self.input_scroll = target;
+        self.input_scroll_follow_cursor = false;
 
         // Resolve the newly-exposed viewport edge through the same wrap the
         // renderer uses, and pin the selection head to its byte — hidden rows
@@ -240,6 +248,12 @@ impl App {
             &mut self.selection,
             crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, byte),
         );
+        if target == 0 || target == max {
+            // The pointer is still held, but no hidden row remains in this
+            // direction. Stop the animation heartbeat now; a later mouse-drag
+            // report will re-arm it if geometry or direction changes.
+            self.input_drag_scroll = None;
+        }
         true
     }
 
@@ -247,6 +261,7 @@ impl App {
     /// writer only: the next frame's terminal commit transaction.
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor_position = pos;
+        self.input_scroll_follow_cursor = true;
     }
 
     /// Set the input caret to the end of `self.input` (common case after a

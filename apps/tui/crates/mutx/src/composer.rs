@@ -242,14 +242,20 @@ pub fn composer_text_width(full_width: usize) -> usize {
 /// draw path resolves it once, then the terminal commit installs that final
 /// coordinate while the physical cursor is hidden.
 ///
+/// `follow_cursor` distinguishes editing from deliberate viewport browsing.
+/// When false, this clamps `input_scroll` only to the valid scroll range and
+/// returns `None` if the caret is outside the preserved viewport; the caller
+/// can then keep the physical cursor hidden until editing resumes.
+///
 /// Returns `None` when `input_rect` has no room for text rows. The caller is
-/// responsible for deciding whether the caret should be shown at all (modal
-/// owning the keyboard, active selection, etc.).
+/// responsible for the remaining visibility policy (modal owning the
+/// keyboard, active selection, etc.).
 pub fn cursor_screen_pos(
     input_rect: Rect,
     input: &str,
     byte_cursor: usize,
     input_scroll: &mut usize,
+    follow_cursor: bool,
 ) -> Option<(u16, u16)> {
     let full_w = input_rect.width as usize;
     if full_w == 0 || input_rect.height == 0 {
@@ -282,12 +288,18 @@ pub fn cursor_screen_pos(
     if wrapped.len() <= visible_rows {
         *input_scroll = 0;
     } else {
-        if cursor_line < *input_scroll {
-            *input_scroll = cursor_line;
-        } else if cursor_line >= *input_scroll + visible_rows {
-            *input_scroll = cursor_line.saturating_sub(visible_rows - 1);
-        }
         *input_scroll = (*input_scroll).min(max_scroll);
+        if follow_cursor {
+            if cursor_line < *input_scroll {
+                *input_scroll = cursor_line;
+            } else if cursor_line >= *input_scroll + visible_rows {
+                *input_scroll = cursor_line.saturating_sub(visible_rows - 1);
+            }
+        }
+    }
+
+    if cursor_line < *input_scroll || cursor_line >= *input_scroll + visible_rows {
+        return None;
     }
 
     let visible_cursor_line = cursor_line.saturating_sub(*input_scroll);
@@ -331,6 +343,7 @@ pub fn draw_composer(
         ComposerDrawOptions {
             focused,
             show_caret,
+            follow_caret: true,
             record,
             image_count,
             paste_count,
@@ -341,16 +354,34 @@ pub fn draw_composer(
     )
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ComposerDrawOptions {
     pub focused: bool,
     pub show_caret: bool,
+    /// Keep the viewport pinned to the logical caret. The live composer
+    /// suspends this during wheel browsing and selection edge-autoscroll so
+    /// rendering preserves the user's viewport instead of snapping back.
+    pub follow_caret: bool,
     pub record: bool,
     pub image_count: usize,
     pub paste_count: usize,
     /// Owned meta-row inputs: what the buffer is and what Enter does. Built
     /// by the caller before the mutable composer borrow begins.
     pub hints: crate::components::composer_hints::ComposerHints,
+}
+
+impl Default for ComposerDrawOptions {
+    fn default() -> Self {
+        Self {
+            focused: false,
+            show_caret: false,
+            follow_caret: true,
+            record: false,
+            image_count: 0,
+            paste_count: 0,
+            hints: crate::components::composer_hints::ComposerHints::default(),
+        }
+    }
 }
 
 /// The effort-ignition variant of [`draw_composer`]: `prompt_accent` carries
@@ -382,6 +413,18 @@ pub fn draw_composer_highlighted(
     draw_composer_impl(view, text, options, Some(highlight_len), None);
 }
 
+/// Paint the ordinary (non-highlighted, non-igniting) composer while honoring
+/// the caller's complete viewport policy. The convenience [`draw_composer`]
+/// keeps its historical always-follow behavior for isolated render callers;
+/// the live event loop uses this entry point because it owns scroll intent.
+pub fn draw_composer_with_options(
+    view: ComposerView<'_, '_>,
+    text: ComposerText<'_>,
+    options: ComposerDrawOptions,
+) {
+    draw_composer_impl(view, text, options, None, None);
+}
+
 fn draw_composer_impl(
     view: ComposerView<'_, '_>,
     text: ComposerText<'_>,
@@ -392,6 +435,7 @@ fn draw_composer_impl(
     let ComposerDrawOptions {
         focused,
         show_caret,
+        follow_caret,
         record,
         image_count,
         paste_count,
@@ -463,8 +507,7 @@ fn draw_composer_impl(
     // single source of truth in [`cursor_screen_pos`]. The draw path reuses it
     // so the rendered caret and the terminal cursor can never disagree — which
     // is what previously let the IME composition window drift by a frame.
-    let (cursor_x, cursor_y) =
-        cursor_screen_pos(input_rect, input, byte_cursor, input_scroll).unwrap_or((0, 0));
+    let cursor = cursor_screen_pos(input_rect, input, byte_cursor, input_scroll, follow_caret);
 
     // Overflow bookkeeping for the chrome-row indicators and the meta row's
     // position readout: how many wrapped rows sit above / below the visible
@@ -714,7 +757,7 @@ fn draw_composer_impl(
     // never sits inside a box that doesn't accept keypresses. The coordinates
     // come from the shared [`cursor_screen_pos`] so the rendered caret and the
     // terminal cursor are always identical.
-    if show_caret {
+    if show_caret && let Some((cursor_x, cursor_y)) = cursor {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }

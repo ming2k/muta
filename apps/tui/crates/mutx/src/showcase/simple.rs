@@ -857,6 +857,7 @@ pub fn effort_ignition() -> io::Result<()> {
                 crate::view::ComposerDrawOptions {
                     focused: true,
                     show_caret: false,
+                    follow_caret: true,
                     record: false,
                     image_count: 0,
                     paste_count: 0,

@@ -39,6 +39,9 @@ pub struct QuotaWindowBucket {
     pub window: Option<QuotaWindowKind>,
     /// Human-friendly label (e.g. "Gemini 3.7 Flash", "5h Rolling Limit", "Daily Budget").
     pub label: String,
+    /// Logical group / model family this bucket belongs to (e.g. "Chat Models", "Claude Models").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// Used fraction from 0.0 (0% used) to 1.0 (100% depleted).
     pub used_fraction: f32,
     /// Optional absolute used amount (e.g. 15 requests, 12000 tokens).
@@ -127,6 +130,9 @@ pub struct ProviderUsage {
     /// High-level plan / account tier badge (e.g. "Google AI Premium", "Pay-as-you-go", "Tier 2").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Optional descriptive text or policy note from provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Typed structured quota / balance data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<ProviderQuotaData>,
@@ -202,9 +208,18 @@ pub struct ConnectionDetail {
     /// Every model served by this connection.
     #[serde(default)]
     pub models: Vec<String>,
+    /// Detailed model settings for served models in the same order as `models`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_info: Vec<crate::ProviderModelInfo>,
     /// Active / default model for this connection if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_model: Option<String>,
+    /// Active / default model reasoning effort if configured (e.g. "high", "medium", "max").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_model_effort: Option<String>,
+    /// Active / default model thinking state if configured (e.g. true for adaptive thinking).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_model_thinking: Option<bool>,
     /// Remote provider usage / quota / balance state.
     pub usage: ConnectionUsageState,
 }

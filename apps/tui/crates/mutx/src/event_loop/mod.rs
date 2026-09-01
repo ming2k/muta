@@ -35,7 +35,7 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use mutx_engine::Terminal;
 use tokio::sync::{Mutex, mpsc};
 
@@ -54,6 +54,48 @@ use sync::{
     drain_outbox_signals, sync_runtime_state_to_app, sync_transcripts_and_session,
     tick_toast_timers,
 };
+
+/// Whether an event expresses an editing/caret-navigation intent in the live
+/// composer even when it is a no-op at the current boundary (for example,
+/// `End` while the logical caret is already at the end). Such an intent must
+/// leave a wheel-browsed viewport and reveal the caret again.
+fn event_rearms_composer_follow(event: &Event) -> bool {
+    match event {
+        Event::Paste(_) => true,
+        Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+            match key.code {
+                KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Enter
+                | KeyCode::Tab => true,
+                KeyCode::Left | KeyCode::Right => !key.modifiers.contains(KeyModifiers::SUPER),
+                KeyCode::Up | KeyCode::Down => !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER),
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    !c.is_control()
+                }
+                KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    matches!(
+                        c.to_ascii_lowercase(),
+                        'a' | 'b' | 'e' | 'j' | 'k' | 'u' | 'v' | 'w'
+                    )
+                }
+                KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::ALT) => {
+                    matches!(c.to_ascii_lowercase(), 'b' | 'd' | 'f')
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
 
 pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
     match name {
@@ -437,6 +479,13 @@ async fn process_one_event(
         && crate::completion::resolved_slash_command_len(&app.input, &app.command_catalog)
             .is_some();
 
+    // `process_event` performs the hot-path text edits and caret motions
+    // directly through mutable references. Remember the cheap structural
+    // state so those transitions can re-arm caret following without hashing
+    // or cloning a potentially very large draft on every keypress.
+    let composer_edit_state_before = (app.input.len(), app.cursor_position);
+    let composer_owned_before = app.caret_owner() == crate::CaretOwner::Composer;
+
     let action = if let Some(dropdown_action) = probe_config_dropdown(app, event) {
         dropdown_action
     } else if let Some(delete_action) = probe_delete_overlay(app, event) {
@@ -520,6 +569,12 @@ async fn process_one_event(
     )
     .await;
 
+    if (app.input.len(), app.cursor_position) != composer_edit_state_before
+        || (composer_owned_before && event_rearms_composer_follow(event))
+    {
+        app.input_scroll_follow_cursor = true;
+    }
+
     if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
         *input_redraw_pending = true;
     }
@@ -532,4 +587,40 @@ async fn process_one_event(
     app.anchor_completion_selection(&completions);
 
     Ok(flow)
+}
+
+#[cfg(test)]
+mod input_scroll_follow_tests {
+    use super::*;
+    use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
+    }
+
+    #[test]
+    fn editing_intent_rearms_follow_without_treating_global_navigation_as_editing() {
+        assert!(event_rearms_composer_follow(&key(
+            KeyCode::End,
+            KeyModifiers::NONE
+        )));
+        assert!(event_rearms_composer_follow(&key(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!event_rearms_composer_follow(&key(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!event_rearms_composer_follow(&key(
+            KeyCode::Up,
+            KeyModifiers::CONTROL
+        )));
+        assert!(!event_rearms_composer_follow(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })));
+    }
 }

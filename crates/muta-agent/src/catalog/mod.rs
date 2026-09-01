@@ -12,7 +12,9 @@ pub use discovery::{
     sync_fitted_model_registry,
 };
 use picker::active_model_id_for_entry;
-pub use picker::{build_picker_state, prune_stale_models, prune_stale_models_on_disk};
+pub use picker::{
+    build_picker_state, channel_model_info, prune_stale_models, prune_stale_models_on_disk,
+};
 
 use muta_contracts::catalog::ProviderEntry;
 use muta_persistence::config::{Config, Credentials, DiscoveryCache};

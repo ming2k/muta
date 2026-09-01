@@ -462,6 +462,11 @@ pub struct App {
     pub completion_request_id: u64,
     pub cursor_position: usize,
     pub input_scroll: usize,
+    /// Whether the next composer render should move the input viewport to
+    /// keep the logical caret visible. Editing and caret movement re-arm
+    /// following; wheel browsing and drag-selection edge autoscroll suspend
+    /// it so a render cannot immediately undo the user's scroll gesture.
+    pub input_scroll_follow_cursor: bool,
     /// Active Emacs-style two-stroke leader chord state.
     pub leader_chord: LeaderChord,
     /// Screen rect of the composer panel in the last drawn frame (the whole

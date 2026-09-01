@@ -544,6 +544,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let composer_options = view::ComposerDrawOptions {
                 focused: !step_focused,
                 show_caret,
+                follow_caret: app.input_scroll_follow_cursor,
                 record: true,
                 image_count,
                 paste_count,
@@ -583,7 +584,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         composer_options,
                         accent,
                     ),
-                    None => view::draw_composer(
+                    None if app.input_scroll_follow_cursor => view::draw_composer(
                         ComposerView {
                             frame: f,
                             input_rect,
@@ -602,6 +603,21 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         image_count,
                         paste_count,
                         composer_hints,
+                    ),
+                    None => view::draw_composer_with_options(
+                        ComposerView {
+                            frame: f,
+                            input_rect,
+                            theme: &app.theme,
+                            layout_map: &mut layout_map,
+                            input_scroll: &mut app.input_scroll,
+                            selection: &app.selection,
+                        },
+                        ComposerText {
+                            input: &app.input,
+                            byte_cursor,
+                        },
+                        composer_options,
                     ),
                 },
             }

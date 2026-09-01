@@ -11,6 +11,7 @@
 
 pub mod request;
 pub mod response;
+mod tool_trace;
 
 use async_trait::async_trait;
 use futures::StreamExt;

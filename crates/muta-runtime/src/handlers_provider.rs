@@ -1399,7 +1399,22 @@ pub(crate) async fn query_connection_detail(
         .iter()
         .map(|c| c.model.clone())
         .collect::<Vec<_>>();
-    let active_model = entry.default_channel().map(|c| c.model.clone());
+    let model_info = entry
+        .channels
+        .iter()
+        .map(muta_agent::catalog::channel_model_info)
+        .collect::<Vec<_>>();
+    let default_channel = entry.default_channel();
+    let active_model = default_channel.map(|c| c.model.clone());
+    let active_channel_info = default_channel.map(muta_agent::catalog::channel_model_info);
+    let active_model_effort = active_channel_info.as_ref().and_then(|info| {
+        let show = match info.protocol.as_str() {
+            "anthropic" => info.thinking == Some(true),
+            _ => info.effort.is_some(),
+        };
+        if show { info.effort.clone() } else { None }
+    });
+    let active_model_thinking = active_channel_info.as_ref().and_then(|info| info.thinking);
 
     let auth_type = if connection.auth.is_oauth() {
         format!("OAuth ({:?})", connection.auth)
@@ -1430,7 +1445,10 @@ pub(crate) async fn query_connection_detail(
         },
         user_agent,
         models,
+        model_info,
         active_model,
+        active_model_effort,
+        active_model_thinking,
         usage: muta_contracts::ConnectionUsageState::Fetching,
     };
 
@@ -1442,12 +1460,9 @@ pub(crate) async fn query_connection_detail(
     let preset_id = connection.preset_id.clone();
     let raw_key_str = raw_key.expose_secret().to_string();
     tokio::spawn(async move {
-        let usage = muta_providers::fetch_provider_usage(
-            preset_id.as_deref(),
-            &base_url,
-            &raw_key_str,
-        )
-        .await;
+        let usage =
+            muta_providers::fetch_provider_usage(preset_id.as_deref(), &base_url, &raw_key_str)
+                .await;
 
         initial_detail.usage = usage;
         let _ = resp_tx_bg.send(AgentResponse::ConnectionDetail(initial_detail));

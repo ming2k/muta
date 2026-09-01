@@ -76,8 +76,31 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
+// The ChatGPT subscription endpoint is Responses-shaped, but it is not the
+// public OpenAI Responses API. It accepts Codex's stable `prompt_cache_key`
+// while rejecting the GPT-5.6 platform-only `prompt_cache_options` control.
+// Keep this route implicit and retention-neutral so the shared encoder emits
+// only the affinity key.
+const CHATGPT_IMPLICIT_CACHE: muta_contracts::PromptCacheSpec = muta_contracts::PromptCacheSpec {
+    modes: &[muta_contracts::PromptCacheMode::Implicit],
+    default_mode: Some(muta_contracts::PromptCacheMode::Implicit),
+    supported_retentions: &[],
+    default_retention: None,
+    disable_supported: false,
+    routing_key_supported: true,
+    max_breakpoints: None,
+    min_cacheable_tokens: None,
+    reports_reads: true,
+    reports_writes: true,
+    reports_misses: false,
+};
+
+const fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
+    CHATGPT_IMPLICIT_CACHE
+}
+
 pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
-    prompt_cache: super::openai::prompt_cache_for_model,
+    prompt_cache: prompt_cache_for_model,
     id: "chatgpt-oauth",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
@@ -95,7 +118,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::CacheRetention;
+    use muta_contracts::PromptCacheMode;
 
     #[test]
     fn seed_is_entitlement_neutral_and_uses_responses() {
@@ -107,12 +130,12 @@ mod tests {
     }
 
     #[test]
-    fn gpt_5_6_uses_codex_prompt_cache_controls() {
+    fn chatgpt_uses_affinity_without_platform_cache_options() {
         let capabilities = (PRESET_SPEC.prompt_cache)("gpt-5.6-sol").materialize();
-        assert_eq!(
-            capabilities.default_retention,
-            Some(CacheRetention::ThirtyMinutes)
-        );
+        assert_eq!(capabilities.modes, vec![PromptCacheMode::Implicit]);
+        assert_eq!(capabilities.default_mode, Some(PromptCacheMode::Implicit));
+        assert!(capabilities.supported_retentions.is_empty());
+        assert_eq!(capabilities.default_retention, None);
         assert!(capabilities.routing_key_supported);
     }
 }

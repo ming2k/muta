@@ -6,7 +6,7 @@
 
 use crate::blobs::BlobStore;
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Result, Row};
+use rusqlite::{Connection, OptionalExtension, Result, Row, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, oneshot};

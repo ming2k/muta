@@ -98,10 +98,7 @@ pub(crate) fn parse_siliconflow_user(
         .charge_balance
         .as_deref()
         .and_then(|s| s.parse::<f64>().ok());
-    let voucher_num = data
-        .balance
-        .as_deref()
-        .and_then(|s| s.parse::<f64>().ok());
+    let voucher_num = data.balance.as_deref().and_then(|s| s.parse::<f64>().ok());
 
     let balance_quota = BalanceQuota {
         currency: "CNY".to_string(),
@@ -154,6 +151,7 @@ pub(crate) fn parse_siliconflow_user(
         } else {
             None
         },
+        description: None,
         quota: Some(ProviderQuotaData::Balance(balance_quota)),
         primary_balance: Some(primary_balance),
         metrics,

@@ -3,9 +3,7 @@
 //! Query endpoint: `GET https://openrouter.ai/api/v1/auth/key`
 
 use muta_contracts::async_trait;
-use muta_contracts::{
-    BalanceQuota, ProviderQuotaData, ProviderUsage, RateLimitSpec, UsageMetric,
-};
+use muta_contracts::{BalanceQuota, ProviderQuotaData, ProviderUsage, RateLimitSpec, UsageMetric};
 use serde::Deserialize;
 
 use super::ProviderUsageFetcher;
@@ -156,6 +154,7 @@ pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<Provid
 
     Ok(ProviderUsage {
         plan,
+        description: None,
         quota: Some(ProviderQuotaData::Composite {
             balance: Some(balance_quota),
             periodic: None,

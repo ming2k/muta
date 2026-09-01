@@ -369,8 +369,41 @@ impl Theme {
     /// Build a complete renderer theme from a parsed [`ThemeFile`].
     pub fn from_theme_file(file: &ThemeFile) -> Self {
         let mut theme = Self::from_custom(&file.colors);
+        theme.apply_surfaces_overrides(&file.surfaces);
         theme.apply_component_overrides(&file.components);
         theme
+    }
+
+    /// Apply spatial 4-layer surface overrides onto an existing theme.
+    pub fn apply_surfaces_overrides(
+        &mut self,
+        overrides: &Option<muta_contracts::SurfacesThemeConfig>,
+    ) {
+        let Some(surfaces) = overrides else { return };
+        if let Some(ref view) = surfaces.view {
+            if let Some(val) = view.canvas.as_deref().and_then(Self::color_from_hex) {
+                self.app_bg = val;
+            }
+            if let Some(val) = view.header_bg.as_deref().and_then(Self::color_from_hex) {
+                self.menu_bg = val;
+            }
+        }
+        if let Some(ref sheet) = surfaces.sheet
+            && let Some(val) = sheet.surface.as_deref().and_then(Self::color_from_hex)
+        {
+            self.element_bg = val;
+        }
+        if let Some(ref modal) = surfaces.modal {
+            if let Some(val) = modal.surface.as_deref().and_then(Self::color_from_hex) {
+                self.panel_bg = val;
+            }
+            if let Some(val) = modal.backdrop.as_deref().and_then(Self::color_from_hex) {
+                self.backdrop = val;
+            }
+            if let Some(val) = modal.dim_factor {
+                self.modal_dim_factor = val.clamp(0.0, 1.0);
+            }
+        }
     }
 
     /// Apply component-specific overrides onto an existing theme.
@@ -716,6 +749,165 @@ impl Theme {
     pub fn crate_badge(&self) -> Color {
         self.crate_bg
     }
+
+    // ── 4-Layer Spatial Surfaces Tokens ──
+    pub fn surfaces(&self) -> SurfacesTokens {
+        SurfacesTokens {
+            view: ViewTokens {
+                canvas: self.app_bg,
+                header_bg: self.menu_bg,
+                header_fg: self.text,
+                header_badge: self.primary,
+            },
+            sheet: SheetTokens {
+                surface: self.element_bg,
+                border: self.primary,
+                accent_bar: self.warning,
+            },
+            modal: ModalTokens {
+                surface: self.panel_bg,
+                border: self.primary,
+                backdrop: self.backdrop,
+                dim_factor: self.modal_dim_factor,
+                selected: self.selected_bg,
+            },
+            overlay: OverlayTokens {
+                toast_bg: self.panel_bg,
+                shadow: Color::Black,
+            },
+        }
+    }
+
+    // ── Feedback Severity Tokens ──
+    pub fn feedback(&self, severity: muta_contracts::NoticeSeverity) -> FeedbackToneTokens {
+        match severity {
+            muta_contracts::NoticeSeverity::Info => FeedbackToneTokens {
+                container: mix(self.app_bg, self.info, 0.15),
+                border: self.info,
+                text: self.text,
+            },
+            muta_contracts::NoticeSeverity::Warning => FeedbackToneTokens {
+                container: mix(self.app_bg, self.warning, 0.18),
+                border: self.warning,
+                text: self.text,
+            },
+            muta_contracts::NoticeSeverity::Error => FeedbackToneTokens {
+                container: mix(self.app_bg, self.error_fg, 0.18),
+                border: self.error_fg,
+                text: self.text,
+            },
+        }
+    }
+
+    pub fn feedback_success(&self) -> FeedbackToneTokens {
+        FeedbackToneTokens {
+            container: mix(self.app_bg, self.success, 0.15),
+            border: self.success,
+            text: self.text,
+        }
+    }
+
+    // ── Component Overrides Tokens ──
+    pub fn components(&self) -> ComponentsTokens {
+        ComponentsTokens {
+            input: InputTokens {
+                bg_active: self.input_bg_active,
+                bg_inactive: self.input_bg_inactive,
+                caret: self.caret_fg,
+                selection: self.input_selection_bg,
+                placeholder: self.input_placeholder_fg,
+            },
+            diff: DiffTokens {
+                add_bg: self.diff_add_bg,
+                del_bg: self.diff_del_bg,
+                add_hl: self.diff_add_hl,
+                del_hl: self.diff_del_hl,
+            },
+            command: CommandTokens {
+                idle_bg: self.command_band_bg,
+                hover_bg: self.command_band_bg_hover,
+            },
+            crate_tag: self.crate_fg,
+            crate_badge: self.crate_bg,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewTokens {
+    pub canvas: Color,
+    pub header_bg: Color,
+    pub header_fg: Color,
+    pub header_badge: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SheetTokens {
+    pub surface: Color,
+    pub border: Color,
+    pub accent_bar: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModalTokens {
+    pub surface: Color,
+    pub border: Color,
+    pub backdrop: Color,
+    pub dim_factor: f32,
+    pub selected: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlayTokens {
+    pub toast_bg: Color,
+    pub shadow: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfacesTokens {
+    pub view: ViewTokens,
+    pub sheet: SheetTokens,
+    pub modal: ModalTokens,
+    pub overlay: OverlayTokens,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeedbackToneTokens {
+    pub container: Color,
+    pub border: Color,
+    pub text: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputTokens {
+    pub bg_active: Color,
+    pub bg_inactive: Color,
+    pub caret: Color,
+    pub selection: Color,
+    pub placeholder: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffTokens {
+    pub add_bg: Color,
+    pub del_bg: Color,
+    pub add_hl: Color,
+    pub del_hl: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandTokens {
+    pub idle_bg: Color,
+    pub hover_bg: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComponentsTokens {
+    pub input: InputTokens,
+    pub diff: DiffTokens,
+    pub command: CommandTokens,
+    pub crate_tag: Color,
+    pub crate_badge: Color,
 }
 
 fn rgb(color: Color) -> (u8, u8, u8) {
@@ -922,5 +1114,55 @@ hover_bg = "#282828"
                 "{scheme:?}: command hover only {hover_idle_step:.1} above its idle band"
             );
         }
+    }
+
+    #[test]
+    fn spatial_surfaces_and_feedback_tokens_contract() {
+        let theme = Theme::default();
+        let surfaces = theme.surfaces();
+        assert_eq!(surfaces.view.canvas, theme.surface());
+        assert_eq!(surfaces.modal.surface, theme.panel());
+        assert_eq!(surfaces.modal.dim_factor, 0.5);
+
+        let fb_warn = theme.feedback(muta_contracts::NoticeSeverity::Warning);
+        assert_eq!(fb_warn.border, theme.warn());
+
+        let fb_err = theme.feedback(muta_contracts::NoticeSeverity::Error);
+        assert_eq!(fb_err.border, theme.err());
+
+        let fb_info = theme.feedback(muta_contracts::NoticeSeverity::Info);
+        assert_eq!(fb_info.border, theme.info());
+    }
+
+    #[test]
+    fn parses_and_applies_theme_surfaces_overrides() {
+        let raw = r##"
+name = "Custom Theme"
+description = "Test"
+
+[palette]
+background = "#050505"
+surface = "#101010"
+text = "#ffffff"
+muted = "#888888"
+accent = "#00ffcc"
+success = "#00cc00"
+warning = "#cccc00"
+error = "#cc0000"
+
+[surfaces.view]
+canvas = "#010101"
+header_bg = "#111111"
+
+[surfaces.modal]
+surface = "#222222"
+dim_factor = 0.65
+"##;
+        let file: ThemeFile = toml::from_str(raw).expect("should parse");
+        let theme = Theme::from_theme_file(&file);
+        assert_eq!(theme.surfaces().view.canvas, Color::Rgb(1, 1, 1));
+        assert_eq!(theme.surfaces().view.header_bg, Color::Rgb(17, 17, 17));
+        assert_eq!(theme.surfaces().modal.surface, Color::Rgb(34, 34, 34));
+        assert_eq!(theme.surfaces().modal.dim_factor, 0.65);
     }
 }

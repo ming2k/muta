@@ -10,7 +10,7 @@ pub use crate::chrome::{
 };
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
-    draw_composer_igniting,
+    draw_composer_igniting, draw_composer_with_options,
 };
 // Design tokens are re-exported crate-visibility so the drawing leaves that
 // used to reach them via the old `paint` parent's namespace still resolve.
