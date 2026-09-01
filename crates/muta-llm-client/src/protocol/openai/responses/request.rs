@@ -16,6 +16,31 @@ use serde_json::{Value, json};
 
 use super::tool_trace::{self, InputItem};
 
+/// A request cannot be serialized without violating stateless replay or tool
+/// trace invariants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestBuildError {
+    EmptyReplayArtifact,
+    MalformedReplayArtifact,
+    InvalidToolTrace(String),
+}
+
+impl std::fmt::Display for RequestBuildError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyReplayArtifact => formatter.write_str(
+                "Cannot replay this Responses turn: its provider output artifact is empty. The session was recorded by an incompatible client; start a new session instead of continuing with incomplete model state.",
+            ),
+            Self::MalformedReplayArtifact => formatter.write_str(
+                "Cannot replay this Responses turn: its provider output artifact is malformed. Start a new session instead of continuing with incomplete model state.",
+            ),
+            Self::InvalidToolTrace(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for RequestBuildError {}
+
 /// Inputs to [`body`]: the model id, whether this is a streaming request, the
 /// prepared tool schemas (OpenAI function-spec shape, optional), the optional
 /// reasoning-effort override, and the ChatGPT account id.
@@ -37,7 +62,7 @@ pub struct BodyInput<'a> {
 /// and results are reconciled so the request is always wire-valid: every
 /// `function_call_output` references a preceding `function_call`, and every
 /// `function_call` has its output (mirrors the chat-completions builder).
-pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
+pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Result<Value, RequestBuildError> {
     let capabilities = muta_contracts::ModelCapabilities::for_channel(input.model, None);
     body_with_capabilities(messages, input, &capabilities)
 }
@@ -49,7 +74,7 @@ pub fn body_with_capabilities(
     messages: Vec<Message>,
     input: BodyInput<'_>,
     capabilities: &muta_contracts::ModelCapabilities,
-) -> Value {
+) -> Result<Value, RequestBuildError> {
     let BodyInput {
         model: model_id,
         stream,
@@ -102,17 +127,33 @@ pub fn body_with_capabilities(
                 input_items.push(InputItem::plain(message_item("user", &m, "input_text")));
             }
             Role::Assistant => {
-                if matches!(delivery, muta_contracts::RequestDelivery::OpaqueReplay)
-                    && let Some(items) = m
-                        .provider_meta
-                        .as_ref()
-                        .and_then(|meta| {
-                            meta.get(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
-                        })
-                        .and_then(Value::as_array)
-                {
-                    input_items.extend(items.iter().cloned().map(InputItem::provider_owned));
-                    continue;
+                if matches!(delivery, muta_contracts::RequestDelivery::OpaqueReplay) {
+                    match m.provider_meta.as_ref().and_then(|meta| {
+                        meta.get(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
+                    }) {
+                        Some(Value::Array(items)) if items.is_empty() => {
+                            return Err(RequestBuildError::EmptyReplayArtifact);
+                        }
+                        Some(Value::Array(items)) => {
+                            for item in items {
+                                if !item.is_object()
+                                    || item
+                                        .get("type")
+                                        .and_then(Value::as_str)
+                                        .is_none_or(str::is_empty)
+                                {
+                                    return Err(RequestBuildError::MalformedReplayArtifact);
+                                }
+                            }
+                            input_items
+                                .extend(items.iter().cloned().map(InputItem::provider_owned));
+                            continue;
+                        }
+                        Some(_) => {
+                            return Err(RequestBuildError::MalformedReplayArtifact);
+                        }
+                        None => {}
+                    }
                 }
                 // Emit an assistant message item for any text content...
                 if !m.content.is_empty() {
@@ -140,6 +181,7 @@ pub fn body_with_capabilities(
         }
     }
     let input_items: Vec<Value> = tool_trace::project(input_items, remote_call_ids)
+        .map_err(|error| RequestBuildError::InvalidToolTrace(error.to_string()))?
         .into_iter()
         .map(InputItem::into_wire)
         .collect();
@@ -195,7 +237,7 @@ pub fn body_with_capabilities(
     body["reasoning"] = Value::Object(reasoning);
     super::super::cache::project_responses_instructions_for_explicit_mode(&mut body, cache_plan);
     super::super::cache::apply(&mut body, cache_plan, "input");
-    body
+    Ok(body)
 }
 
 /// Calls already stored behind `previous_response_id` are valid parents for
@@ -229,7 +271,10 @@ fn valid_message(message: &Message) -> bool {
                 .tool_calls
                 .as_ref()
                 .map(|calls| calls.is_empty())
-                .unwrap_or(true);
+                .unwrap_or(true)
+            && !message.provider_meta.as_ref().is_some_and(|meta| {
+                meta.contains_key(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
+            });
         return !empty;
     }
     true
@@ -375,7 +420,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(body["instructions"], "be concise");
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 1);
@@ -409,7 +455,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
         let input = body["input"].as_array().unwrap();
         // user, assistant(message), function_call, function_call_output.
         assert_eq!(input.len(), 4);
@@ -449,7 +496,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
 
         let input = body["input"].as_array().unwrap();
         let calls: Vec<&Value> = input
@@ -516,7 +564,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
 
         let input = body["input"].as_array().unwrap();
         assert_eq!(input[0]["id"], "fc_1");
@@ -555,7 +604,8 @@ mod tests {
                 store: true,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(body["previous_response_id"], "resp_1");
         let input = body["input"].as_array().unwrap();
@@ -586,7 +636,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
         let input = body["input"].as_array().unwrap();
         // Only user + assistant message survive; the unanswered call is dropped.
         assert_eq!(input.len(), 2);
@@ -606,7 +657,8 @@ mod tests {
                 store: false,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
-        );
+        )
+        .unwrap();
         // The most verbose summaries the backend offers — the raw chain of
         // thought is never exposed, so `detailed` is the ceiling.
         assert_eq!(body["reasoning"]["summary"], "detailed");
@@ -631,7 +683,8 @@ mod tests {
                 cache_plan: &muta_contracts::ResolvedCachePlan::Unsupported,
             },
             &muta_contracts::ModelCapabilities::for_channel("gpt-5.6-sol", None),
-        );
+        )
+        .unwrap();
         assert_eq!(
             request["include"],
             serde_json::json!(["reasoning.encrypted_content"])
@@ -730,7 +783,8 @@ mod tests {
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
             &caps,
-        );
+        )
+        .unwrap();
 
         let input = payload["input"].as_array().expect("input array");
         assert_eq!(input.len(), 1);
@@ -744,5 +798,54 @@ mod tests {
             content[1]["image_url"],
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         );
+    }
+
+    #[test]
+    fn empty_opaque_replay_artifact_fails_closed() {
+        let mut provider_meta = serde_json::Map::new();
+        provider_meta.insert(
+            muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
+            serde_json::json!([]),
+        );
+        let assistant = Message {
+            provider_meta: Some(provider_meta),
+            ..Message::new(Role::Assistant, "previous answer")
+        };
+        let error = body(
+            vec![assistant, Message::new(Role::User, "continue")],
+            BodyInput {
+                model: "gpt-5.6-sol",
+                stream: true,
+                tool_specs: None,
+                reasoning_effort: None,
+                delivery: &muta_contracts::RequestDelivery::OpaqueReplay,
+                store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, RequestBuildError::EmptyReplayArtifact);
+        assert!(error.to_string().contains("start a new session"));
+    }
+
+    #[test]
+    fn orphan_tool_output_fails_instead_of_disappearing() {
+        let error = body(
+            vec![Message {
+                tool_call_id: Some("missing_call".to_string()),
+                ..Message::new(Role::Tool, "result")
+            }],
+            BodyInput {
+                model: "gpt-5.6-sol",
+                stream: true,
+                tool_specs: None,
+                reasoning_effort: None,
+                delivery: &DEFAULT_DELIVERY,
+                store: false,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown call_id `missing_call`"));
     }
 }

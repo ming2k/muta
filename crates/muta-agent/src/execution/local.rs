@@ -292,6 +292,7 @@ impl WorkspaceFsProvider {
         let admitted = self.unconfined.is_unconfined()
             || resolved.starts_with(&self.root)
             || muta_contracts::execution::admits_temp_path(&resolved)
+            || muta_contracts::execution::admits_skills_path(&resolved)
             || self
                 .additional_roots
                 .snapshot()

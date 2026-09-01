@@ -18,15 +18,14 @@ pub enum Mode {
     Attach { id: Option<String> },
     /// Open the full-screen session dashboard.
     Dashboard,
+    /// Open the full-screen settings view (optional category).
+    Settings { category: Option<String> },
     /// `mutx completions <shell>`.
     Completions(Shell),
     /// `--version` / `-V`.
     Version,
     /// `--help` / `-h` / `help [topic]`.
     Help(Option<String>),
-    /// Render one UI component standalone (debug builds only).
-    #[cfg(debug_assertions)]
-    Showcase(String),
 }
 
 /// A shell whose completion script `mutx completions` can print.
@@ -89,13 +88,12 @@ const COMMANDS: &[Spec] = &[
         about: "open the full-screen session dashboard",
     },
     Spec {
+        name: "settings",
+        about: "open the full-screen settings view (optional category)",
+    },
+    Spec {
         name: "completions",
         about: "print a shell completion script",
-    },
-    #[cfg(debug_assertions)]
-    Spec {
-        name: "showcase",
-        about: "render a single UI component standalone (debug only)",
     },
     Spec {
         name: "help",
@@ -314,6 +312,13 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             [] => Mode::Dashboard,
             [bad, ..] => return unexpected(bad),
         },
+        "settings" => match extra {
+            [] => Mode::Settings { category: None },
+            [category] => Mode::Settings {
+                category: Some(category.clone()),
+            },
+            [bad, ..] => return unexpected(bad),
+        },
         "completions" => match extra {
             [shell] => match Shell::from_name(shell) {
                 Some(shell) => Mode::Completions(shell),
@@ -324,12 +329,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 }
             },
             [] => return Err("missing shell name (expected bash, zsh, or fish)".into()),
-            [bad, ..] => return unexpected(bad),
-        },
-        #[cfg(debug_assertions)]
-        "showcase" => match extra {
-            [component] => Mode::Showcase(component.clone()),
-            [] => return Err("showcase requires a component name".into()),
             [bad, ..] => return unexpected(bad),
         },
         "help" => Mode::Help(None),
@@ -404,6 +403,12 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str(
                 "  MUTA_PORT              override default daemon TCP port (default: 9800)\n",
             );
+            out.push_str(
+                "  MUTX_STARTUP_VIEW      boot view override (e.g. 'settings', 'settings:web', 'dashboard')\n",
+            );
+            out.push_str(
+                "  MUTX_SETTINGS_NAV      initial settings category (appearance, transcript, behavior, web, system)\n",
+            );
             out.push_str("\nWith no command, mutx opens a fresh interactive session.\n");
             out.push_str("It checks the Muta daemon first and starts `muta` when needed.\n");
             out.push_str("Daemon and service administration remains under the `muta` command.\n");
@@ -424,6 +429,14 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
                         "\nWith no id the TUI session picker opens (a lone hosted session is\n",
                     );
                     out.push_str("auto-selected). The Muta daemon starts on demand.\n");
+                }
+                "settings" => {
+                    out.push_str(
+                        "\nOpen the full-screen settings view. Optionally specify a category name\n",
+                    );
+                    out.push_str(
+                        "(appearance, transcript, behavior, web, system) or index (0..4).\n",
+                    );
                 }
                 _ => {}
             }
@@ -519,5 +532,27 @@ mod tests {
         let parsed = parse(&["fix", "the", "build"]).unwrap();
         assert!(matches!(parsed.mode, Mode::Fresh));
         assert_eq!(parsed.prompt.as_deref(), Some("fix the build"));
+    }
+
+    #[test]
+    fn settings_subcommand_parses_category() {
+        let parsed = parse(&["settings"]).unwrap();
+        assert_eq!(parsed.mode, Mode::Settings { category: None });
+
+        let parsed = parse(&["settings", "web"]).unwrap();
+        assert_eq!(
+            parsed.mode,
+            Mode::Settings {
+                category: Some("web".into())
+            }
+        );
+
+        let parsed = parse(&["settings", "appearance"]).unwrap();
+        assert_eq!(
+            parsed.mode,
+            Mode::Settings {
+                category: Some("appearance".into())
+            }
+        );
     }
 }

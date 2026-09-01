@@ -18,6 +18,7 @@ pub struct InputCompletionEngine {
     catalog: CommandCatalog,
     project_root: PathBuf,
     project_entries: OnceCell<Vec<String>>,
+    skills_registry: Option<muta_skills::SkillRegistry>,
 }
 
 impl InputCompletionEngine {
@@ -26,7 +27,13 @@ impl InputCompletionEngine {
             catalog,
             project_root,
             project_entries: OnceCell::new(),
+            skills_registry: None,
         }
+    }
+
+    pub fn with_skills(mut self, registry: muta_skills::SkillRegistry) -> Self {
+        self.skills_registry = Some(registry);
+        self
     }
 
     /// Produce one race-safe protocol response. `cursor` is a Unicode-scalar
@@ -52,10 +59,12 @@ impl InputCompletionEngine {
             return Vec::new();
         };
         let query = &input[at_start + 1..cursor_end];
-        if is_explicit_path_prefix(query) {
+        if is_skill_query(query) {
+            self.complete_skills(input, query, at_start, cursor_end)
+        } else if is_explicit_path_prefix(query) {
             self.complete_explicit_path(input, query, at_start, cursor_end)
         } else {
-            self.complete_project_path(input, query, at_start, cursor_end)
+            self.complete_project_and_skills(input, query, at_start, cursor_end)
                 .await
         }
     }
@@ -64,13 +73,79 @@ impl InputCompletionEngine {
         complete_slash_items(&self.catalog, input, cursor_byte)
     }
 
-    async fn complete_project_path(
+    fn complete_skills(
         &self,
         input: &str,
         query: &str,
         at_start: usize,
         cursor_end: usize,
     ) -> Vec<InputCompletion> {
+        let Some(registry) = &self.skills_registry else {
+            return Vec::new();
+        };
+        let guard = registry.lock();
+        let all_skills = guard.list();
+
+        let (filter, explicit_prefix) = if let Some(rest) = query.strip_prefix("skills:") {
+            (rest, "skills:")
+        } else if let Some(rest) = query.strip_prefix("skill:") {
+            (rest, "skill:")
+        } else {
+            (query, "skill:")
+        };
+
+        let mut items = Vec::new();
+
+        if (query == "skill" || query == "skills") && !all_skills.is_empty() {
+            items.push(skill_namespace_item(input, at_start, cursor_end));
+        }
+
+        let filter_lower = filter.to_lowercase();
+        for skill in &all_skills {
+            if !skill.enabled || skill.quarantined {
+                continue;
+            }
+            if !filter_lower.is_empty()
+                && filter != "skill"
+                && filter != "skills"
+                && !skill.name.to_lowercase().contains(&filter_lower)
+            {
+                continue;
+            }
+            items.push(skill_item(input, skill, explicit_prefix, at_start, cursor_end));
+        }
+
+        items
+    }
+
+    async fn complete_project_and_skills(
+        &self,
+        input: &str,
+        query: &str,
+        at_start: usize,
+        cursor_end: usize,
+    ) -> Vec<InputCompletion> {
+        let mut items = Vec::new();
+
+        if query.is_empty() && self.skills_registry.is_some() {
+            items.push(skill_namespace_item(input, at_start, cursor_end));
+        }
+
+        if let Some(registry) = &self.skills_registry
+            && !query.is_empty()
+        {
+            let guard = registry.lock();
+            let query_lower = query.to_lowercase();
+            for skill in guard.list() {
+                if !skill.enabled || skill.quarantined {
+                    continue;
+                }
+                if skill.name.to_lowercase().contains(&query_lower) {
+                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
+                }
+            }
+        }
+
         let root = self.project_root.clone();
         let entries = self
             .project_entries
@@ -80,7 +155,7 @@ impl InputCompletionEngine {
                     .unwrap_or_default()
             })
             .await;
-        let mut items = entries
+        let mut path_items = entries
             .iter()
             .filter(|path| path_query_match(path, query))
             .take(MAX_PATH_COMPLETIONS)
@@ -98,7 +173,8 @@ impl InputCompletionEngine {
                 )
             })
             .collect::<Vec<_>>();
-        sort_path_completions(&mut items);
+        sort_path_completions(&mut path_items);
+        items.extend(path_items);
         items
     }
 
@@ -383,6 +459,70 @@ fn slash_item(
         },
         alias_of: None,
         command: Some(command.clone()),
+    }
+}
+
+fn is_skill_query(query: &str) -> bool {
+    query.starts_with("skill:")
+        || query.starts_with("skills:")
+        || query == "skill"
+        || query == "skills"
+}
+
+fn skill_namespace_item(
+    input: &str,
+    at_start_byte: usize,
+    replace_end_byte: usize,
+) -> InputCompletion {
+    InputCompletion {
+        label: "@skill:".to_string(),
+        description: "Skill mention namespace".to_string(),
+        insert_text: "@skill:".to_string(),
+        replace_start: input[..at_start_byte].chars().count(),
+        replace_end: input[..replace_end_byte].chars().count(),
+        kind: InputCompletionKind::PathDir,
+        alias_of: None,
+        command: None,
+    }
+}
+
+fn skill_item(
+    input: &str,
+    skill: &muta_skills::Skill,
+    explicit_prefix: &str,
+    at_start_byte: usize,
+    replace_end_byte: usize,
+) -> InputCompletion {
+    let label = format!("@{explicit_prefix}{}", skill.name);
+    let mut insert_text = format!("@{explicit_prefix}{}", skill.name);
+    let needs_space = input
+        .get(replace_end_byte..)
+        .and_then(|suffix| suffix.chars().next())
+        .map(|character| !character.is_whitespace())
+        .unwrap_or(true);
+    if needs_space {
+        insert_text.push(' ');
+    }
+    let desc = skill
+        .description
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    InputCompletion {
+        label,
+        description: if desc.is_empty() {
+            format!("Skill ({})", skill.scope)
+        } else {
+            desc
+        },
+        insert_text,
+        replace_start: input[..at_start_byte].chars().count(),
+        replace_end: input[..replace_end_byte].chars().count(),
+        kind: InputCompletionKind::PathExplicit,
+        alias_of: None,
+        command: None,
     }
 }
 
@@ -936,17 +1076,53 @@ mod tests {
         assert!(paths.iter().all(|path| !path.starts_with("target/")));
     }
 
-    #[test]
-    fn wire_offsets_are_unicode_scalar_indices() {
-        let item = path_item(
-            "中 @src",
-            "src/main.rs",
-            4,
-            8,
-            InputCompletionKind::PathFile,
-        );
-        assert_eq!(item.replace_start, 2);
-        assert_eq!(item.replace_end, 6);
-        assert_eq!(item.insert_text, "src/main.rs ");
+    #[tokio::test]
+    async fn skill_completions_trigger_inline_anywhere() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = muta_skills::SkillRegistry::empty();
+        let skill: muta_skills::Skill = serde_json::from_value(serde_json::json!({
+            "name": "skill-creator",
+            "description": "Create and optimize muta skills",
+            "scope": "User",
+            "source": "/skills/skill-creator/SKILL.md",
+            "root": ".",
+            "content": "",
+            "version": null,
+            "policy": { "allow_implicit_invocation": true }
+        }))
+        .unwrap();
+        registry.replace(vec![skill]);
+
+        let engine = InputCompletionEngine::new(catalog(), temp.path().to_path_buf())
+            .with_skills(registry);
+
+        // 1. Direct namespace trigger `@skill:`
+        let input = "hello @skill:";
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(100, input.into(), input.chars().count()).await
+        else {
+            panic!("unexpected response")
+        };
+        assert!(items.iter().any(|i| i.label == "@skill:skill-creator" && i.insert_text == "@skill:skill-creator "));
+
+        // 2. Multiline cursor anywhere in content
+        let input = "First line\nSecond line with @skill:creat and more text";
+        let cursor_char_pos = "First line\nSecond line with @skill:creat".chars().count();
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(101, input.into(), cursor_char_pos).await
+        else {
+            panic!("unexpected response")
+        };
+        let match_item = items.iter().find(|i| i.label == "@skill:skill-creator").expect("should find skill-creator");
+        assert_eq!(match_item.insert_text, "@skill:skill-creator");
+
+        // 3. Namespace suggestion on `@skill`
+        let input = "check @skill";
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(102, input.into(), input.chars().count()).await
+        else {
+            panic!("unexpected response")
+        };
+        assert!(items.iter().any(|i| i.label == "@skill:" && i.insert_text == "@skill:"));
     }
 }

@@ -86,11 +86,13 @@ There are two paths from identifying a skill to placing its body in context:
    even for disabled skills, so the model can load one and explain why it did
    nothing.
 
-2. **Implicit — mention detection.** Before a round runs, the harness scans the
+2. **Implicit — mention detection and completion.** Before a round runs, the harness scans the
    latest visible user message for skill mentions. A mention is one of:
    - an `@skill-name` reference,
    - the disambiguated `@skill:skill-name` / `@skills:skill-name` namespace,
    - a `skill://skill-name` or source-path URI.
+
+   **Composer Autocompletion**: The composer provides cursor-anchored, inline overlay autocompletion for `@skill:` / `@skills:` and `@` mentions anywhere within multiline input. Selecting a candidate commits the unambiguous `@skill:<name>` token.
 
    Each mentioned skill whose policy allows implicit invocation is loaded as a
    **hidden user message** carrying the same `[Skill '<name>' loaded]` marker
@@ -98,6 +100,8 @@ There are two paths from identifying a skill to placing its body in context:
    as part of the visible transcript. A plain name occurrence is deliberately
    ignored because common words would otherwise pull large bodies into context
    accidentally. Already implicitly loaded skills are not re-injected.
+
+3. **Progressive Disclosure & Workspace Admission.** Available skills are surfaced to the model in system prompt metadata blocks (`<available_skills>`). Global user skill roots (`~/.local/share/muta/skills/`, `~/.agents/skills/`, etc.) are natively admitted to the execution workspace sandbox so the model can inspect skill definitions on demand without permission denials.
 
 Both paths emit the same marker, so persisted context remains auditable even
 though one path is a tool result and the other is harness-authored user context.

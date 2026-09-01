@@ -264,6 +264,7 @@ pub trait ExecutionEnvironment: Send + Sync {
         let admitted = self.is_unconfined()
             || normalized.starts_with(&root_norm)
             || admits_temp_path(&target)
+            || admits_skills_path(&target)
             || self
                 .additional_roots()
                 .iter()
@@ -341,6 +342,51 @@ pub fn temp_roots() -> Vec<std::path::PathBuf> {
 pub fn admits_temp_path(path: &Path) -> bool {
     let normalized = lexical_normalize(path);
     temp_roots()
+        .iter()
+        .any(|root| normalized.starts_with(lexical_normalize(root)))
+}
+
+/// Global skills roots that are admitted for progressive disclosure skill reading.
+pub fn global_skills_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(muta_home) = std::env::var("MUTA_HOME") {
+        let base = PathBuf::from(muta_home);
+        roots.push(base.join("data").join("skills"));
+        roots.push(base.join("cache").join("skills"));
+    }
+    if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+        roots.push(PathBuf::from(xdg_data).join("muta").join("skills"));
+    }
+    if let Ok(xdg_cache) = std::env::var("XDG_CACHE_HOME") {
+        roots.push(PathBuf::from(xdg_cache).join("muta").join("skills"));
+    }
+    if let Some(data) = dirs::data_local_dir().or_else(dirs::data_dir) {
+        roots.push(data.join("muta").join("skills"));
+    }
+    if let Some(cache) = dirs::cache_dir() {
+        roots.push(cache.join("muta").join("skills"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".local").join("share").join("muta").join("skills"));
+        roots.push(home.join(".cache").join("muta").join("skills"));
+        roots.push(home.join(".agents").join("skills"));
+        roots.push(home.join(".claude").join("skills"));
+    }
+    let raw_roots = roots.clone();
+    for raw in raw_roots {
+        if let Ok(canon) = std::fs::canonicalize(&raw) {
+            roots.push(canon);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Lexical containment check against global user and remote cached skills roots.
+pub fn admits_skills_path(path: &Path) -> bool {
+    let normalized = lexical_normalize(path);
+    global_skills_roots()
         .iter()
         .any(|root| normalized.starts_with(lexical_normalize(root)))
 }

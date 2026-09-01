@@ -434,6 +434,13 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         // on a row (HostSwitchSelected) re-attaches as usual.
         tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
+    } else if matches!(app.startup_overlay, crate::StartupOverlay::Settings { .. })
+        && (app.active_modal() == Modal::Config || app.current_view() == crate::surfaces::View::Settings)
+    {
+        // `mutx settings` (or MUTX_STARTUP_VIEW=settings) opened the settings
+        // view directly: Esc here quits rather than dropping into chat.
+        tracing::info!(reason = "startup_settings_cancelled", "app exiting");
+        app.should_quit.store(true, Ordering::SeqCst);
     } else {
         // Retained browse views hide instead of closing (ADR-0139), and the
         // quick switcher cancels back to its origin surface — both via the

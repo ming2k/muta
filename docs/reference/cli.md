@@ -51,10 +51,9 @@ mutx [OPTIONS] <COMMAND>
 | `attach [id]` | Attach the TUI to a hosted session; the picker opens when no id is given |
 | `run <prompt>` | Headless non-interactive execution with the prompt |
 | `dashboard` | Open the full-screen session dashboard |
+| `settings [category]` | Open the full-screen settings view (optional category: `appearance`, `transcript`, `behavior`, `web`, `system` or `0..4`) |
 | `completions <bash\|zsh\|fish>` | Print a `mutx` shell completion script |
 | `help [command]` | Print top-level or command help |
-
-`mutx showcase <name>` renders one UI component in debug builds only.
 
 ## Options
 
@@ -137,4 +136,6 @@ eval "$(mutx completions bash)"
 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | Per-category directory overrides (see [Paths](paths.md)) |
 | `MUTA_LOG` | Log level for the file log under the XDG state dir: `off`, `error`, `warn`, `info` (default), `debug`, `trace` |
 | `MUTA_BIN` | Explicit `muta` executable used by `mutx` for on-demand daemon startup; normally unnecessary because a sibling binary and then `PATH` are checked |
+| `MUTX_STARTUP_VIEW` | Acceptance/test/launch view override: boot directly into a full-screen view (`settings`, `settings:<category>`, `dashboard`, `sessions`) |
+| `MUTX_SETTINGS_NAV` | Initial navigation category for the settings view (`appearance`, `transcript`, `behavior`, `web`, `system` or index `0..4`) |
 | `RUST_LOG` | Per-target filter; takes precedence over `MUTA_LOG` when set |

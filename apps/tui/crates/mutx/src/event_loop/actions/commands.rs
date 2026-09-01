@@ -326,13 +326,11 @@ pub(crate) fn handle_ctrl_c(
             app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         } else if app.ctrl_c_armed() {
             tracing::info!(reason = "dashboard_ctrl_c_double_press", "app exiting");
-            if app.startup_overlay == crate::StartupOverlay::Dashboard {
-                // `mutx dashboard` opened this screen over a
-                // carrier session the user never asked to
-                // converse with: quit the detach-flavoured way
-                // (should_quit, mirroring the Esc path) so the
-                // carrier stays hosted — never a client-declared
-                // EndSession aimed at someone else's session.
+            if app.startup_overlay == crate::StartupOverlay::Dashboard
+                || matches!(app.startup_overlay, crate::StartupOverlay::Settings { .. })
+            {
+                // Standalone entry (`mutx dashboard` or `mutx settings`) opened this
+                // screen without an attached conversation: quit cleanly.
                 app.should_quit.store(true, Ordering::SeqCst);
             } else {
                 // `/dashboard` opened in-session: the same

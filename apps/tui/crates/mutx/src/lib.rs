@@ -16,17 +16,13 @@
 //!   ([`app`]), input mapping ([`input`]), and the event/render loop
 //!   (`event_loop`). [`start_tui`] is the entry point wired by the
 //!   `muta` binary (`mutx`), which stays a thin shell over this
-//!   crate. The debug-only [`showcase`] module is a "Storybook" rendering
-//!   individual components in isolation (`mutx showcase <component>`).
+//!   crate.
 //!
 //! The seam between shell and view is the borrowed `view::TranscriptView`
 //! the event loop fills in each frame; the view modules never reach back into
 //! the shell.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-
-#[cfg(debug_assertions)]
-pub mod showcase;
 
 pub mod app;
 pub mod browser;
@@ -60,7 +56,7 @@ pub(crate) mod disclosure;
 pub(crate) mod layout;
 pub(crate) mod overlays;
 pub(crate) mod tools;
-pub(crate) mod views;
+pub mod views;
 
 // Drawing leaves + shared tokens.
 pub(crate) mod chrome;
@@ -163,6 +159,59 @@ pub enum StartupOverlay {
     SessionsPicker,
     /// `mutx dashboard`: open the session dashboard over the carrier session.
     Dashboard,
+    /// `mutx settings`: open the settings view directly (optional category index).
+    Settings { category: Option<usize> },
+}
+
+impl StartupOverlay {
+    /// Resolve startup overlay intent from acceptance / test / launch environment variables:
+    /// - `MUTX_STARTUP_VIEW` / `MUTX_VIEW`: e.g. `settings`, `settings:web`, `settings:3`, `dashboard`, `sessions`.
+    /// - `MUTX_SETTINGS_NAV` / `MUTX_SETTINGS_CATEGORY`: e.g. `web`, `transcript`, `appearance`, `system`, `behavior`, `0..4`.
+    pub fn resolve_from_env() -> Option<Self> {
+        let view_val = std::env::var("MUTX_STARTUP_VIEW")
+            .or_else(|_| std::env::var("MUTX_VIEW"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let nav_val = std::env::var("MUTX_SETTINGS_NAV")
+            .or_else(|_| std::env::var("MUTX_SETTINGS_CATEGORY"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if let Some(view) = view_val {
+            let lower = view.to_ascii_lowercase();
+            if lower == "dashboard" {
+                return Some(StartupOverlay::Dashboard);
+            }
+            if lower == "sessions" || lower == "attach" || lower == "picker" {
+                return Some(StartupOverlay::SessionsPicker);
+            }
+            if lower == "settings"
+                || lower.starts_with("settings:")
+                || lower.starts_with("settings/")
+                || lower.starts_with("settings.")
+                || lower == "config"
+                || lower.starts_with("config:")
+                || lower.starts_with("config/")
+            {
+                let suffix_cat = lower
+                    .split_once(|c| c == ':' || c == '/' || c == '.')
+                    .map(|(_, s)| s);
+                let cat = suffix_cat
+                    .or(nav_val.as_deref())
+                    .and_then(crate::views::ConfigCategory::from_name)
+                    .map(|c| c as usize);
+                return Some(StartupOverlay::Settings { category: cat });
+            }
+        } else if let Some(nav) = nav_val {
+            let cat = crate::views::ConfigCategory::from_name(&nav).map(|c| c as usize);
+            return Some(StartupOverlay::Settings { category: cat });
+        }
+
+        None
+    }
 }
 
 /// Whether an inbound response is a high-frequency visual update that can wait
@@ -2148,10 +2197,14 @@ pub async fn run_tui(
 
     let mut app = App {
         panels: crate::surfaces::PanelRegistry::new(),
-        surfaces: if startup_overlay == StartupOverlay::SessionsPicker {
-            crate::surfaces::SurfaceRouter::with_panel(crate::surfaces::PanelId::Sessions)
-        } else {
-            crate::surfaces::SurfaceRouter::new()
+        surfaces: match startup_overlay {
+            StartupOverlay::SessionsPicker => {
+                crate::surfaces::SurfaceRouter::with_panel(crate::surfaces::PanelId::Sessions)
+            }
+            StartupOverlay::Settings { .. } => {
+                crate::surfaces::SurfaceRouter::with_view(crate::surfaces::View::Settings)
+            }
+            _ => crate::surfaces::SurfaceRouter::new(),
         },
         queue_exit_session: None,
         view_switcher_query: String::new(),
@@ -2201,7 +2254,7 @@ pub async fn run_tui(
         pin_summary_line: None,
         scroll_settle_pending: false,
         focus_stack: Vec::new(),
-        tx,
+        tx: tx.clone(),
         should_quit,
         suggestion_index: None,
         completion_dismissed: false,
@@ -2231,7 +2284,12 @@ pub async fn run_tui(
         permissions_scroll: 0,
         config_scroll: 0,
         config_focus: crate::overlays::ConfigFocus::Categories,
-        config_category: 0,
+        config_category: match startup_overlay {
+            StartupOverlay::Settings { category: Some(cat) } => {
+                cat.min(crate::views::ConfigCategory::ALL.len().saturating_sub(1))
+            }
+            _ => 0,
+        },
         config_detail_index: 0,
         config_web_segment: 0,
 
@@ -2405,6 +2463,9 @@ pub async fn run_tui(
 
     if startup_overlay == StartupOverlay::SessionsPicker {
         app.panels.open(crate::surfaces::PanelId::Sessions);
+    }
+    if matches!(startup_overlay, StartupOverlay::Settings { .. }) {
+        let _ = tx.send(AgentRequest::QueryWebSearchConfig);
     }
 
     // Run app

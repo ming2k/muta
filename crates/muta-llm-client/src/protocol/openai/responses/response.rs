@@ -11,7 +11,8 @@
 //! - `response.function_call_arguments.delta` → accumulating tool-call args
 //! - `response.function_call_arguments.done` → the complete tool call
 //! - `response.output_item.added` (function_call) → captures id/name/call_id
-//! - `response.completed` → terminal usage
+//! - `response.output_item.done` → preserves the complete opaque output item
+//! - `response.completed` → terminal usage and exact replay artifacts
 
 use muta_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::Value;
@@ -136,6 +137,12 @@ pub struct ResponsesStream {
     seen_item: std::collections::HashSet<String>,
     /// `item_id`s that already received argument deltas.
     seen_args: std::collections::HashSet<String>,
+    /// Complete provider output items, keyed by their response output index.
+    /// Stateless continuation replays these values byte-for-byte at the JSON
+    /// value level, including encrypted reasoning state and unknown item types.
+    completed_output: std::collections::BTreeMap<usize, Value>,
+    /// A response has exactly one terminal event and no data may follow it.
+    terminal_seen: bool,
 }
 
 impl ResponsesStream {
@@ -145,16 +152,18 @@ impl ResponsesStream {
 
     /// Parse one `data:` payload (a JSON object with a `type` field) into zero
     /// or more harness stream events. Unknown event types are ignored.
-    pub fn parse(&mut self, data: &str) -> Vec<ProviderStreamEvent> {
-        let Ok(value) = serde_json::from_str::<Value>(data) else {
-            return Vec::new();
-        };
+    pub fn parse(&mut self, data: &str) -> Result<Vec<ProviderStreamEvent>, String> {
+        let value = serde_json::from_str::<Value>(data)
+            .map_err(|error| format!("Invalid JSON in Responses event: {error}"))?;
         self.parse_value(&value)
     }
 
     /// Parse an already-decoded event. Transport adapters use this entry point
     /// so validation and event assembly share one JSON decode.
-    pub fn parse_value(&mut self, value: &Value) -> Vec<ProviderStreamEvent> {
+    pub fn parse_value(&mut self, value: &Value) -> Result<Vec<ProviderStreamEvent>, String> {
+        if self.terminal_seen {
+            return Err("Responses stream emitted data after its terminal event.".to_string());
+        }
         let mut events = Vec::new();
         let event_type = value["type"].as_str().unwrap_or("");
         match event_type {
@@ -243,12 +252,73 @@ impl ResponsesStream {
                     }
                 }
             }
+            "response.output_item.done" => {
+                let output_index = value["output_index"].as_u64().ok_or_else(|| {
+                    "Responses output_item.done event is missing output_index.".to_string()
+                })? as usize;
+                let item = value
+                    .get("item")
+                    .filter(|item| item.is_object())
+                    .ok_or_else(|| {
+                        "Responses output_item.done event is missing its complete item.".to_string()
+                    })?;
+                if item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(
+                        "Responses output_item.done event contains an item without a type."
+                            .to_string(),
+                    );
+                }
+                if self
+                    .completed_output
+                    .insert(output_index, item.clone())
+                    .is_some()
+                {
+                    return Err(format!(
+                        "Responses stream completed output index {output_index} more than once."
+                    ));
+                }
+            }
             "response.completed" => {
                 let response = &value["response"];
+                let output = match response.get("output").and_then(Value::as_array) {
+                    Some(items) if !items.is_empty() => items.clone(),
+                    _ if !self.completed_output.is_empty() => {
+                        for (expected, actual) in self.completed_output.keys().enumerate() {
+                            if expected != *actual {
+                                return Err(format!(
+                                    "Responses stream is missing completed output index {expected}."
+                                ));
+                            }
+                        }
+                        self.completed_output.values().cloned().collect()
+                    }
+                    _ => {
+                        return Err(
+                            "Responses stream completed without any replayable output items."
+                                .to_string(),
+                        );
+                    }
+                };
+                for item in &output {
+                    if !item.is_object()
+                        || item
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty)
+                    {
+                        return Err(
+                            "Responses completion contains a malformed output item.".to_string()
+                        );
+                    }
+                }
                 let mut artifacts = serde_json::Map::new();
                 artifacts.insert(
                     muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
-                    response["output"].clone(),
+                    Value::Array(output),
                 );
                 if let Some(id) = response["id"].as_str() {
                     artifacts.insert(
@@ -263,13 +333,14 @@ impl ResponsesStream {
                         continuation: None,
                     },
                 ));
+                self.terminal_seen = true;
             }
-            // `response.created`, `response.in_progress`, and `*.added`/`*.done`
-            // for text/reasoning parts carry no harness-relevant payload.
+            // `response.created`, `response.in_progress`, and part-level
+            // `*.added`/`*.done` events carry no additional harness payload.
             // Terminal failures are rejected by the transport before parsing.
             _ => {}
         }
-        events
+        Ok(events)
     }
 
     /// Assign (or look up) the tool-call index for an `item_id`, in
@@ -295,7 +366,9 @@ mod tests {
     #[test]
     fn parses_output_text_delta() {
         let mut s = ResponsesStream::new();
-        let ev = s.parse(r#"{"type":"response.output_text.delta","delta":"hel"}"#);
+        let ev = s
+            .parse(r#"{"type":"response.output_text.delta","delta":"hel"}"#)
+            .unwrap();
         assert_eq!(ev.len(), 1);
         assert!(matches!(
             &ev[0],
@@ -306,7 +379,9 @@ mod tests {
     #[test]
     fn parses_reasoning_summary_delta() {
         let mut s = ResponsesStream::new();
-        let ev = s.parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#);
+        let ev = s
+            .parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#)
+            .unwrap();
         assert_eq!(ev.len(), 1);
         assert!(matches!(
             &ev[0],
@@ -319,7 +394,9 @@ mod tests {
         // Third-party Responses providers (DeepSeek V4) stream the raw CoT as
         // `reasoning_text` deltas rather than ChatGPT's summary stream.
         let mut s = ResponsesStream::new();
-        let ev = s.parse(r#"{"type":"response.reasoning_text.delta","delta":"pondering"}"#);
+        let ev = s
+            .parse(r#"{"type":"response.reasoning_text.delta","delta":"pondering"}"#)
+            .unwrap();
         assert_eq!(ev.len(), 1);
         assert!(matches!(
             &ev[0],
@@ -346,7 +423,7 @@ mod tests {
         // output_item.added announces the call.
         let added = s.parse(
             r#"{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"bash"}}"#,
-        );
+        ).unwrap();
         assert_eq!(added.len(), 1);
         assert!(matches!(
             &added[0],
@@ -356,15 +433,15 @@ mod tests {
         // Argument deltas accumulate under the same index.
         let d1 = s.parse(
             r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"comm"}"#,
-        );
+        ).unwrap();
         let d2 = s.parse(
             r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"and\":\"ls\"}"}"#,
-        );
+        ).unwrap();
         assert_eq!(d1.len() + d2.len(), 2);
         // A second call gets index 1.
         let added2 = s.parse(
             r#"{"type":"response.output_item.added","item":{"id":"fc_2","type":"function_call","call_id":"call_2","name":"grep"}}"#,
-        );
+        ).unwrap();
         assert!(matches!(
             &added2[0],
             ProviderStreamEvent::ToolCallDelta { index: 1, .. }
@@ -375,8 +452,8 @@ mod tests {
     fn emits_usage_on_completion() {
         let mut s = ResponsesStream::new();
         let ev = s.parse(
-            r#"{"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":7,"total_tokens":19}}}"#,
-        );
+            r#"{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":12,"output_tokens":7,"total_tokens":19}}}"#,
+        ).unwrap();
         assert_eq!(ev.len(), 1);
         match &ev[0] {
             ProviderStreamEvent::Completed(meta) => {
@@ -399,7 +476,7 @@ mod tests {
         let mut s = ResponsesStream::new();
         s.parse(
             r#"{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"list_dir"}}"#,
-        );
+        ).unwrap();
         let delta = serde_json::json!({
             "type": "response.function_call_arguments.delta",
             "item_id": "fc_1",
@@ -414,9 +491,9 @@ mod tests {
             "arguments": "{\"path\":\".\",\"max_results\":100}"
         })
         .to_string();
-        s.parse(&delta);
+        s.parse(&delta).unwrap();
         // The .done event must emit nothing — args and id/name already flowed.
-        let done_events = s.parse(&done);
+        let done_events = s.parse(&done).unwrap();
         assert!(
             done_events.is_empty(),
             "done must not re-emit after deltas; got {done_events:?}"
@@ -436,7 +513,7 @@ mod tests {
             "arguments": "{\"path\":\".\"}"
         })
         .to_string();
-        let ev = s.parse(&done);
+        let ev = s.parse(&done).unwrap();
         assert_eq!(ev.len(), 1);
         match &ev[0] {
             ProviderStreamEvent::ToolCallDelta {
@@ -471,32 +548,34 @@ mod tests {
     #[test]
     fn unknown_event_types_are_ignored() {
         let mut s = ResponsesStream::new();
-        let ev = s.parse(r#"{"type":"response.created"}"#);
+        let ev = s.parse(r#"{"type":"response.created"}"#).unwrap();
         assert!(ev.is_empty());
-        // Garbage JSON is ignored too.
-        assert!(s.parse("not json").is_empty());
+        assert!(s.parse("not json").is_err());
     }
 
     #[test]
     fn reasoning_summary_strips_html_comment_placeholder() {
         let mut s = ResponsesStream::new();
         // A header delta passes through.
-        let ev = s.parse(
-            r#"{"type":"response.reasoning_summary_text.delta","delta":"**Planning**\n\n"}"#,
-        );
+        let ev = s
+            .parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"**Planning**\n\n"}"#)
+            .unwrap();
         assert!(matches!(
             &ev[0],
             ProviderStreamEvent::ReasoningDelta(t) if t.contains("Planning")
         ));
         // The empty-body placeholder delta is dropped entirely (no event).
-        let ev = s.parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"<!-- -->"}"#);
+        let ev = s
+            .parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"<!-- -->"}"#)
+            .unwrap();
         assert!(
             ev.is_empty(),
             "placeholder delta must be dropped; got {ev:?}"
         );
         // A delta combining text + placeholder keeps the text, drops the marker.
-        let ev =
-            s.parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"done\n<!-- -->"}"#);
+        let ev = s
+            .parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"done\n<!-- -->"}"#)
+            .unwrap();
         match &ev[0] {
             ProviderStreamEvent::ReasoningDelta(t) => {
                 assert!(t.contains("done"));
@@ -517,5 +596,110 @@ mod tests {
         assert_eq!(u.prompt_tokens, 800);
         assert_eq!(u.cache_read_input_tokens, 500);
         assert_eq!(u.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn completed_reconstructs_empty_terminal_output_from_done_items() {
+        let mut stream = ResponsesStream::new();
+        let reasoning = serde_json::json!({
+            "id": "rs_1",
+            "type": "reasoning",
+            "encrypted_content": "opaque-state",
+            "summary": []
+        });
+        let call = serde_json::json!({
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "list_dir",
+            "arguments": "{\"path\":\".\"}",
+            "status": "completed"
+        });
+        stream
+            .parse_value(&serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": call
+            }))
+            .unwrap();
+        stream
+            .parse_value(&serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": reasoning
+            }))
+            .unwrap();
+
+        let events = stream
+            .parse_value(&serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "output": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 5}
+                }
+            }))
+            .unwrap();
+        let ProviderStreamEvent::Completed(meta) = &events[0] else {
+            panic!("expected completion metadata");
+        };
+        let output = meta
+            .artifacts
+            .as_ref()
+            .and_then(|artifacts| {
+                artifacts.get(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
+            })
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["encrypted_content"], "opaque-state");
+        assert_eq!(output[1]["call_id"], "call_1");
+    }
+
+    #[test]
+    fn completed_without_any_output_is_a_protocol_error() {
+        let error = ResponsesStream::new()
+            .parse_value(&serde_json::json!({
+                "type": "response.completed",
+                "response": {"output": []}
+            }))
+            .unwrap_err();
+        assert!(error.contains("without any replayable output items"));
+    }
+
+    #[test]
+    fn completed_rejects_gaps_in_done_item_indices() {
+        let mut stream = ResponsesStream::new();
+        stream
+            .parse_value(&serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {"type": "message", "content": []}
+            }))
+            .unwrap();
+        let error = stream
+            .parse_value(&serde_json::json!({
+                "type": "response.completed",
+                "response": {"output": []}
+            }))
+            .unwrap_err();
+        assert!(error.contains("missing completed output index 0"));
+    }
+
+    #[test]
+    fn terminal_event_is_unique_and_final() {
+        let mut stream = ResponsesStream::new();
+        stream
+            .parse_value(&serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "output": [{"type": "message", "content": []}]
+                }
+            }))
+            .unwrap();
+        let error = stream
+            .parse_value(&serde_json::json!({"type": "response.created"}))
+            .unwrap_err();
+        assert!(error.contains("after its terminal event"));
     }
 }

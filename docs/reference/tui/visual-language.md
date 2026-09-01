@@ -127,7 +127,7 @@ a later tweak to the ladder propagates everywhere.
 - ❌ `·` inside a keycap unit — a key and its action are one value (`Ctrl+P block`,
   never `Ctrl+P · block`).
 - ❌ `·` as a generic list bullet in prose and comments — it is a render token,
-  not a punctuation mark (the `showcase/` previews follow the same rule).
+  not a punctuation mark (the UI previews follow the same rule).
 
 ## Conformance
 

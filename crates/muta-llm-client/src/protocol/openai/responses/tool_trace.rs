@@ -9,6 +9,31 @@ use muta_contracts::ToolCall;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProjectionError {
+    MissingCallId(&'static str),
+    UnknownCallId(String),
+}
+
+impl std::fmt::Display for ProjectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingCallId(kind) => {
+                write!(
+                    formatter,
+                    "Responses tool trace contains {kind} without a call_id."
+                )
+            }
+            Self::UnknownCallId(call_id) => write!(
+                formatter,
+                "Responses tool output references unknown call_id `{call_id}`."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProjectionError {}
+
 /// One typed Responses input item before final JSON serialization.
 #[derive(Debug)]
 pub(super) struct InputItem {
@@ -168,7 +193,7 @@ impl InputItem {
 pub(super) fn project(
     mut items: Vec<InputItem>,
     remote_call_ids: impl IntoIterator<Item = String>,
-) -> Vec<InputItem> {
+) -> Result<Vec<InputItem>, ProjectionError> {
     let remote_call_ids: HashSet<String> = remote_call_ids
         .into_iter()
         .filter(|call_id| !call_id.is_empty())
@@ -183,7 +208,10 @@ pub(super) fn project(
         match &item.kind {
             InputItemKind::FunctionCall {
                 original_call_id, ..
-            } if !original_call_id.is_empty() => {
+            } => {
+                if original_call_id.is_empty() {
+                    return Err(ProjectionError::MissingCallId("a function call"));
+                }
                 pending_local_calls
                     .entry(original_call_id.clone())
                     .or_default()
@@ -191,7 +219,10 @@ pub(super) fn project(
             }
             InputItemKind::FunctionCallOutput {
                 original_call_id, ..
-            } if !original_call_id.is_empty() => {
+            } => {
+                if original_call_id.is_empty() {
+                    return Err(ProjectionError::MissingCallId("a function output"));
+                }
                 if let Some(call_index) = pending_local_calls
                     .get_mut(original_call_id)
                     .and_then(|indices| indices.pop())
@@ -200,6 +231,8 @@ pub(super) fn project(
                     local_output_to_call.insert(index, call_index);
                 } else if unmatched_remote_calls.remove(original_call_id) {
                     remote_outputs.insert(index);
+                } else {
+                    return Err(ProjectionError::UnknownCallId(original_call_id.clone()));
                 }
             }
             _ => {}
@@ -242,7 +275,7 @@ pub(super) fn project(
         }
     }
 
-    items
+    Ok(items
         .into_iter()
         .enumerate()
         .filter_map(|(index, item)| match &item.kind {
@@ -255,7 +288,7 @@ pub(super) fn project(
             }
             _ => Some(item),
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -276,6 +309,7 @@ mod tests {
 
     fn wire(items: Vec<InputItem>, remote: &[&str]) -> Vec<Value> {
         project(items, remote.iter().map(|id| (*id).to_string()))
+            .unwrap()
             .into_iter()
             .map(InputItem::into_wire)
             .collect()
@@ -331,16 +365,17 @@ mod tests {
     }
 
     #[test]
-    fn orphan_outputs_and_unanswered_calls_are_removed() {
-        let items = wire(
+    fn orphan_outputs_fail_closed() {
+        let error = project(
             vec![
                 InputItem::plain(json!({"type": "message"})),
                 call("unanswered", "tool"),
                 output("orphan", "ignored"),
             ],
-            &[],
-        );
-        assert_eq!(items, vec![json!({"type": "message"})]);
+            Vec::<String>::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error, ProjectionError::UnknownCallId("orphan".to_string()));
     }
 
     #[test]

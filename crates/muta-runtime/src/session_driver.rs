@@ -170,7 +170,8 @@ impl SessionDriver {
         let completion_engine = crate::input_completion::InputCompletionEngine::new(
             command_catalog,
             project_root_for_side.clone(),
-        );
+        )
+        .with_skills((*skills_registry).clone());
 
         let initial_session_id = session.id().await;
         token_ledger.restore_session(&initial_session_id, session.request_usage_records().await);

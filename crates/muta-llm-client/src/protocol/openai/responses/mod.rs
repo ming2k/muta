@@ -267,7 +267,7 @@ impl OpenAiResponsesProvider {
             delivery,
             ..
         } = request;
-        Ok(request::body_with_capabilities(
+        request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -279,7 +279,73 @@ impl OpenAiResponsesProvider {
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
-        ))
+        )
+        .map_err(|error| ProviderError::invalid_request(self.label(), error.to_string()))
+    }
+
+    /// The ChatGPT Subscription Responses endpoint is streaming-only. Collect
+    /// its canonical event stream for callers of the provider's completion
+    /// interface instead of maintaining a second, unsupported wire path.
+    async fn collect_streaming_completion(
+        &self,
+        request: ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, ProviderError> {
+        let mut stream = self.stream_chat_events(request).await?;
+        let mut streamed_usage = None;
+        let mut completion_meta = None;
+
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            match event {
+                ProviderStreamEvent::Usage(usage) => streamed_usage = Some(usage),
+                ProviderStreamEvent::Completed(mut meta) => {
+                    if completion_meta.is_some() {
+                        return Err(ProviderError::protocol(
+                            self.label(),
+                            "Responses stream emitted more than one terminal completion event.",
+                        ));
+                    }
+                    if meta.usage.is_none() {
+                        meta.usage = streamed_usage;
+                    }
+                    completion_meta = Some(meta);
+                }
+                ProviderStreamEvent::ModelCatalogEtag(_)
+                | ProviderStreamEvent::TextDelta(_)
+                | ProviderStreamEvent::ReasoningDelta(_)
+                | ProviderStreamEvent::ToolCallDelta { .. } => {
+                    if completion_meta.is_some() {
+                        return Err(ProviderError::protocol(
+                            self.label(),
+                            "Responses stream emitted data after its terminal completion event.",
+                        ));
+                    }
+                }
+            }
+        }
+
+        let meta = completion_meta.ok_or_else(|| {
+            ProviderError::protocol(
+                self.label(),
+                "Responses stream ended without a terminal completion event.",
+            )
+        })?;
+        let output = meta
+            .artifacts
+            .as_ref()
+            .and_then(|artifacts| {
+                artifacts.get(muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY)
+            })
+            .filter(|output| output.as_array().is_some_and(|items| !items.is_empty()))
+            .ok_or_else(|| {
+                ProviderError::protocol(
+                    self.label(),
+                    "Responses stream completed without a valid output artifact.",
+                )
+            })?;
+        let message = response::message(output);
+
+        Ok(muta_contracts::ProviderCompletion { message, meta })
     }
 }
 
@@ -332,6 +398,9 @@ impl Provider for OpenAiResponsesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        if self.dialect == muta_contracts::OpenAiResponsesDialect::ChatGpt {
+            return self.collect_streaming_completion(request).await;
+        }
         let label = self.label();
         let body = self.build_body(request, false)?;
         let resp = self.send_request(&body, false).await?;
@@ -343,10 +412,18 @@ impl Provider for OpenAiResponsesProvider {
                 format!("{label} Error: {}", err),
             ));
         }
+        let output = value
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .filter(|items| !items.is_empty())
+            .ok_or_else(|| {
+                ProviderError::protocol(label, "Responses completion contains no output items.")
+            })?;
+        let output = serde_json::Value::Array(output.clone());
         let mut artifacts = serde_json::Map::new();
         artifacts.insert(
             muta_contracts::OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY.to_string(),
-            value["output"].clone(),
+            output.clone(),
         );
         let continuation =
             value["id"]
@@ -357,7 +434,7 @@ impl Provider for OpenAiResponsesProvider {
                     response_id: response_id.to_string(),
                 });
         Ok(muta_contracts::ProviderCompletion {
-            message: response::message(&value["output"]),
+            message: response::message(&output),
             meta: muta_contracts::ProviderCompletionMeta {
                 usage: response::usage(&value["usage"]),
                 artifacts: Some(artifacts),
@@ -412,7 +489,9 @@ impl Provider for OpenAiResponsesProvider {
             let data = item?;
             let value = decode_stream_payload(&data, label)?;
             let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
-            let mut events = p.parse_value(&value);
+            let mut events = p
+                .parse_value(&value)
+                .map_err(|error| ProviderError::protocol(label, error))?;
             for event in &mut events {
                 if let ProviderStreamEvent::Completed(meta) = event
                     && let Some(artifacts) = meta.artifacts.as_mut()

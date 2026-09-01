@@ -69,6 +69,29 @@ impl ConfigCategory {
         }
     }
 
+    /// Match a category by name, slug, or numeric index string (case-insensitive).
+    pub fn from_name(name: &str) -> Option<Self> {
+        let trimmed = name.trim().to_ascii_lowercase();
+        match trimmed.as_str() {
+            "0" | "appearance" | "theme" | "themes" | "look" => Some(ConfigCategory::Appearance),
+            "1" | "transcript" | "chat" | "scroll" | "bands" => Some(ConfigCategory::Transcript),
+            "2" | "behavior" | "interaction" | "mouse" | "dismiss" => Some(ConfigCategory::Behavior),
+            "3" | "web" | "websearch" | "search" | "fetch" | "reader" => Some(ConfigCategory::WebSearch),
+            "4" | "system" | "info" | "about" | "paths" | "runtime" => Some(ConfigCategory::System),
+            _ => None,
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            ConfigCategory::Appearance => "appearance",
+            ConfigCategory::Transcript => "transcript",
+            ConfigCategory::Behavior => "behavior",
+            ConfigCategory::WebSearch => "web",
+            ConfigCategory::System => "system",
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             ConfigCategory::Appearance => "Appearance",
@@ -87,6 +110,24 @@ impl ConfigCategory {
             ConfigCategory::WebSearch => "Search & fetch connections, routing & proxy",
             ConfigCategory::System => "Config file paths, runtime & daemon info",
         }
+    }
+}
+
+impl std::fmt::Display for ConfigCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.slug())
+    }
+}
+
+impl std::str::FromStr for ConfigCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s).ok_or_else(|| {
+            format!(
+                "unknown settings category '{s}' (expected appearance, transcript, behavior, web, system, or 0..4)"
+            )
+        })
     }
 }
 
@@ -384,5 +425,48 @@ pub(super) fn render_scrollable(
 
     if max_scroll > 0 {
         draw_scrollbar(frame, rect, content_offset, max_scroll, theme);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_category_from_name() {
+        assert_eq!(ConfigCategory::from_name("appearance"), Some(ConfigCategory::Appearance));
+        assert_eq!(ConfigCategory::from_name("THEME"), Some(ConfigCategory::Appearance));
+        assert_eq!(ConfigCategory::from_name("0"), Some(ConfigCategory::Appearance));
+
+        assert_eq!(ConfigCategory::from_name("transcript"), Some(ConfigCategory::Transcript));
+        assert_eq!(ConfigCategory::from_name("chat"), Some(ConfigCategory::Transcript));
+        assert_eq!(ConfigCategory::from_name("1"), Some(ConfigCategory::Transcript));
+
+        assert_eq!(ConfigCategory::from_name("behavior"), Some(ConfigCategory::Behavior));
+        assert_eq!(ConfigCategory::from_name("mouse"), Some(ConfigCategory::Behavior));
+        assert_eq!(ConfigCategory::from_name("2"), Some(ConfigCategory::Behavior));
+
+        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebSearch));
+        assert_eq!(ConfigCategory::from_name("websearch"), Some(ConfigCategory::WebSearch));
+        assert_eq!(ConfigCategory::from_name("search"), Some(ConfigCategory::WebSearch));
+        assert_eq!(ConfigCategory::from_name("3"), Some(ConfigCategory::WebSearch));
+
+        assert_eq!(ConfigCategory::from_name("system"), Some(ConfigCategory::System));
+        assert_eq!(ConfigCategory::from_name("info"), Some(ConfigCategory::System));
+        assert_eq!(ConfigCategory::from_name("about"), Some(ConfigCategory::System));
+        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::System));
+
+        assert_eq!(ConfigCategory::from_name("invalid"), None);
+    }
+
+    #[test]
+    fn test_config_category_slug_and_display() {
+        for cat in ConfigCategory::ALL {
+            let slug = cat.slug();
+            assert_eq!(ConfigCategory::from_name(slug), Some(cat));
+            assert_eq!(format!("{cat}"), slug);
+            let parsed: ConfigCategory = slug.parse().unwrap();
+            assert_eq!(parsed, cat);
+        }
     }
 }

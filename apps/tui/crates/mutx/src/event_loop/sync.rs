@@ -173,6 +173,9 @@ pub(crate) async fn sync_runtime_state_to_app(
         app.session_detail = Some(detail);
         app.session_info_scroll = 0;
     }
+    if let Some(snapshot) = runtime.session_context.lock().await.take() {
+        app.session_context = Some(snapshot);
+    }
     if let Some(detail) = runtime.connection_detail.lock().await.take() {
         app.connection_detail = Some(detail);
         app.connection_info_scroll = 0;

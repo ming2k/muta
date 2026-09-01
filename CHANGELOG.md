@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added ADR-0166 for lossless, fail-closed stateless Responses replay.
+- First-class `@skill:` and `@mention` inline composer autocompletion floating directly at cursor position without heavy command docs.
+- Workspace execution sandbox admission for global user and remote skill roots (`~/.local/share/muta/skills`, `~/.agents/skills`, `~/.claude/skills`), enabling seamless on-demand reading via progressive disclosure.
+
+### Fixed
+
+- Fixed missing `session_context` synchronization in `sync_runtime_state_to_app`, preventing `/skills`, `/tools`, `/mcp`, and `/permissions` overlays from hanging indefinitely in a loading state.
+- Preserve complete ChatGPT Subscription Responses output items across turns,
+  reject corrupt historical replay state instead of silently dropping it, and
+  route completion-style subscription calls through the required streaming
+  transport.
+
 ## [0.37.28] - 2026-09-01
 
 ### Added

@@ -1392,7 +1392,7 @@ mod surface_tests {
 
     #[test]
     fn tui_commands_are_not_accepted_by_muta() {
-        for command in ["run", "attach", "dashboard", "showcase"] {
+        for command in ["run", "attach", "dashboard", "settings"] {
             assert!(parse(&[command]).is_err(), "{command}");
         }
     }

@@ -420,3 +420,75 @@ fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
         ]
     );
 }
+
+#[test]
+fn surface_router_with_view_boots_directly_into_target_view() {
+    let router = crate::surfaces::SurfaceRouter::with_view(crate::surfaces::View::Settings);
+    assert_eq!(router.active_view(), crate::surfaces::View::Settings);
+    assert_eq!(router.modal(), Modal::Config);
+    assert_eq!(router.active_panel(), None);
+}
+
+#[test]
+fn startup_overlay_env_resolution_accepts_settings_and_nav() {
+    // Helper to run with temporary environment overrides
+    let test_env = |view: Option<&str>, nav: Option<&str>| -> Option<crate::StartupOverlay> {
+        // We test the parsing logic directly by setting/unsetting env vars
+        unsafe {
+            if let Some(v) = view {
+                std::env::set_var("MUTX_STARTUP_VIEW", v);
+            } else {
+                std::env::remove_var("MUTX_STARTUP_VIEW");
+                std::env::remove_var("MUTX_VIEW");
+            }
+            if let Some(n) = nav {
+                std::env::set_var("MUTX_SETTINGS_NAV", n);
+            } else {
+                std::env::remove_var("MUTX_SETTINGS_NAV");
+                std::env::remove_var("MUTX_SETTINGS_CATEGORY");
+            }
+        }
+        let res = crate::StartupOverlay::resolve_from_env();
+        unsafe {
+            std::env::remove_var("MUTX_STARTUP_VIEW");
+            std::env::remove_var("MUTX_VIEW");
+            std::env::remove_var("MUTX_SETTINGS_NAV");
+            std::env::remove_var("MUTX_SETTINGS_CATEGORY");
+        }
+        res
+    };
+
+    assert_eq!(
+        test_env(Some("settings"), None),
+        Some(crate::StartupOverlay::Settings { category: None })
+    );
+    assert_eq!(
+        test_env(Some("settings:web"), None),
+        Some(crate::StartupOverlay::Settings { category: Some(3) })
+    );
+    assert_eq!(
+        test_env(Some("settings:transcript"), None),
+        Some(crate::StartupOverlay::Settings { category: Some(1) })
+    );
+    assert_eq!(
+        test_env(Some("settings:2"), None),
+        Some(crate::StartupOverlay::Settings { category: Some(2) })
+    );
+    assert_eq!(
+        test_env(Some("settings"), Some("system")),
+        Some(crate::StartupOverlay::Settings { category: Some(4) })
+    );
+    assert_eq!(
+        test_env(None, Some("behavior")),
+        Some(crate::StartupOverlay::Settings { category: Some(2) })
+    );
+    assert_eq!(
+        test_env(Some("dashboard"), None),
+        Some(crate::StartupOverlay::Dashboard)
+    );
+    assert_eq!(
+        test_env(Some("sessions"), None),
+        Some(crate::StartupOverlay::SessionsPicker)
+    );
+    assert_eq!(test_env(None, None), None);
+}

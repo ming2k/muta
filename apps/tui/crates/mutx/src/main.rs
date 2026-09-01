@@ -94,21 +94,44 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print!("{}", cli::completion_script(shell));
             Ok(())
         }
-        #[cfg(debug_assertions)]
-        Mode::Showcase(component) => mutx::showcase::run(&component),
         Mode::Dashboard => run_dashboard(project_override, delegated_at_start).await,
+        Mode::Settings { category } => {
+            let cat_str = category.or_else(|| {
+                std::env::var("MUTX_SETTINGS_NAV")
+                    .or_else(|_| std::env::var("MUTX_SETTINGS_CATEGORY"))
+                    .ok()
+            });
+            let cat = cat_str
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .and_then(mutx::views::ConfigCategory::from_name)
+                .map(|c| c as usize);
+            run_attached(
+                None,
+                true,
+                project_override,
+                delegated_at_start,
+                mutx::StartupOverlay::Settings { category: cat },
+                prompt,
+            )
+            .await
+        }
         Mode::Attach { id } => {
-            run_attached(id, false, project_override, delegated_at_start, false, None).await
+            let overlay =
+                mutx::StartupOverlay::resolve_from_env().unwrap_or(mutx::StartupOverlay::None);
+            run_attached(id, false, project_override, delegated_at_start, overlay, None).await
         }
         Mode::Run { prompt } => {
             if interactive {
                 // `run -i` deliberately switches to the TUI with the prompt.
+                let overlay =
+                    mutx::StartupOverlay::resolve_from_env().unwrap_or(mutx::StartupOverlay::None);
                 run_attached(
                     None,
                     true,
                     project_override,
                     delegated_at_start,
-                    false,
+                    overlay,
                     Some(prompt),
                 )
                 .await
@@ -125,12 +148,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Mode::Fresh => {
+            let overlay =
+                mutx::StartupOverlay::resolve_from_env().unwrap_or(mutx::StartupOverlay::None);
             run_attached(
                 None,
                 true,
                 project_override,
                 delegated_at_start,
-                false,
+                overlay,
                 prompt,
             )
             .await
@@ -228,7 +253,7 @@ async fn run_dashboard(
         false,
         project_override,
         delegated_at_start,
-        true,
+        mutx::StartupOverlay::Dashboard,
         None,
     )
     .await
@@ -244,7 +269,7 @@ async fn run_attached(
     fresh: bool,
     project_override: Option<PathBuf>,
     delegated_at_start: bool,
-    dashboard_entry: bool,
+    initial_overlay: mutx::StartupOverlay,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
@@ -266,10 +291,10 @@ async fn run_attached(
     // picker's `/sessions <id>` exit re-attaches through `switch_to`.
     let mut pick_pending = session_id.is_none() && !fresh;
     let mut delegated_pending = delegated_at_start;
-    // `mutx dashboard` raises the dashboard over the carrier session on the
-    // first TUI entry only; a `/host` switch re-attaches into an ordinary
+    // The startup overlay (dashboard, settings, sessions picker) raises on
+    // the first TUI entry only; a `/host` switch re-attaches into an ordinary
     // conversation view (the overlay does not re-arm).
-    let mut dashboard_pending = dashboard_entry;
+    let mut startup_overlay_pending = initial_overlay;
     // Re-attach loop: returning from the TUI with a `/host` switch target
     // re-connects to that session instead of exiting (ADR-0096).
     loop {
@@ -370,12 +395,8 @@ async fn run_attached(
         let input_history = mutx::config::load_history();
         let tui_config = mutx_config.clone();
         let input_history_config = mutx_config.input_history.clone();
-        let startup_overlay = if dashboard_pending {
-            dashboard_pending = false;
-            mutx::StartupOverlay::Dashboard
-        } else {
-            mutx::StartupOverlay::None
-        };
+        let startup_overlay =
+            std::mem::replace(&mut startup_overlay_pending, mutx::StartupOverlay::None);
         let outcome = start_tui(
             tx,
             rx,

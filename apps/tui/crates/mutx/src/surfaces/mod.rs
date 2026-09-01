@@ -334,6 +334,16 @@ impl SurfaceRouter {
         }
     }
 
+    /// Boot straight into a full-screen view (e.g. settings or dashboard).
+    pub(crate) fn with_view(view: View) -> Self {
+        Self {
+            view,
+            overlay: Overlay::None,
+            returns: Vec::new(),
+            view_back: Vec::new(),
+        }
+    }
+
     pub(crate) fn active(&self) -> Surface {
         match self.overlay {
             Overlay::None => Surface::View(self.view),

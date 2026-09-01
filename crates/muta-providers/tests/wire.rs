@@ -118,7 +118,7 @@ impl muta_contracts::CredentialSource for MockOAuthSource {
 }
 
 #[tokio::test]
-async fn chatgpt_responses_resolves_credential_source_bearer_before_sending() {
+async fn chatgpt_responses_chat_uses_streaming_transport_and_dynamic_credentials() {
     let mut server = Server::new_async().await;
     let url = format!("{}/backend-api/codex/responses", server.url());
     let _mock = server
@@ -129,13 +129,16 @@ async fn chatgpt_responses_resolves_credential_source_bearer_before_sending() {
         .match_body(Matcher::PartialJson(json!({
             "model": "gpt-5.6-sol",
             "store": false,
-            "stream": false
+            "stream": true,
+            "include": ["reasoning.encrypted_content"]
         })))
         .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(
-            r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}"#,
-        )
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body(&[
+            r#"{"type":"response.output_text.delta","delta":"ok"}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}],"status":"completed"}}"#,
+            r#"{"type":"response.completed","response":{"id":"resp_1","output":[],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}}"#,
+        ]))
         .create_async()
         .await;
 
