@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-01
+
+### Added
+
+- Added ADR-0167 defining the Worker-Station agent model and hypervisor architecture.
+- Replaced monolithic supervisor/steward design with a decoupled cognitive station and hypervisor.
+- Dynamic agent roles (`PrimaryWorker`, `SubRunner`, `ResearchAnalyst`, etc.) with modular cognitive mesh instruction compilation.
+- Reactive skills discovery, filesystem watcher integration, and refined TUI keycap/affordance rendering.
+
 ## [0.37.29] - 2026-09-01
 
 ### Added
@@ -5871,7 +5880,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.29...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/ming2k/muta/compare/v0.37.29...v0.38.0
 [0.37.29]: https://github.com/ming2k/muta/compare/v0.37.28...v0.37.29
 [0.37.28]: https://github.com/ming2k/muta/compare/v0.37.27...v0.37.28
 [0.37.27]: https://github.com/ming2k/muta/compare/v0.37.26...v0.37.27
