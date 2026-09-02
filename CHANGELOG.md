@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.38.0] - 2026-09-01
+## [0.38.1] - 2026-09-02
+
+### Added
+
+- Added ADR-0168 documenting complete SQLite persistence unification and legacy store purge.
+- Added ADR-0169 defining session view dual mode (`Live` and `Review`) and unified leader keyboard architecture.
+- Added step focus bar and dedicated review/browse navigation across conversation turns and tool executions.
+- Unified keymap bindings with ergonomic single-key and leader sequences.
+
+### Changed
+
+- Migrated route settings, token usage, and connection metadata storage entirely to SQLite with transactional integrity.
 
 ### Added
 
@@ -5880,7 +5891,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.1...HEAD
+[0.38.1]: https://github.com/ming2k/muta/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/ming2k/muta/compare/v0.37.29...v0.38.0
 [0.37.29]: https://github.com/ming2k/muta/compare/v0.37.28...v0.37.29
 [0.37.28]: https://github.com/ming2k/muta/compare/v0.37.27...v0.37.28
