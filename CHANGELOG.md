@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.3] - 2026-09-02
+
+### Changed
+
+- Replaced legacy activity and pulse overlays with a streamlined todos modal and integrated layout mapping.
+- Enhanced mouse interaction and selection state handling across document render flows.
+- Standardized web tool interfaces and configuration options across runtime and agents.
+
 ## [0.38.2] - 2026-09-02
 
 ### Changed
@@ -5899,7 +5907,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.3...HEAD
+[0.38.3]: https://github.com/ming2k/muta/compare/v0.38.2...v0.38.3
 [0.38.2]: https://github.com/ming2k/muta/compare/v0.38.1...v0.38.2
 [0.38.1]: https://github.com/ming2k/muta/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/ming2k/muta/compare/v0.37.29...v0.38.0
