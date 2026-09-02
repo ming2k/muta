@@ -4,7 +4,9 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_todo_bar};
+pub use crate::chrome::{
+    ActivityBarView, draw_activity_bar, draw_step_focus_bar, draw_todo_bar,
+};
 pub use crate::chrome::{
     ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar, draw_queue_bar,
 };
@@ -632,6 +634,11 @@ pub fn draw_transcript(
     } else {
         MODEL_BAR_ROWS
     };
+    let step_focus_height: u16 = if chrome_hidden || in_runner || focused_target.is_none() {
+        0
+    } else {
+        1
+    };
     // The composer/hint gap is 0 and the activity/composer gap is 0: the
     // hint bar sits flush against the composer's bottom edge and the activity
     // bar flush against the composer's top edge (each side's panel-bg padding
@@ -643,16 +650,7 @@ pub fn draw_transcript(
     // placer derives both the band's total height (for the layout split) and
     // each row's rect, so the height arithmetic can no longer exist in two
     // copies that drift. Order, top → bottom: gap, todo bar, queue bar,
-    // activity bar, input box, hint bar. The ambient meta bars (todo = task
-    // list, queue = outbox) lead; the activity bar sits flush above the input
-    // box so the live status reads as part of the composer; the hint bar sits
-    // flush below it and carries the next input action + model/context.
-    // Session-level state (workspace, mode flags such as `DELEGATED`) lives on
-    // the head row at the top of the view, not on a bottom status bar.
-    //
-    // The zero-gap tokens (activity→composer, composer→hint) collapse to no
-    // row at all rather than a zero-height placeholder: the stack lists only
-    // rows that exist, and their flush-ness is a property of adjacency.
+    // activity bar, step focus bar, input box, hint bar.
     let footer_rows: Vec<FooterRow> = if chrome_hidden || in_runner {
         Vec::new()
     } else {
@@ -672,6 +670,10 @@ pub fn draw_transcript(
             FooterRow {
                 id: FooterRowId::Activity,
                 height: activity_height,
+            },
+            FooterRow {
+                id: FooterRowId::StepFocus,
+                height: step_focus_height,
             },
             FooterRow {
                 id: FooterRowId::Composer,
@@ -893,7 +895,13 @@ pub fn draw_transcript(
             )
         });
 
-    // The input box sits flush directly below the activity bar — the
+    // The transient step focus bar sits directly above the composer whenever
+    // a transcript step is keyboard-focused.
+    footer_stack::rect_of(&placed_footer, FooterRowId::StepFocus)
+        .filter(|_| focused_target.is_some())
+        .map(|rect| draw_step_focus_bar(frame, rect, theme));
+
+    // The input box sits flush directly below the activity bar / step focus bar — the
     // composer's top panel-bg padding row already separates its text from
     // the live status line, so no `surface` gap row is reserved between them.
     let input_rect = footer_stack::rect_of(&placed_footer, FooterRowId::Composer)

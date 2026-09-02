@@ -9,6 +9,7 @@ pub mod common;
 pub mod completion_menu;
 pub mod model_bar;
 pub mod queue_bar;
+pub mod step_focus_bar;
 pub mod todo_bar;
 
 #[cfg(test)]
@@ -28,4 +29,5 @@ pub use model_bar::{
     draw_model_bar, format_token_count,
 };
 pub use queue_bar::{QueueBarView, QueueItemView, draw_queue_bar};
+pub use step_focus_bar::draw_step_focus_bar;
 pub use todo_bar::draw_todo_bar;

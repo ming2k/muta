@@ -131,7 +131,7 @@ eval "$(mutx completions bash)"
 
 | Variable | Effect |
 |----------|--------|
-| `MUTA_HOME` | Instance root (ADR-0121): redirects config, data, state, cache, the daemon's runtime files, and (with `MUTA_PORT`) the default port under one root — the env form of `--home`. Must be absolute; relative values are ignored |
+| `MUTA_HOME` | Instance root (ADR-0121): redirects config, data, state, cache, the daemon's runtime files, and (with `MUTA_PORT`) the default port under one root. Must be absolute; relative values are ignored |
 | `MUTA_PORT` | Default TCP port for `daemon start` when `--port` is absent (overrides the well-known 9800) |
 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | Per-category directory overrides (see [Paths](paths.md)) |
 | `MUTA_LOG` | Log level for the file log under the XDG state dir: `off`, `error`, `warn`, `info` (default), `debug`, `trace` |

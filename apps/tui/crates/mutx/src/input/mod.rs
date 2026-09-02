@@ -125,6 +125,9 @@ impl InputContext {
 /// are inert so `/` can open search and stray letters never mutate a buffer the
 /// user isn't editing.
 fn edits_input_field(context: &InputContext) -> bool {
+    if context.has_focused_target {
+        return false;
+    }
     match context.active_modal {
         super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
@@ -1321,31 +1324,28 @@ pub fn process_event(
                         }
                     }
                     (KeyCode::Char('o'), _) | (KeyCode::Char('O'), _) => {
-                        InputAction::FocusNextTarget
-                    }
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => InputAction::Quit,
-                    (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
-                        InputAction::SetLeaderChord(crate::app::LeaderChord::None)
-                    }
-                    _ => InputAction::SetLeaderChord(crate::app::LeaderChord::None),
-                };
-            }
-
-            if context.leader_chord == crate::app::LeaderChord::CtrlC {
-                return match (key.code, key.modifiers) {
-                    (KeyCode::Char('c'), _) | (KeyCode::Char('C'), _) => {
-                        if context.in_side_view {
-                            InputAction::InterruptSide
+                        if context.has_focused_target {
+                            InputAction::ClearFocusedTarget
                         } else {
-                            InputAction::Interrupt
+                            InputAction::FocusNextTarget
                         }
                     }
-                    (KeyCode::Char('p'), _) | (KeyCode::Char('P'), _) => {
-                        InputAction::OpenPermissions
-                    }
                     (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => InputAction::OpenTodos,
+                    (KeyCode::Char('q'), _) | (KeyCode::Char('Q'), _) => InputAction::OpenQueue,
+                    (KeyCode::Char('p'), _) | (KeyCode::Char('P'), _) => {
+                        InputAction::QueueToggleBlock
+                    }
                     (KeyCode::Char('m'), _) | (KeyCode::Char('M'), _) => InputAction::OpenModels,
-                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => InputAction::OpenTelemetry,
+                    (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) => {
+                        InputAction::OpenActiveConnectionDetail
+                    }
+                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => {
+                        InputAction::OpenTelemetry
+                    }
+                    (KeyCode::Char('a'), _) | (KeyCode::Char('A'), _) => InputAction::OpenBtwList,
+                    (KeyCode::Char('s'), _) | (KeyCode::Char('S'), _) => InputAction::OpenConfig,
+                    (KeyCode::Char('?'), _) => InputAction::OpenHelp,
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => InputAction::Quit,
                     (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
                         InputAction::SetLeaderChord(crate::app::LeaderChord::None)
                     }

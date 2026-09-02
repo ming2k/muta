@@ -662,12 +662,11 @@ fn alt_arrows_and_alt_o_drive_focus() {
 }
 
 #[test]
-fn typing_while_focused_inserts_and_keeps_focus() {
-    // A focused step does not capture typing: printable characters insert
-    // into the prompt as usual and leave the focus highlight in place
-    // (Esc / Enter, not typing, change the focus).
+fn typing_while_focused_is_isolated() {
+    // A focused step isolates typing: printable characters are swallowed
+    // so they do not type through into the composer while inspecting a step.
     let action = key_with_focus(KeyCode::Char('a'));
-    assert_eq!(action, InputAction::InsertChar('a'));
+    assert_eq!(action, InputAction::None);
 }
 
 /// Ctrl+↑ / Ctrl+↓ inside any scrollable modal advance the body by a page
@@ -2016,23 +2015,60 @@ fn emacs_ctrl_x_leader_chord_switches_view_with_b() {
 }
 
 #[test]
-fn emacs_ctrl_c_leader_chord_opens_permissions_with_p() {
+fn emacs_ctrl_x_leader_chord_opens_todos_with_t() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
 
     let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         InputContext {
             config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::CtrlC,
+            leader_chord: crate::app::LeaderChord::CtrlX,
             ..Default::default()
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::OpenPermissions);
+    assert_eq!(action, InputAction::OpenTodos);
+}
+
+#[test]
+fn emacs_ctrl_x_leader_chord_toggles_focus_with_o() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    // From no focus: FocusNextTarget
+    let action1 = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            config_focus: Default::default(),
+            leader_chord: crate::app::LeaderChord::CtrlX,
+            has_focused_target: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action1, InputAction::FocusNextTarget);
+
+    // From focused step: ClearFocusedTarget (returns to composer)
+    let action2 = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            config_focus: Default::default(),
+            leader_chord: crate::app::LeaderChord::CtrlX,
+            has_focused_target: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action2, InputAction::ClearFocusedTarget);
 }
 
 #[test]

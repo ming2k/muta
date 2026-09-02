@@ -16,7 +16,7 @@ use crate::model::layout::{BlockRegion, LayoutMap};
 use crate::model::selection::SelectionState;
 
 use super::Theme;
-use super::components::composer_hints::hint_row_spans;
+use super::components::composer_hints::hint_row_parts;
 use super::design::{
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_TEXT_ROW_OFFSET,
     COMPOSER_VERTICAL_CHROME_ROWS,
@@ -662,13 +662,9 @@ fn draw_composer_impl(
     lines.push(chrome_row(full_w, panel_bg, theme, '↓', hidden_below));
 
     // Row 4: the hint row
-    // `Enter send prompt` leads (left) and, only while the box clips rows,
-    // a right-aligned position readout closes the row. Keycaps and verbs
-    // tint with `panel_bg` so they blend into the box; the row degrades by
-    // width ladder before the readout is ever dropped, and the readout is
-    // the first thing the row sheds when the panel gets too narrow. While
-    // unfocused the sentence is dropped entirely — the recessed panel must
-    // not compete with a step-focused transcript.
+    // Navigation/actions lead on the left, execution/submit anchors on the
+    // right. Keycaps and verbs tint with `panel_bg` so they blend into the box.
+    // While unfocused the active sentence is replaced with a muted inactive indicator.
     {
         use crate::components::composer_hints::ActionDensity;
         let keys_width = full_w
@@ -677,44 +673,58 @@ fn draw_composer_impl(
         let density = ActionDensity::for_width(keys_width);
         let mut spans: Vec<Span<'static>> = vec![indent.clone()];
         if focused {
-            spans.extend(hint_row_spans(
+            let (left_spans, right_spans) = hint_row_parts(
                 hints.can_retry,
                 density,
                 hints.compose_target,
                 theme,
                 panel_bg,
-            ));
-        }
-        // Right-aligned position readout, shown only while the box actually
-        // clips rows: `12–24/87 lines` names the visible span inside the
-        // whole wrapped draft, answering "where am I" the moment the ↑/↓
-        // indicators answer "what am I not seeing". A fully visible draft
-        // carries no right-side readout at all — a position inside a box
-        // that shows everything is noise, and the char counter this slot
-        // used to carry never earned its place (a draft is judged in lines,
-        // not chars). Same fit discipline as the old counter: drop the
-        // readout unless the sentence plus label fit with at least one
-        // filler column between them.
-        if focused && wrapped.len() > visible_rows {
-            let first = *input_scroll + 1;
-            let last = (*input_scroll + visible_rows).min(wrapped.len());
-            let position_label = format!("{first}–{last}/{} lines", wrapped.len());
-            let used = spans
-                .iter()
-                .map(|span| str_len(&span.content))
-                .sum::<usize>()
-                + str_len(&position_label);
-            if full_w > used + 1 {
-                let gap = full_w - used - 1;
+            );
+            let left_w: usize = left_spans.iter().map(|s| str_len(&s.content)).sum();
+            let right_w: usize = right_spans.iter().map(|s| str_len(&s.content)).sum();
+
+            let position_label = if wrapped.len() > visible_rows {
+                let first = *input_scroll + 1;
+                let last = (*input_scroll + visible_rows).min(wrapped.len());
+                Some(format!("{first}–{last}/{} lines", wrapped.len()))
+            } else {
+                None
+            };
+            let pos_w = position_label.as_ref().map(|s| str_len(s) + 3).unwrap_or(0);
+
+            spans.extend(left_spans);
+
+            let prefix_w = COMPOSER_PROMPT_PREFIX_COLS;
+            let target_right_w = right_w + pos_w;
+            let available = full_w.saturating_sub(COMPOSER_RIGHT_PAD_COLS);
+            let needed = prefix_w + left_w + target_right_w;
+
+            if available > needed {
+                let gap = available - needed;
                 spans.push(Span::styled(
                     " ".repeat(gap),
-                    Style::default().bg(panel_bg).fg(theme.muted()),
+                    Style::default().bg(panel_bg),
                 ));
-                spans.push(Span::styled(
-                    position_label,
-                    Style::default().bg(panel_bg).fg(theme.muted()),
-                ));
+            } else {
+                spans.push(Span::styled("   ", Style::default().bg(panel_bg)));
             }
+
+            if let Some(pos) = position_label {
+                if available > needed {
+                    spans.push(Span::styled(
+                        pos,
+                        Style::default().bg(panel_bg).fg(theme.muted()),
+                    ));
+                    spans.push(Span::styled("   ", Style::default().bg(panel_bg)));
+                }
+            }
+
+            spans.extend(right_spans);
+        } else {
+            spans.push(Span::styled(
+                "(Composer inactive)",
+                Style::default().bg(panel_bg).fg(theme.muted()),
+            ));
         }
         let used = spans
             .iter()

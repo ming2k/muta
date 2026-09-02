@@ -4,22 +4,20 @@
 //! honours the XDG Base Directory Specification and layers overrides in this
 //! precedence order (highest first):
 //!
-//! 1. `--home <dir>` CLI flag (expressed via the matching
-//!    [`PathsOverride`]) — the **instance root** (ADR-0121).
-//! 2. `MUTA_CONFIG_DIR` / `MUTA_DATA_DIR` / `MUTA_STATE_DIR` /
+//! 1. `MUTA_CONFIG_DIR` / `MUTA_DATA_DIR` / `MUTA_STATE_DIR` /
 //!    `MUTA_CACHE_DIR` environment variables (app-specific
 //!    per-category overrides; more specific than the root, so one
 //!    category can still be carved out of a sandbox).
-//! 3. `MUTA_HOME` — the env form of the instance selector: one variable
+//! 2. `MUTA_HOME` — the instance selector: one variable
 //!    moves the entire footprint (`<home>/muta/{config,data,state,
 //!    cache}` plus the daemon's runtime files under `instance/`), so a
 //!    dev or test build can never touch the host installation's state.
-//! 4. `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
+//! 3. `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 //!    `XDG_CACHE_HOME` / `XDG_RUNTIME_DIR` environment variables
 //!    (standard XDG overrides; relative values are ignored per spec).
-//! 5. Platform-native defaults via the `directories` crate (`config_dir`,
+//! 4. Platform-native defaults via the `directories` crate (`config_dir`,
 //!    `data_dir`, `state_dir`, `cache_dir`).
-//! 6. `$HOME/.config`, `$HOME/.local/share`, ... fallbacks when even the
+//! 5. `$HOME/.config`, `$HOME/.local/share`, ... fallbacks when even the
 //!    `directories` crate cannot resolve a native location.
 //!
 //! On Linux `$XDG_RUNTIME_DIR` is honoured for the daemon's runtime files;
@@ -34,18 +32,11 @@ use std::sync::RwLock;
 
 use directories::ProjectDirs;
 
-/// App-specific override of the path roots supplied by the CLI.
+/// App-specific override of the path roots supplied by the CLI or configuration.
 ///
-/// Any field left as `None` falls back to env / native resolution. This is
-/// the type plumbed through `main.rs` from the command line.
+/// Any field left as `None` falls back to env / native resolution.
 #[derive(Debug, Clone, Default)]
 pub struct PathsOverride {
-    /// `--home <dir>`: the instance root (ADR-0121). One flag redirects
-    /// every category and the daemon's runtime files — the same selector
-    /// `MUTA_HOME` expresses as an environment variable for process
-    /// trees that cannot pass flags (CI, `cargo test`, auto-spawned
-    /// daemons). The CLI flag wins when both are present.
-    pub home: Option<PathBuf>,
     pub config_dir: Option<PathBuf>,
     pub data_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
@@ -66,30 +57,24 @@ pub struct Dirs {
     /// `$XDG_RUNTIME_DIR/muta` when set, otherwise `None` (callers fall
     /// back to `state_dir` for portability and to avoid surprising tmpfs
     /// use). For the daemon's runtime files prefer [`Self::instance_dir`],
-    /// which folds this field together with the `--home`/`MUTA_HOME`
+    /// which folds this field together with the `MUTA_HOME`
     /// override.
     pub runtime_dir: Option<PathBuf>,
 }
 
 impl Dirs {
-    /// Resolve using the given CLI overrides combined with env / native.
+    /// Resolve using the given overrides combined with env / native.
     pub fn resolve(overrides: &PathsOverride) -> Self {
         // A single application component is intentional. Supplying the app
         // name as both organization and application produces
         // `%APPDATA%\muta\muta` on Windows and an equally duplicated
         // macOS bundle path. Linux ignores those fields, which hid the bug.
         let project = ProjectDirs::from("", "", "muta");
-        // The instance root (ADR-0121): the `--home` flag beats the
-        // `MUTA_HOME` env var; both are normalised to the `muta`-suffixed
+        // The instance root (ADR-0121): `MUTA_HOME` is normalised to the `muta`-suffixed
         // base once, so every category and the instance dir hang off one
         // location: `<home>/muta/{config,data,state,cache,instance}`.
-        // `app_dir_from_root` also tolerates a root that already ends in
-        // `muta`, so `--home /x/muta` is accepted.
-        let home_base = overrides
-            .home
-            .clone()
-            .or_else(muta_home)
-            .map(app_dir_from_root);
+        // `app_dir_from_root` also tolerates a root that already ends in `muta`.
+        let home_base = muta_home().map(app_dir_from_root);
         Self {
             config_dir: resolve_kind(
                 Kind::Config,
@@ -191,6 +176,11 @@ impl Dirs {
     /// Cached model discovery lists and capability metadata (`$XDG_CACHE_HOME/muta/models_discovery.json`).
     pub fn discovery_cache_file(&self) -> PathBuf {
         self.cache_dir.join("models_discovery.json")
+    }
+
+    /// Authoritative unified SQLite database file (ADR-0163 / ADR-0168).
+    pub fn db_file(&self) -> PathBuf {
+        self.data_dir.join("muta.db")
     }
 
     /// Content-addressed blob store root. Large payloads are stored under
@@ -336,7 +326,7 @@ impl Dirs {
     /// (legacy records) — and nothing else (ADR-0121).
     ///
     /// It is exactly [`Self::runtime_dir`] when a runtime location resolves
-    /// (`--home`/`MUTA_HOME` → `<home>/muta/instance`, else
+    /// (`MUTA_HOME` → `<home>/muta/instance`, else
     /// `$XDG_RUNTIME_DIR/muta`), else the data dir as the portable
     /// fallback. Windows instead uses `state_dir/instance`, keeping process
     /// coordination out of the roaming profile. The rule is named once here.
@@ -386,7 +376,7 @@ impl Dirs {
 }
 
 /// Global process-wide [`Dirs`] instance. `main` installs it once via
-/// [`set_default`] (the `--home` override, ADR-0121); every other
+/// [`set_default`] (the `MUTA_HOME` override, ADR-0121); every other
 /// module reads via [`get`].
 ///
 /// Implementation: a `std::sync::OnceLock` holds the production value (set
@@ -419,7 +409,7 @@ pub static TEST_OVERRIDE_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(())
 /// already set (the new value is NOT stored in that case).
 ///
 /// `mutx`'s `main` calls this once at startup to install the
-/// `--home` override (ADR-0121) before any path is resolved; library
+/// `MUTA_HOME` override (ADR-0121) before any path is resolved; library
 /// code that runs outside `main` (tests, examples) falls back to
 /// [`Dirs::system`] via [`get`].
 pub fn set_default(dirs: Dirs) -> Result<Option<Dirs>, Dirs> {
@@ -601,7 +591,7 @@ fn resolve_kind(
     if let Some(p) = std::env::var_os(kind.app_env_var()).filter(|v| !v.is_empty()) {
         return app_dir_from_root(PathBuf::from(p));
     }
-    // 3. Instance root (ADR-0121): `--home` flag or `MUTA_HOME` env.
+    // 3. Instance root (ADR-0121): `MUTA_HOME` env.
     //    `home` is already the `muta`-suffixed base, so only the category
     //    segment appends.
     if let Some(base) = home {
@@ -872,33 +862,6 @@ mod tests {
                 "the instance dir must follow the sandbox root, not the host XDG runtime"
             );
 
-            for var in ["MUTA_HOME", "XDG_RUNTIME_DIR"] {
-                unsafe {
-                    std::env::remove_var(var);
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn home_flag_beats_the_muta_home_env() {
-        env_locked!({
-            let env_home = absolute_test_root("env-home");
-            let cli_home = absolute_test_root("cli-home");
-            let runtime = absolute_test_root("runtime-loses");
-            unsafe {
-                std::env::set_var("MUTA_HOME", env_home);
-                std::env::set_var("XDG_RUNTIME_DIR", runtime);
-            }
-            let dirs = Dirs::resolve(&PathsOverride {
-                home: Some(cli_home.clone()),
-                ..Default::default()
-            });
-            assert_eq!(
-                dirs.instance_dir(),
-                cli_home.join("muta").join("instance"),
-                "the --home flag is the same selector as MUTA_HOME, and wins"
-            );
             for var in ["MUTA_HOME", "XDG_RUNTIME_DIR"] {
                 unsafe {
                     std::env::remove_var(var);

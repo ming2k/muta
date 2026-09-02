@@ -81,6 +81,11 @@ impl RouteSettingsStore {
     }
 
     fn read_file() -> Self {
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
+            && let Ok(Some(file)) = engine.get_json::<RouteSettingsFile>("state:route_settings")
+        {
+            return Self { file };
+        }
         let path = paths::get().route_settings_file();
         let Ok(content) = fs::read_to_string(&path) else {
             return Self::default();
@@ -116,8 +121,11 @@ impl RouteSettingsStore {
         }
     }
 
-    /// Persist atomically under `$XDG_STATE_HOME/muta/route_settings.json`.
+    /// Persist atomically under `$XDG_STATE_HOME/muta/route_settings.json` and SQLite.
     pub fn save(&self) -> Result<(), String> {
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
+            let _ = engine.set_json("state:route_settings", &self.file);
+        }
         let path = paths::get().route_settings_file();
         fsutil::atomic_write_json(&path, &self.file).map_err(|e| e.to_string())
     }

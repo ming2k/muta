@@ -82,9 +82,7 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     let mut command = std::process::Command::new(&program);
     // The supervisor form: the child re-enters `start --fg` —
     // foreground by construction, its lifecycle flags from [daemon] config.
-    // No `--home` restatement needed: `install_home_override` restates the
-    // flag as `MUTA_HOME` in this process's environment, and the child
-    // inherits it (ADR-0121).
+    // The child inherits `MUTA_HOME` in this process's environment (ADR-0121).
     command.args(["start", "--fg"]);
     // Every explicit start flag survives the detach: the child is the same
     // start the operator asked for, minus the daemonization. Dropping them

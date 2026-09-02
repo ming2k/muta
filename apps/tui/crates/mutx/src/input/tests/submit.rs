@@ -295,16 +295,16 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
 }
 
 #[test]
-fn enter_activates_focused_target_space_inserts() {
-    // Enter activates the focused step; Space is an ordinary character (it
-    // inserts a space — there is no "space activates" anymore).
+fn enter_activates_focused_target_space_isolated() {
+    // Enter activates the focused step; Space is swallowed while focused
+    // to preserve clean mode isolation.
     assert_eq!(
         key_with_focus(KeyCode::Enter),
         InputAction::ActivateFocusedTarget
     );
     assert_eq!(
         key_with_focus(KeyCode::Char(' ')),
-        InputAction::InsertChar(' ')
+        InputAction::None
     );
 }
 

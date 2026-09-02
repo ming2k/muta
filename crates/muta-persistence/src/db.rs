@@ -9,6 +9,7 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Result, Row, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
@@ -633,6 +634,122 @@ impl DatabaseEngine {
 
         Ok(results)
     }
+
+    // --- Typed JSON KV Helpers (ADR-0168) ---
+
+    /// Retrieve and deserialize a JSON value from `kv_store`.
+    pub fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        if let Some(raw) = self.get_kv(key)? {
+            match serde_json::from_str::<T>(&raw) {
+                Ok(val) => Ok(Some(val)),
+                Err(err) => {
+                    tracing::warn!(key = %key, error = %err, "Failed to deserialize JSON from kv_store");
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Serialize and persist a JSON value to `kv_store`.
+    pub fn set_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        let serialized = serde_json::to_string(value)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.set_kv(key, &serialized)
+    }
+
+    // --- Legacy Flat-File Migration (ADR-0168) ---
+
+    /// Inspect legacy `projects/` directory and import older `.json` / `.jsonl` sessions into SQLite.
+    /// Idempotent: existing sessions are skipped or updated without duplicate event sequences.
+    pub fn migrate_legacy_projects(&self, projects_dir: &Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(projects_dir) else {
+            return 0;
+        };
+
+        let mut count = 0;
+        for bucket in entries.flatten() {
+            let sessions_dir = bucket.path().join("sessions");
+            let Ok(session_files) = std::fs::read_dir(&sessions_dir) else {
+                continue;
+            };
+
+            for file_entry in session_files.flatten() {
+                let path = file_entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+
+                // Parse legacy snapshot
+                let Ok(raw_json) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+
+                #[derive(Deserialize)]
+                struct LegacySnapshot {
+                    id: String,
+                    #[serde(default)]
+                    parent_id: Option<String>,
+                    #[serde(default)]
+                    fork_kind: Option<String>,
+                    #[serde(default)]
+                    title: Option<String>,
+                    #[serde(default)]
+                    title_manual: bool,
+                    #[serde(default)]
+                    created_at: Option<u64>,
+                    #[serde(default)]
+                    updated_at: Option<u64>,
+                    #[serde(default)]
+                    project_root: Option<PathBuf>,
+                }
+
+                if let Ok(snap) = serde_json::from_str::<LegacySnapshot>(&raw_json) {
+                    let project_root_str = snap
+                        .project_root
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let record = SessionRecord {
+                        id: snap.id.clone(),
+                        parent_id: snap.parent_id,
+                        fork_kind: snap.fork_kind.unwrap_or_else(|| "trunk".to_string()),
+                        title: snap.title,
+                        title_manual: snap.title_manual,
+                        created_at_ms: snap.created_at.map(|t| t as i64).unwrap_or(0),
+                        updated_at_ms: snap.updated_at.map(|t| t as i64).unwrap_or(0),
+                        project_root: project_root_str,
+                    };
+
+                    if self.upsert_session(&record).is_ok() {
+                        count += 1;
+                    }
+
+                    // Parse sibling JSONL if present
+                    let jsonl_path = path.with_extension("jsonl");
+                    if let Ok(lines) = std::fs::read_to_string(&jsonl_path) {
+                        for (seq, line) in lines.lines().enumerate() {
+                            if line.trim().is_empty() {
+                                continue;
+                            }
+                            let _ = self.append_event(&SessionEventRecord {
+                                session_id: snap.id.clone(),
+                                seq: seq as i64 + 1,
+                                event_type: "legacy_event".to_string(),
+                                payload: line.to_string(),
+                                created_at_ms: record.updated_at_ms,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            info!(count = count, "Migrated legacy sessions into SQLite muta.db");
+        }
+        count
+    }
 }
 
 // --- Asynchronous Persistence Actor (Single-Writer Pattern) ---
@@ -642,6 +759,10 @@ pub enum PersistenceCommand {
     UpsertSession {
         record: SessionRecord,
         ack: oneshot::Sender<Result<()>>,
+    },
+    DeleteSession {
+        session_id: String,
+        ack: oneshot::Sender<Result<bool>>,
     },
     AppendEvent {
         event: SessionEventRecord,
@@ -660,6 +781,10 @@ pub enum PersistenceCommand {
         value: String,
         ack: oneshot::Sender<Result<()>>,
     },
+    DeleteKV {
+        key: String,
+        ack: oneshot::Sender<Result<bool>>,
+    },
 }
 
 /// Asynchronous handle for interacting with the single-writer PersistenceActor without blocking Tokio runtime.
@@ -668,6 +793,20 @@ pub struct PersistenceHandle {
     tx: mpsc::Sender<PersistenceCommand>,
     db_path: PathBuf,
     blob_store: Option<BlobStore>,
+}
+
+static GLOBAL_HANDLE: OnceLock<PersistenceHandle> = OnceLock::new();
+
+/// Get or initialize the global shared [`PersistenceHandle`].
+pub fn get_persistence_handle() -> PersistenceHandle {
+    GLOBAL_HANDLE
+        .get_or_init(|| {
+            let dirs = crate::paths::get();
+            let db_path = dirs.db_file();
+            let blobs = Some(BlobStore::new(dirs.blobs_dir()));
+            PersistenceHandle::spawn(db_path, blobs)
+        })
+        .clone()
 }
 
 impl PersistenceHandle {
@@ -695,6 +834,10 @@ impl PersistenceHandle {
                             let res = engine.upsert_session(&record);
                             let _ = ack.send(res);
                         }
+                        PersistenceCommand::DeleteSession { session_id, ack } => {
+                            let res = engine.delete_session(&session_id);
+                            let _ = ack.send(res);
+                        }
                         PersistenceCommand::AppendEvent { event, ack } => {
                             let res = engine.append_event(&event);
                             let _ = ack.send(res);
@@ -709,6 +852,10 @@ impl PersistenceHandle {
                         }
                         PersistenceCommand::SetKV { key, value, ack } => {
                             let res = engine.set_kv(&key, &value);
+                            let _ = ack.send(res);
+                        }
+                        PersistenceCommand::DeleteKV { key, ack } => {
+                            let res = engine.delete_kv(&key);
                             let _ = ack.send(res);
                         }
                     }
@@ -738,11 +885,99 @@ impl PersistenceHandle {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
+    /// Non-blocking fire-and-forget session upsert to avoid blocking synchronous writers.
+    pub fn try_upsert_session(&self, record: SessionRecord) {
+        let (ack_tx, _) = oneshot::channel();
+        let _ = self.tx.try_send(PersistenceCommand::UpsertSession {
+            record,
+            ack: ack_tx,
+        });
+    }
+
+    /// Non-blocking fire-and-forget message insert to avoid blocking synchronous writers.
+    pub fn try_insert_message(&self, message: MessageRecord) {
+        let (ack_tx, _) = oneshot::channel();
+        let _ = self.tx.try_send(PersistenceCommand::InsertMessage {
+            message,
+            ack: ack_tx,
+        });
+    }
+
+    /// Asynchronously delete a session record.
+    pub async fn delete_session(&self, session_id: String) -> Result<bool> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::DeleteSession {
+                session_id,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
     /// Asynchronously append an event to the ledger.
     pub async fn append_event(&self, event: SessionEventRecord) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .send(PersistenceCommand::AppendEvent { event, ack: ack_tx })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Asynchronously insert a message.
+    pub async fn insert_message(&self, message: MessageRecord) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::InsertMessage {
+                message,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Asynchronously record a command audit event.
+    pub async fn record_command(&self, cmd: CommandRecord) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::RecordCommand { cmd, ack: ack_tx })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Asynchronously set a key-value entry.
+    pub async fn set_kv(&self, key: String, value: String) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::SetKV {
+                key,
+                value,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Asynchronously delete a key-value entry.
+    pub async fn delete_kv(&self, key: String) -> Result<bool> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::DeleteKV { key, ack: ack_tx })
             .await
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         ack_rx

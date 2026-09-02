@@ -703,6 +703,8 @@ pub enum Action {
     /// Toggle the user block on the viewed session's outbox. While blocked, no
     /// queued message auto-drains (not even after the round completes).
     ToggleQueueBlock,
+    /// Arm the two-stroke Ctrl+X leader chord (Actions / Which-Key menu).
+    LeaderChord,
     /// Copy the current selection (or clear input / arm quit — resolved by the
     /// app loop).
     CopyOrClear,
@@ -844,6 +846,15 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::OpenTelemetry,
             description: "session telemetry report",
         },
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('x'),
+            },
+            gate: Gate::NoModal,
+            action: Action::LeaderChord,
+            description: "actions / leader chord (Which-Key)",
+        },
         // `?` / `f1` / `ctrl+h` all open help, but they are context-sensitive (`?`
         // only fires on an empty prompt) and `ctrl+h` needs the Kitty protocol —
         // so they stay hand-routed in the input handler and are *documented* in
@@ -937,6 +948,9 @@ impl Registry {
                 Action::OpenBtwList => InputAction::OpenBtwList,
                 Action::OpenViewSwitcher => InputAction::ViewSwitcherToggle,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
+                Action::LeaderChord => {
+                    InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
+                }
                 Action::CopyOrClear => InputAction::CtrlC,
                 Action::CopySelection => InputAction::CopySelection,
             });
@@ -1064,6 +1078,19 @@ mod tests {
         assert_eq!(action, Some(InputAction::OpenBtwList));
 
         let action = registry.resolve(key(KeyCode::F(5), KeyModifiers::NONE), Modal::Models);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn ctrl_x_arms_leader_chord_from_top_level() {
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::Char('x'), KeyModifiers::CONTROL), Modal::None);
+        assert_eq!(
+            action,
+            Some(InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX))
+        );
+
+        let action = registry.resolve(key(KeyCode::Char('x'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(action, None);
     }
 

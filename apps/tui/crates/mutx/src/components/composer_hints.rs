@@ -38,9 +38,9 @@ impl ActionDensity {
     /// long-form busy sentence plus a short char counter comfortable inside an
     /// 80-col composer and degrade before the counter would ever be dropped.
     pub(crate) fn for_width(row_width: usize) -> Self {
-        if row_width >= 72 {
+        if row_width >= 50 {
             ActionDensity::Full
-        } else if row_width >= 28 {
+        } else if row_width >= 24 {
             ActionDensity::Compact
         } else {
             ActionDensity::Tiny
@@ -180,27 +180,15 @@ pub(crate) struct ComposerHints {
 
 // The hint row — one sentence about what Enter does
 
-/// Build the composer's hint row: what the next `Enter` does, the `Tab`
-/// toggle while mid-round, and any escape hatch. The switch runs over the
-/// compose target so the verb can never drift out of sync with where the
-/// buffer will actually land:
-///
-/// ```text
-/// Enter send prompt                 ← idle plain buffer
-/// Enter send command                ← resolved `/command` buffer
-/// Enter send steer  Tab follow-up   ← mid-round, steering armed
-/// Enter send follow-up  Tab steer   ← mid-round, queueing armed
-/// Enter update follow-ups[2]        ← queue-pointer edit
-/// Tab/Enter select  ↑↓ navigate  Esc dismiss ← completion popup
-/// Enter insert  Tab preview  Esc close ← history search
-/// ```
-pub(crate) fn hint_row_spans(
+/// Build the composer's hint row separated into left (navigation/actions) and
+/// right (execution/submit) spans.
+pub(crate) fn hint_row_parts(
     can_retry: bool,
     density: ActionDensity,
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
-) -> Vec<Span<'static>> {
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
     let key_style = keycap_style(theme).bg(bg);
     let hint_style = theme.keycap_label_style().bg(bg);
     let verb_style = Style::default().bg(bg);
@@ -208,118 +196,195 @@ pub(crate) fn hint_row_spans(
 
     match target {
         ComposeTarget::HistorySearch => {
-            let mut spans = vec![
+            let left = if compact {
+                vec![
+                    Span::styled(Key::ESC.display(), key_style),
+                    Span::styled(" close", hint_style),
+                ]
+            } else {
+                vec![
+                    Span::styled(keyvocab::ARROWS_UD, key_style),
+                    Span::styled(" select", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled(Key::ESC.display(), key_style),
+                    Span::styled(" close", hint_style),
+                ]
+            };
+            let right = vec![
                 Span::styled(Key::TAB.display(), key_style),
                 Span::styled(" / ", hint_style),
                 Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(
+                    " insert",
+                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+                ),
             ];
-            spans.push(Span::styled(
-                " insert",
-                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-            ));
-            if !compact {
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
-                spans.push(Span::styled(" select", hint_style));
-            }
-            spans.push(Span::styled("  ", hint_style));
-            spans.push(Span::styled(Key::ESC.display(), key_style));
-            spans.push(Span::styled(" close", hint_style));
-            return spans;
+            (left, right)
         }
         ComposeTarget::Completion { .. } => {
-            let mut spans = vec![
+            let left = if compact {
+                vec![
+                    Span::styled(Key::ESC.display(), key_style),
+                    Span::styled(" dismiss", hint_style),
+                ]
+            } else {
+                vec![
+                    Span::styled(keyvocab::ARROWS_UD, key_style),
+                    Span::styled(" navigate", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled(Key::ESC.display(), key_style),
+                    Span::styled(" dismiss", hint_style),
+                ]
+            };
+            let right = vec![
                 Span::styled(Key::TAB.display(), key_style),
                 Span::styled(" / ", hint_style),
                 Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(
+                    " select",
+                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+                ),
             ];
-            spans.push(Span::styled(
-                " select",
-                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-            ));
-            if !compact {
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
-                spans.push(Span::styled(" navigate", hint_style));
-            }
-            spans.push(Span::styled("  ", hint_style));
-            spans.push(Span::styled(Key::ESC.display(), key_style));
-            spans.push(Span::styled(" dismiss", hint_style));
-            return spans;
+            (left, right)
         }
         ComposeTarget::QueueEdit { kind, number, .. } => {
-            let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
-            spans.push(Span::styled(" update ", hint_style));
-            spans.push(Span::styled(
-                format!("{}[{number}]", kind.plural_noun()),
-                verb_style.fg(kind.consequence_color(theme)),
-            ));
-            spans.push(Span::styled("  ", hint_style));
-            spans.push(Span::styled(Key::ESC.display(), key_style));
-            spans.push(Span::styled(" draft", hint_style));
-            return spans;
+            let left = vec![
+                Span::styled(Key::ESC.display(), key_style),
+                Span::styled(" draft", hint_style),
+            ];
+            let right = vec![
+                Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(" update ", hint_style),
+                Span::styled(
+                    format!("{}[{number}]", kind.plural_noun()),
+                    verb_style.fg(kind.consequence_color(theme)),
+                ),
+            ];
+            (left, right)
         }
-        _ => {}
-    }
-
-    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
-    spans.push(Span::styled(" send", hint_style));
-
-    match target {
         ComposeTarget::Command => {
-            // Echo the in-box resolved-command treatment: brand + bold.
-            spans.push(Span::styled(
-                " command",
-                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-            ));
-        }
-        ComposeTarget::Steer | ComposeTarget::FollowUp => {
-            let primary = verb_style.fg(target.submit_color(theme));
-            let (verb, other, other_label) = match target {
-                ComposeTarget::Steer => (
-                    " steer",
-                    "follow-up",
-                    if compact {
-                        " follow-up"
-                    } else {
-                        " follow-up mode"
-                    },
-                ),
-                _ => (
-                    " follow-up",
-                    "steer",
-                    if compact { " steer" } else { " steer mode" },
-                ),
-            };
-            spans.push(Span::styled(verb, primary));
-            spans.push(Span::styled("  ", hint_style));
-            spans.push(Span::styled(Key::TAB.display(), key_style));
-            spans.push(Span::styled(other_label, hint_style));
-            // `other` kept for symmetry with the compact ladder above.
-            let _ = other;
-        }
-        ComposeTarget::Prompt | ComposeTarget::QueueEdit { .. } => {
-            if can_retry {
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled("/retry", key_style));
-                if !compact {
-                    spans.push(Span::styled(" to retry", hint_style));
-                }
+            let left = if matches!(density, ActionDensity::Tiny) {
+                Vec::new()
+            } else if compact {
+                vec![
+                    Span::styled("Ctrl+X", key_style),
+                    Span::styled(" actions", hint_style),
+                ]
             } else {
-                spans.push(Span::styled(" prompt", hint_style));
+                vec![
+                    Span::styled("Ctrl+X o", key_style),
+                    Span::styled(" focus", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled("Ctrl+X", key_style),
+                    Span::styled(" actions", hint_style),
+                ]
+            };
+            let right = vec![
+                Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(" send ", hint_style),
+                Span::styled(
+                    "command",
+                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+                ),
+            ];
+            (left, right)
+        }
+        ComposeTarget::Steer => {
+            let left = if compact {
+                vec![
+                    Span::styled(Key::TAB.display(), key_style),
+                    Span::styled(" follow-up", hint_style),
+                ]
+            } else {
+                vec![
+                    Span::styled(Key::TAB.display(), key_style),
+                    Span::styled(" follow-up", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled(Key::CTRL_C.display(), key_style),
+                    Span::styled(" interrupt", hint_style),
+                ]
+            };
+            let right = vec![
+                Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(" send ", hint_style),
+                Span::styled("steer", verb_style.fg(target.submit_color(theme))),
+            ];
+            (left, right)
+        }
+        ComposeTarget::FollowUp => {
+            let left = if compact {
+                vec![
+                    Span::styled(Key::TAB.display(), key_style),
+                    Span::styled(" steer", hint_style),
+                ]
+            } else {
+                vec![
+                    Span::styled(Key::TAB.display(), key_style),
+                    Span::styled(" steer", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled(Key::CTRL_C.display(), key_style),
+                    Span::styled(" interrupt", hint_style),
+                ]
+            };
+            let right = vec![
+                Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(" send ", hint_style),
+                Span::styled("follow-up", verb_style.fg(target.submit_color(theme))),
+            ];
+            (left, right)
+        }
+        ComposeTarget::Prompt => {
+            let left = if matches!(density, ActionDensity::Tiny) {
+                Vec::new()
+            } else if compact {
+                vec![
+                    Span::styled("Ctrl+X", key_style),
+                    Span::styled(" actions", hint_style),
+                ]
+            } else {
+                vec![
+                    Span::styled("Ctrl+X o", key_style),
+                    Span::styled(" focus", hint_style),
+                    Span::styled("   ", hint_style),
+                    Span::styled("Ctrl+X", key_style),
+                    Span::styled(" actions", hint_style),
+                ]
+            };
+            let mut right = vec![
+                Span::styled(Key::ENTER.display(), key_style),
+                Span::styled(" send", hint_style),
+            ];
+            if can_retry {
+                right.push(Span::styled("   ", hint_style));
+                right.push(Span::styled("/retry", key_style));
                 if !compact {
-                    spans.push(Span::styled("  ", hint_style));
-                    spans.push(Span::styled(Key::PAGE_UP.display(), key_style));
-                    spans.push(Span::styled(" history", hint_style));
-                    spans.push(Span::styled("  ", hint_style));
-                    spans.push(Span::styled(Key::ALT_UP.display(), key_style));
-                    spans.push(Span::styled(" transcript", hint_style));
+                    right.push(Span::styled(" retry", hint_style));
                 }
             }
+            (left, right)
         }
-        _ => {}
     }
-    spans
+}
+
+/// Build the composer's combined hint row: what the next `Enter` does, the `Tab`
+/// toggle while mid-round, and any escape hatch.
+#[allow(dead_code)]
+pub(crate) fn hint_row_spans(
+    can_retry: bool,
+    density: ActionDensity,
+    target: ComposeTarget,
+    theme: &Theme,
+    bg: Color,
+) -> Vec<Span<'static>> {
+    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg);
+    if left.is_empty() {
+        right
+    } else {
+        let mut spans = left;
+        spans.push(Span::styled("   ", Style::default().bg(bg)));
+        spans.extend(right);
+        spans
+    }
 }
 
 #[cfg(test)]
@@ -340,7 +405,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(idle, "Enter send prompt  PgUp history  Alt+↑ transcript");
+        assert_eq!(idle, "Ctrl+X o focus   Ctrl+X actions   Enter send");
 
         let idle_compact = text(&hint_row_spans(
             false,
@@ -349,7 +414,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(idle_compact, "Enter send prompt");
+        assert_eq!(idle_compact, "Ctrl+X actions   Enter send");
 
         let steer = text(&hint_row_spans(
             false,
@@ -358,7 +423,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(steer, "Enter send steer  Tab follow-up mode");
+        assert_eq!(steer, "Tab follow-up   Ctrl+C interrupt   Enter send steer");
 
         let follow_up = text(&hint_row_spans(
             false,
@@ -367,7 +432,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(follow_up, "Enter send follow-up  Tab steer");
+        assert_eq!(follow_up, "Tab steer   Enter send follow-up");
 
         let completion = text(&hint_row_spans(
             false,
@@ -378,7 +443,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(completion, "Tab / Enter select  ↑↓ navigate  Esc dismiss");
+        assert_eq!(completion, "↑↓ navigate   Esc dismiss   Tab / Enter select");
 
         let search = text(&hint_row_spans(
             false,
@@ -387,7 +452,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(search, "Tab / Enter insert  ↑↓ select  Esc close");
+        assert_eq!(search, "↑↓ select   Esc close   Tab / Enter insert");
     }
 
     #[test]
@@ -400,7 +465,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(row, "Enter send command");
+        assert_eq!(row, "Ctrl+X o focus   Ctrl+X actions   Enter send command");
     }
 
     #[test]
@@ -417,7 +482,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(row, "Enter update follow-ups[2]  Esc draft");
+        assert_eq!(row, "Esc draft   Enter update follow-ups[2]");
 
         let steer_edit = text(&hint_row_spans(
             false,
@@ -430,7 +495,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(steer_edit, "Enter update steers[1]  Esc draft");
+        assert_eq!(steer_edit, "Esc draft   Enter update steers[1]");
     }
 
     #[test]
@@ -443,7 +508,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(full, "Enter send  /retry to retry");
+        assert_eq!(full, "Ctrl+X o focus   Ctrl+X actions   Enter send   /retry retry");
         let compact = text(&hint_row_spans(
             true,
             ActionDensity::Tiny,
@@ -451,7 +516,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(compact, "Enter send  /retry");
+        assert_eq!(compact, "Enter send   /retry");
     }
 
     #[test]

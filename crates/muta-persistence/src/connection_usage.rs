@@ -47,9 +47,13 @@ pub struct ConnectionUsage {
 }
 
 impl ConnectionUsage {
-    /// Load from the well-known state file. Returns an empty store when the
-    /// file is missing or unreadable, since the data is fully rebuildable.
+    /// Load from SQLite database or fallback to the legacy state file.
     pub fn load() -> Self {
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
+            && let Ok(Some(usage)) = engine.get_json::<Self>("state:connection_usage")
+        {
+            return usage;
+        }
         let path = paths::get().connection_usage_file();
         let Ok(content) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -111,6 +115,9 @@ impl ConnectionUsage {
                     .last_models
                     .insert(connection_id.clone(), model.clone());
             }
+        }
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
+            let _ = engine.set_json("state:connection_usage", &merged);
         }
         let json = serde_json::to_string_pretty(&merged)
             .map_err(|e| format!("could not serialize usage store: {e}"))?;

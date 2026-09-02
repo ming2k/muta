@@ -274,7 +274,6 @@ async fn load_for_project_isolates_sessions_per_cwd() {
     locked!({
         let root = std::env::temp_dir().join(format!("muta-proj-iso-{}", uuid::Uuid::new_v4()));
         let dirs = paths::Dirs::resolve(&paths::PathsOverride {
-            home: Some(root.clone()),
             data_dir: Some(root.join("data")),
             state_dir: Some(root.join("state")),
             config_dir: Some(root.join("config")),

@@ -248,11 +248,14 @@ fn read_day_file(path: &Path) -> DayFile {
     }
 }
 
-/// Write a day file under its companion lock. Blocking lock acquisition:
-/// contention is one other process flushing usage at the same moment, so
-/// waiting beats losing the append.
+/// Write a day file under its companion lock and synchronize with SQLite.
 fn persist_day_file(path: &Path, day_file: &DayFile) -> Result<(), String> {
     let _lock = FileLock::acquire(path).map_err(|e| e.to_string())?;
+    if let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
+        && let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
+    {
+        let _ = engine.set_json(&format!("usage:day:{file_name}"), day_file);
+    }
     atomic_write_json(path, &day_file)
 }
 

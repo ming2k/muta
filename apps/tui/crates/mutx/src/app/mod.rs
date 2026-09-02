@@ -61,10 +61,8 @@ pub enum LeaderChord {
     /// No leader active.
     #[default]
     None,
-    /// `Ctrl+X` leader active (View stack / Buffer / Window management).
+    /// `Ctrl+X` leader active (View stack / Buffer / Navigation / Workspace management).
     CtrlX,
-    /// `Ctrl+C` leader active (Agent control / Mode-specific operations).
-    CtrlC,
 }
 
 /// A user message owned by the compact outbox (the **next-round** queue).

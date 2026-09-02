@@ -129,27 +129,23 @@ Two categories of file deliberately live outside XDG:
 XDG categories answer *where*. The override stack answers *who decides*.
 From highest to lowest:
 
-1. **CLI flag.** `--home <dir>` moves every category at once — the
-   instance-root selector (ADR-0121); `--config-dir`, `--data-dir`,
-   `--state-dir`, `--cache-dir` are reserved plumbing for per-category
-   flags.
-2. **App-specific env var.** `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`,
+1. **App-specific per-category env var.** `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`,
    `MUTA_STATE_DIR`, `MUTA_CACHE_DIR`. Use these to redirect
-   muta and only muta.
-3. **Instance root.** `MUTA_HOME` redirects *everything at once* —
+   specific categories for muta and only muta.
+2. **Instance root.** `MUTA_HOME` redirects *everything at once* —
    the four categories plus the daemon's runtime files — under one root,
    and is how development and test runs isolate themselves from an
-   installed muta (ADR-0121). The env form of `--home`; sits below the
-   per-category vars so a sandbox can still carve one category out.
-4. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+   installed muta (ADR-0121). Sits below the per-category vars so a sandbox
+   can still carve one category out.
+3. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
    `XDG_STATE_HOME`, `XDG_CACHE_HOME`. Native on Linux and accepted as an
    explicit portable override elsewhere.
-5. **Native per-OS default.** On macOS, `~/Library/Application
+4. **Native per-OS default.** On macOS, `~/Library/Application
    Support/muta`; on Windows, `%APPDATA%\muta`. Provided by the
    platform's convention rather than the spec.
-6. **`$HOME` fallback.** `~/.config`, `~/.local/share`, `~/.local/state`,
+5. **`$HOME` fallback.** `~/.config`, `~/.local/share`, `~/.local/state`,
    `~/.cache` — the spec's default locations when nothing else applies.
-7. **Current directory.** Last resort; never panics.
+6. **Current directory.** Last resort; never panics.
 
 The same precedence applies to every category — there is no per-subsystem
 special case. Relative values in the XDG env vars are ignored (per spec);

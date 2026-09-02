@@ -133,7 +133,7 @@ Default location: `~/.cache/muta/`.
 
 Ephemeral per daemon. By default `$XDG_RUNTIME_DIR/muta/` on Linux;
 moved wholesale to `<dir>/muta/instance` by the instance root selector
-(`--home` / `MUTA_HOME`, ADR-0121). Never assume the default location
+(`MUTA_HOME`, ADR-0121). Never assume the default location
 exists.
 
 | Path | Purpose | Lossy? |

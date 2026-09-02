@@ -466,7 +466,50 @@ fn write_session_file(
         data.applied_seq = Some(high);
     }
     data.checksum = Some(compute_checksum(&data)?);
-    fsutil::atomic_write_json(path, &data)
+    let write_res = fsutil::atomic_write_json(path, &data);
+
+    // Synchronize to unified SQLite database via Single-Writer Actor (ADR-0163 / ADR-0168)
+    let handle = crate::db::get_persistence_handle();
+    let fork_str = match data.fork_kind {
+        muta_contracts::SessionForkKind::Trunk => "trunk",
+        muta_contracts::SessionForkKind::Fork => "fork",
+        muta_contracts::SessionForkKind::Aside => "aside",
+    };
+    let session_rec = crate::db::SessionRecord {
+        id: data.id.clone(),
+        parent_id: data.parent_id.clone(),
+        fork_kind: fork_str.to_string(),
+        title: data.title.clone(),
+        title_manual: data.title_manual,
+        created_at_ms: data.created_at as i64,
+        updated_at_ms: data.updated_at as i64,
+        project_root: data.project_root.to_string_lossy().into_owned(),
+    };
+    handle.try_upsert_session(session_rec);
+
+    // Materialize active model window messages into messages table & FTS index
+    for (seq, msg) in data.model_window.iter().enumerate() {
+        let role_str = match msg.role {
+            muta_contracts::Role::User => "user",
+            muta_contracts::Role::Assistant => "assistant",
+            muta_contracts::Role::System => "system",
+            muta_contracts::Role::Tool => "tool",
+        };
+        handle.try_insert_message(crate::db::MessageRecord {
+            id: format!("{}:{}", data.id, seq),
+            session_id: data.id.clone(),
+            seq: seq as i64,
+            role: role_str.to_string(),
+            content: msg.content.clone(),
+            content_blob_hash: msg.content_blob.clone(),
+            reasoning_content: msg.reasoning_content.clone(),
+            provider: None,
+            model: None,
+            created_at_ms: data.updated_at as i64,
+        });
+    }
+
+    write_res
 }
 
 /// Move large `Message.content` strings into the blob store and replace them

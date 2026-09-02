@@ -198,9 +198,9 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
 }
 
 #[test]
-fn q_while_focused_inserts_instead_of_quitting() {
-    // 'q' only quits when nothing is focused. With a step focused it is an
-    // ordinary character, so navigating never risks an accidental exit.
+fn q_while_focused_does_not_quit_or_insert() {
+    // With a step focused, 'q' does not quit and is isolated from typing
+    // into the composer.
     let mut input = String::new();
     let mut cursor = 0;
     let action = run_key(
@@ -211,8 +211,8 @@ fn q_while_focused_inserts_instead_of_quitting() {
         crate::Modal::None,
         true,
     );
-    assert_eq!(action, InputAction::InsertChar('q'));
-    assert_eq!(input, "q");
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "");
 }
 
 #[test]

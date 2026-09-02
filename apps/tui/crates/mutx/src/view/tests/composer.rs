@@ -1826,23 +1826,27 @@ fn composer_panel_carries_the_hint_row() {
 
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(
-        row4.contains("Enter send prompt"),
+        row4.contains("Enter send"),
         "hint row carries the Enter sentence: {row4:?}"
+    );
+    assert!(
+        row4.contains("Ctrl+X o focus") && row4.contains("Ctrl+X actions"),
+        "hint row carries the navigation and leader chord actions: {row4:?}"
     );
     assert!(
         !row4.contains("lines") && !row4.contains("chars"),
         "a fully visible draft carries no right-side readout: {row4:?}"
     );
-    // The sentence begins at the text column (the `›` prefix width).
-    let enter_x = row4
+    // The navigation clause begins at the text column (the `›` prefix width).
+    let prefix_x = row4
         .char_indices()
-        .find(|(_, c)| *c == 'E')
+        .find(|(_, c)| *c == 'C')
         .map(|(i, _)| row4[..i].chars().count())
-        .expect("Enter clause");
+        .expect("Ctrl+X clause");
     assert_eq!(
-        enter_x,
+        prefix_x,
         crate::design::COMPOSER_PROMPT_PREFIX_COLS,
-        "hint sentence aligns with the text column"
+        "hint navigation aligns with the text column"
     );
 }
 

@@ -59,23 +59,21 @@ pub(crate) fn draw_which_key_overlay(
 
     let (title, items): (&'static str, Vec<WhichKeyItem>) = match chord {
         LeaderChord::CtrlX => (
-            "Ctrl+X (View / Window)",
+            "Ctrl+X (Actions)",
             vec![
                 WhichKeyItem::primary("b", "switch view / buffer"),
                 WhichKeyItem::primary("k", "close current view"),
                 WhichKeyItem::primary("o", "other pane / focus"),
-                WhichKeyItem::from_key(Key::CTRL_C, "quit mutx", true),
-                WhichKeyItem::from_key(Key::CTRL_G, "cancel", false),
-            ],
-        ),
-        LeaderChord::CtrlC => (
-            "Ctrl+C (Agent / Mode)",
-            vec![
-                WhichKeyItem::primary("c", "interrupt round"),
-                WhichKeyItem::primary("p", "permissions modal"),
                 WhichKeyItem::primary("t", "todos task list"),
+                WhichKeyItem::primary("q", "message queue"),
+                WhichKeyItem::primary("p", "pause / resume queue"),
                 WhichKeyItem::primary("m", "models picker"),
-                WhichKeyItem::primary("d", "performance report"),
+                WhichKeyItem::primary("n", "connection detail"),
+                WhichKeyItem::primary("d", "telemetry / perf"),
+                WhichKeyItem::primary("a", "/btw asides"),
+                WhichKeyItem::primary("s", "settings"),
+                WhichKeyItem::primary("?", "help"),
+                WhichKeyItem::from_key(Key::CTRL_C, "quit mutx", true),
                 WhichKeyItem::from_key(Key::CTRL_G, "cancel", false),
             ],
         ),
@@ -84,7 +82,8 @@ pub(crate) fn draw_which_key_overlay(
 
     let card_width: u16 = 38;
     // 2 border rows + 1 top blank line + 1 title line + items + 1 bottom blank line
-    let card_height: u16 = (items.len() as u16) + 5;
+    let desired_height: u16 = (items.len() as u16) + 5;
+    let card_height = desired_height.min(viewport.height.saturating_sub(2)).max(6);
 
     // Position at bottom-right, 1 row above the terminal bottom
     let x = viewport.width.saturating_sub(card_width + 2).max(1);
@@ -162,7 +161,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(content.contains("Ctrl+X (View / Window)"));
+        assert!(content.contains("Ctrl+X (Actions)"));
         assert!(content.contains("switch view"));
         assert!(content.contains("cancel"));
 
@@ -172,24 +171,6 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(row_23.trim().is_empty());
-    }
-
-    #[test]
-    fn which_key_overlay_renders_for_ctrl_c() {
-        let theme = Theme::default();
-        let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-        terminal.draw(|f| {
-            draw_which_key_overlay(f, &theme, LeaderChord::CtrlC, f.area());
-        });
-        let content: String = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(content.contains("Ctrl+C (Agent / Mode)"));
-        assert!(content.contains("interrupt round"));
-        assert!(content.contains("permissions"));
     }
 
     #[test]
@@ -206,6 +187,5 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(!content.contains("Ctrl+X"));
-        assert!(!content.contains("Ctrl+C"));
     }
 }
