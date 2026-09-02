@@ -17,30 +17,9 @@ fn typing_in_compose_returns_insert_char() {
         &mut cursor,
         InputContext {
             active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
+            ..Default::default()
         },
         &mut drag,
     );
@@ -62,30 +41,10 @@ fn backspace_in_compose_returns_backspace_action() {
         &mut cursor,
         InputContext {
             active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 1,
             has_exact_suggestion: true,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
+            ..Default::default()
         },
         &mut drag,
     );
@@ -96,11 +55,6 @@ fn backspace_in_compose_returns_backspace_action() {
 
 #[test]
 fn backspace_atomically_deletes_an_image_chip() {
-    // Pasting an image inserts `[Image #1 (size)] ` (chip + trailing
-    // space). A single Backspace right after the space must erase both
-    // the space and the chip — mirroring codex / claude-code / opencode's
-    // atomic chip backspace. The reconcile pass in the event loop
-    // drops the orphaned `pending_images` entry.
     let chip = crate::composer_attachments::image_chip(1, 0);
     let mut input = format!("look {chip} ");
     let mut cursor = input.chars().count();
@@ -109,33 +63,7 @@ fn backspace_atomically_deletes_an_image_chip() {
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
+        InputContext::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -145,12 +73,8 @@ fn backspace_atomically_deletes_an_image_chip() {
 
 #[test]
 fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
-    // When the cursor lands right after `]` (no trailing space), a
-    // single Backspace still removes the whole chip rather than
-    // chipping away at the `]`.
     let chip = crate::composer_attachments::paste_chip(1, 5, 0);
     let mut input = format!("see {chip}!");
-    // Cursor right after `]`, before `!`.
     let prefix_chars = "see ".chars().count() + chip.chars().count();
     let mut cursor = prefix_chars;
     let mut drag = SelectionDrag::default();
@@ -158,33 +82,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
+        InputContext::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -194,7 +92,6 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
 
 #[test]
 fn backspace_falls_through_to_single_char_outside_a_chip() {
-    // Mid-word backspace must keep deleting one character at a time.
     let mut input = "hello".to_string();
     let mut cursor = 5;
     let mut drag = SelectionDrag::default();
@@ -202,33 +99,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
+        InputContext::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -272,33 +143,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
         Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
+        InputContext::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CtrlC);
@@ -316,30 +161,7 @@ fn a_in_connections_modal_opens_preset_chooser() {
         &mut cursor,
         InputContext {
             active_modal: crate::Modal::Connections,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
+            ..Default::default()
         },
         &mut drag,
     );
@@ -439,138 +261,6 @@ fn b_and_d_in_preset_chooser_pick_the_login_method() {
 }
 
 #[test]
-fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
-    // Ctrl+T is a declared global binding (registry → OpenTodos). It opens
-    // the Todos modal from the top level and is a no-op while another
-    // modal owns the surface.
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('t'),
-            KeyModifiers::CONTROL,
-        )),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::OpenTodos);
-}
-
-#[test]
-fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let context = InputContext {
-        active_modal: crate::Modal::None,
-        session_info_detail: false,
-        connection_info_detail: false,
-        is_responding: false,
-        completion_kind: crate::CompletionKind::None,
-        suggestion_count: 0,
-        has_exact_suggestion: false,
-        suggestion_index: None,
-        completion_dismissed: false,
-        has_trigger_text: false,
-        permission_confirm_always: false,
-        permission_show_details: false,
-        in_runner_view: false,
-        in_side_view: false,
-        has_focused_target: false,
-        history_searching: false,
-        model_searching: false,
-        modal_keymap_open: false,
-        editor_field: None,
-        custom_provider_field: None,
-        question_other_highlighted: false,
-        history_clear_confirm: false,
-        host_prompting: false,
-        config_focus: Default::default(),
-        leader_chord: crate::app::LeaderChord::None,
-    };
-    let action = process_event(
-        Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('m'),
-            KeyModifiers::CONTROL,
-        )),
-        &mut input,
-        &mut cursor,
-        context,
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::OpenModels);
-
-    // While a modal is already open, Ctrl+M is ignored so it cannot yank
-    // the user out of another modal mid-interaction.
-    let action = process_event(
-        Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('m'),
-            KeyModifiers::CONTROL,
-        )),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Help,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::None);
-}
-
-#[test]
 fn ctrl_b_moves_caret_back_one_char() {
     // Ctrl+B is readline backward-char: it moves the caret left and never
     // touches focus. (Focus navigation is Ctrl+↑/↓.)
@@ -589,9 +279,7 @@ fn ctrl_b_moves_caret_back_one_char() {
 }
 
 #[test]
-fn alt_arrows_and_alt_o_drive_focus() {
-    // Alt+↑ / Alt+O enter focus from the input box (no focus yet) and Alt+↓ / Alt+O / Esc clear focus.
-    // Bare Tab stays a no-op.
+fn alt_arrows_and_tab_drive_focus() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
@@ -609,17 +297,6 @@ fn alt_arrows_and_alt_o_drive_focus() {
         run_key(
             &mut input,
             &mut cursor,
-            KeyCode::Char('o'),
-            KeyModifiers::ALT,
-            crate::Modal::None,
-            false,
-        ),
-        InputAction::FocusPrevTarget
-    );
-    assert_eq!(
-        run_key(
-            &mut input,
-            &mut cursor,
             KeyCode::Down,
             KeyModifiers::ALT,
             crate::Modal::None,
@@ -627,26 +304,13 @@ fn alt_arrows_and_alt_o_drive_focus() {
         ),
         InputAction::ClearFocusedTarget
     );
-    assert_eq!(
-        run_key(
-            &mut input,
-            &mut cursor,
-            KeyCode::Char('o'),
-            KeyModifiers::ALT,
-            crate::Modal::None,
-            true,
-        ),
-        InputAction::ClearFocusedTarget
-    );
-    assert_eq!(key_with_focus(KeyCode::Tab), InputAction::None);
+    assert_eq!(key_with_focus(KeyCode::Tab), InputAction::ClearFocusedTarget);
 }
 
 #[test]
-fn typing_while_focused_is_isolated() {
-    // A focused step isolates typing: printable characters are swallowed
-    // so they do not type through into the composer while inspecting a step.
+fn typing_while_focused_auto_bounces_to_composer() {
     let action = key_with_focus(KeyCode::Char('a'));
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::ClearFocusedTarget);
 }
 
 /// Ctrl+↑ / Ctrl+↓ inside any scrollable modal advance the body by a page
@@ -1274,8 +938,6 @@ fn slash_in_history_panel_inserts_literal() {
 
 #[test]
 fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
-    // With no modal open, Ctrl+R routes through OpenHistory so the app
-    // loop can stash the in-progress draft and show the fuzzy picker.
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -1286,39 +948,11 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         )),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
-        },
+        InputContext::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::OpenHistory);
 
-    // Once any modal is open (including HistorySearch itself), Ctrl+R is
-    // a no-op so it cannot yank the user out of the in-progress query.
     let action = process_event(
         Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Char('r'),
@@ -1328,30 +962,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::Modal::HistorySearch,
-            session_info_detail: false,
-            connection_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::None,
+            ..Default::default()
         },
         &mut drag,
     );
@@ -1619,61 +1230,23 @@ fn keybinding_modals_are_not_text_commands() {
 }
 
 #[test]
-fn ctrl_x_in_history_modal_arms_clear() {
-    // Ctrl+X inside the Ctrl+R panel arms the clear-history confirmation.
-    // It must never type an `x` into the filter.
-    let mut input = "git".to_string();
-    let mut cursor = 3;
-    let action = run_history_key(
-        &mut input,
-        &mut cursor,
-        KeyCode::Char('x'),
-        KeyModifiers::CONTROL,
-    );
-    assert_eq!(action, InputAction::HistoryClearAll);
-    assert_eq!(input, "git", "Ctrl+X must not type into the filter");
-    assert_eq!(cursor, 3);
-}
-
-#[test]
-fn ctrl_x_outside_history_modal_arms_leader_chord() {
-    // Nowhere else does Ctrl+X mean anything: at the top level (no modal) it
-    // must arm the leader chord.
+fn ctrl_l_opens_command_palette() {
     let mut input = "draft".to_string();
     let mut cursor = 5;
     let mut drag = SelectionDrag::default();
     let action = process_event(
         Event::Key(KeyEvent {
-            code: KeyCode::Char('x'),
+            code: KeyCode::Char('l'),
             modifiers: KeyModifiers::CONTROL,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            completion_dismissed: false,
-            has_trigger_text: false,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_runner_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            history_searching: false,
-            ..Default::default()
-        },
+        InputContext::default(),
         &mut drag,
     );
-    assert_eq!(
-        action,
-        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
-    );
+    assert_eq!(action, InputAction::ViewSwitcherToggle);
     assert_eq!(input, "draft");
 }
 
@@ -1955,126 +1528,83 @@ fn host_prompt_delete_key_removes_forward_char() {
 }
 
 #[test]
-fn emacs_ctrl_x_leader_chord_switches_view_with_b() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-
-    // 1. Initial Ctrl+X arms the leader chord
-    let action1 = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
-        &mut input,
-        &mut cursor,
-        InputContext::default(),
-        &mut drag,
-    );
-    assert_eq!(
-        action1,
-        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
-    );
-
-    // 2. Following 'b' opens ViewSwitcher
-    let action2 = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::CtrlX,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action2, InputAction::ViewSwitcherToggle);
-}
-
-#[test]
-fn emacs_ctrl_x_leader_chord_opens_todos_with_t() {
+fn tab_in_composer_focuses_transcript() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
 
     let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         InputContext {
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::CtrlX,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::OpenTodos);
-}
-
-#[test]
-fn emacs_ctrl_x_leader_chord_toggles_focus_with_o() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-
-    // From no focus: FocusNextTarget
-    let action1 = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::CtrlX,
             has_focused_target: false,
             ..Default::default()
         },
         &mut drag,
     );
-    assert_eq!(action1, InputAction::FocusNextTarget);
+    assert_eq!(action, InputAction::FocusNextTarget);
+}
 
-    // From focused step: ClearFocusedTarget (returns to composer)
-    let action2 = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+#[test]
+fn tab_in_transcript_returns_to_composer() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         InputContext {
-            config_focus: Default::default(),
-            leader_chord: crate::app::LeaderChord::CtrlX,
             has_focused_target: true,
             ..Default::default()
         },
         &mut drag,
     );
-    assert_eq!(action2, InputAction::ClearFocusedTarget);
+    assert_eq!(action, InputAction::ClearFocusedTarget);
 }
 
 #[test]
-fn emacs_ctrl_g_triggers_keyboard_quit() {
+fn alt_s_while_running_emits_steer_immediate() {
+    let mut input = "steer command".to_string();
+    let mut cursor = 13;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            is_responding: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::SteerImmediate("steer command".to_string()));
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn printable_char_in_transcript_auto_bounces_and_inserts() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
 
     let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+        Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        InputContext {
+            has_focused_target: true,
+            ..Default::default()
+        },
         &mut drag,
     );
-    assert_eq!(action, InputAction::KeyboardQuit);
-}
-
-#[test]
-fn emacs_meta_x_opens_view_switcher() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
-        &mut input,
-        &mut cursor,
-        InputContext::default(),
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::ViewSwitcherToggle);
+    assert_eq!(action, InputAction::ClearFocusedTarget);
+    assert_eq!(input, "h");
+    assert_eq!(cursor, 1);
 }
 
 #[test]

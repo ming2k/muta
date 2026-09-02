@@ -35,18 +35,20 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
         let drawn_modal_rect = view::draw_sessions_modal(
             f,
-            &app.sessions_overview,
-            app.modal_index
-                .min(app.sessions_overview.len().saturating_sub(1)),
-            app.modal_keymap_open,
-            &mut app.session_scroll,
-            app.session_modal_follow,
+            crate::overlays::session::SessionsModalProps {
+                sessions: &app.sessions_overview,
+                selected: app
+                    .modal_index
+                    .min(app.sessions_overview.len().saturating_sub(1)),
+                scroll: &mut app.session_scroll,
+                follow: app.session_modal_follow,
+                startup_picker: app.startup_overlay == crate::StartupOverlay::SessionsPicker,
+                spinner_phase,
+                session_info_detail: app.session_info_detail,
+                session_detail: app.session_detail.as_ref(),
+                session_info_scroll: &mut app.session_info_scroll,
+            },
             &app.theme,
-            app.startup_overlay == crate::StartupOverlay::SessionsPicker,
-            spinner_phase,
-            app.session_info_detail,
-            app.session_detail.as_ref(),
-            &mut app.session_info_scroll,
             &app.selection,
             &mut layout_map,
         );
@@ -703,41 +705,41 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             Some(view::draw_connections_modal(
                 f,
                 &mut layout_map,
-                &providers,
-                &app.current_provider,
-                app.modal_index,
-                &app.input,
-                app.cursor_position,
-                &mut app.model_scroll,
-                app.model_modal_follow,
-                app.model_search,
-                app.modal_keymap_open,
+                crate::overlays::provider::connections::ConnectionsModalProps {
+                    providers: &providers,
+                    current_provider: &app.current_provider,
+                    modal_index: app.modal_index,
+                    query: &app.input,
+                    cursor_position: app.cursor_position,
+                    scroll: &mut app.model_scroll,
+                    follow_selection: app.model_modal_follow,
+                    search: app.model_search,
+                    connection_info_detail: app.connection_info_detail,
+                    connection_detail: app.connection_detail.as_ref(),
+                    connection_info_scroll: &mut app.connection_info_scroll,
+                    spinner_phase,
+                    connection_info_standalone: app.connection_info_standalone,
+                },
                 &app.theme,
                 &app.selection,
-                app.connection_info_detail,
-                app.connection_detail.as_ref(),
-                &mut app.connection_info_scroll,
-                spinner_phase,
-                app.connection_info_standalone,
             ))
         }
         Modal::Models => {
             let models = app.models_flat_filtered();
             Some(view::draw_models_modal(
                 f,
-                &mut layout_map,
-                &models,
-                &app.current_provider,
-                &app.current_model,
-                app.modal_index,
-                &app.input,
-                app.cursor_position,
-                &mut app.model_scroll,
-                app.model_modal_follow,
-                app.model_search,
-                app.modal_keymap_open,
+                crate::overlays::provider::models::ModelsModalProps {
+                    models: &models,
+                    current_provider: &app.current_provider,
+                    current_model: &app.current_model,
+                    modal_index: app.modal_index,
+                    query: &app.input,
+                    cursor_position: app.cursor_position,
+                    scroll: &mut app.model_scroll,
+                    follow_selection: app.model_modal_follow,
+                    search: app.model_search,
+                },
                 &app.theme,
-                &app.selection,
             ))
         }
         Modal::HistorySearch => {
@@ -752,15 +754,16 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     .map_or(0, |r| r.height);
             view::draw_history_panel(
                 f,
-                &app.input_history,
-                &ranked,
-                app.modal_index,
-                &mut app.history_scroll,
-                app.history_modal_follow,
-                app.history_preview,
-                app.modal_keymap_open,
-                input_rect,
-                activity_height,
+                crate::overlays::history::HistoryPanelProps {
+                    history: &app.input_history,
+                    ranked: &ranked,
+                    modal_index: app.modal_index,
+                    scroll: &mut app.history_scroll,
+                    follow_selection: app.history_modal_follow,
+                    preview: app.history_preview,
+                    input_rect,
+                    activity_height,
+                },
                 &app.theme,
                 &app.selection,
                 &mut layout_map,
@@ -911,26 +914,23 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             ))
         }
         Modal::Help => {
-            // Project the global-keybinding registry into the rows
-            // the Help modal renders. Help and the live input
-            // resolver share the same registry, so the keys shown
-            // here can never drift from the keys that actually fire.
-            let bindings: Vec<view::HelpBinding> = crate::keymap::Registry::new()
-                .bindings()
-                .iter()
-                .map(|b| view::HelpBinding {
-                    // Help prose rows use the compact lowercase
-                    // chord form (`ctrl+t`), sourced from the same
-                    // vocabulary the footers' capitalized form
-                    // (`Ctrl+T`) derives from.
-                    key: b.key.chord(),
-                    description: b.description,
-                })
-                .collect();
+            let app_ctx = crate::keymap::AppContext {
+                active_view: app.current_view(),
+                active_modal: app.active_modal(),
+                session_focus: app.session_focus,
+                is_responding: viewed_running,
+                has_input: !app.input.is_empty(),
+                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_running_task: viewed_running,
+                in_runner_view: app.in_runner_view(),
+                in_side_view: app.in_side_view,
+                queue_count: app.pending_dispatch.len(),
+                has_focused_target: app.focused_target.is_some(),
+            };
             Some(view::draw_help_modal(
                 f,
                 &mut app.help_scroll,
-                &bindings,
+                &app_ctx,
                 &app.theme,
                 &app.selection,
                 &mut layout_map,
@@ -938,42 +938,42 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         }
         Modal::Sessions => Some(view::draw_sessions_modal(
             f,
-            &app.sessions_overview,
-            app.modal_index
-                .min(app.sessions_overview.len().saturating_sub(1)),
-            app.modal_keymap_open,
-            &mut app.session_scroll,
-            app.session_modal_follow,
+            crate::overlays::session::SessionsModalProps {
+                sessions: &app.sessions_overview,
+                selected: app
+                    .modal_index
+                    .min(app.sessions_overview.len().saturating_sub(1)),
+                scroll: &mut app.session_scroll,
+                follow: app.session_modal_follow,
+                startup_picker: app.startup_overlay == crate::StartupOverlay::SessionsPicker,
+                spinner_phase,
+                session_info_detail: app.session_info_detail,
+                session_detail: app.session_detail.as_ref(),
+                session_info_scroll: &mut app.session_info_scroll,
+            },
             &app.theme,
-            app.startup_overlay == crate::StartupOverlay::SessionsPicker,
-            spinner_phase,
-            app.session_info_detail,
-            app.session_detail.as_ref(),
-            &mut app.session_info_scroll,
             &app.selection,
             &mut layout_map,
         )),
         Modal::Host => {
-            // The session dashboard is a first-class, full-screen
-            // surface (Recess::Takeover already occluded the
-            // conversation): lay it out over the whole viewport
-            // instead of a centered modal rect.
             let rects = view::draw_dashboard(
                 f,
-                &app.host_sessions,
-                app.modal_index
-                    .min(app.host_sessions.len().saturating_sub(1)),
-                app.host_focus,
-                app.modal_keymap_open,
-                &mut app.host_scroll,
-                app.host_modal_follow,
-                &mut app.host_detail_scroll,
-                &app.host_console_log,
-                app.host_prompting,
-                app.host_prompt_new,
-                &app.input,
+                crate::overlays::dashboard::DashboardProps {
+                    rows: &app.host_sessions,
+                    selected: app
+                        .modal_index
+                        .min(app.host_sessions.len().saturating_sub(1)),
+                    focus: app.host_focus,
+                    list_scroll: &mut app.host_scroll,
+                    list_follow: app.host_modal_follow,
+                    detail_scroll: &mut app.host_detail_scroll,
+                    log: &app.host_console_log,
+                    prompting: app.host_prompting,
+                    prompt_create_new: app.host_prompt_new,
+                    prompt_text: &app.input,
+                    current_session_id: viewed_session_id,
+                },
                 &app.theme,
-                viewed_session_id,
             );
             // Stash the list-body height so the page-scroll step
             // (computed after this match from `drawn_modal_rect`)
@@ -1137,7 +1137,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.modal_index,
             &mut app.btw_scroll,
             app.btw_modal_follow,
-            app.modal_keymap_open,
             &app.theme,
             &app.selection,
             &mut layout_map,
@@ -1150,21 +1149,34 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.tree_modal_follow,
             &app.theme,
         )),
-        // Global view quick switcher (ADR-0139, Ctrl+L): open views first
-        // in MRU order, then the rest as discovery. Renders from the view
-        // registry; Enter switches via `ViewSwitchActivate`.
+        // Global unified command palette (Ctrl+L)
         Modal::ViewSwitcher => {
-            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
-            let open_ids = app.panels.order().to_vec();
-            Some(view::draw_view_switcher(
+            let app_ctx = crate::keymap::AppContext {
+                active_view: app.current_view(),
+                active_modal: app.active_modal(),
+                session_focus: app.session_focus,
+                is_responding: viewed_running,
+                has_input: !app.input.is_empty(),
+                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_running_task: viewed_running,
+                in_runner_view: app.in_runner_view(),
+                in_side_view: app.in_side_view,
+                queue_count: app.pending_dispatch.len(),
+                has_focused_target: app.focused_target.is_some(),
+            };
+            let entries = crate::overlays::command_palette::filter_palette_commands(
+                &app.command_palette_query,
+                &app.recent_commands,
+                &app_ctx,
+            );
+            Some(crate::overlays::draw_command_palette(
                 f,
-                &rows,
-                &app.view_switcher_query,
-                app.modal_index,
-                &open_ids,
-                app.transient_return_panel(),
-                &mut app.session_scroll,
-                app.session_modal_follow,
+                crate::overlays::command_palette::CommandPaletteProps {
+                    query: &app.command_palette_query,
+                    entries: &entries,
+                    selected_index: app.command_palette_selected,
+                    scroll: &mut app.command_palette_scroll,
+                },
                 &app.theme,
                 &app.selection,
                 &mut layout_map,
@@ -1231,9 +1243,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     if app.esc_armed() {
         view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     }
-
-    // Floating Which-Key / Leader Chord card overlay (Helix style)
-    crate::components::which_key::draw_which_key_overlay(f, &app.theme, app.leader_chord, f.area());
 
     app.layout_map = layout_map;
 

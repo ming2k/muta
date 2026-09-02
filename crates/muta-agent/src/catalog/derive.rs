@@ -186,7 +186,11 @@ pub fn derive_channel(
                     base_url,
                     client_profile,
                     effort,
-                    dialect: OpenAiResponsesDialect::Standard,
+                    dialect: if connection.preset_id.as_deref() == Some("deepseek") {
+                        OpenAiResponsesDialect::DeepSeek
+                    } else {
+                        OpenAiResponsesDialect::Standard
+                    },
                 },
                 WireProtocol::OpenAiChatCompletions => Transport::OpenAi {
                     base_url,

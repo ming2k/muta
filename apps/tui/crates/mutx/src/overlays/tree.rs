@@ -214,8 +214,6 @@ pub fn draw_tree_modal(
             ],
             empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
             extra_footer_hints: &[],
-            keymap_open: false,
-            select_doc: None,
         },
         theme,
     )

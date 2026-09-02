@@ -135,12 +135,7 @@ pub fn draw_queue_modal(
                 ),
             ],
             empty_footer_hints: &[FooterHint::key_always(crate::keymap::Key::ESC, "close")],
-            // Destructive delete sits at band 70 (outlives secondaries, never
-            // the always-keep close) — the same convention as Connections /
-            // Sessions.
             extra_footer_hints: &[FooterHint::with_band("D", "delete", 70)],
-            keymap_open: false,
-            select_doc: None,
         },
         theme,
     )

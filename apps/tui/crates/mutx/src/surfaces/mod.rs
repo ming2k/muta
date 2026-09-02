@@ -36,10 +36,11 @@ pub(crate) type ModalId = PanelId;
 /// session id) still lives on `App` — the router owns only which view is
 /// active, so `App::in_runner_view()` / `App::in_side_view()` are derived
 /// from the router instead of scattered booleans and stack emptiness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum View {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum View {
     /// The live conversation: transcript + composer. The default view and
     /// the destination every Esc eventually falls back to.
+    #[default]
     Session,
     /// The session dashboard (`/dashboard`, was `ViewId::Host`).
     Dashboard,
@@ -53,12 +54,13 @@ pub(crate) enum View {
     Side,
 }
 
+#[allow(dead_code)]
 impl View {
     /// The presentation discriminant this view renders as. The full-screen
     /// conversation-like views project to `Modal::None` (they are the
     /// surface itself, not an overlay); the two destination views keep
     /// their existing modal-render arms.
-    pub(crate) fn modal(self) -> Modal {
+    pub fn modal(self) -> Modal {
         match self {
             Self::Session | Self::Runner | Self::Side => Modal::None,
             Self::Dashboard => Modal::Host,
@@ -67,7 +69,7 @@ impl View {
     }
 
     /// The label shown in the quick switcher and used for fuzzy matching.
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Session => "Session",
             Self::Dashboard => "Session dashboard",
@@ -78,7 +80,7 @@ impl View {
     }
 
     /// The secondary line the switcher shows under the label.
-    pub(crate) fn hint(self) -> &'static str {
+    pub fn hint(self) -> &'static str {
         match self {
             Self::Session => "Esc  home",
             Self::Dashboard => "/dashboard",
@@ -101,7 +103,7 @@ impl View {
 /// Esc pops the router's transient return stack rather than hiding a
 /// panel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum PanelId {
+pub enum PanelId {
     Help,
     Todos,
     Tools,
@@ -197,21 +199,22 @@ impl PanelId {
 
     /// The secondary line the switcher shows under the label — where the
     /// surface is normally reached from, so the list doubles as discovery.
+    #[allow(dead_code)]
     pub(crate) fn hint(self) -> &'static str {
         match self {
-            PanelId::Help => "F1 / ?",
-            PanelId::Todos => "Ctrl+T / todo bar",
+            PanelId::Help => "F1",
+            PanelId::Todos => "/todos",
             PanelId::Tools => "/tools",
             PanelId::Mcp => "/mcp",
             PanelId::Skills => "/skills",
             PanelId::Permissions => "/permissions",
             PanelId::UsageStats => "/usage",
-            PanelId::Telemetry => "Ctrl+O / meter click",
-            PanelId::Btw => "F5 / /btw list",
-            PanelId::Models => "Ctrl+M / /models",
+            PanelId::Telemetry => "/telemetry",
+            PanelId::Btw => "/btw",
+            PanelId::Models => "/models",
             PanelId::Connections => "/connections",
             PanelId::HistorySearch => "Ctrl+R",
-            PanelId::Queue => "Ctrl+Q / queue bar",
+            PanelId::Queue => "/queue",
             PanelId::Sessions => "/sessions",
             PanelId::Tree => "/tree",
         }
@@ -220,12 +223,14 @@ impl PanelId {
 
 /// One row of the quick switcher: either a switchable full-screen view or a
 /// retained panel. Views sort first (ADR-0141).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SwitcherTarget {
     View(View),
     Panel(PanelId),
 }
 
+#[allow(dead_code)]
 impl SwitcherTarget {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -591,6 +596,7 @@ impl PanelRegistry {
     }
 
     /// The MRU order of open panels, most recent first.
+    #[allow(dead_code)]
     pub(crate) fn order(&self) -> &[PanelId] {
         &self.order
     }
@@ -602,6 +608,7 @@ impl PanelRegistry {
     /// panels in MRU order, then every other panel in display order (the
     /// not-yet-opened ones are still listed so the switcher doubles as
     /// discovery).
+    #[allow(dead_code)]
     pub(crate) fn switcher_rows(&self) -> Vec<SwitcherTarget> {
         let mut rows: Vec<SwitcherTarget> = [View::Dashboard, View::Settings]
             .into_iter()
@@ -622,6 +629,7 @@ impl PanelRegistry {
     /// discovery row set filtered by a fuzzy match of `query` against each
     /// row's label and hint (case-insensitive subsequence). An empty query
     /// is the unfiltered list.
+    #[allow(dead_code)]
     pub(crate) fn switcher_rows_filtered(&self, query: &str) -> Vec<SwitcherTarget> {
         let rows = self.switcher_rows();
         if query.trim().is_empty() {

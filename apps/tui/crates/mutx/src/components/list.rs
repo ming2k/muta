@@ -9,9 +9,7 @@ use super::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use super::options::{ChoiceTone, choice_style};
 use super::scroll::ScrollBody;
 
-/// Row palette for a Filled-tone selectable row. A thin alias over the
-/// canonical [`crate::components::options::ChoiceStyle`] so the legacy
-/// `row_style()` call sites keep working while routing through one color rule.
+/// Row palette for a Filled-tone selectable row.
 pub(crate) struct RowStyle {
     pub bg: Color,
     pub fg: Color,
@@ -28,9 +26,7 @@ impl From<super::options::ChoiceStyle> for RowStyle {
     }
 }
 
-/// Resolve the palette for a centered modal list row (the Filled tone). Every
-/// columnar selectable surface — config, tools, mcp, sessions — goes through
-/// here so there is exactly one "what does selected look like" rule.
+/// Resolve the palette for a centered modal list row (the Filled tone).
 pub(crate) fn row_style(selected: bool, theme: &Theme) -> RowStyle {
     choice_style(ChoiceTone::Filled, selected, theme).into()
 }
@@ -45,18 +41,7 @@ pub(crate) struct SelectableListPage<'a> {
     pub has_items: bool,
     pub item_footer_hints: &'a [FooterHint],
     pub empty_footer_hints: &'a [FooterHint],
-    /// Custom-band extra hints (e.g. a destructive `d` at band 70), shown after
-    /// `item_footer_hints` / `empty_footer_hints`. Empty for most list modals.
     pub extra_footer_hints: &'a [FooterHintWithBand],
-    /// When true, the body is replaced by the full keymap page (in-modal `?`).
-    pub keymap_open: bool,
-    /// Selection context for the in-modal `?` keymap sub-page, which is a
-    /// selectable document (copyable key labels). The main list body stays a
-    /// plain `ScrollBody` — its rows are keyboard targets.
-    pub select_doc: Option<(
-        &'a crate::model::selection::SelectionState,
-        &'a mut crate::model::layout::LayoutMap,
-    )>,
 }
 
 pub(crate) fn draw_selectable_list_page(
@@ -64,7 +49,7 @@ pub(crate) fn draw_selectable_list_page(
     page: SelectableListPage<'_>,
     theme: &Theme,
 ) -> Rect {
-    let follow = if page.has_items && page.follow_selection && !page.keymap_open {
+    let follow = if page.has_items && page.follow_selection {
         page.selected_line
     } else {
         None
@@ -88,12 +73,6 @@ pub(crate) fn draw_selectable_list_page(
             },
             footer_hints,
             extra_footer_hints: page.extra_footer_hints,
-            keymap_open: page.keymap_open,
-            // List modals support in-modal `?` expand, so surface `? help`
-            // when the footer has collapsed. Empty-list pages have no keymap
-            // wiring, so suppress it there.
-            show_more: page.has_items,
-            select_doc: page.select_doc,
         },
         theme,
     )

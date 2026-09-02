@@ -69,6 +69,7 @@ impl App {
             .map_or(Modal::None, crate::surfaces::Surface::modal)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn transient_return_panel(&self) -> Option<crate::surfaces::PanelId> {
         self.surfaces
             .return_surface()
@@ -76,7 +77,7 @@ impl App {
     }
 
     pub(crate) fn can_open_view_switcher(&self) -> bool {
-        self.can_accept_navigation_signal() && !self.modal_keymap_open
+        self.can_accept_navigation_signal()
     }
 
     /// Whether asynchronous presentation intent may replace the foreground.
@@ -247,7 +248,9 @@ impl App {
             self.reset_view_payload(id);
         }
         self.session_context = None;
-        self.view_switcher_query.clear();
+        self.command_palette_query.clear();
+        self.command_palette_selected = 0;
+        self.command_palette_scroll = 0;
         // An armed Esc confirmation targets the conversation being left;
         // carrying it across the boundary could fire session A's interrupt
         // against session B. Disarm so the next Esc starts fresh.
@@ -279,7 +282,6 @@ impl App {
         let first = self.panels.open(id).is_none();
         self.surfaces.show_panel(id);
         self.restore_panel_state(id);
-        self.modal_keymap_open = false;
         first
     }
 
@@ -428,7 +430,6 @@ impl App {
         if let Some(id) = self.active_panel() {
             self.deactivate_panel(id);
             self.surfaces.hide_panel();
-            self.modal_keymap_open = false;
             true
         } else if self.current_view() != crate::surfaces::View::Session {
             // Esc from a full-screen destination returns to the scoped view
@@ -449,7 +450,6 @@ impl App {
                 self.reset_view_state();
             }
             self.deactivate_view(leaving);
-            self.modal_keymap_open = false;
             true
         } else {
             false
@@ -459,6 +459,7 @@ impl App {
     /// Explicitly close a retained view, dropping both its navigation state
     /// and its view-owned volatile UI payload. Closing the focused view first
     /// runs the same exit hook as a switch/hide.
+    #[allow(dead_code)]
     pub(crate) fn close_panel(&mut self, id: crate::surfaces::PanelId) {
         if self.active_panel() == Some(id) {
             self.deactivate_panel(id);
@@ -468,7 +469,6 @@ impl App {
         }
         self.panels.close(id);
         self.reset_view_payload(id);
-        self.modal_keymap_open = false;
     }
 
     fn reset_view_payload(&mut self, id: crate::surfaces::PanelId) {
@@ -605,7 +605,6 @@ impl App {
     pub(crate) fn dismiss_surface(&mut self) -> bool {
         if self.active_modal() == Modal::ViewSwitcher {
             self.pop_transient_surface();
-            self.modal_keymap_open = false;
             return true;
         }
         self.hide_active_panel()

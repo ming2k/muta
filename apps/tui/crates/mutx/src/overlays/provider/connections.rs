@@ -15,35 +15,53 @@ use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area,
+    breadcrumb_parts, keyvocab, modal_area,
     modal_frame, modal_header, modal_header_parts, render_body, render_centered_body,
     render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::RankedProvider;
 use crate::view::Theme;
 
+/// Properties for rendering the Connections modal.
+pub struct ConnectionsModalProps<'a> {
+    pub providers: &'a [RankedProvider],
+    pub current_provider: &'a str,
+    pub modal_index: usize,
+    pub query: &'a str,
+    pub cursor_position: usize,
+    pub scroll: &'a mut usize,
+    pub follow_selection: bool,
+    pub search: bool,
+    pub connection_info_detail: bool,
+    pub connection_detail: Option<&'a muta_contracts::ConnectionDetail>,
+    pub connection_info_scroll: &'a mut usize,
+    pub spinner_phase: usize,
+    pub connection_info_standalone: bool,
+}
+
 /// Draw the **Connections** modal — the provider-instance management surface (`/connections`).
-#[allow(clippy::too_many_arguments)]
 pub fn draw_connections_modal(
     frame: &mut Frame,
     layout_map: &mut LayoutMap,
-    providers: &[RankedProvider],
-    current_provider: &str,
-    modal_index: usize,
-    query: &str,
-    cursor_position: usize,
-    scroll: &mut usize,
-    follow_selection: bool,
-    search: bool,
-    keymap_open: bool,
+    props: ConnectionsModalProps<'_>,
     theme: &Theme,
     selection: &SelectionState,
-    connection_info_detail: bool,
-    connection_detail: Option<&muta_contracts::ConnectionDetail>,
-    connection_info_scroll: &mut usize,
-    spinner_phase: usize,
-    connection_info_standalone: bool,
 ) -> mutx_engine::Rect {
+    let ConnectionsModalProps {
+        providers,
+        current_provider,
+        modal_index,
+        query,
+        cursor_position,
+        scroll,
+        follow_selection,
+        search,
+        connection_info_detail,
+        connection_detail,
+        connection_info_scroll,
+        spinner_phase,
+        connection_info_standalone,
+    } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -75,27 +93,6 @@ pub fn draw_connections_modal(
     } else {
         (&browse_hints, &browse_extra)
     };
-
-    if keymap_open {
-        modal_header(
-            frame,
-            header_rect,
-            &format!("Connections{}keybindings", crate::design::JOIN_BREADCRUMB),
-            theme,
-        );
-        let body = keymap_body_lines(hints, extra, theme);
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
-            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
-        );
-        if let Some(fo) = f.footer {
-            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
-        }
-        return area;
-    }
 
     if connection_info_detail {
         if connection_info_standalone {

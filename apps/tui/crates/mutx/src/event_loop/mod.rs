@@ -443,7 +443,6 @@ async fn process_one_event(
     let has_focused_target = app.focused_target.is_some();
     let history_searching = app.history_search;
     let model_searching = app.model_search;
-    let modal_keymap_open = app.modal_keymap_open;
     let custom_provider_field =
         if active_modal == Modal::CustomProvider && app.custom_text_field_focused() {
             Some(app.custom_field)
@@ -513,7 +512,6 @@ async fn process_one_event(
                 has_focused_target,
                 history_searching,
                 model_searching,
-                modal_keymap_open,
                 custom_provider_field,
                 editor_field,
                 question_other_highlighted,
@@ -521,7 +519,7 @@ async fn process_one_event(
                 host_prompting,
 
                 config_focus: app.config_focus,
-                leader_chord: app.leader_chord,
+                session_focus: app.session_focus,
             },
             &mut app.drag,
         )

@@ -31,6 +31,9 @@ pub enum OpenAiChatDialect {
 pub enum OpenAiResponsesDialect {
     #[default]
     Standard,
+    /// DeepSeek's OpenAI-compatible Responses surface is stateless: it
+    /// ignores `store` and does not support `previous_response_id`.
+    DeepSeek,
     ChatGpt,
     Copilot,
 }
@@ -84,8 +87,8 @@ pub enum Transport {
         effort: Option<crate::Effort>,
         dialect: GoogleGenerateContentDialect,
     },
-    /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
-    /// subscription backend and GitHub Copilot Responses backend.
+    /// OpenAI **Responses** API (`/responses` endpoint), including compatible
+    /// DeepSeek, ChatGPT subscription, and GitHub Copilot backends.
     OpenAiResponses {
         base_url: String,
         client_profile: crate::ClientProfile,

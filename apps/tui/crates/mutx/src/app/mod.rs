@@ -55,14 +55,14 @@ pub enum ComposerSendMode {
     FollowUp,
 }
 
-/// Active Emacs-style two-stroke leader chord state.
+/// Focus region within the composite Session View.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LeaderChord {
-    /// No leader active.
+pub enum SessionFocusRegion {
+    /// Default focus in Session View: typing directly edits prompt buffer.
     #[default]
-    None,
-    /// `Ctrl+X` leader active (View stack / Buffer / Navigation / Workspace management).
-    CtrlX,
+    Composer,
+    /// Transcript inspection focus: arrow keys walk steps, Enter opens/expands.
+    Transcript,
 }
 
 /// A user message owned by the compact outbox (the **next-round** queue).
@@ -464,8 +464,10 @@ pub struct App {
     /// following; wheel browsing and drag-selection edge autoscroll suspend
     /// it so a render cannot immediately undo the user's scroll gesture.
     pub input_scroll_follow_cursor: bool,
-    /// Active Emacs-style two-stroke leader chord state.
-    pub leader_chord: LeaderChord,
+    /// Active focus region in Session view (Composer vs Transcript).
+    pub session_focus: SessionFocusRegion,
+    /// Saved focus region prior to opening an overlay/modal, restored on close.
+    pub saved_focus: Option<SessionFocusRegion>,
     /// Screen rect of the composer panel in the last drawn frame (the whole
     /// tinted box, chrome rows included), or `None` while no composer is
     /// shown (overlay modal open, runner view). The spatial mouse router
@@ -493,12 +495,12 @@ pub struct App {
     /// the old reset-on-every-open ritual. Full-screen views are not
     /// registered here: their state already persists on `App`.
     pub(crate) panels: crate::surfaces::PanelRegistry,
-    /// The quick switcher's live fuzzy query (ADR-0139). The
-    /// switcher does not borrow the composer (it must work over surfaces
-    /// that have their own input semantics); printable keys append here,
-    /// Backspace drops one, and the row set is `switcher_rows` filtered by
-    /// `fuzzy_match` against each view's label + hint.
-    pub(crate) view_switcher_query: String,
+    /// The command palette's live fuzzy query (Ctrl+L).
+    pub(crate) command_palette_query: String,
+    pub(crate) command_palette_selected: usize,
+    pub(crate) command_palette_scroll: usize,
+    /// Recently executed commands for MRU display in Command Palette.
+    pub(crate) recent_commands: Vec<crate::keymap::CommandId>,
     /// The session whose outbox the Queue view auto-blocked on entry
     /// (ADR-0139). `hide_active_panel` is an `&mut App` method that
     /// cannot see the loop's `viewed_session_id`, so the block site records
@@ -668,11 +670,6 @@ pub struct App {
     /// reachable — the renderer used to take a throwaway `&mut 0`, leaving the
     /// modal unscrollable.
     pub help_scroll: usize,
-    /// Whether the active modal is showing its in-modal keybindings page
-    /// (toggled by `?` when the footer has collapsed). Not a nested modal —
-    /// the same `active_modal` stays open and the body is swapped for the
-    /// full keymap. Cleared on modal close / stage change / Esc.
-    pub modal_keymap_open: bool,
     pub pending_permission: Option<PermissionRequest>,
     /// The pending interactive-input request (L3.5 β) from an interactive
     /// `bash` command, or `None`. Set when a `RoundEvent::InputRequest` arrives;

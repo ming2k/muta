@@ -1,23 +1,18 @@
-//! Help / keybindings modal.
+//! Authoritative Help Modal (F1).
 //!
-//! The global-shortcut rows are **not** hard-coded here: they are fed in by
-//! the app shell from the unified keybinding registry (`crate::keymap`),
-//! which is the single source of truth shared with the input resolver. That
-//! way the keys shown in Help can never drift from the keys that actually fire. See [`HelpBinding`] and
-//! [`draw_help_modal`].
-//!
-//! The remaining rows (Enter semantics, line editing, transcript focus, slash
-//! commands, modes) are static fallback content for keys that are either
-//! context-sensitive (`?`/`ctrl+h` help aliases need an empty prompt / the
-//! Kitty protocol), polymorphic (`enter`, `tab`), or non-keyboard (`/tools`,
-//! `/pursue`). Those are documented prose, not registry-resolvable bindings.
+//! Fully derived from the Action & Command Registry SSOT (`crate::keymap`).
+//! Groups commands into Global, Contextual/Session, Navigation, and Management,
+//! rendering accurate descriptions and key combinations without static drift.
 
 use mutx_engine::{
-    Frame, Modifier, Span, {Line, Style},
+    Frame, Modifier, Rect, Span, {Line, Style},
 };
 
 use crate::components::keycap::keycap_style;
 use crate::components::selectable_body::{SelectableRow, render_selectable_body};
+use crate::keymap::{
+    AppContext, Availability, COMMAND_REGISTRY, CommandCategory, Scope,
+};
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
@@ -25,136 +20,89 @@ use crate::primitives::{
 };
 use crate::view::Theme;
 
-/// One row in the Help modal's "Views & tools" section, projected from the
-/// keybinding registry. `key` is the canonical lowercase label (e.g.
-/// `ctrl+t`); `description` is the short human text shown beside it.
-///
-/// This is a plain data type so the view crate can render it without a
-/// dependency on the shell — the shell builds the slice from its registry and
-/// hands it over each frame.
-pub struct HelpBinding {
-    pub key: &'static str,
-    pub description: &'static str,
-}
-
-/// Draw the Help modal. `bindings` is the registry projection for the global
-/// shortcuts section; everything else is static fallback prose (see the module
-/// docs for why those keys are not registry-resolvable). The body is a
-/// selectable document: keycap labels and descriptions can be dragged over
-/// and copied like transcript text.
+/// Draw the dynamic Help modal derived from `COMMAND_REGISTRY`.
 pub fn draw_help_modal(
     frame: &mut Frame,
     scroll: &mut usize,
-    bindings: &[HelpBinding],
+    ctx: &AppContext,
     theme: &Theme,
     selection: &SelectionState,
     layout_map: &mut LayoutMap,
-) -> mutx_engine::Rect {
-    let key = |k: &str| Span::styled(format!("{:<10}", k), keycap_style(theme));
-    let desc = |d: &str| Span::styled(d.to_string(), theme.keycap_label_style());
-    let section = |title: &str| {
+) -> Rect {
+    let spec = FixedModalSpec::HELP;
+    let outer_rect = modal_area(frame, spec);
+    let f = modal_frame(frame, outer_rect, theme.panel(), true, true);
+
+    modal_header(frame, f.header, "Help & Key Reference (F1)", theme);
+
+    let key_fmt = |k: &str| Span::styled(format!("{:<16}", k), keycap_style(theme));
+    let desc_fmt = |d: &str| Span::styled(d.to_string(), theme.keycap_label_style());
+    let section_fmt = |title: &str| {
         Span::styled(
             title.to_string(),
             Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
         )
     };
-    let row = |k: &str, d: &str| Line::from(vec![key(k), desc(d)]);
+    let row_fmt = |k: &str, d: &str| Line::from(vec![key_fmt(k), desc_fmt(d)]);
 
-    let mut body = vec![
-        Line::from(section("General")),
-        row("enter", "send message"),
-        row("alt+enter", "insert newline (ctrl+j)"),
-        row("esc esc", "interrupt running task"),
-        row("esc", "close modal / return to composer"),
-    ];
+    let mut rows: Vec<SelectableRow> = Vec::new();
 
-    // ── Global shortcuts (from the keybinding registry) ──
-    // These rows are projected from the single source of truth, so Help and
-    // the live key handler can never disagree about which global keys exist.
-    // `ctrl+c` is deliberately kept here as well so the copy/clear/quit row
-    // renders exactly once, sourced from the registry.
-    body.extend(bindings.iter().map(|b| row(b.key, b.description)));
-
-    body.extend([
-        Line::from(""),
-        Line::from(section("While the agent is running")),
-        row("enter", "perform the action shown below the prompt"),
-        row("tab", "change what Enter will do"),
-        row("esc esc", "interrupt running task"),
-        Line::from(""),
-        Line::from(section("Line editing")),
-        row("ctrl+a / ctrl+e", "caret to line start / end"),
-        row("ctrl+b", "move back one char (←)"),
-        row("home / end", "caret to line start / end"),
-        row("ctrl+u / ctrl+k", "delete to line start / end"),
-        row("ctrl+w", "delete previous word"),
-        row("alt+backspace", "delete previous word"),
-        row("alt+d", "delete next word"),
-        row("ctrl+← / ctrl+→", "move word back / forward"),
-        row("alt+b / alt+f", "move word back / forward"),
-        Line::from(""),
-        Line::from(section("Prompt history")),
-        row("alt+p / alt+n", "previous / next prompt history"),
-        row("ctrl+r", "search prompt history"),
-        Line::from(""),
-        Line::from(section("Page navigation & scrolling")),
-        row("pageup / pagedown", "scroll page up / down (transcript & modals)"),
-        row("ctrl+↑ / ctrl+↓", "scroll page up / down (in modals)"),
-        Line::from(""),
-        Line::from(section("Transcript focus")),
-        Line::from(desc(
-            "Seamless switching: Alt+↑ / Alt+O focuses transcript steps;",
-        )),
-        Line::from(desc(
-            "Alt+↓ / Esc returns focus directly to the composer.",
-        )),
-        row("alt+↑ / alt+o", "focus transcript (nearest step)"),
-        row("alt+↓ / alt+o", "return focus to composer"),
-        row("↑ / ↓", "while focused: cycle steps"),
-        row("pageup / pagedown", "while focused: scroll transcript page"),
-        row("enter", "open / toggle the focused step"),
-        row("esc", "clear focus and return to composer"),
-        Line::from(""),
-        Line::from(section("Views & tools")),
-        // Help aliases that the registry cannot own (context-sensitive /
-        // protocol-dependent) are documented here as prose, alongside the
-        // slash-command surfaces and the registry-provided globals below them.
-        row("? / ctrl+h", "this help (f1 anywhere)"),
-        row("/tools", "manage tools"),
-        row("/skills", "browse skills"),
-        row("/permissions", "manage permissions"),
-        row("/settings", "settings & appearance"),
-        row("/", "commands (⌘)"),
-        Line::from(""),
-        Line::from(section("Modes")),
-        Line::from(""),
-        Line::from(desc("Drag to select; copy with Ctrl+C or Ctrl+Shift+C.")),
-    ]);
-
-    // Selectable document body: renders through `render_selectable_body` so
-    // every visual row registers a MODAL_DOC region (drag-select + copy).
-    // The panel shell (geometry, header, footer) is the same `modal_frame`
-    // ceremony other hand-rolled modals use; the document replaces the
-    // engine-wrapped `ScrollBody` the `ModalPage` path would have drawn.
-    let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
-
-    let area = modal_area(frame, FixedModalSpec::HELP);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header(frame, f.header, "Help", theme);
-    render_selectable_body(
-        frame, f.body, &rows, scroll, None, theme, selection, layout_map,
-    );
-    if let Some(footer) = f.footer {
-        render_modal_footer(
-            frame,
-            footer,
-            &[
-                FooterHint::navigation(crate::keymap::keyvocab::ARROWS_UD, "scroll"),
-                FooterHint::key_always(crate::keymap::Key::ESC, "close"),
-            ],
-            theme,
-        );
+    // ── 1. Global Core Shortcuts (6 Canonical Keys) ──
+    rows.push(SelectableRow::from_line(Line::from(section_fmt("Global Core Keys"))));
+    for cmd in COMMAND_REGISTRY.iter().filter(|c| c.scope == Scope::Global && c.category == CommandCategory::Global) {
+        let key_str = if !cmd.bindings.is_empty() {
+            cmd.bindings[0].display()
+        } else {
+            cmd.hint
+        };
+        rows.push(SelectableRow::from_line(row_fmt(key_str, cmd.description)));
     }
-    area
+
+    // ── 2. Current Context / Session Controls ──
+    rows.push(SelectableRow::from_line(Line::from("")));
+    rows.push(SelectableRow::from_line(Line::from(section_fmt("Session & Focus Controls"))));
+    for cmd in COMMAND_REGISTRY.iter().filter(|c| c.scope == Scope::Session || c.scope == Scope::Composer || c.scope == Scope::Transcript) {
+        let key_str = if !cmd.bindings.is_empty() {
+            cmd.bindings[0].display()
+        } else {
+            cmd.hint
+        };
+        let desc = match (cmd.availability)(ctx) {
+            Availability::Available => cmd.description.to_string(),
+            Availability::Unavailable(reason) => format!("{} ({})", cmd.description, reason),
+        };
+        rows.push(SelectableRow::from_line(row_fmt(key_str, &desc)));
+    }
+
+    // ── 3. Readline Text Editing Reference ──
+    rows.push(SelectableRow::from_line(Line::from("")));
+    rows.push(SelectableRow::from_line(Line::from(section_fmt("Composer Line Editing"))));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+A / Home", "Move cursor to line start")));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+E / End", "Move cursor to line end")));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+U", "Clear prompt line from cursor to start")));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+K", "Clear prompt line from cursor to end")));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+W / Alt+Bksp", "Delete word before cursor")));
+    rows.push(SelectableRow::from_line(row_fmt("Alt+D", "Delete word after cursor")));
+    rows.push(SelectableRow::from_line(row_fmt("Alt+B / Alt+F", "Move cursor backward / forward word")));
+    rows.push(SelectableRow::from_line(row_fmt("Ctrl+V", "Paste clipboard text or image")));
+
+    // ── 4. Surface Navigation & Discovery ──
+    rows.push(SelectableRow::from_line(Line::from("")));
+    rows.push(SelectableRow::from_line(Line::from(section_fmt("Navigation (Open via Ctrl+L or Slash)"))));
+    for cmd in COMMAND_REGISTRY.iter().filter(|c| c.category == CommandCategory::Navigate || c.category == CommandCategory::Settings) {
+        let trigger = cmd.slash.unwrap_or(cmd.hint);
+        rows.push(SelectableRow::from_line(row_fmt(trigger, cmd.description)));
+    }
+
+    render_selectable_body(frame, f.body, &rows, scroll, None, theme, selection, layout_map);
+
+    if let Some(fo) = f.footer {
+        let footer_hints = [
+            FooterHint::navigation("↑↓", "scroll"),
+            FooterHint::always("Esc", "close"),
+        ];
+        render_modal_footer(frame, fo, &footer_hints, theme);
+    }
+
+    outer_rect
 }

@@ -10,7 +10,7 @@ use super::common::{one_line, relative_time_at, truncate_ellipsis};
 use crate::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, breadcrumb_parts,
-    draw_scrollbar, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_frame,
+    draw_scrollbar, keyvocab, modal_area, modal_frame,
     modal_header, modal_header_parts, render_centered_body, render_modal_footer,
     render_modal_footer_with_more, resolve_scroll,
 };
@@ -45,23 +45,38 @@ fn absolute_time(ts: u64) -> String {
 /// `session_info_detail` switches the body to the detail sub-view for the
 /// session under `session_detail` (requested on demand when the sub-view
 /// opens); `session_info_scroll` is that sub-view's own scroll slot.
-#[allow(clippy::too_many_arguments)]
+/// Properties for rendering the Sessions modal.
+pub struct SessionsModalProps<'a> {
+    pub sessions: &'a [muta_contracts::SessionOverview],
+    pub selected: usize,
+    pub scroll: &'a mut usize,
+    pub follow: bool,
+    pub startup_picker: bool,
+    pub spinner_phase: usize,
+    pub session_info_detail: bool,
+    pub session_detail: Option<&'a muta_contracts::SessionDetail>,
+    pub session_info_scroll: &'a mut usize,
+}
+
+/// Draw the Sessions picker modal.
 pub fn draw_sessions_modal(
     frame: &mut Frame,
-    sessions: &[muta_contracts::SessionOverview],
-    selected: usize,
-    keymap_open: bool,
-    scroll: &mut usize,
-    follow: bool,
+    props: SessionsModalProps<'_>,
     theme: &Theme,
-    startup_picker: bool,
-    spinner_phase: usize,
-    session_info_detail: bool,
-    session_detail: Option<&muta_contracts::SessionDetail>,
-    session_info_scroll: &mut usize,
     selection: &crate::model::selection::SelectionState,
     layout_map: &mut crate::model::layout::LayoutMap,
 ) -> mutx_engine::Rect {
+    let SessionsModalProps {
+        sessions,
+        selected,
+        scroll,
+        follow,
+        startup_picker,
+        spinner_phase,
+        session_info_detail,
+        session_detail,
+        session_info_scroll,
+    } = props;
     let area = modal_area(frame, FixedModalSpec::SESSIONS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -78,30 +93,6 @@ pub fn draw_sessions_modal(
         FooterHint::with_band("I", "info", 55),
         FooterHint::with_band("D", "delete", 70),
     ];
-
-    if keymap_open {
-        // Breadcrumb: `Sessions` modal › its keybindings sub-page.
-        modal_header(
-            frame,
-            f.header,
-            &format!("Sessions{}keybindings", crate::design::JOIN_BREADCRUMB),
-            theme,
-        );
-        let body = keymap_body_lines(&list_footer_hints, &list_extra, theme);
-        // Selectable document: the keymap sub-page registers as MODAL_DOC
-        // rows so key labels and descriptions are copyable.
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
-            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
-        );
-        if let Some(fo) = f.footer {
-            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
-        }
-        return area;
-    }
 
     // Detail sub-view (`i`): a focused read-out of the selected session. Its
     // own footer (Esc → back to list) and own scroll slot; Esc is handled by

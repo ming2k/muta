@@ -1,6 +1,6 @@
 # 0169. Session View Dual-Mode Confinement, Device-Agnostic Input State Machine, and Unified `Ctrl+X` Leader Architecture
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0170
 - **Date:** 2026-09-02
 - **Builds on:** ADR-0133 (view surfaces & quick switch), ADR-0139 (surface router & lifecycle), ADR-0141 (view means fullscreen, modal means modal)
 - **Supersedes:** Any overlapping legacy multi-leader chord proposals (`Ctrl+C` leader) and ambient dual-mode diffusion.

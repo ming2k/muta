@@ -532,7 +532,6 @@ impl App {
         self.modal_index = 0;
         self.history_search = false;
         self.history_preview = false;
-        self.modal_keymap_open = false;
     }
 
     /// Tear down the model picker's borrowed state: hand the parked composer
@@ -549,6 +548,5 @@ impl App {
         self.model_search = false;
         self.model_scroll = 0;
         self.model_modal_follow = true;
-        self.modal_keymap_open = false;
     }
 }

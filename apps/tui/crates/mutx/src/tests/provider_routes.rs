@@ -737,3 +737,103 @@ async fn open_active_connection_detail_opens_standalone_and_closes_to_none() {
     assert!(!app.connection_info_detail);
     assert!(!app.connection_info_standalone);
 }
+
+#[tokio::test]
+async fn connection_detail_quota_update_preserves_scroll_position() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    // Initial phase 1 detail arrives with Fetching usage
+    let detail_phase1 = muta_contracts::ConnectionDetail {
+        id: "google-antigravity".to_string(),
+        name: "Google Antigravity".to_string(),
+        preset_id: Some("antigravity-oauth".to_string()),
+        preset_label: None,
+        protocol: "google".to_string(),
+        base_url: "https://daily-cloudcode-pa.googleapis.com".to_string(),
+        auth_type: "OAuth (AntigravityOAuth)".to_string(),
+        api_key_masked: Some("ya29...".to_string()),
+        api_key_source: "OAuth".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Antigravity,
+        user_agent: "antigravity".to_string(),
+        models: vec!["gemini-2.5-pro".to_string()],
+        model_info: vec![],
+        active_model: Some("gemini-2.5-pro".to_string()),
+        active_model_effort: None,
+        active_model_thinking: None,
+        usage: muta_contracts::ConnectionUsageState::Fetching,
+    };
+
+    *runtime.connection_detail.lock().await = Some(detail_phase1.clone());
+    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+
+    assert_eq!(app.connection_info_scroll, 0);
+    assert_eq!(app.connection_detail.as_ref().map(|d| &d.id), Some(&"google-antigravity".to_string()));
+
+    // User scrolls down while reading the connection details
+    app.connection_info_scroll = 5;
+
+    // Phase 2 quotas arrive for the same connection
+    let mut detail_phase2 = detail_phase1.clone();
+    detail_phase2.usage = muta_contracts::ConnectionUsageState::Available(Box::new(
+        muta_contracts::ProviderUsage::default(),
+    ));
+
+    *runtime.connection_detail.lock().await = Some(detail_phase2);
+    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+
+    // Scroll must be preserved and not jump to 0!
+    assert_eq!(app.connection_info_scroll, 5, "quota loading must preserve scroll position");
+}
+
+#[tokio::test]
+async fn connection_detail_refresh_action_queries_active_detail_id() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.connection_info_detail = true;
+    app.connection_detail = Some(muta_contracts::ConnectionDetail {
+        id: "custom-relay".to_string(),
+        name: "Custom Relay".to_string(),
+        preset_id: None,
+        preset_label: None,
+        protocol: "openai".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type: "API Key".to_string(),
+        api_key_masked: Some("sk-...".to_string()),
+        api_key_source: "credentials.toml".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Native,
+        user_agent: "muta".to_string(),
+        models: vec![],
+        model_info: vec![],
+        active_model: None,
+        active_model_effort: None,
+        active_model_thinking: None,
+        usage: muta_contracts::ConnectionUsageState::Unsupported,
+    });
+
+    let flow = crate::event_loop::actions::dispatch_action_for_test(
+        &mut app,
+        &runtime,
+        crate::input::InputAction::RefreshProviderModels,
+        "s1",
+    )
+    .await;
+
+    assert_eq!(flow, crate::event_loop::actions::ActionFlow::Handled);
+    assert_eq!(
+        app.connection_detail.as_ref().map(|d| &d.usage),
+        Some(&muta_contracts::ConnectionUsageState::Fetching)
+    );
+
+    let req = rx.try_recv().expect("should query connection detail for refresh");
+    match req {
+        muta_contracts::AgentRequest::QueryConnectionDetail { id } => {
+            assert_eq!(id, "custom-relay");
+        }
+        _ => panic!("Expected QueryConnectionDetail request"),
+    }
+}

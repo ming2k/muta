@@ -636,24 +636,21 @@ fn render_models_modal(modal_index: usize, query: &str, search: bool) -> String 
     let ranked = crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", query);
     let mut terminal = mutx_engine::TestTerminal::new(72, 28);
     terminal.draw(|f| {
-        let mut lm = crate::model::layout::LayoutMap::new();
         let mut scroll = 0;
-        let selection = crate::model::selection::SelectionState::None;
         draw_models_modal(
             f,
-            &mut lm,
-            &ranked,
-            "openai",
-            "gpt-5.5",
-            modal_index,
-            query,
-            query.len(),
-            &mut scroll,
-            true,
-            search,
-            false,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &ranked,
+                current_provider: "openai",
+                current_model: "gpt-5.5",
+                modal_index,
+                query,
+                cursor_position: query.len(),
+                scroll: &mut scroll,
+                follow_selection: true,
+                search,
+            },
             &theme,
-            &selection,
         );
     });
     buffer_text(&terminal)
@@ -741,24 +738,21 @@ fn models_modal_empty_state_centered_copy_and_footer() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(72, 24);
     terminal.draw(|f| {
-        let mut lm = crate::model::layout::LayoutMap::new();
         let mut scroll = 0;
-        let selection = crate::model::selection::SelectionState::None;
         draw_models_modal(
             f,
-            &mut lm,
-            &[],
-            "",
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &[],
+                current_provider: "",
+                current_model: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+            },
             &theme,
-            &selection,
         );
     });
     let text = buffer_text(&terminal);
@@ -774,24 +768,21 @@ fn models_modal_search_empty_state() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(72, 24);
     terminal.draw(|f| {
-        let mut lm = crate::model::layout::LayoutMap::new();
         let mut scroll = 0;
-        let selection = crate::model::selection::SelectionState::None;
         draw_models_modal(
             f,
-            &mut lm,
-            &[],
-            "",
-            "",
-            0,
-            "xyz",
-            3,
-            &mut scroll,
-            false,
-            true,
-            false,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &[],
+                current_provider: "",
+                current_model: "",
+                modal_index: 0,
+                query: "xyz",
+                cursor_position: 3,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: true,
+            },
             &theme,
-            &selection,
         );
     });
     let text = buffer_text(&terminal);
@@ -838,22 +829,23 @@ fn connections_modal_empty_state_centered_copy_and_footer() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: false,
+                connection_detail: None,
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            false,
-            None,
-            &mut 0,
-            0,
-            false,
         );
     });
     let text = buffer_text(&terminal);
@@ -875,22 +867,23 @@ fn connections_modal_search_empty_state() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "nonexistent",
-            11,
-            &mut scroll,
-            false,
-            true,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "nonexistent",
+                cursor_position: 11,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: true,
+                connection_info_detail: false,
+                connection_detail: None,
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            false,
-            None,
-            &mut 0,
-            0,
-            false,
         );
     });
     let text = buffer_text(&terminal);
@@ -952,22 +945,23 @@ fn connections_modal_detail_view_renders_info_and_usage() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 0,
-            0,
-            false,
         );
     });
 
@@ -991,22 +985,23 @@ fn connections_modal_detail_view_renders_info_and_usage() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 8,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 8,
-            0,
-            false,
         );
     });
 
@@ -1084,22 +1079,23 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 8,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 8,
-            0,
-            false,
         );
     });
 
@@ -1143,22 +1139,23 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 2,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 0,
-            2,
-            false,
         );
     });
 
@@ -1174,22 +1171,23 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 6,
+                spinner_phase: 2,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 6,
-            2,
-            false,
         );
     });
 
@@ -1319,22 +1317,23 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 0,
-            0,
-            false,
         );
     });
 
@@ -1356,22 +1355,23 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut info_scroll,
+                spinner_phase: 0,
+                connection_info_standalone: false,
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut info_scroll,
-            0,
-            false,
         );
     });
 
@@ -1418,22 +1418,23 @@ fn connections_modal_standalone_detail_renders_single_level_header() {
         draw_connections_modal(
             f,
             &mut lm,
-            &[],
-            "",
-            0,
-            "",
-            0,
-            &mut scroll,
-            false,
-            false,
-            false,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: true, // standalone = true
+            },
             &theme,
             &selection,
-            true,
-            Some(&detail),
-            &mut 0,
-            0,
-            true, // standalone = true
         );
     });
 

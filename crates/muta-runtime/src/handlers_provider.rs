@@ -1457,16 +1457,63 @@ pub(crate) async fn query_connection_detail(
 
     // Phase 2: Async remote query in background task.
     let resp_tx_bg = resp_tx.clone();
+    let conn_id = connection.id.clone();
+    let conn_auth = connection.auth;
     let preset_id = connection.preset_id.clone();
     let raw_key_str = raw_key.expose_secret().to_string();
     tokio::spawn(async move {
-        let usage =
-            muta_providers::fetch_provider_usage(preset_id.as_deref(), &base_url, &raw_key_str)
-                .await;
+        let (api_key, is_oauth) = if conn_auth.is_oauth() {
+            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
+            match muta_contracts::CredentialSource::resolve_auth(&source).await {
+                Ok(auth) => (auth.token.expose_secret().to_string(), true),
+                Err(err) => {
+                    initial_detail.usage = muta_contracts::ConnectionUsageState::Error(err);
+                    let _ = resp_tx_bg.send(AgentResponse::ConnectionDetail(initial_detail));
+                    return;
+                }
+            }
+        } else {
+            (raw_key_str, false)
+        };
+
+        let mut usage =
+            muta_providers::fetch_provider_usage(preset_id.as_deref(), &base_url, &api_key).await;
+
+        if is_oauth {
+            if let muta_contracts::ConnectionUsageState::Error(ref err) = usage {
+                if is_auth_error(err) {
+                    let source =
+                        muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
+                    let rejected = SecretString::from(api_key.as_str());
+                    if let Ok(refreshed) =
+                        muta_contracts::CredentialSource::force_refresh_after_rejection(
+                            &source, &rejected,
+                        )
+                        .await
+                    {
+                        usage = muta_providers::fetch_provider_usage(
+                            preset_id.as_deref(),
+                            &base_url,
+                            refreshed.token.expose_secret(),
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
 
         initial_detail.usage = usage;
         let _ = resp_tx_bg.send(AgentResponse::ConnectionDetail(initial_detail));
     });
+}
+
+fn is_auth_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("unauthenticated")
+        || lower.contains("invalid_token")
+        || lower.contains("token expired")
 }
 
 #[cfg(test)]
@@ -1603,6 +1650,59 @@ mod tests {
         // Verify no token was written
         let store = muta_providers::oauth::AuthStore::load().unwrap();
         assert!(store.tokens.is_empty());
+
+        muta_persistence::paths::set_test_default(None);
+    }
+
+    #[tokio::test]
+    async fn query_connection_detail_sends_initial_and_background_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        let mut conns = Connections::default();
+        conns.connections.push(Connection {
+            id: "test-relay".to_string(),
+            name: Some("Test Relay".to_string()),
+            base_url: Some("https://example.com".to_string()),
+            protocol: Some(WireProtocol::OpenAiChatCompletions),
+            ..Default::default()
+        });
+        conns.save().unwrap();
+
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
+        query_connection_detail(&resp_tx, "test-relay".to_string()).await;
+
+        // Phase 1: immediate detail with Fetching usage
+        let initial = resp_rx.recv().await.expect("initial response");
+        match initial {
+            AgentResponse::ConnectionDetail(detail) => {
+                assert_eq!(detail.id, "test-relay");
+                assert_eq!(detail.usage, muta_contracts::ConnectionUsageState::Fetching);
+            }
+            other => panic!("expected ConnectionDetail, got {other:?}"),
+        }
+
+        // Phase 2: background resolution
+        let final_resp = resp_rx.recv().await.expect("final response");
+        match final_resp {
+            AgentResponse::ConnectionDetail(detail) => {
+                assert_eq!(detail.id, "test-relay");
+                // Unsupported since base_url is example.com and no API key is set
+                assert!(matches!(
+                    detail.usage,
+                    muta_contracts::ConnectionUsageState::Error(_)
+                        | muta_contracts::ConnectionUsageState::Unsupported
+                ));
+            }
+            other => panic!("expected final ConnectionDetail, got {other:?}"),
+        }
 
         muta_persistence::paths::set_test_default(None);
     }

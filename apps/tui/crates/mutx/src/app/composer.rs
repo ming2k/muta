@@ -593,7 +593,6 @@ impl App {
         if self.active_panel().is_none() && self.surfaces.active_panel().is_none() {
             self.surfaces.hide_panel();
         }
-        self.modal_keymap_open = false;
     }
 
     /// Park the composer draft into `stashed_input` and clear the live line so

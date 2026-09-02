@@ -13,4 +13,3 @@ pub(super) mod scroll;
 pub(crate) mod secure_input;
 pub(super) mod selectable_body;
 pub(super) mod toast;
-pub(crate) mod which_key;

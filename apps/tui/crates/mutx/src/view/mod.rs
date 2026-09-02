@@ -39,7 +39,6 @@ pub(crate) use crate::footer_stack::{
 };
 /// Transcript arrangement strategy (`turn_band`).
 pub(crate) use crate::layout;
-pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::*;

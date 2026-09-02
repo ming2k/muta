@@ -36,7 +36,7 @@ use mutx_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::{
-    FooterHint, LayoutTier, SCROLL_EDGE_MARGIN, keymap_body_lines, keyvocab, resolve_scroll,
+    LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll,
     viewport_rect,
 };
 use crate::view::Theme;
@@ -154,26 +154,40 @@ fn workspace_basename(project_root: &str) -> String {
 /// the console. `prompting` shows the inline new-session prompt line in
 /// place of the footer command strip. `log` is the console's receipt
 /// transcript (every dispatched directive and the daemon's answer).
-#[allow(clippy::too_many_arguments)]
+/// Properties for rendering the full-screen session dashboard.
+pub struct DashboardProps<'a> {
+    pub rows: &'a [MonitoredSession],
+    pub selected: usize,
+    pub focus: DashboardFocus,
+    pub list_scroll: &'a mut usize,
+    pub list_follow: bool,
+    pub detail_scroll: &'a mut usize,
+    pub log: &'a [ConsoleLine],
+    pub prompting: bool,
+    pub prompt_create_new: bool,
+    pub prompt_text: &'a str,
+    pub current_session_id: &'a str,
+}
+
+/// Draw the full-screen dashboard view.
 pub fn draw_dashboard(
     frame: &mut Frame,
-    rows: &[MonitoredSession],
-    selected: usize,
-    focus: DashboardFocus,
-    keymap_open: bool,
-    list_scroll: &mut usize,
-    list_follow: bool,
-    detail_scroll: &mut usize,
-    log: &[ConsoleLine],
-    prompting: bool,
-    // `prompt_create_new`: `true` when the open prompt creates a new session
-    // (`n`), `false` when it prompts the selected session (`p`). Only
-    // meaningful when `prompting`.
-    prompt_create_new: bool,
-    prompt_text: &str,
+    props: DashboardProps<'_>,
     theme: &Theme,
-    current_session_id: &str,
 ) -> DashboardRects {
+    let DashboardProps {
+        rows,
+        selected,
+        focus,
+        list_scroll,
+        list_follow,
+        detail_scroll,
+        log,
+        prompting,
+        prompt_create_new,
+        prompt_text,
+        current_session_id,
+    } = props;
     // A true full-screen surface: clear the whole frame and paint our own
     // backdrop, then lay out inside the viewport margins.
     frame.render_widget(Clear, frame.area());
@@ -242,17 +256,6 @@ pub fn draw_dashboard(
     };
 
     draw_header(frame, header_rect, rows, theme);
-
-    if keymap_open {
-        let body_lines = keymap_body_lines(&footer_hints(focus), &[], theme);
-        render_scrollable(frame, console_rect, body_lines, list_scroll, None, theme);
-        render_footer(frame, footer_rect, focus, false, false, "", theme, true);
-        return DashboardRects {
-            area,
-            list_body: console_rect,
-            detail_body: None,
-        };
-    }
 
     let console_body = draw_console(
         frame,
@@ -817,31 +820,6 @@ fn render_footer(
             blank.clone()
         };
         frame.render_widget(Paragraph::new(line), Rect::new(rect.x, y, rect.width, 1));
-    }
-}
-
-fn footer_hints(focus: DashboardFocus) -> Vec<FooterHint> {
-    match focus {
-        DashboardFocus::List => vec![
-            FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-            FooterHint::key_always(crate::keymap::Key::TAB, "switch pane"),
-            FooterHint::key_primary(crate::keymap::Key::ENTER, "preview"),
-            FooterHint::secondary("a", "attach"),
-            FooterHint::secondary("p", "prompt"),
-            FooterHint::secondary("n", "new session"),
-            FooterHint::secondary("i", "interrupt"),
-            FooterHint::secondary("k", "kill"),
-            FooterHint::secondary("s", "suspend"),
-            FooterHint::key_secondary(crate::keymap::Key::ESC, "close"),
-        ],
-        DashboardFocus::Detail => vec![
-            FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
-            FooterHint::key_always(crate::keymap::Key::TAB, "switch pane"),
-            FooterHint::secondary("n", "new session"),
-            FooterHint::secondary("p", "prompt"),
-            FooterHint::secondary("a", "attach"),
-            FooterHint::key_secondary(crate::keymap::Key::ESC, "close"),
-        ],
     }
 }
 

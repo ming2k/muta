@@ -135,8 +135,11 @@ fn deepseek_route_is_the_responses_transport() {
         &Credentials::default(),
     );
     match &channel.transport {
-        Transport::OpenAiResponses { base_url, .. } => {
+        Transport::OpenAiResponses {
+            base_url, dialect, ..
+        } => {
             assert_eq!(base_url, "https://api.deepseek.com/v1/responses");
+            assert_eq!(*dialect, OpenAiResponsesDialect::DeepSeek);
         }
         other => panic!("expected Responses transport, got {other:?}"),
     }
@@ -387,7 +390,9 @@ async fn live_discovery_writes_the_per_instance_cache() {
         .mock("GET", "/v1/models")
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"data":[{"id":"deepseek-v4-flash"},{"id":"deepseek-v4-pro"}]}"#)
+        .with_body(
+            r#"{"data":[{"id":"deepseek-v4-flash"},{"id":"deepseek-v4-pro"},{"id":"deepseek-v4-flash-vision-exp"}]}"#,
+        )
         .create_async()
         .await;
 
@@ -412,10 +417,13 @@ async fn live_discovery_writes_the_per_instance_cache() {
     let cache = DiscoveryCache::load();
     assert_eq!(
         cache.connection_models.get("deepseek").map(|m| m.len()),
-        Some(2),
+        Some(3),
         "the discovered list lands in the cache"
     );
     assert!(cache.connection_models["deepseek"].contains(&"deepseek-v4-flash".to_string()));
+    assert!(
+        cache.connection_models["deepseek"].contains(&"deepseek-v4-flash-vision-exp".to_string())
+    );
 }
 
 #[tokio::test]

@@ -169,15 +169,21 @@ pub(crate) async fn sync_runtime_state_to_app(
     }
 
     if let Some(detail) = runtime.session_detail.lock().await.take() {
+        let same_id = app.session_detail.as_ref().map(|s| &s.id) == Some(&detail.id);
         app.session_detail = Some(detail);
-        app.session_info_scroll = 0;
+        if !same_id {
+            app.session_info_scroll = 0;
+        }
     }
     if let Some(snapshot) = runtime.session_context.lock().await.take() {
         app.session_context = Some(snapshot);
     }
     if let Some(detail) = runtime.connection_detail.lock().await.take() {
+        let same_id = app.connection_detail.as_ref().map(|c| &c.id) == Some(&detail.id);
         app.connection_detail = Some(detail);
-        app.connection_info_scroll = 0;
+        if !same_id {
+            app.connection_info_scroll = 0;
+        }
     }
     if let Some(report) = runtime.token_report.lock().await.take() {
         app.token_report = Some(report);

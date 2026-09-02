@@ -163,6 +163,7 @@ pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
 /// Same-rank peer enumeration — pure whitespace, no glyph (columns).
 pub(crate) const JOIN_ENUMERATE_COLS: usize = 2;
 /// Container › member breadcrumb for inline hierarchy (`round 3 › turn 2`).
+#[allow(dead_code)]
 pub(crate) const JOIN_BREADCRUMB: &str = " › ";
 /// Queue bar: a one-line persistent region pinned directly below the todo bar
 /// (and above the transient activity bar) that always surfaces the pending

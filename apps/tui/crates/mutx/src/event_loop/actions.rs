@@ -51,6 +51,7 @@ pub(crate) use modals::{
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
 /// the loop) when the match was inline in `run_app_loop` return these instead;
 /// the call site maps them back onto the same control flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActionFlow {
     /// Action handled; the drain loop proceeds to the next statement.
     Handled,
@@ -197,9 +198,9 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
 /// verbatim from `run_app_loop`; only `continue` / `return Ok(())` inside arms
 /// became [`ActionFlow`] values, and the clipboard senders / viewed session id
 /// are passed explicitly instead of captured.
-pub(super) async fn dispatch_action(
+pub(super) async fn dispatch_action<W: std::io::Write>(
     app: &mut App,
-    terminal: &mut Terminal<std::io::Stdout>,
+    _terminal: &mut Terminal<W>,
     action: input::InputAction,
     ctx: &mut ActionContext<'_>,
 ) -> ActionFlow {
@@ -233,29 +234,8 @@ pub(super) async fn dispatch_action(
         host::cancel_kill_confirm(app);
     }
 
-    if !matches!(
-        action,
-        input::InputAction::SetLeaderChord(_)
-            | input::InputAction::Hover { .. }
-            | input::InputAction::None
-            | input::InputAction::TerminalResized
-    ) {
-        app.leader_chord = crate::app::LeaderChord::None;
-    }
     match action {
         input::InputAction::None => {}
-        input::InputAction::SetLeaderChord(chord) => {
-            app.leader_chord = chord;
-        }
-        input::InputAction::KeyboardQuit => {
-            app.leader_chord = crate::app::LeaderChord::None;
-            app.selection = crate::model::selection::SelectionState::None;
-            if app.active_modal() != Modal::None {
-                modals::handle_close_modal(app, viewed_session_id);
-            } else {
-                app.focused_target = None;
-            }
-        }
         input::InputAction::TerminalResized => {
             // A resize is the prime trigger for crossterm splitting an
             // in-flight SGR mouse sequence across reads (issue #854).
@@ -265,20 +245,13 @@ pub(super) async fn dispatch_action(
             // at the old geometry. The re-arm is best-effort: if the
             // terminal is mid-shutdown the write is ignored.
             use crossterm::event::EnableMouseCapture;
-            let _ = crossterm::execute!(terminal.backend().writer(), EnableMouseCapture);
+            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
             sgr_guard.reset();
             // No need to set `frame_dirty` here: every drained event
             // already raised `input_redraw_pending`, which forces a
             // redraw on the very next frame at the new geometry.
         }
         input::InputAction::Quit => {
-            // Now reachable only via the `/exit` slash command (the bare
-            // `q` shortcut was removed to stop accidental first-key exits).
-            // The operator's intent is "done with this session", not
-            // "detach": declare the session ended (ADR-0112) so the daemon
-            // tears it down instead of hosting it forever. Fire-and-forget
-            // is safe — the client pump drains the request channel to the
-            // wire before it closes the socket on App drop.
             let _ = app.tx.send(AgentRequest::EndSession);
             tracing::info!(reason = "slash_exit", "app exiting");
             return ActionFlow::Exit;
@@ -286,11 +259,11 @@ pub(super) async fn dispatch_action(
         input::InputAction::SendChat(text) => {
             commands::handle_send_chat(app, runtime, viewed_session_id, text).await;
         }
-        input::InputAction::ToggleComposerSendMode => {
-            app.composer_send_mode = match app.composer_send_mode {
-                crate::app::ComposerSendMode::Steer => crate::app::ComposerSendMode::FollowUp,
-                crate::app::ComposerSendMode::FollowUp => crate::app::ComposerSendMode::Steer,
-            };
+        input::InputAction::SteerImmediate(text) => {
+            commands::handle_send_steer(app, runtime, viewed_session_id, text).await;
+        }
+        input::InputAction::QueueFollowUp(text) => {
+            commands::handle_queue_follow_up(app, runtime, viewed_session_id, text).await;
         }
         input::InputAction::SendSlash(cmd) => {
             return commands::handle_send_slash(app, runtime, session, cmd).await;
@@ -465,7 +438,6 @@ pub(super) async fn dispatch_action(
             // rows. Shared by the Connections and Models pickers.
             if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
                 app.model_search = true;
-                app.modal_keymap_open = false;
                 app.modal_index = 0;
                 app.model_scroll = 0;
                 app.model_modal_follow = true;
@@ -477,7 +449,6 @@ pub(super) async fn dispatch_action(
             // `stashed_input` until the modal closes for real.
             if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
                 app.model_search = false;
-                app.modal_keymap_open = false;
                 app.input.clear();
                 app.set_cursor(0);
                 app.input_scroll = 0;
@@ -655,16 +626,21 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::RefreshProviderModels => {
             if app.active_modal() == Modal::Connections && app.connection_info_detail {
-                let providers = app.providers_filtered();
-                if let Some(ranked) =
-                    providers.get(app.modal_index.min(providers.len().saturating_sub(1)))
-                {
+                let id = app
+                    .connection_detail
+                    .as_ref()
+                    .map(|d| d.id.clone())
+                    .or_else(|| {
+                        let providers = app.providers_filtered();
+                        providers
+                            .get(app.modal_index.min(providers.len().saturating_sub(1)))
+                            .map(|p| p.id.clone())
+                    });
+                if let Some(id) = id {
                     if let Some(detail) = app.connection_detail.as_mut() {
                         detail.usage = muta_contracts::ConnectionUsageState::Fetching;
                     }
-                    let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
-                        id: ranked.id.clone(),
-                    });
+                    let _ = app.tx.send(AgentRequest::QueryConnectionDetail { id });
                 }
             } else if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
                 let _ = app.tx.send(AgentRequest::RefreshProviderModels {
@@ -1358,35 +1334,6 @@ pub(super) async fn dispatch_action(
         input::InputAction::CloseModal => {
             modals::handle_close_modal(app, viewed_session_id);
         }
-        input::InputAction::ToggleModalKeymap => {
-            // In-modal `?` expand: swap the body for the full keymap
-            // page (or close it). Not a nested modal.
-            app.modal_keymap_open = !app.modal_keymap_open;
-            // Reset the body scroll so the keymap starts at the top.
-            match app.active_modal() {
-                Modal::Connections | Modal::Models => {
-                    app.model_scroll = 0;
-                    app.model_modal_follow = true;
-                }
-                Modal::HistorySearch => {
-                    app.history_scroll = 0;
-                    app.history_modal_follow = true;
-                }
-                Modal::Help => app.help_scroll = 0,
-                Modal::Todos => app.todos_scroll = 0,
-                Modal::Permissions => app.permissions_scroll = 0,
-                Modal::Tools | Modal::Mcp | Modal::Skills => {
-                    app.session_scroll = 0;
-                    app.session_modal_follow = true;
-                }
-                Modal::Config => {
-                    app.config_scroll = 0;
-                    app.config_detail_scroll = 0;
-                }
-                Modal::Telemetry => app.telemetry_scroll = 0,
-                _ => {}
-            }
-        }
         input::InputAction::TelemetryActivate => {
             if app.active_modal() == Modal::Telemetry {
                 if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
@@ -1566,18 +1513,15 @@ pub(super) async fn dispatch_action(
             );
         }
         input::InputAction::FocusNextTarget => {
-            // Ctrl+↓ (or ↓ while focused): advance to the next step.
-            // From no focus this lands on the first (oldest) step.
+            app.session_focus = crate::app::SessionFocusRegion::Transcript;
             app.focus_interactive_target(1);
         }
         input::InputAction::FocusPrevTarget => {
-            // Ctrl+↑ (or ↑ while focused): step back. From no focus this
-            // lands on the last (nearest-to-prompt) step.
+            app.session_focus = crate::app::SessionFocusRegion::Transcript;
             app.focus_interactive_target(-1);
         }
         input::InputAction::ClearFocusedTarget => {
-            // Esc: drop the focus highlight, returning every key to its
-            // ordinary input-box meaning.
+            app.session_focus = crate::app::SessionFocusRegion::Composer;
             app.focused_target = None;
         }
         input::InputAction::ActivateFocusedTarget => {
@@ -1705,75 +1649,80 @@ pub(super) async fn dispatch_action(
             );
         }
         input::InputAction::ViewSwitcherFilter { ch } => {
-            // ADR-0139: the filter is the switcher's own query,
-            // narrowed live; the row cursor re-anchors to the top of the
-            // filtered set.
             if app.active_modal() == Modal::ViewSwitcher {
-                app.view_switcher_query.push(ch);
-                app.modal_index = 0;
+                app.command_palette_query.push(ch);
+                app.command_palette_selected = 0;
+                app.command_palette_scroll = 0;
                 app.session_scroll = 0;
                 app.session_modal_follow = true;
             }
         }
         input::InputAction::ViewSwitcherBackspace => {
             if app.active_modal() == Modal::ViewSwitcher {
-                if !app.view_switcher_query.is_empty() {
+                if !app.command_palette_query.is_empty() {
                     let start = mutx_engine::text::floor_grapheme_boundary(
-                        &app.view_switcher_query,
-                        app.view_switcher_query.len() - 1,
+                        &app.command_palette_query,
+                        app.command_palette_query.len() - 1,
                     );
-                    app.view_switcher_query.truncate(start);
+                    app.command_palette_query.truncate(start);
                 }
-                app.modal_index = 0;
+                app.command_palette_selected = 0;
+                app.command_palette_scroll = 0;
                 app.session_scroll = 0;
                 app.session_modal_follow = true;
             }
         }
         input::InputAction::ViewSwitcherToggle => {
-            // Ctrl+L (ADR-0139): the global view quick switcher. A toggle —
-            // a second Ctrl+L while it is up cancels back to the surface it
-            // was opened over, exactly like Esc (nothing changed). The
-            // switcher is a transient chooser, never a retained view, so it
-            // does not touch the PanelRegistry on open/close; only Enter
-            // (`ViewSwitchActivate`) performs a switch.
             if app.active_modal() == Modal::ViewSwitcher {
                 app.dismiss_surface();
             } else if app.can_open_view_switcher() {
+                if app.saved_focus.is_none() {
+                    app.saved_focus = Some(app.session_focus);
+                }
                 app.push_transient_surface(Modal::ViewSwitcher);
-                app.modal_keymap_open = false;
-                app.modal_index = 0;
-                app.view_switcher_query.clear();
-                // The switcher borrows the shared session scroll slot (see
-                // `modal_scroll_field`), so park whatever the previous
-                // surface had there — a browse view's saved scroll is in the
-                // registry, restored on its next open, not from this slot.
+                app.command_palette_query.clear();
+                app.command_palette_selected = 0;
+                app.command_palette_scroll = 0;
                 app.session_scroll = 0;
                 app.session_modal_follow = true;
             }
         }
         input::InputAction::ViewSwitchActivate => {
-            // Quick switcher Enter (ADR-0139): switch to the highlighted
-            // view. A browse-view origin hides (state retained); a
-            // chat origin just loses focus to the target. Every activation
-            // runs the target's ordinary initialization/refresh transaction.
             if app.active_modal() != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
-            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
-            let Some(target) = rows.get(app.modal_index).copied() else {
-                return ActionFlow::Handled;
+            let is_busy = app.running_sessions.contains(viewed_session_id);
+            let app_ctx = crate::keymap::AppContext {
+                active_view: app.current_view(),
+                active_modal: app.active_modal(),
+                session_focus: app.session_focus,
+                is_responding: is_busy,
+                has_input: !app.input.is_empty(),
+                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_running_task: is_busy,
+                in_runner_view: app.in_runner_view(),
+                in_side_view: app.in_side_view,
+                queue_count: app.pending_dispatch.len(),
+                has_focused_target: app.focused_target.is_some(),
             };
-            // The switcher must not leak its own selection state into the
-            // target surface: reset the cursor before opening so the
-            // registry's restore (not the switcher's row index) wins.
-            app.modal_index = 0;
-            app.pop_transient_surface();
-            match target {
-                crate::surfaces::SwitcherTarget::View(view) => {
-                    enter_view(app, view, runtime);
-                }
-                crate::surfaces::SwitcherTarget::Panel(id) => {
-                    enter_panel(app, id, runtime, viewed_session_id);
+            let entries = crate::overlays::command_palette::filter_palette_commands(
+                &app.command_palette_query,
+                &app.recent_commands,
+                &app_ctx,
+            );
+            if let Some(entry) = entries.get(app.command_palette_selected).or_else(|| entries.first()) {
+                if matches!(entry.availability, crate::keymap::Availability::Available) {
+                    let cmd_id = entry.spec.id;
+                    if let Some(pos) = app.recent_commands.iter().position(|&id| id == cmd_id) {
+                        app.recent_commands.remove(pos);
+                    }
+                    app.recent_commands.insert(0, cmd_id);
+                    if app.recent_commands.len() > 10 {
+                        app.recent_commands.truncate(10);
+                    }
+
+                    app.pop_transient_surface();
+                    return execute_command_by_id(app, runtime, session, viewed_session_id, copy_tx, copy_pending, cmd_id).await;
                 }
             }
         }
@@ -1781,24 +1730,6 @@ pub(super) async fn dispatch_action(
             if app.active_modal() != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
-            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
-            let Some(target) = rows.get(app.modal_index).copied() else {
-                return ActionFlow::Handled;
-            };
-            // Only retained panels carry closeable state; views keep their
-            // fields natively on `App` and are never switcher-closed.
-            if let crate::surfaces::SwitcherTarget::Panel(id) = target {
-                if app.transient_return_panel() == Some(id) {
-                    app.pop_transient_surface();
-                    app.close_panel(id);
-                    app.push_transient_surface(Modal::ViewSwitcher);
-                } else {
-                    app.close_panel(id);
-                }
-            }
-            let remaining = app.panels.switcher_rows_filtered(&app.view_switcher_query);
-            app.modal_index = app.modal_index.min(remaining.len().saturating_sub(1));
-            app.session_modal_follow = true;
         }
         input::InputAction::BtwFocusSelected => {
             // Asides modal Enter (ADR-0103 §5): jump back into the selected
@@ -1807,7 +1738,6 @@ pub(super) async fn dispatch_action(
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
                 app.hide_active_panel();
-                app.modal_keymap_open = false;
                 let _ = app.tx.send(AgentRequest::FocusSide { side_id });
             }
         }
@@ -2252,6 +2182,13 @@ pub(crate) fn open_active_connection_detail(
             .map(|p| p.id.clone())
             .unwrap_or_default()
     };
+    if let Some(pos) = app
+        .providers_filtered()
+        .iter()
+        .position(|p| p.id == target_id)
+    {
+        app.modal_index = pos;
+    }
     app.connection_info_detail = true;
     app.connection_info_standalone = true;
     app.connection_detail = None;
@@ -2634,6 +2571,34 @@ mod view_entry_tests {
     }
 }
 
+#[cfg(test)]
+pub(crate) async fn dispatch_action_for_test(
+    app: &mut App,
+    runtime: &UiRuntime,
+    action: input::InputAction,
+    viewed_session_id: &str,
+) -> ActionFlow {
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (paste_tx, _paste_rx) = mpsc::unbounded_channel();
+    let mut sgr_guard = input::SgrLeakGuard::default();
+    let session = crate::SessionSource::Remote {
+        session_id: viewed_session_id.to_string(),
+    };
+    let mut ctx = ActionContext {
+        runtime,
+        session: &session,
+        viewed_session_id,
+        copy_tx: &copy_tx,
+        copy_pending: &copy_pending,
+        paste_tx: &paste_tx,
+        sgr_guard: &mut sgr_guard,
+    };
+    let backend = mutx_engine::Backend::with_bce(Vec::new(), mutx_engine::backend::Bce::No);
+    let mut terminal = mutx_engine::Terminal::new(backend);
+    dispatch_action(app, &mut terminal, action, &mut ctx).await
+}
+
 /// Test shims for the dashboard console dispatcher: the internal helpers the
 /// console tests drive directly (they need no terminal or clipboard plumbing
 /// — just `App` + `UiRuntime`).
@@ -2669,4 +2634,213 @@ fn cycle_tri_state(v: Option<bool>) -> Option<bool> {
         Some(true) => Some(false),
         Some(false) => None,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_command_by_id(
+    app: &mut App,
+    runtime: &UiRuntime,
+    _session: &crate::SessionSource,
+    viewed_session_id: &str,
+    copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
+    copy_pending: &Arc<AtomicUsize>,
+    cmd_id: crate::keymap::CommandId,
+) -> ActionFlow {
+    use crate::keymap::CommandId;
+    match cmd_id {
+        CommandId::Help => {
+            enter_panel(app, crate::surfaces::PanelId::Help, runtime, viewed_session_id);
+        }
+        CommandId::CommandPalette => {}
+        CommandId::CancelOrBack => {
+            if app.active_modal() != Modal::None {
+                modals::handle_close_modal(app, viewed_session_id);
+            } else if app.focused_target.is_some() {
+                app.session_focus = crate::app::SessionFocusRegion::Composer;
+                app.focused_target = None;
+            }
+        }
+        CommandId::InterruptTask => {
+            return commands::handle_ctrl_c(app, viewed_session_id, copy_tx, copy_pending);
+        }
+        CommandId::Quit => {
+            let _ = app.tx.send(AgentRequest::EndSession);
+            return ActionFlow::Exit;
+        }
+        CommandId::CopySelection => {
+            if let Some(text) = extract_selection_text(
+                &app.selection,
+                app.focused_messages(),
+                &app.input,
+                &app.layout_map,
+                app.drag.cell_info.as_ref(),
+            ) {
+                clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+            }
+        }
+        CommandId::SendPrompt => {
+            let text = std::mem::take(&mut app.input);
+            app.set_cursor(0);
+            commands::handle_send_chat(app, runtime, viewed_session_id, text).await;
+        }
+        CommandId::QueueFollowUp => {
+            let text = std::mem::take(&mut app.input);
+            app.set_cursor(0);
+            commands::handle_queue_follow_up(app, runtime, viewed_session_id, text).await;
+        }
+        CommandId::SteerImmediate => {
+            let text = std::mem::take(&mut app.input);
+            app.set_cursor(0);
+            commands::handle_send_steer(app, runtime, viewed_session_id, text).await;
+        }
+        CommandId::InsertNewline => {
+            app.input.push('\n');
+            app.set_cursor_end();
+        }
+        CommandId::HistorySearch => {
+            enter_panel(app, crate::surfaces::PanelId::HistorySearch, runtime, viewed_session_id);
+        }
+        CommandId::FocusTranscript => {
+            app.session_focus = crate::app::SessionFocusRegion::Transcript;
+            app.focus_interactive_target(1);
+        }
+        CommandId::FocusComposer => {
+            app.session_focus = crate::app::SessionFocusRegion::Composer;
+            app.focused_target = None;
+        }
+        CommandId::ScrollTranscriptUp => {
+            app.scroll = app.scroll.saturating_sub(app.view_height.saturating_sub(2).max(1));
+        }
+        CommandId::ScrollTranscriptDown => {
+            app.scroll = app.scroll.saturating_add(app.view_height.saturating_sub(2).max(1)).min(app.max_scroll);
+        }
+        CommandId::TranscriptMoveUp => {
+            app.focus_interactive_target(-1);
+        }
+        CommandId::TranscriptMoveDown => {
+            app.focus_interactive_target(1);
+        }
+        CommandId::TranscriptOpenOrToggle => {
+            if let Some(target) = app.focused_target {
+                if target.kind == InteractiveTargetKind::ToolStep {
+                    let mut messages = runtime.messages.write().await;
+                    let enter_id = resolve_focused_mut(
+                        &mut messages,
+                        &app.focus_stack,
+                        target.message_idx,
+                    )
+                    .and_then(|message| {
+                        if message.is_runner_task() {
+                            message.tool_step_call_id().map(String::from)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(id) = enter_id {
+                        drop(messages);
+                        app.enter_runner(id);
+                    } else {
+                        app.toggle_step_pinned(&mut messages, target.message_idx);
+                        drop(messages);
+                    }
+                }
+            }
+        }
+        CommandId::TranscriptTop => {
+            app.scroll = 0;
+            app.follow_bottom = false;
+        }
+        CommandId::TranscriptBottom => {
+            app.scroll = app.max_scroll;
+            app.follow_bottom = true;
+        }
+        CommandId::NavigateSession => {
+            enter_view(app, crate::surfaces::View::Session, runtime);
+        }
+        CommandId::NavigateDashboard => {
+            enter_view(app, crate::surfaces::View::Dashboard, runtime);
+        }
+        CommandId::NavigateSettings => {
+            enter_view(app, crate::surfaces::View::Settings, runtime);
+        }
+        CommandId::OpenTodos => {
+            enter_panel(app, crate::surfaces::PanelId::Todos, runtime, viewed_session_id);
+        }
+        CommandId::OpenQueue => {
+            enter_panel(app, crate::surfaces::PanelId::Queue, runtime, viewed_session_id);
+        }
+        CommandId::OpenTelemetry => {
+            enter_panel(app, crate::surfaces::PanelId::Telemetry, runtime, viewed_session_id);
+        }
+        CommandId::OpenModels => {
+            enter_panel(app, crate::surfaces::PanelId::Models, runtime, viewed_session_id);
+        }
+        CommandId::OpenConnections => {
+            enter_panel(app, crate::surfaces::PanelId::Connections, runtime, viewed_session_id);
+        }
+        CommandId::OpenTools => {
+            enter_panel(app, crate::surfaces::PanelId::Tools, runtime, viewed_session_id);
+        }
+        CommandId::OpenMcp => {
+            enter_panel(app, crate::surfaces::PanelId::Mcp, runtime, viewed_session_id);
+        }
+        CommandId::OpenSkills => {
+            enter_panel(app, crate::surfaces::PanelId::Skills, runtime, viewed_session_id);
+        }
+        CommandId::OpenPermissions => {
+            enter_panel(app, crate::surfaces::PanelId::Permissions, runtime, viewed_session_id);
+        }
+        CommandId::OpenUsage => {
+            enter_panel(app, crate::surfaces::PanelId::UsageStats, runtime, viewed_session_id);
+        }
+        CommandId::OpenTree => {
+            enter_panel(app, crate::surfaces::PanelId::Tree, runtime, viewed_session_id);
+        }
+        CommandId::OpenBtw => {
+            enter_panel(app, crate::surfaces::PanelId::Btw, runtime, viewed_session_id);
+        }
+        CommandId::OpenSessions => {
+            enter_panel(app, crate::surfaces::PanelId::Sessions, runtime, viewed_session_id);
+        }
+        CommandId::ToggleQueueBlock => {
+            let sid = viewed_session_id.to_string();
+            if app.is_queue_blocked(&sid) {
+                app.resume_queue(&sid);
+                show_local_toast(app, "Queue resumed", false, std::time::Duration::from_millis(2000));
+            } else {
+                app.block_queue(&sid);
+                show_local_toast(app, "Queue paused", false, std::time::Duration::from_millis(2000));
+            }
+        }
+        CommandId::ClearQueue => {
+            app.pending_dispatch.clear();
+            show_local_toast(app, "Queue cleared", false, std::time::Duration::from_millis(2000));
+        }
+        CommandId::McpReconnectSelected => {}
+        CommandId::McpToggleSelected => {}
+        CommandId::ToolsToggleSelected => {}
+        CommandId::PermissionsRevokeSelected => {}
+        CommandId::PermissionsClearAll => {
+            if let Some(ref ctx) = app.session_context {
+                for perm in &ctx.permissions {
+                    let _ = app.tx.send(AgentRequest::RevokePermission {
+                        tool: perm.tool.clone(),
+                        scope: perm.scope.clone(),
+                    });
+                }
+            }
+            show_local_toast(app, "All permissions revoked", false, std::time::Duration::from_millis(2000));
+        }
+        CommandId::SkillsToggleDetail => {}
+        CommandId::ProviderAddConnection => {
+            app.open_preset_chooser();
+        }
+        CommandId::ProviderEditSelected => {}
+        CommandId::ProviderDeleteSelected => {}
+        CommandId::ProviderToggleFavorite => {}
+        CommandId::RedrawScreen => {
+            show_local_toast(app, "Screen redrawn", false, std::time::Duration::from_millis(1000));
+        }
+    }
+    ActionFlow::Handled
 }

@@ -11,36 +11,44 @@ use super::common::{
 };
 use crate::components::options::{ChoiceTone, choice_style};
 use crate::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
-use crate::model::layout::LayoutMap;
-use crate::model::selection::SelectionState;
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_frame, modal_header,
+    keyvocab, modal_area, modal_frame, modal_header,
     render_body, render_centered_body, render_modal_footer_with_more,
 };
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::view::Theme;
 
-/// Draw the **Models** flat model picker modal (`/models`). A single searchable
-/// list of every model declared across every provider instance (built-in + user
-/// custom). Selecting a row activates that model ON that connection.
-#[allow(clippy::too_many_arguments)]
+/// Properties for rendering the Models modal.
+pub struct ModelsModalProps<'a> {
+    pub models: &'a [RankedModel],
+    pub current_provider: &'a str,
+    pub current_model: &'a str,
+    pub modal_index: usize,
+    pub query: &'a str,
+    pub cursor_position: usize,
+    pub scroll: &'a mut usize,
+    pub follow_selection: bool,
+    pub search: bool,
+}
+
+/// Draw the **Models** flat model picker modal (`/models`).
 pub fn draw_models_modal(
     frame: &mut Frame,
-    layout_map: &mut LayoutMap,
-    models: &[RankedModel],
-    current_provider: &str,
-    current_model: &str,
-    modal_index: usize,
-    query: &str,
-    cursor_position: usize,
-    scroll: &mut usize,
-    follow_selection: bool,
-    search: bool,
-    keymap_open: bool,
+    props: ModelsModalProps<'_>,
     theme: &Theme,
-    selection: &SelectionState,
 ) -> mutx_engine::Rect {
+    let ModelsModalProps {
+        models,
+        current_provider,
+        current_model,
+        modal_index,
+        query,
+        cursor_position,
+        scroll,
+        follow_selection,
+        search,
+    } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -72,27 +80,6 @@ pub fn draw_models_modal(
     } else {
         (&browse_hints, &[])
     };
-
-    if keymap_open {
-        modal_header(
-            frame,
-            header_rect,
-            &format!("Models{}keybindings", crate::design::JOIN_BREADCRUMB),
-            theme,
-        );
-        let body = keymap_body_lines(hints, extra, theme);
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
-            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
-        );
-        if let Some(fo) = f.footer {
-            crate::primitives::render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
-        }
-        return area;
-    }
 
     modal_header(frame, header_rect, "Models", theme);
 

@@ -33,7 +33,7 @@ pub mod todos;
 pub mod tools;
 pub mod tree;
 pub mod usage_stats;
-pub mod view_switcher;
+pub mod command_palette;
 
 #[allow(unused_imports)]
 pub use crate::views::settings::{
@@ -48,7 +48,7 @@ pub use dashboard::{
 // is part of the module's public API surface.
 #[allow(unused_imports)]
 pub use dashboard::DashboardRects;
-pub use help::{HelpBinding, draw_help_modal};
+pub use help::draw_help_modal;
 pub use history::draw_history_panel;
 // The old centered `/host` modal (`host.rs`) was superseded by the full-screen
 // `dashboard` surface and removed; `/host` now opens the dashboard.
@@ -73,6 +73,4 @@ pub use todos::{TodosModalView, draw_todos_modal};
 pub use tools::draw_tools_modal;
 pub use tree::draw_tree_modal;
 pub use usage_stats::draw_usage_stats_modal;
-// The view quick switcher (ADR-0133) is consumed crate-internally by the
-// render dispatch (`event_loop::render`), so it stays crate-visible.
-pub(crate) use view_switcher::draw_view_switcher;
+pub(crate) use command_palette::draw_command_palette;

@@ -1,123 +1,43 @@
-//! Unified keybinding registry — the single source of truth for the app's
-//! global keyboard shortcuts.
+//! Authoritative Action & Command Registry — Single Source of Truth (SSOT).
 //!
-//! Every global shortcut (a key that works from the top level, i.e. while no
-//! modal owns the surface) is declared once here as a [`Binding`]. The input
-//! handler resolves global keys by consulting this table, and the Help modal
-//! renders its keybindings list from the same table, so the two can never
-//! drift apart. Adding a global shortcut means adding one entry: it shows up
-//! in Help automatically.
+//! Every action, shortcut, command palette entry, slash command, F1 help item,
+//! and footer hint across the application is declared here as a [`CommandSpec`].
 //!
-//! ## Two canonical labels per key
+//! ## Core Architectural Principles
 //!
-//! Every key has **two** display strings, both derived from one token table
-//! so they can never drift:
-//!
-//! - [`Key::chord`] — the compact lowercase form (`ctrl+t`, `enter`, `esc`,
-//!   `↑`). Used by the Help modal's prose rows.
-//! - [`Key::display`] — the capitalized human form (`Ctrl+T`, `Enter`, `Esc`,
-//!   `↑`). Used by footer hint strips, the activity-bar interrupt hint, and
-//!   in-modal legends — i.e. every place a keycap is rendered standalone.
-//!
-//! Footers and legends never type a key glyph inline: a single physical key is
-//! spelled `Key::display()`, and a repeated affordance (arrow pair, Space,
-//! Shift+Tab, …) is a named constant in [`keyvocab`]. That makes the whole UI
-//! share one key vocabulary.
-//!
-//! ## Scope and limits
-//!
-//! The registry covers **global** bindings only — keys whose meaning is fixed
-//! from the top level (open a modal, copy, quit, …). It deliberately does
-//! *not* cover:
-//!
-//! - **Text-editing** keys (`Ctrl+A/E/U/K/W`, `Alt+B/F/D`, arrows, Backspace,
-//!   …). These depend on whether a text field is focused and on the readline
-//!   family, so they stay as explicit arms in `input::process_event`.
-//! - **Contextual / modal-internal** keys (modal ↑/↓ selection, `Space` toggles
-//!   inside Tools/MCP/Config, `/` entering a search sub-layer, `e`/`*`/`D`
-//!   inside the provider picker, Esc's modal-specific hierarchy, …). These are
-//!   tied to the active modal and its sub-layer state, so they stay inline.
-//! - **Enter / Tab**: their behavior is polymorphic across every surface, so
-//!   they stay hand-routed.
-//!
-//! ## Gating
-//!
-//! Every binding carries an optional [`Gate`] — the precondition under which
-//! the key is active. Most global shortcuts require [`Gate::NoModal`] (so they
-//! don't fire while a modal is open); a few (copy) work everywhere. The
-//! resolver applies the gate before returning an action, so the binding
-//! declarations read declaratively.
-//!
-//! ## Adding a binding
-//!
-//! 1. Add a variant to [`Action`] (or reuse an existing one) and dispatch it
-//!    in the event loop.
-//! 2. Push a [`Binding`] into [`GLOBAL_BINDINGS`] with its [`Key`], gate, the
-//!    [`Action`] it maps to, and a short human description (shown in Help).
-//!
-//! The Help modal and the resolver pick it up with no further wiring.
+//! 1. **Composer-first, no input modality**: typing always flows to Composer.
+//! 2. **Single input owner**: only one region/dialog owns focus at any moment.
+//! 3. **Visible, predictable, recoverable focus**: overlays trap focus, closing restores source.
+//! 4. **Single semantic origin**: one action has one semantic source.
+//! 5. **Unified derivation**: shortcuts, Help, Footer, and Command Palette are derived from this registry.
+//! 6. **Discovery over memorization**: rare actions are found via `Ctrl+L` Command Palette.
+//! 7. **No modal penetration**: overlays strictly isolate input from background views.
+//! 8. **Zero loss of printable characters**: typing in transcript bounces back to composer.
+//! 9. **Terminal independence**: core workflows work without Kitty enhanced keyboard protocol.
+//! 10. **Zero legacy baggage**: breaking clean from leader chords and modal keymaps.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::Modal;
-use super::input::InputAction;
+use crate::app::SessionFocusRegion;
+use crate::modal::Modal;
+use crate::surfaces::View;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Canonical key display vocabulary.
-//
-// A physical key has **two** canonical strings in this app, and both are
-// derived from the one place below so they can never drift:
-//
-// - [`Key::chord`] — the lowercase machine/compact form (`ctrl+t`, `enter`,
-//   `esc`, `↑`). Used by the Help prose rows and anywhere space is tight.
-// - [`Key::display`] — the capitalized human form (`Ctrl+T`, `Enter`, `Esc`,
-//   `↑`). Used by the footer hint strips, the activity-bar interrupt hint, and
-//   any in-modal legend.
-//
-// Both come out of the same token table ([`chord_token`] / [`display_token`]),
-// so the only way to add a key to the UI is to spell it once here; every footer
-// literal and every help row then agrees on the same glyph and the same case.
-//
-// A few legend tokens are not single physical keys but affordances shown as a
-// keycap (`↑↓` for "arrow keys", `←→`, `Space`, …). Those have no
-// `KeyCode`, so they live as named constants in [`keyvocab`] and the footer /
-// legend call sites reference them by name instead of hand-typing the glyph.
+// Canonical key vocabulary and display formatting
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Repeated legend tokens — glyph strings that stand for an affordance rather
-/// than a single physical key (`↑↓` = "the arrow keys", `←→`, `Space`,
-/// `⇧Tab`, `Enter/Space`, …).
-///
-/// Footers and legends reference these `const`s instead of typing the glyph
-/// inline, so the spelling and width of a repeated affordance is owned in one
-/// place. New affordances go here; single physical keys are spelled via
-/// [`Key::display`] (e.g. `Key::ESC.display()`).
+/// Repeated legend tokens — glyph strings that stand for an affordance.
 pub mod keyvocab {
-    /// Vertical arrow pair: "the up/down keys". The single most-repeated
-    /// footer token in the app.
     pub const ARROWS_UD: &str = "↑↓";
-    /// Horizontal arrow pair: "the left/right keys".
     pub const ARROWS_LR: &str = "←→";
-    /// Up arrow alone (Help prose / single-direction affordances).
-    #[allow(dead_code)]
     pub const UP: &str = "↑";
-    /// Down arrow alone.
-    #[allow(dead_code)]
     pub const DOWN: &str = "↓";
-    /// Space bar, shown as the word `Space` (matches the capitalization of
-    /// `Enter`/`Esc`/`Tab`).
     pub const SPACE: &str = "Space";
-    /// Shift+Tab, shown with the shift sign so it reads at a glance.
     pub const SHIFT_TAB: &str = "⇧Tab";
-    /// The `Enter` key with a leading shift sign — used where the affordance is
-    /// "Shift+Enter" but the glyph must stay compact. Kept so the family is
-    /// exhaustive; remove if it stays dead.
-    #[allow(dead_code)]
     pub const SHIFT_ENTER: &str = "⇧Enter";
 }
 
-/// The compact token for a core [`KeyCode`] — the lowercase `enter` / `esc` /
-/// `↑` fragment used inside a chord, before any modifier prefix.
+/// The compact token for a core [`KeyCode`] in lowercase chord notation.
 pub const fn chord_token(code: KeyCode) -> &'static str {
     match code {
         KeyCode::Char(c) => match c.to_ascii_lowercase() {
@@ -183,8 +103,7 @@ pub const fn chord_token(code: KeyCode) -> &'static str {
     }
 }
 
-/// The display token for a core [`KeyCode`] — the capitalized `Enter` / `Esc` /
-/// `↑` fragment a footer or legend shows, before any modifier prefix.
+/// The display token for a core [`KeyCode`] in capitalized human notation.
 pub const fn display_token(code: KeyCode) -> &'static str {
     match code {
         KeyCode::Char(c) => match c.to_ascii_lowercase() {
@@ -230,17 +149,17 @@ pub const fn display_token(code: KeyCode) -> &'static str {
         },
         KeyCode::Enter => "Enter",
         KeyCode::Tab => "Tab",
-        KeyCode::BackTab => "Shift+Tab",
+        KeyCode::BackTab => keyvocab::SHIFT_TAB,
         KeyCode::Backspace => "Backspace",
         KeyCode::Esc => "Esc",
-        KeyCode::Up => "↑",
-        KeyCode::Down => "↓",
+        KeyCode::Up => keyvocab::UP,
+        KeyCode::Down => keyvocab::DOWN,
         KeyCode::Left => "←",
         KeyCode::Right => "→",
         KeyCode::Home => "Home",
         KeyCode::End => "End",
-        KeyCode::PageUp => "PgUp",
-        KeyCode::PageDown => "PgDn",
+        KeyCode::PageUp => "PageUp",
+        KeyCode::PageDown => "PageDown",
         KeyCode::F(1) => "F1",
         KeyCode::F(2) => "F2",
         KeyCode::F(3) => "F3",
@@ -250,48 +169,7 @@ pub const fn display_token(code: KeyCode) -> &'static str {
     }
 }
 
-/// The lowercase modifier prefix for a chord (`ctrl+`, `alt+`, …), or `""` for none.
-pub const fn chord_prefix(modifiers: KeyModifiers) -> &'static str {
-    if modifiers.bits() == (KeyModifiers::CONTROL.bits() | KeyModifiers::SHIFT.bits()) {
-        "ctrl+shift+"
-    } else if modifiers.bits() == KeyModifiers::CONTROL.bits() {
-        "ctrl+"
-    } else if modifiers.bits() == KeyModifiers::ALT.bits() {
-        "alt+"
-    } else if modifiers.bits() == KeyModifiers::SHIFT.bits() {
-        "shift+"
-    } else if modifiers.bits() == KeyModifiers::SUPER.bits() {
-        "cmd+"
-    } else {
-        ""
-    }
-}
-
-/// The display-case modifier prefix for a key (`Ctrl+`, `Alt+`, …), or `""` for none.
-pub const fn display_prefix(modifiers: KeyModifiers) -> &'static str {
-    if modifiers.bits() == (KeyModifiers::CONTROL.bits() | KeyModifiers::SHIFT.bits()) {
-        "Ctrl+Shift+"
-    } else if modifiers.bits() == KeyModifiers::CONTROL.bits() {
-        "Ctrl+"
-    } else if modifiers.bits() == KeyModifiers::ALT.bits() {
-        "Alt+"
-    } else if modifiers.bits() == KeyModifiers::SHIFT.bits() {
-        "Shift+"
-    } else if modifiers.bits() == KeyModifiers::SUPER.bits() {
-        "Cmd+"
-    } else {
-        ""
-    }
-}
-
-/// A physical key combination, independent of crossterm's `KeyEvent` envelope.
-///
-/// `Ctrl`/`Alt`/`Shift` modifiers are tracked explicitly so the registry (and
-/// the Help text) can describe bindings in the same `ctrl+t` / `alt+enter`
-/// notation users see in the UI. Shift alone does not count as a modifier for
-/// letter keys (a shifted letter is just a different `char`), so a `Key`
-/// built from a `KeyEvent` normalizes bare `Shift` away to keep `C-t` and
-/// `Ctrl+Shift+T` (the same letter intent) on one row.
+/// A physical key with optional modifier flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Key {
     pub modifiers: KeyModifiers,
@@ -299,65 +177,124 @@ pub struct Key {
 }
 
 impl Key {
-    /// Build a [`Key`] from a raw crossterm event, normalizing a bare
-    /// `Shift` on a letter key away (see the type docs for why).
-    pub fn from_event(event: KeyEvent) -> Self {
-        let mut modifiers = event.modifiers;
-        if let KeyCode::Char(ch) = event.code
-            && ch.is_ascii_alphabetic()
-            && modifiers == KeyModifiers::SHIFT
-        {
-            modifiers = KeyModifiers::NONE;
-        }
-        Self {
-            modifiers,
-            code: event.code,
-        }
-    }
+    pub const ESC: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Esc,
+    };
+    pub const ENTER: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Enter,
+    };
+    pub const TAB: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Tab,
+    };
+    pub const BACKTAB: Key = Key {
+        modifiers: KeyModifiers::SHIFT,
+        code: KeyCode::BackTab,
+    };
+    pub const UP: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Up,
+    };
+    pub const DOWN: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Down,
+    };
+    pub const PAGE_UP: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::PageUp,
+    };
+    pub const PAGE_DOWN: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::PageDown,
+    };
+    pub const HOME: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Home,
+    };
+    pub const END: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::End,
+    };
+    pub const F1: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(1),
+    };
+    pub const F5: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(5),
+    };
 
-    /// Construct a bare character key with no modifiers.
-    pub const fn from_char(ch: char) -> Self {
-        Self {
-            modifiers: KeyModifiers::NONE,
-            code: KeyCode::Char(ch),
-        }
-    }
+    pub const CTRL_L: Key = Key::ctrl('l');
+    pub const CTRL_C: Key = Key::ctrl('c');
+    pub const CTRL_P: Key = Key::ctrl('p');
+    pub const CTRL_Q: Key = Key::ctrl('q');
+    pub const CTRL_R: Key = Key::ctrl('r');
+    pub const CTRL_O: Key = Key::ctrl('o');
+    pub const CTRL_N: Key = Key::ctrl('n');
+    pub const CTRL_T: Key = Key::ctrl('t');
+    pub const CTRL_M: Key = Key::ctrl('m');
+    pub const CTRL_S: Key = Key::ctrl('s');
+    pub const CTRL_G: Key = Key::ctrl('g');
+    pub const CTRL_X: Key = Key::ctrl('x');
+    pub const CTRL_J: Key = Key::ctrl('j');
+    pub const CTRL_U: Key = Key::ctrl('u');
+    pub const CTRL_A: Key = Key::ctrl('a');
+    pub const CTRL_E: Key = Key::ctrl('e');
+    pub const CTRL_K: Key = Key::ctrl('k');
+    pub const CTRL_W: Key = Key::ctrl('w');
+    pub const CTRL_V: Key = Key::ctrl('v');
 
-    /// Construct a Ctrl+key combination.
-    pub const fn ctrl(ch: char) -> Self {
+    pub const ALT_S: Key = Key::alt('s');
+    pub const ALT_ENTER: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Enter,
+    };
+
+    pub const CTRL_SHIFT_C: Key = Key {
+        modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+        code: KeyCode::Char('c'),
+    };
+    pub const CMD_C: Key = Key {
+        modifiers: KeyModifiers::SUPER,
+        code: KeyCode::Char('c'),
+    };
+
+    pub const fn ctrl(c: char) -> Self {
         Self {
             modifiers: KeyModifiers::CONTROL,
-            code: KeyCode::Char(ch),
+            code: KeyCode::Char(c),
         }
     }
 
-    /// Construct an Alt+key combination.
-    pub const fn alt(ch: char) -> Self {
+    pub const fn alt(c: char) -> Self {
         Self {
             modifiers: KeyModifiers::ALT,
-            code: KeyCode::Char(ch),
+            code: KeyCode::Char(c),
         }
     }
 
-    /// The canonical lowercase chord for this key, in the `ctrl+t` /
-    /// `alt+enter` / `f1` / `esc` / `↑` notation used by the Help modal's prose
-    /// rows. Joined keys use `+`, matching the established Help copy.
-    ///
-    /// This is the compact/machine form; the capitalized human form a footer
-    /// renders is [`Key::display`]. Both come from the same token table, so a
-    /// key is spelled exactly once for the whole app.
-    ///
-    /// Returns `&'static str` because every declared binding is a fixed,
-    /// compile-time-known combination, so the label can be stored alongside
-    /// the `&'static str` description in the Help rows without allocation.
-    pub const fn chord(self) -> &'static str {
-        if matches!(self.code, KeyCode::BackTab) {
-            return "shift+tab";
+    pub fn from_event(event: KeyEvent) -> Self {
+        let mut code = event.code;
+        let mut modifiers = event.modifiers;
+
+        if let KeyCode::Char(c) = code {
+            if c.is_ascii_uppercase() && !modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT) {
+                modifiers.remove(KeyModifiers::SHIFT);
+            } else if modifiers.contains(KeyModifiers::CONTROL) {
+                code = KeyCode::Char(c.to_ascii_lowercase());
+            }
         }
-        let ctrl = self.modifiers.bits() & KeyModifiers::CONTROL.bits() != 0;
-        let shift = self.modifiers.bits() & KeyModifiers::SHIFT.bits() != 0;
-        let alt = self.modifiers.bits() & KeyModifiers::ALT.bits() != 0;
-        let cmd = self.modifiers.bits() & KeyModifiers::SUPER.bits() != 0;
+
+        Self { modifiers, code }
+    }
+
+    pub const fn chord(&self) -> &'static str {
+        let ctrl = self.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = self.modifiers.contains(KeyModifiers::ALT);
+        let shift = self.modifiers.contains(KeyModifiers::SHIFT);
+        let cmd = self.modifiers.contains(KeyModifiers::SUPER);
 
         if ctrl && shift {
             match self.code {
@@ -366,55 +303,80 @@ impl Key {
             }
         } else if ctrl {
             match self.code {
-                KeyCode::Char('a') | KeyCode::Char('A') => "ctrl+a",
-                KeyCode::Char('b') | KeyCode::Char('B') => "ctrl+b",
-                KeyCode::Char('c') | KeyCode::Char('C') => "ctrl+c",
-                KeyCode::Char('d') | KeyCode::Char('D') => "ctrl+d",
-                KeyCode::Char('e') | KeyCode::Char('E') => "ctrl+e",
-                KeyCode::Char('f') | KeyCode::Char('F') => "ctrl+f",
-                KeyCode::Char('g') | KeyCode::Char('G') => "ctrl+g",
-                KeyCode::Char('h') | KeyCode::Char('H') => "ctrl+h",
-                KeyCode::Char('i') | KeyCode::Char('I') => "ctrl+i",
-                KeyCode::Char('j') | KeyCode::Char('J') => "ctrl+j",
-                KeyCode::Char('k') | KeyCode::Char('K') => "ctrl+k",
-                KeyCode::Char('l') | KeyCode::Char('L') => "ctrl+l",
-                KeyCode::Char('m') | KeyCode::Char('M') => "ctrl+m",
-                KeyCode::Char('n') | KeyCode::Char('N') => "ctrl+n",
-                KeyCode::Char('o') | KeyCode::Char('O') => "ctrl+o",
-                KeyCode::Char('p') | KeyCode::Char('P') => "ctrl+p",
-                KeyCode::Char('q') | KeyCode::Char('Q') => "ctrl+q",
-                KeyCode::Char('r') | KeyCode::Char('R') => "ctrl+r",
-                KeyCode::Char('s') | KeyCode::Char('S') => "ctrl+s",
-                KeyCode::Char('t') | KeyCode::Char('T') => "ctrl+t",
-                KeyCode::Char('u') | KeyCode::Char('U') => "ctrl+u",
-                KeyCode::Char('v') | KeyCode::Char('V') => "ctrl+v",
-                KeyCode::Char('w') | KeyCode::Char('W') => "ctrl+w",
-                KeyCode::Char('x') | KeyCode::Char('X') => "ctrl+x",
-                KeyCode::Char('y') | KeyCode::Char('Y') => "ctrl+y",
-                KeyCode::Char('z') | KeyCode::Char('Z') => "ctrl+z",
-                KeyCode::Left => "ctrl+←",
-                KeyCode::Right => "ctrl+→",
+                KeyCode::Char(c) => match c.to_ascii_lowercase() {
+                    'a' => "ctrl+a",
+                    'b' => "ctrl+b",
+                    'c' => "ctrl+c",
+                    'd' => "ctrl+d",
+                    'e' => "ctrl+e",
+                    'f' => "ctrl+f",
+                    'g' => "ctrl+g",
+                    'h' => "ctrl+h",
+                    'i' => "ctrl+i",
+                    'j' => "ctrl+j",
+                    'k' => "ctrl+k",
+                    'l' => "ctrl+l",
+                    'm' => "ctrl+m",
+                    'n' => "ctrl+n",
+                    'o' => "ctrl+o",
+                    'p' => "ctrl+p",
+                    'q' => "ctrl+q",
+                    'r' => "ctrl+r",
+                    's' => "ctrl+s",
+                    't' => "ctrl+t",
+                    'u' => "ctrl+u",
+                    'v' => "ctrl+v",
+                    'w' => "ctrl+w",
+                    'x' => "ctrl+x",
+                    'y' => "ctrl+y",
+                    'z' => "ctrl+z",
+                    _ => "·",
+                },
                 KeyCode::Up => "ctrl+↑",
                 KeyCode::Down => "ctrl+↓",
+                KeyCode::Left => "ctrl+←",
+                KeyCode::Right => "ctrl+→",
                 _ => "·",
             }
         } else if alt {
             match self.code {
+                KeyCode::Char(c) => match c.to_ascii_lowercase() {
+                    'a' => "alt+a",
+                    'b' => "alt+b",
+                    'c' => "alt+c",
+                    'd' => "alt+d",
+                    'e' => "alt+e",
+                    'f' => "alt+f",
+                    'g' => "alt+g",
+                    'h' => "alt+h",
+                    'i' => "alt+i",
+                    'j' => "alt+j",
+                    'k' => "alt+k",
+                    'l' => "alt+l",
+                    'm' => "alt+m",
+                    'n' => "alt+n",
+                    'o' => "alt+o",
+                    'p' => "alt+p",
+                    'q' => "alt+q",
+                    'r' => "alt+r",
+                    's' => "alt+s",
+                    't' => "alt+t",
+                    'u' => "alt+u",
+                    'v' => "alt+v",
+                    'w' => "alt+w",
+                    'x' => "alt+x",
+                    'y' => "alt+y",
+                    'z' => "alt+z",
+                    _ => "·",
+                },
                 KeyCode::Enter => "alt+enter",
-                KeyCode::Char('b') | KeyCode::Char('B') => "alt+b",
-                KeyCode::Char('d') | KeyCode::Char('D') => "alt+d",
-                KeyCode::Char('f') | KeyCode::Char('F') => "alt+f",
-                KeyCode::Char('o') | KeyCode::Char('O') => "alt+o",
-                KeyCode::Char('p') | KeyCode::Char('P') => "alt+p",
-                KeyCode::Char('n') | KeyCode::Char('N') => "alt+n",
                 KeyCode::Up => "alt+↑",
                 KeyCode::Down => "alt+↓",
-                KeyCode::Backspace => "alt+backspace",
                 _ => "·",
             }
         } else if shift {
             match self.code {
-                KeyCode::Tab => "shift+tab",
+                KeyCode::Tab | KeyCode::BackTab => "shift+tab",
                 _ => chord_token(self.code),
             }
         } else if cmd {
@@ -427,24 +389,11 @@ impl Key {
         }
     }
 
-    /// The canonical capitalized display name for this key — `Enter`, `Esc`,
-    /// `Tab`, `Ctrl+T`, `↑` — i.e. the form a footer hint strip or an
-    /// activity-bar interrupt hint renders as a standalone keycap.
-    ///
-    /// This is the human form; the compact lowercase form is [`Key::chord`].
-    /// Footers and legends call this (or a [`keyvocab`] affordance constant)
-    /// instead of typing the glyph, so every surface agrees on case and glyph.
-    ///
-    /// Returns `&'static str` for the same allocation-free reason as
-    /// [`Key::chord`].
-    pub const fn display(self) -> &'static str {
-        if matches!(self.code, KeyCode::BackTab) {
-            return keyvocab::SHIFT_TAB;
-        }
-        let ctrl = self.modifiers.bits() & KeyModifiers::CONTROL.bits() != 0;
-        let shift = self.modifiers.bits() & KeyModifiers::SHIFT.bits() != 0;
-        let alt = self.modifiers.bits() & KeyModifiers::ALT.bits() != 0;
-        let cmd = self.modifiers.bits() & KeyModifiers::SUPER.bits() != 0;
+    pub const fn display(&self) -> &'static str {
+        let ctrl = self.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = self.modifiers.contains(KeyModifiers::ALT);
+        let shift = self.modifiers.contains(KeyModifiers::SHIFT);
+        let cmd = self.modifiers.contains(KeyModifiers::SUPER);
 
         if ctrl && shift {
             match self.code {
@@ -453,55 +402,80 @@ impl Key {
             }
         } else if ctrl {
             match self.code {
-                KeyCode::Char('a') | KeyCode::Char('A') => "Ctrl+A",
-                KeyCode::Char('b') | KeyCode::Char('B') => "Ctrl+B",
-                KeyCode::Char('c') | KeyCode::Char('C') => "Ctrl+C",
-                KeyCode::Char('d') | KeyCode::Char('D') => "Ctrl+D",
-                KeyCode::Char('e') | KeyCode::Char('E') => "Ctrl+E",
-                KeyCode::Char('f') | KeyCode::Char('F') => "Ctrl+F",
-                KeyCode::Char('g') | KeyCode::Char('G') => "Ctrl+G",
-                KeyCode::Char('h') | KeyCode::Char('H') => "Ctrl+H",
-                KeyCode::Char('i') | KeyCode::Char('I') => "Ctrl+I",
-                KeyCode::Char('j') | KeyCode::Char('J') => "Ctrl+J",
-                KeyCode::Char('k') | KeyCode::Char('K') => "Ctrl+K",
-                KeyCode::Char('l') | KeyCode::Char('L') => "Ctrl+L",
-                KeyCode::Char('m') | KeyCode::Char('M') => "Ctrl+M",
-                KeyCode::Char('n') | KeyCode::Char('N') => "Ctrl+N",
-                KeyCode::Char('o') | KeyCode::Char('O') => "Ctrl+O",
-                KeyCode::Char('p') | KeyCode::Char('P') => "Ctrl+P",
-                KeyCode::Char('q') | KeyCode::Char('Q') => "Ctrl+Q",
-                KeyCode::Char('r') | KeyCode::Char('R') => "Ctrl+R",
-                KeyCode::Char('s') | KeyCode::Char('S') => "Ctrl+S",
-                KeyCode::Char('t') | KeyCode::Char('T') => "Ctrl+T",
-                KeyCode::Char('u') | KeyCode::Char('U') => "Ctrl+U",
-                KeyCode::Char('v') | KeyCode::Char('V') => "Ctrl+V",
-                KeyCode::Char('w') | KeyCode::Char('W') => "Ctrl+W",
-                KeyCode::Char('x') | KeyCode::Char('X') => "Ctrl+X",
-                KeyCode::Char('y') | KeyCode::Char('Y') => "Ctrl+Y",
-                KeyCode::Char('z') | KeyCode::Char('Z') => "Ctrl+Z",
-                KeyCode::Left => "Ctrl+←",
-                KeyCode::Right => "Ctrl+→",
+                KeyCode::Char(c) => match c.to_ascii_lowercase() {
+                    'a' => "Ctrl+A",
+                    'b' => "Ctrl+B",
+                    'c' => "Ctrl+C",
+                    'd' => "Ctrl+D",
+                    'e' => "Ctrl+E",
+                    'f' => "Ctrl+F",
+                    'g' => "Ctrl+G",
+                    'h' => "Ctrl+H",
+                    'i' => "Ctrl+I",
+                    'j' => "Ctrl+J",
+                    'k' => "Ctrl+K",
+                    'l' => "Ctrl+L",
+                    'm' => "Ctrl+M",
+                    'n' => "Ctrl+N",
+                    'o' => "Ctrl+O",
+                    'p' => "Ctrl+P",
+                    'q' => "Ctrl+Q",
+                    'r' => "Ctrl+R",
+                    's' => "Ctrl+S",
+                    't' => "Ctrl+T",
+                    'u' => "Ctrl+U",
+                    'v' => "Ctrl+V",
+                    'w' => "Ctrl+W",
+                    'x' => "Ctrl+X",
+                    'y' => "Ctrl+Y",
+                    'z' => "Ctrl+Z",
+                    _ => "·",
+                },
                 KeyCode::Up => "Ctrl+↑",
                 KeyCode::Down => "Ctrl+↓",
+                KeyCode::Left => "Ctrl+←",
+                KeyCode::Right => "Ctrl+→",
                 _ => "·",
             }
         } else if alt {
             match self.code {
+                KeyCode::Char(c) => match c.to_ascii_lowercase() {
+                    'a' => "Alt+A",
+                    'b' => "Alt+B",
+                    'c' => "Alt+C",
+                    'd' => "Alt+D",
+                    'e' => "Alt+E",
+                    'f' => "Alt+F",
+                    'g' => "Alt+G",
+                    'h' => "Alt+H",
+                    'i' => "Alt+I",
+                    'j' => "Alt+J",
+                    'k' => "Alt+K",
+                    'l' => "Alt+L",
+                    'm' => "Alt+M",
+                    'n' => "Alt+N",
+                    'o' => "Alt+O",
+                    'p' => "Alt+P",
+                    'q' => "Alt+Q",
+                    'r' => "Alt+R",
+                    's' => "Alt+S",
+                    't' => "Alt+T",
+                    'u' => "Alt+U",
+                    'v' => "Alt+V",
+                    'w' => "Alt+W",
+                    'x' => "Alt+X",
+                    'y' => "Alt+Y",
+                    'z' => "Alt+Z",
+                    _ => "·",
+                },
                 KeyCode::Enter => "Alt+Enter",
-                KeyCode::Char('b') | KeyCode::Char('B') => "Alt+B",
-                KeyCode::Char('d') | KeyCode::Char('D') => "Alt+D",
-                KeyCode::Char('f') | KeyCode::Char('F') => "Alt+F",
-                KeyCode::Char('o') | KeyCode::Char('O') => "Alt+O",
-                KeyCode::Char('p') | KeyCode::Char('P') => "Alt+P",
-                KeyCode::Char('n') | KeyCode::Char('N') => "Alt+N",
                 KeyCode::Up => "Alt+↑",
                 KeyCode::Down => "Alt+↓",
-                KeyCode::Backspace => "Alt+Backspace",
                 _ => "·",
             }
         } else if shift {
             match self.code {
-                KeyCode::Tab => keyvocab::SHIFT_TAB,
+                KeyCode::Tab | KeyCode::BackTab => keyvocab::SHIFT_TAB,
                 _ => display_token(self.code),
             }
         } else if cmd {
@@ -515,870 +489,1049 @@ impl Key {
     }
 }
 
-impl Key {
-    // Frequently-displayed single keys, as `const` values so call sites read as
-    // `Key::ESC.display()` instead of rebuilding a `Key` literal each time.
-    // These are the keys whose display name recurs across footers and legends.
+// ─────────────────────────────────────────────────────────────────────────────
+// Command Registry SSOT Specification Types
+// ─────────────────────────────────────────────────────────────────────────────
 
-    /// The Escape key.
-    pub const ESC: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Esc,
-    };
-    /// The Enter / Return key.
-    pub const ENTER: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Enter,
-    };
-    /// The Tab key.
-    pub const TAB: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Tab,
-    };
-    /// The Backspace key.
-    pub const BACKSPACE: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Backspace,
-    };
-    /// The Up arrow key.
-    pub const UP: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Up,
-    };
-    /// The Down arrow key.
-    pub const DOWN: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Down,
-    };
-    /// The Left arrow key.
-    pub const LEFT: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Left,
-    };
-    /// The Right arrow key.
-    pub const RIGHT: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Right,
-    };
-    /// F1.
-    pub const F1: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(1),
-    };
-    /// F2.
-    pub const F2: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(2),
-    };
-    /// F3.
-    pub const F3: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(3),
-    };
-    /// F4.
-    pub const F4: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(4),
-    };
-    /// F5.
-    pub const F5: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(5),
-    };
-    /// Page Up.
-    pub const PAGE_UP: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::PageUp,
-    };
-    /// Page Down.
-    pub const PAGE_DOWN: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::PageDown,
-    };
-    /// Alt+Up.
-    pub const ALT_UP: Key = Key {
-        modifiers: KeyModifiers::ALT,
-        code: KeyCode::Up,
-    };
-    /// Alt+Down.
-    pub const ALT_DOWN: Key = Key {
-        modifiers: KeyModifiers::ALT,
-        code: KeyCode::Down,
-    };
-    /// Alt+O.
-    pub const ALT_O: Key = Key {
-        modifiers: KeyModifiers::ALT,
-        code: KeyCode::Char('o'),
-    };
-    /// Ctrl+A.
-    pub const CTRL_A: Key = Key::ctrl('a');
-    /// Ctrl+B.
-    pub const CTRL_B: Key = Key::ctrl('b');
-    /// Ctrl+C.
-    pub const CTRL_C: Key = Key::ctrl('c');
-    /// Ctrl+D.
-    pub const CTRL_D: Key = Key::ctrl('d');
-    /// Ctrl+E.
-    pub const CTRL_E: Key = Key::ctrl('e');
-    /// Ctrl+F.
-    pub const CTRL_F: Key = Key::ctrl('f');
-    /// Ctrl+G.
-    pub const CTRL_G: Key = Key::ctrl('g');
-    /// Ctrl+H.
-    pub const CTRL_H: Key = Key::ctrl('h');
-    /// Ctrl+K.
-    pub const CTRL_K: Key = Key::ctrl('k');
-    /// Ctrl+M.
-    pub const CTRL_M: Key = Key::ctrl('m');
-    /// Ctrl+N.
-    pub const CTRL_N: Key = Key::ctrl('n');
-    /// Ctrl+O.
-    pub const CTRL_O: Key = Key::ctrl('o');
-    /// Ctrl+P.
-    pub const CTRL_P: Key = Key::ctrl('p');
-    /// Ctrl+Q.
-    pub const CTRL_Q: Key = Key::ctrl('q');
-    /// Ctrl+R.
-    pub const CTRL_R: Key = Key::ctrl('r');
-    /// Ctrl+S.
-    pub const CTRL_S: Key = Key::ctrl('s');
-    /// Ctrl+T.
-    pub const CTRL_T: Key = Key::ctrl('t');
-    /// Ctrl+U.
-    pub const CTRL_U: Key = Key::ctrl('u');
-    /// Ctrl+W.
-    pub const CTRL_W: Key = Key::ctrl('w');
-    /// Ctrl+X.
-    pub const CTRL_X: Key = Key::ctrl('x');
-    /// Ctrl+Y.
-    pub const CTRL_Y: Key = Key::ctrl('y');
-    /// Ctrl+Z.
-    pub const CTRL_Z: Key = Key::ctrl('z');
+/// Exhaustive identifier for every executable command in the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandId {
+    // ── Global (6 Hard-Bound Shortcuts) ──
+    Help,
+    CommandPalette,
+    CancelOrBack,
+    InterruptTask,
+    Quit,
+    CopySelection,
+
+    // ── Session & Composer ──
+    SendPrompt,
+    QueueFollowUp,
+    SteerImmediate,
+    InsertNewline,
+    HistorySearch,
+    FocusTranscript,
+    FocusComposer,
+    ScrollTranscriptUp,
+    ScrollTranscriptDown,
+
+    // ── Transcript Focus ──
+    TranscriptMoveUp,
+    TranscriptMoveDown,
+    TranscriptOpenOrToggle,
+    TranscriptTop,
+    TranscriptBottom,
+
+    // ── Surface Navigation ──
+    NavigateSession,
+    NavigateDashboard,
+    NavigateSettings,
+    OpenTodos,
+    OpenQueue,
+    OpenTelemetry,
+    OpenModels,
+    OpenConnections,
+    OpenTools,
+    OpenMcp,
+    OpenSkills,
+    OpenPermissions,
+    OpenUsage,
+    OpenTree,
+    OpenBtw,
+    OpenSessions,
+
+    // ── Management & Actions ──
+    ToggleQueueBlock,
+    ClearQueue,
+    McpReconnectSelected,
+    McpToggleSelected,
+    ToolsToggleSelected,
+    PermissionsRevokeSelected,
+    PermissionsClearAll,
+    SkillsToggleDetail,
+    ProviderAddConnection,
+    ProviderEditSelected,
+    ProviderDeleteSelected,
+    ProviderToggleFavorite,
+    RedrawScreen,
 }
 
-/// The precondition under which a binding is active.
+/// Scope context where a command is applicable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Global,
+    Session,
+    Composer,
+    Transcript,
+    BrowsePanel,
+    BlockingDialog,
+}
+
+/// Category of the command for palette grouping and help presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandCategory {
+    Global,
+    Navigate,
+    Session,
+    Actions,
+    Settings,
+}
+
+impl CommandCategory {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Global => "Global",
+            Self::Navigate => "Navigate",
+            Self::Session => "Session",
+            Self::Actions => "Actions",
+            Self::Settings => "Settings",
+        }
+    }
+}
+
+/// Danger classification for critical/destructive actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Gate {
-    /// Active in every context, including while a modal is open.
-    Always,
-    /// Active only from the top level — no modal owns the surface.
-    NoModal,
+pub enum DangerLevel {
+    Safe,
+    Cautious,
+    Dangerous,
 }
 
-/// One declared global shortcut: a [`Key`] that maps to an [`Action`] while
-/// its [`Gate`] holds, with a short description for the Help modal.
+/// Progressive disclosure priority level (L0 to L3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DisclosurePriority {
+    /// L0: Maximum of 3 primary actions rendered in the active footer.
+    L0Footer,
+    /// L1: Local action displayed in a focused region bar.
+    L1FocusRegion,
+    /// L2: Searchable through the `Ctrl+L` Command Palette.
+    L2Palette,
+    /// L3: Full contextual reference visible only in F1 Help.
+    L3HelpOnly,
+}
+
+/// Dynamic availability status for a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Availability {
+    Available,
+    Unavailable(&'static str),
+}
+
+/// Snapshot of application state passed to availability predicates.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppContext {
+    pub active_view: View,
+    pub active_modal: Modal,
+    pub session_focus: SessionFocusRegion,
+    pub is_responding: bool,
+    pub has_input: bool,
+    pub has_selection: bool,
+    pub has_running_task: bool,
+    pub in_runner_view: bool,
+    pub in_side_view: bool,
+    pub queue_count: usize,
+    pub has_focused_target: bool,
+}
+
+/// Authoritative declaration of a single application command.
 #[derive(Debug, Clone, Copy)]
-pub struct Binding {
-    pub key: Key,
-    pub gate: Gate,
-    pub action: Action,
+pub struct CommandSpec {
+    pub id: CommandId,
+    pub label: &'static str,
+    pub hint: &'static str,
+    pub category: CommandCategory,
+    pub scope: Scope,
+    pub bindings: &'static [Key],
+    pub slash: Option<&'static str>,
+    pub availability: fn(&AppContext) -> Availability,
+    pub disclosure: DisclosurePriority,
+    pub danger: DangerLevel,
     pub description: &'static str,
 }
 
-/// The semantic global action a binding resolves to. Kept separate from
-/// [`InputAction`] so the registry can be enumerated for Help without owning
-/// the full (large, contextual) action enum; the resolver is the only place
-/// that bridges [`Action`] → [`InputAction`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    /// Open the help / keybindings modal.
-    OpenHelp,
-    /// Open the input-history recall modal.
-    OpenHistory,
-    /// Open the flat model picker.
-    OpenModels,
-    /// Open the active connection detail modal (`Ctrl+N`).
-    OpenConnectionDetail,
-    /// Open the Todos modal.
-    OpenTodos,
-    /// Open the queue overview modal.
-    OpenQueue,
-    /// Open the session telemetry modal (context tokens & performance) (`Ctrl+O`).
-    OpenTelemetry,
-    /// Open the `/btw` asides list modal (ADR-0103 §5): live background
-    /// asides, jump back in, or close one outright.
-    OpenBtwList,
-    /// Open the global view quick switcher (ADR-0133, `Ctrl+L`).
-    OpenViewSwitcher,
-    /// Toggle the user block on the viewed session's outbox. While blocked, no
-    /// queued message auto-drains (not even after the round completes).
-    ToggleQueueBlock,
-    /// Arm the two-stroke Ctrl+X leader chord (Actions / Which-Key menu).
-    LeaderChord,
-    /// Copy the current selection (or clear input / arm quit — resolved by the
-    /// app loop).
-    CopyOrClear,
-    /// Copy the selection unconditionally (Ctrl+Shift+C / Cmd+C).
-    CopySelection,
+// ─────────────────────────────────────────────────────────────────────────────
+// Availability Predicates
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn avail_always(_: &AppContext) -> Availability {
+    Availability::Available
 }
 
-/// The registry of global bindings, in Help display order.
+fn avail_session(ctx: &AppContext) -> Availability {
+    if ctx.active_view == View::Session && ctx.active_modal == Modal::None {
+        Availability::Available
+    } else {
+        Availability::Unavailable("only in session")
+    }
+}
+
+fn avail_running(ctx: &AppContext) -> Availability {
+    if ctx.is_responding || ctx.has_running_task {
+        Availability::Available
+    } else {
+        Availability::Unavailable("only while running")
+    }
+}
+
+fn avail_idle_composer(ctx: &AppContext) -> Availability {
+    if ctx.active_modal != Modal::None {
+        Availability::Unavailable("modal active")
+    } else if ctx.is_responding {
+        Availability::Unavailable("currently running")
+    } else {
+        Availability::Available
+    }
+}
+
+fn avail_selection(ctx: &AppContext) -> Availability {
+    if ctx.has_selection {
+        Availability::Available
+    } else {
+        Availability::Unavailable("no active selection")
+    }
+}
+
+fn avail_queue_nonempty(ctx: &AppContext) -> Availability {
+    if ctx.queue_count > 0 {
+        Availability::Available
+    } else {
+        Availability::Unavailable("queue is empty")
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static Command Registry Master Table
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub static COMMAND_REGISTRY: &[CommandSpec] = &[
+    // ── 6 Canonical Global Bindings ──
+    CommandSpec {
+        id: CommandId::Help,
+        label: "Help",
+        hint: "F1",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::F1],
+        slash: Some("/help"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Show context-sensitive help and key references",
+    },
+    CommandSpec {
+        id: CommandId::CommandPalette,
+        label: "Command Palette",
+        hint: "Ctrl+L",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::CTRL_L],
+        slash: Some("/commands"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Open unified command palette and surface switcher",
+    },
+    CommandSpec {
+        id: CommandId::CancelOrBack,
+        label: "Back / Cancel",
+        hint: "Esc",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::ESC],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Dismiss active overlay, step back, or return to composer",
+    },
+    CommandSpec {
+        id: CommandId::InterruptTask,
+        label: "Interrupt Task",
+        hint: "Ctrl+C",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::CTRL_C],
+        slash: Some("/interrupt"),
+        availability: avail_running,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Cautious,
+        description: "Interrupt currently executing turn / task",
+    },
+    CommandSpec {
+        id: CommandId::Quit,
+        label: "Quit Muta",
+        hint: "Ctrl+Q",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::CTRL_Q],
+        slash: Some("/exit"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Dangerous,
+        description: "Exit application gracefully",
+    },
+    CommandSpec {
+        id: CommandId::CopySelection,
+        label: "Copy Selection",
+        hint: "Ctrl+Shift+C",
+        category: CommandCategory::Global,
+        scope: Scope::Global,
+        bindings: &[Key::CTRL_SHIFT_C, Key::CMD_C],
+        slash: None,
+        availability: avail_selection,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Copy selected text to clipboard",
+    },
+
+    // ── Session & Composer Controls ──
+    CommandSpec {
+        id: CommandId::SendPrompt,
+        label: "Send Prompt",
+        hint: "Enter",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::ENTER],
+        slash: Some("/send"),
+        availability: avail_idle_composer,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Send prompt text to agent",
+    },
+    CommandSpec {
+        id: CommandId::QueueFollowUp,
+        label: "Queue Follow-up",
+        hint: "Enter (running)",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_running,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Enqueue prompt as next-round follow-up message",
+    },
+    CommandSpec {
+        id: CommandId::SteerImmediate,
+        label: "Steer Now",
+        hint: "Alt+S",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::ALT_S],
+        slash: Some("/steer"),
+        availability: avail_running,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Cautious,
+        description: "Inject prompt immediately at next safe boundary",
+    },
+    CommandSpec {
+        id: CommandId::InsertNewline,
+        label: "Insert Newline",
+        hint: "Alt+Enter / Ctrl+J",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::ALT_ENTER, Key::CTRL_J],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L3HelpOnly,
+        danger: DangerLevel::Safe,
+        description: "Insert literal newline into composer buffer",
+    },
+    CommandSpec {
+        id: CommandId::HistorySearch,
+        label: "Search History",
+        hint: "Ctrl+R",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::CTRL_R],
+        slash: Some("/history"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Search and recall past prompt history",
+    },
+    CommandSpec {
+        id: CommandId::FocusTranscript,
+        label: "Focus Transcript",
+        hint: "Tab",
+        category: CommandCategory::Session,
+        scope: Scope::Composer,
+        bindings: &[Key::TAB],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Switch focus from Composer to Transcript region",
+    },
+    CommandSpec {
+        id: CommandId::FocusComposer,
+        label: "Focus Composer",
+        hint: "Tab / Esc",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::TAB, Key::BACKTAB, Key::ESC],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Switch focus from Transcript to Composer region",
+    },
+    CommandSpec {
+        id: CommandId::ScrollTranscriptUp,
+        label: "Scroll Transcript Up",
+        hint: "PageUp",
+        category: CommandCategory::Session,
+        scope: Scope::Session,
+        bindings: &[Key::PAGE_UP],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L3HelpOnly,
+        danger: DangerLevel::Safe,
+        description: "Scroll transcript viewport upward",
+    },
+    CommandSpec {
+        id: CommandId::ScrollTranscriptDown,
+        label: "Scroll Transcript Down",
+        hint: "PageDown",
+        category: CommandCategory::Session,
+        scope: Scope::Session,
+        bindings: &[Key::PAGE_DOWN],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L3HelpOnly,
+        danger: DangerLevel::Safe,
+        description: "Scroll transcript viewport downward",
+    },
+
+    // ── Transcript Focus Region Actions ──
+    CommandSpec {
+        id: CommandId::TranscriptMoveUp,
+        label: "Previous Step",
+        hint: "↑",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::UP],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Move focus to previous interactive step or card",
+    },
+    CommandSpec {
+        id: CommandId::TranscriptMoveDown,
+        label: "Next Step",
+        hint: "↓",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::DOWN],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Move focus to next interactive step or card",
+    },
+    CommandSpec {
+        id: CommandId::TranscriptOpenOrToggle,
+        label: "Open / Expand Step",
+        hint: "Enter",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Expand, collapse, or drill down into focused step",
+    },
+    CommandSpec {
+        id: CommandId::TranscriptTop,
+        label: "Transcript Top",
+        hint: "Home",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::HOME],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L3HelpOnly,
+        danger: DangerLevel::Safe,
+        description: "Jump to beginning of transcript",
+    },
+    CommandSpec {
+        id: CommandId::TranscriptBottom,
+        label: "Transcript Bottom",
+        hint: "End",
+        category: CommandCategory::Session,
+        scope: Scope::Transcript,
+        bindings: &[Key::END],
+        slash: None,
+        availability: avail_session,
+        disclosure: DisclosurePriority::L3HelpOnly,
+        danger: DangerLevel::Safe,
+        description: "Jump to end of transcript",
+    },
+
+    // ── Surface Navigation ──
+    CommandSpec {
+        id: CommandId::NavigateSession,
+        label: "Session",
+        hint: "/session",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/session"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Switch to live conversation session view",
+    },
+    CommandSpec {
+        id: CommandId::NavigateDashboard,
+        label: "Session Dashboard",
+        hint: "/dashboard",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/dashboard"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Open daemon session orchestrator dashboard",
+    },
+    CommandSpec {
+        id: CommandId::NavigateSettings,
+        label: "Settings",
+        hint: "/settings",
+        category: CommandCategory::Settings,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/settings"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Open application and appearance settings",
+    },
+    CommandSpec {
+        id: CommandId::OpenTodos,
+        label: "Todos",
+        hint: "/todos",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/todos"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "View agent task list and progression status",
+    },
+    CommandSpec {
+        id: CommandId::OpenQueue,
+        label: "Queue (Outbox)",
+        hint: "/queue",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/queue"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Inspect and manage pending message outbox",
+    },
+    CommandSpec {
+        id: CommandId::OpenTelemetry,
+        label: "Session Telemetry",
+        hint: "/telemetry",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/telemetry"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "View context token accounting and model telemetry",
+    },
+    CommandSpec {
+        id: CommandId::OpenModels,
+        label: "Switch Model",
+        hint: "/models",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/models"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Browse and select available LLM models",
+    },
+    CommandSpec {
+        id: CommandId::OpenConnections,
+        label: "Connections",
+        hint: "/connections",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/connections"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Manage LLM provider endpoints and API credentials",
+    },
+    CommandSpec {
+        id: CommandId::OpenTools,
+        label: "Tools",
+        hint: "/tools",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/tools"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Inspect and configure session tool capability pool",
+    },
+    CommandSpec {
+        id: CommandId::OpenMcp,
+        label: "MCP Servers",
+        hint: "/mcp",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/mcp"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Manage Model Context Protocol server connections",
+    },
+    CommandSpec {
+        id: CommandId::OpenSkills,
+        label: "Skills",
+        hint: "/skills",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/skills"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Inspect discovered workspace skills and guidelines",
+    },
+    CommandSpec {
+        id: CommandId::OpenPermissions,
+        label: "Permissions",
+        hint: "/permissions",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/permissions"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Review and revoke cached tool execution rules",
+    },
+    CommandSpec {
+        id: CommandId::OpenUsage,
+        label: "Usage Statistics",
+        hint: "/usage",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/usage"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "View cross-session token usage and activity ledger",
+    },
+    CommandSpec {
+        id: CommandId::OpenTree,
+        label: "Session Tree",
+        hint: "/tree",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/tree"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "View DAG tree of session rounds and turns",
+    },
+    CommandSpec {
+        id: CommandId::OpenBtw,
+        label: "Asides (/btw)",
+        hint: "/btw",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/btw"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "List background aside conversations",
+    },
+    CommandSpec {
+        id: CommandId::OpenSessions,
+        label: "Sessions",
+        hint: "/sessions",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/sessions"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Switch between saved project sessions",
+    },
+
+    // ── Management Actions ──
+    CommandSpec {
+        id: CommandId::ToggleQueueBlock,
+        label: "Block / Resume Queue",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/queue block"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Cautious,
+        description: "Toggle dispatch latch on outgoing follow-up messages",
+    },
+    CommandSpec {
+        id: CommandId::ClearQueue,
+        label: "Clear Queue",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/queue clear"),
+        availability: avail_queue_nonempty,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Dangerous,
+        description: "Discard all staged outgoing messages in outbox",
+    },
+    CommandSpec {
+        id: CommandId::McpReconnectSelected,
+        label: "Reconnect MCP Server",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Restart and reconnect highlighted MCP server",
+    },
+    CommandSpec {
+        id: CommandId::McpToggleSelected,
+        label: "Toggle MCP Server",
+        hint: "Space",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Enable or disable highlighted MCP server for session",
+    },
+    CommandSpec {
+        id: CommandId::ToolsToggleSelected,
+        label: "Toggle Tool",
+        hint: "Space",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Enable or disable selected tool",
+    },
+    CommandSpec {
+        id: CommandId::PermissionsRevokeSelected,
+        label: "Revoke Permission Rule",
+        hint: "Space",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Cautious,
+        description: "Revoke selected cached execution rule",
+    },
+    CommandSpec {
+        id: CommandId::PermissionsClearAll,
+        label: "Revoke All Permissions",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: Some("/permissions clear"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Dangerous,
+        description: "Clear all cached execution rules for workspace",
+    },
+    CommandSpec {
+        id: CommandId::SkillsToggleDetail,
+        label: "Toggle Skill Details",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Expand or collapse details and guidance for selected skill",
+    },
+    CommandSpec {
+        id: CommandId::ProviderAddConnection,
+        label: "Add Provider Connection",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Configure a new provider or custom endpoint",
+    },
+    CommandSpec {
+        id: CommandId::ProviderEditSelected,
+        label: "Edit Provider / Model",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Edit credentials or capability overrides for selection",
+    },
+    CommandSpec {
+        id: CommandId::ProviderDeleteSelected,
+        label: "Delete Provider Connection",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Dangerous,
+        description: "Delete custom provider endpoint",
+    },
+    CommandSpec {
+        id: CommandId::ProviderToggleFavorite,
+        label: "Toggle Favorite Model",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::BrowsePanel,
+        bindings: &[],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Star or unstar model for quick switching",
+    },
+    CommandSpec {
+        id: CommandId::RedrawScreen,
+        label: "Redraw Screen",
+        hint: "Action",
+        category: CommandCategory::Actions,
+        scope: Scope::Global,
+        bindings: &[],
+        slash: Some("/redraw"),
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Force full TUI terminal redraw and layout sync",
+    },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Registry Lookup & Derivation Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Complete set of registered command specs.
+pub fn all_commands() -> &'static [CommandSpec] {
+    COMMAND_REGISTRY
+}
+
+/// Look up a command by its unique identifier.
+pub fn find_command(id: CommandId) -> Option<&'static CommandSpec> {
+    COMMAND_REGISTRY.iter().find(|cmd| cmd.id == id)
+}
+
+/// Look up a command by its slash trigger.
+pub fn find_by_slash(slash: &str) -> Option<&'static CommandSpec> {
+    let clean = slash.trim().to_ascii_lowercase();
+    COMMAND_REGISTRY.iter().find(|cmd| {
+        cmd.slash.map(|s| s.eq_ignore_ascii_case(&clean)).unwrap_or(false)
+    })
+}
+
+/// Resolve one of the 6 canonical global bindings.
 ///
-/// Wraps a shared lazy-initialized binding list so resolving a key never
-/// allocates (the list is built once, on first use). That list is the
-/// **single source of truth** for the app's global shortcuts; both the input
-/// resolver and the Help modal read from it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Registry;
-
-/// The canonical global bindings, built once on first access. Declared so the
-/// Help modal (via a data bridge) and the input resolver share one list — see
-/// [`Registry`]. `LazyLock` because `KeyModifiers` is a `bitflags` type whose
-/// `bitor` is not `const`, so the list cannot live in a plain `static`.
-pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyLock::new(|| {
-    // Order here is the order rows appear in the Help modal. Keep the most
-    // discoverable / general shortcuts first.
-    vec![
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('t'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenTodos,
-            description: "open todos",
-        },
-        // Queue management lives on the Ctrl row (ADR-0126), replacing the
-        // old F2/F3 bindings. Fn-dispatch is OS/terminal policy, not app
-        // policy: terminals, window managers, and browser embedders may
-        // reserve or remap those keys without the application seeing them.
-        // Ctrl chords are distinct bytes on every terminal (raw mode keeps
-        // ISIG/IXON off), survive tmux/screen, and sit one row from the
-        // Enter the same gesture ends with. Mnemonics: Q = queue list and
-        // P = pause the queue.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('q'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenQueue,
-            description: "open queue (outbox)",
-        },
-        // F5 opens the `/btw` asides list (ADR-0103). A function key rather
-        // than a Ctrl combo: Ctrl+G is byte-collided with readline's
-        // abort-to-start-of-line in terminals without the Kitty protocol.
-        // (The queue family moved off the F-row to Ctrl+P/Q — ADR-0126 —
-        // but this list surface keeps F5, a rarer, less time-sensitive
-        // affordance with no clean free Ctrl slot.)
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(5),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenBtwList,
-            description: "open /btw asides",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('p'),
-            },
-            gate: Gate::NoModal,
-            action: Action::ToggleQueueBlock,
-            description: "block/resume queue",
-        },
-        // Ctrl+M opens the model picker. Portability caveat, mirrored in the
-        // description below: in a raw terminal Ctrl+M is byte-identical to
-        // Enter (0x0D), so this binding only fires under the Kitty enhanced
-        // keyboard protocol (requested in `run_tui`). `/models` is the
-        // portable path — a slash command always arrives as text — so the
-        // chord is a convenience on modern terminals, not the only door.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('m'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenModels,
-            description: "switch model (kitty-protocol chord; /models always works)",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('n'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenConnectionDetail,
-            description: "active connection detail",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('r'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenHistory,
-            description: "search history",
-        },
-        // Ctrl+L opens the global view quick switcher (ADR-0133). `Gate::Always`
-        // — the whole point of a switcher is that it works *over* whatever
-        // surface is up (matching tmux's window switcher, the direct prior
-        // art), so it must not be NoModal-gated like the open-* bindings. A
-        // Ctrl chord rather than the F-row for the same portability reasons
-        // the queue family recorded (ADR-0126): Ctrl bytes are distinct in
-        // raw mode, survive tmux/screen, and sit one row from Enter. Ctrl+L
-        // is free — not in the readline family the composer uses
-        // (Ctrl+A/E/W/U/K, Alt+B/F/D) and unclaimed by any global binding
-        // (Ctrl+G was rejected for colliding with readline's abort;
-        // Ctrl+Tab/Ctrl+Space are terminal/IME territory).
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('l'),
-            },
-            gate: Gate::Always,
-            action: Action::OpenViewSwitcher,
-            description: "switch view",
-        },
-        // Ctrl+O opens the context/token report — the keyboard twin of
-        // clicking the model bar's context meter (progressive disclosure:
-        // the glanceable `89.2k (8%)` gauge hides the full breakdown until
-        // Ctrl+O opens the unified session telemetry report — the keyboard twin of clicking
-        // the context or stream rate gauges in the model bar.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('o'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenTelemetry,
-            description: "session telemetry report",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('x'),
-            },
-            gate: Gate::NoModal,
-            action: Action::LeaderChord,
-            description: "actions / leader chord (Which-Key)",
-        },
-        // `?` / `f1` / `ctrl+h` all open help, but they are context-sensitive (`?`
-        // only fires on an empty prompt) and `ctrl+h` needs the Kitty protocol —
-        // so they stay hand-routed in the input handler and are *documented* in
-        // Help via the legacy fallback rows. Only the portable `f1` is declared
-        // here, so the registry owns at least one canonical help binding.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(1),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenHelp,
-            description: "this help (? / ctrl+h)",
-        },
-        // The copy family. Plain Ctrl+C is the semantic copy/clear/quit (resolved
-        // by the app loop); Ctrl+Shift+C and Cmd+C copy the selection outright.
-        // All three are Always-on so they work over any modal.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('c'),
-            },
-            gate: Gate::Always,
-            action: Action::CopyOrClear,
-            description: "copy  clear input  quit (×2)",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-                code: KeyCode::Char('c'),
-            },
-            gate: Gate::Always,
-            action: Action::CopySelection,
-            description: "copy selection",
-        },
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::SUPER,
-                code: KeyCode::Char('c'),
-            },
-            gate: Gate::Always,
-            action: Action::CopySelection,
-            description: "copy selection (cmd+c)",
-        },
-    ]
-});
-
-impl Registry {
-    /// Construct the registry. Cheap — the binding list is shared and built
-    /// once on first access (see [`GLOBAL_BINDINGS`]).
-    pub const fn new() -> Self {
-        Self
-    }
-
-    /// Iterate the declared bindings in Help display order.
-    pub fn bindings(&self) -> &'static [Binding] {
-        &GLOBAL_BINDINGS
-    }
-
-    /// Resolve a key event to a global [`InputAction`], applying the binding's
-    /// gate against the current `active_modal`. Returns `None` when the key is
-    /// not a declared global shortcut (so the caller falls through to its
-    /// contextual/text-editing handling).
-    ///
-    /// This is the bridge the input handler calls *before* its contextual
-    /// match arms. Global bindings win over contextual ones by construction:
-    /// every declared key here is one we want to mean the same thing from the
-    /// top level regardless of input-box state.
-    pub fn resolve(&self, event: KeyEvent, active_modal: Modal) -> Option<InputAction> {
-        let key = Key::from_event(event);
-        for binding in GLOBAL_BINDINGS.iter() {
-            if binding.key != key {
-                continue;
-            }
-            match binding.gate {
-                Gate::Always => {}
-                Gate::NoModal => {
-                    if active_modal != Modal::None {
-                        continue;
-                    }
-                }
-            }
-            return Some(match binding.action {
-                Action::OpenHelp => InputAction::OpenHelp,
-                Action::OpenHistory => InputAction::OpenHistory,
-                Action::OpenModels => InputAction::OpenModels,
-                Action::OpenConnectionDetail => InputAction::OpenActiveConnectionDetail,
-                Action::OpenTodos => InputAction::OpenTodos,
-                Action::OpenQueue => InputAction::OpenQueue,
-                Action::OpenTelemetry => InputAction::OpenTelemetry,
-                Action::OpenBtwList => InputAction::OpenBtwList,
-                Action::OpenViewSwitcher => InputAction::ViewSwitcherToggle,
-                Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
-                Action::LeaderChord => {
-                    InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
-                }
-                Action::CopyOrClear => InputAction::CtrlC,
-                Action::CopySelection => InputAction::CopySelection,
-            });
-        }
+/// Returns `Some(CommandId)` only when the key matches a designated global binding.
+pub fn resolve_global_key(key: Key) -> Option<CommandId> {
+    if key == Key::F1 {
+        Some(CommandId::Help)
+    } else if key == Key::CTRL_L {
+        Some(CommandId::CommandPalette)
+    } else if key == Key::ESC {
+        Some(CommandId::CancelOrBack)
+    } else if key == Key::CTRL_C {
+        Some(CommandId::InterruptTask)
+    } else if key == Key::CTRL_Q {
+        Some(CommandId::Quit)
+    } else if key == Key::CTRL_SHIFT_C || key == Key::CMD_C {
+        Some(CommandId::CopySelection)
+    } else {
         None
     }
 }
+
+/// Derive command palette entries with current availability flags.
+pub fn commands_for_palette(ctx: &AppContext) -> Vec<(&'static CommandSpec, Availability)> {
+    COMMAND_REGISTRY
+        .iter()
+        .filter(|cmd| cmd.disclosure >= DisclosurePriority::L2Palette || cmd.scope == Scope::Global)
+        .map(|cmd| (cmd, (cmd.availability)(ctx)))
+        .collect()
+}
+
+/// Derive contextual commands for the dynamic F1 Help modal.
+pub fn commands_for_help(ctx: &AppContext) -> Vec<&'static CommandSpec> {
+    COMMAND_REGISTRY
+        .iter()
+        .filter(|cmd| {
+            // Include globals, current scope commands, and relevant navigate/settings commands
+            match cmd.scope {
+                Scope::Global => true,
+                Scope::Session => ctx.active_view == View::Session && ctx.active_modal == Modal::None,
+                Scope::Composer => {
+                    ctx.active_view == View::Session
+                        && ctx.active_modal == Modal::None
+                        && ctx.session_focus == SessionFocusRegion::Composer
+                }
+                Scope::Transcript => {
+                    ctx.active_view == View::Session
+                        && ctx.active_modal == Modal::None
+                        && ctx.session_focus == SessionFocusRegion::Transcript
+                }
+                Scope::BrowsePanel => ctx.active_modal != Modal::None,
+                Scope::BlockingDialog => ctx.active_modal != Modal::None,
+            }
+        })
+        .collect()
+}
+
+/// Derive L0 footer hints for the current context (maximum of 3 items).
+pub fn footer_hints_for_context(ctx: &AppContext) -> Vec<(&'static str, &'static str)> {
+    if ctx.active_modal != Modal::None {
+        // Browse Panel or Dialog footer
+        vec![
+            (keyvocab::ARROWS_UD, "select"),
+            (Key::ENTER.display(), "confirm"),
+            (Key::ESC.display(), "close"),
+        ]
+    } else if ctx.active_view == View::Session {
+        match ctx.session_focus {
+            SessionFocusRegion::Composer => {
+                if ctx.is_responding {
+                    vec![
+                        (Key::TAB.display(), "transcript"),
+                        (Key::ALT_S.display(), "steer now"),
+                        (Key::ENTER.display(), "queue follow-up"),
+                    ]
+                } else {
+                    vec![
+                        (Key::TAB.display(), "transcript"),
+                        (Key::ENTER.display(), "send"),
+                    ]
+                }
+            }
+            SessionFocusRegion::Transcript => {
+                vec![
+                    (keyvocab::ARROWS_UD, "move"),
+                    (Key::ENTER.display(), "open"),
+                    (Key::ESC.display(), "compose"),
+                ]
+            }
+        }
+    } else {
+        vec![
+            (Key::F1.display(), "help"),
+            (Key::CTRL_L.display(), "commands"),
+            (Key::ESC.display(), "back"),
+        ]
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
-        KeyEvent::new(code, modifiers)
+    #[test]
+    fn global_keys_resolve_correctly() {
+        assert_eq!(resolve_global_key(Key::F1), Some(CommandId::Help));
+        assert_eq!(resolve_global_key(Key::CTRL_L), Some(CommandId::CommandPalette));
+        assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
+        assert_eq!(resolve_global_key(Key::CTRL_C), Some(CommandId::InterruptTask));
+        assert_eq!(resolve_global_key(Key::CTRL_Q), Some(CommandId::Quit));
+        assert_eq!(resolve_global_key(Key::CTRL_SHIFT_C), Some(CommandId::CopySelection));
+        assert_eq!(resolve_global_key(Key::CMD_C), Some(CommandId::CopySelection));
     }
 
     #[test]
-    fn ctrl_t_resolves_to_open_todos_from_top_level() {
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('t'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(action, Some(InputAction::OpenTodos));
+    fn non_global_keys_do_not_resolve_as_global() {
+        assert_eq!(resolve_global_key(Key::ENTER), None);
+        assert_eq!(resolve_global_key(Key::TAB), None);
+        assert_eq!(resolve_global_key(Key::CTRL_R), None);
+        assert_eq!(resolve_global_key(Key::ctrl('x')), None);
+        assert_eq!(resolve_global_key(Key::alt('x')), None);
     }
 
     #[test]
-    fn ctrl_t_does_not_fire_while_a_modal_is_open() {
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('t'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn ctrl_c_is_always_active_even_in_a_modal() {
-        let registry = Registry::new();
-        let action = registry.resolve(
-            key(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Modal::Models,
-        );
-        assert_eq!(action, Some(InputAction::CtrlC));
-    }
-
-    #[test]
-    fn f1_opens_help_from_top_level() {
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(1), KeyModifiers::NONE), Modal::None);
-        assert_eq!(action, Some(InputAction::OpenHelp));
-    }
-
-    #[test]
-    fn non_global_keys_are_not_resolved_here() {
-        // Text-editing keys like Ctrl+A are not global bindings; they fall
-        // through to the input handler's contextual arms.
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('a'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn ctrl_q_opens_queue_from_top_level() {
-        // Ctrl+Q is the global binding for the queue (outbox) overview modal
-        // (ADR-0126 — the queue family moved off the F-row onto the Ctrl row).
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(action, Some(InputAction::OpenQueue));
-    }
-
-    #[test]
-    fn ctrl_q_does_not_fire_while_a_modal_is_open() {
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn ctrl_p_toggles_queue_block_from_top_level() {
-        // Ctrl+P is the global binding for the queue block/resume override.
-        // It is gated NoModal: inside a modal the contextual input handler
-        // routes it instead (only the Queue modal honors it there).
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(action, Some(InputAction::QueueToggleBlock));
-    }
-
-    #[test]
-    fn ctrl_p_does_not_fire_via_registry_while_a_modal_is_open() {
-        // The global registry is NoModal-gated, so Ctrl+P resolves to None
-        // inside any modal. (The Queue modal routes Ctrl+P through its
-        // contextual arm; other modals treat it as a no-op.)
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn ctrl_o_opens_the_session_telemetry_drill_down() {
-        // Ctrl+O opens the unified session telemetry report.
-        let registry = Registry::new();
-        let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(ctx, Some(InputAction::OpenTelemetry));
-
-        // Inside a modal the gate swallows the chord.
-        let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(ctx, None);
-    }
-
-    #[test]
-    fn ctrl_n_opens_connection_detail_from_top_level() {
-        // Ctrl+N opens the active connection detail modal.
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('n'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(action, Some(InputAction::OpenActiveConnectionDetail));
-
-        // Inside a modal the gate swallows the chord.
-        let action = registry.resolve(key(KeyCode::Char('n'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn f5_opens_the_btw_asides_from_top_level() {
-        // F5 is the global binding for the `/btw` asides list (ADR-0103 §5).
-        // Gated NoModal like the rest of the F-row list family: inside a
-        // modal it is swallowed by the gate — except inside the asides modal
-        // itself, where the contextual arm turns it into a refresh.
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(5), KeyModifiers::NONE), Modal::None);
-        assert_eq!(action, Some(InputAction::OpenBtwList));
-
-        let action = registry.resolve(key(KeyCode::F(5), KeyModifiers::NONE), Modal::Models);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn ctrl_x_arms_leader_chord_from_top_level() {
-        let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::Char('x'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(
-            action,
-            Some(InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX))
-        );
-
-        let action = registry.resolve(key(KeyCode::Char('x'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn shift_on_a_letter_is_normalized() {
-        // A bare `Shift+T` normalizes to plain `T` (a shifted letter is just a
-        // different char), so `Shift+letter` is not a separate binding from
-        // the unshifted letter. `Ctrl+Shift+T`, however, keeps its modifiers —
-        // a chord's extra modifiers are meaningful (e.g. `Ctrl+Shift+C` is a
-        // distinct copy-selection binding from plain `Ctrl+C`).
-        let bare_shift_t = Key::from_event(key(KeyCode::Char('T'), KeyModifiers::SHIFT));
-        assert_eq!(
-            bare_shift_t,
-            Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::Char('T'),
-            }
-        );
-        let ctrl_shift_t = Key::from_event(key(
-            KeyCode::Char('T'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ));
-        assert_eq!(
-            ctrl_shift_t.modifiers,
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
-        );
-    }
-
-    #[test]
-    fn ctrl_shift_c_and_cmd_c_copy_selection() {
-        // The copy-selection chord and the macOS Cmd+C chord both map to
-        // CopySelection and work over any modal (Always gate).
-        let registry = Registry::new();
-        let action = registry.resolve(
-            key(
-                KeyCode::Char('c'),
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            ),
-            Modal::Models,
-        );
-        assert_eq!(action, Some(InputAction::CopySelection));
-
-        let action = registry.resolve(key(KeyCode::Char('c'), KeyModifiers::SUPER), Modal::Models);
-        assert_eq!(action, Some(InputAction::CopySelection));
-    }
-
-    #[test]
-    fn chord_uses_canonical_lowercase_help_notation() {
-        let ctrl_t = Key {
-            modifiers: KeyModifiers::CONTROL,
-            code: KeyCode::Char('t'),
-        };
-        assert_eq!(ctrl_t.chord(), "ctrl+t");
-
-        let alt_enter = Key {
-            modifiers: KeyModifiers::ALT,
-            code: KeyCode::Enter,
-        };
-        assert_eq!(alt_enter.chord(), "alt+enter");
-
-        let f1 = Key {
-            modifiers: KeyModifiers::NONE,
-            code: KeyCode::F(1),
-        };
-        assert_eq!(f1.chord(), "f1");
-
-        let esc = Key {
-            modifiers: KeyModifiers::NONE,
-            code: KeyCode::Esc,
-        };
-        assert_eq!(esc.chord(), "esc");
-
-        let backtab = Key {
-            modifiers: KeyModifiers::SHIFT,
-            code: KeyCode::BackTab,
-        };
-        assert_eq!(backtab.chord(), "shift+tab");
-    }
-
-    #[test]
-    fn display_uses_capitalized_footer_notation() {
-        // Single named keys: capitalized words matching the footer style.
-        assert_eq!(Key::ENTER.display(), "Enter");
-        assert_eq!(Key::ESC.display(), "Esc");
-        assert_eq!(Key::TAB.display(), "Tab");
-        assert_eq!(
-            Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::Char(' '),
-            }
-            .display(),
-            "·",
-            "Space has no KeyCode; footers use the keyvocab::SPACE affordance"
-        );
-
-        // Arrows share their glyph between the two forms (only named keys
-        // differ in case), and BackTab renders as Shift+Tab.
-        let up = Key {
-            modifiers: KeyModifiers::NONE,
-            code: KeyCode::Up,
-        };
-        assert_eq!(up.display(), "↑");
-        let backtab = Key {
-            modifiers: KeyModifiers::SHIFT,
-            code: KeyCode::BackTab,
-        };
-        assert_eq!(backtab.display(), keyvocab::SHIFT_TAB);
-        assert_eq!(backtab.display(), "⇧Tab");
-
-        // Modifier chords: capitalized prefix + capitalized core.
-        assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
-        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
-        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
-        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
-        assert_eq!(Key::CTRL_S.display(), "Ctrl+S");
-        let ctrl_shift_c = Key {
-            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            code: KeyCode::Char('c'),
-        };
-        assert_eq!(ctrl_shift_c.display(), "Ctrl+Shift+C");
-        let cmd_c = Key {
-            modifiers: KeyModifiers::SUPER,
-            code: KeyCode::Char('c'),
-        };
-        assert_eq!(cmd_c.display(), "Cmd+C");
-    }
-
-    #[test]
-    fn const_aliases_match_their_constructed_keys() {
-        // The frequently-used `Key::ESC`/`ENTER`/`TAB`/`CTRL_T`/queue-family
-        // consts must agree with the equivalent ad-hoc construction, so
-        // swapping a hand-built literal for the alias is a pure refactor.
-        assert_eq!(
-            Key::ESC,
-            Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::Esc,
-            }
-        );
-        assert_eq!(
-            Key::CTRL_T,
-            Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('t'),
-            }
-        );
-        assert_eq!(
-            Key::CTRL_P,
-            Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('p'),
-            }
-        );
-        assert_eq!(
-            Key::CTRL_Q,
-            Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('q'),
-            }
-        );
-        // And their display names match what the footer expects.
-        assert_eq!(Key::ESC.display(), "Esc");
-        assert_eq!(Key::ENTER.display(), "Enter");
-        assert_eq!(Key::TAB.display(), "Tab");
-        assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
-        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
-        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
-    }
-
-    #[test]
-    fn const_display_names_match_key_display() {
-        // Key::display() is a compile-time const fn that accurately returns
-        // the canonical capitalized human form for every key.
-        assert_eq!(Key::ESC.display(), "Esc");
-        assert_eq!(Key::ENTER.display(), "Enter");
-        assert_eq!(Key::TAB.display(), "Tab");
-        assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
-        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
-        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
-        assert_eq!(Key::CTRL_X.display(), "Ctrl+X");
-        assert_eq!(Key::CTRL_C.display(), "Ctrl+C");
-        assert_eq!(Key::CTRL_G.display(), "Ctrl+G");
-        assert_eq!(Key::CTRL_R.display(), "Ctrl+R");
-        assert_eq!(Key::CTRL_M.display(), "Ctrl+M");
-        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
-        assert_eq!(Key::CTRL_N.display(), "Ctrl+N");
-        assert_eq!(Key::CTRL_S.display(), "Ctrl+S");
-        assert_eq!(Key::F1.display(), "F1");
-        assert_eq!(Key::F5.display(), "F5");
-        // SHIFT_TAB matches the BackTab display form.
-        assert_eq!(
-            keyvocab::SHIFT_TAB,
-            Key {
-                modifiers: KeyModifiers::SHIFT,
-                code: KeyCode::BackTab,
-            }
-            .display()
-        );
-    }
-
-    #[test]
-    fn chord_and_display_share_glyphs_for_symbols_and_arrows() {
-        // The two forms differ only for named keys and letters; arrows and
-        // symbol keys (`?`, `/`) must be byte-identical so a footer and a Help
-        // row describing the same arrow never disagree on the glyph.
-        for code in [
-            KeyCode::Up,
-            KeyCode::Down,
-            KeyCode::Left,
-            KeyCode::Right,
-            KeyCode::Char('?'),
-            KeyCode::Char('/'),
-        ] {
-            let k = Key {
-                modifiers: KeyModifiers::NONE,
-                code,
-            };
-            assert_eq!(k.chord(), k.display(), "glyph mismatch for {code:?}");
+    fn all_commands_have_valid_labels_and_descriptions() {
+        for cmd in COMMAND_REGISTRY {
+            assert!(!cmd.label.is_empty(), "command {:?} has empty label", cmd.id);
+            assert!(!cmd.description.is_empty(), "command {:?} has empty description", cmd.id);
         }
     }
 
     #[test]
-    fn declared_binding_labels_always_carry_their_modifier_prefix() {
-        // [`chord_str`] / [`display_str`] are hand-maintained match tables
-        // with a bare-core-token fallback (`(_, c) => c`). A binding added
-        // without its table entry would silently render as `n` instead of
-        // `ctrl+n` in Help — and the non-empty-label test above cannot catch
-        // it (`n` is non-empty). Lock the *full* label (prefix + token) for
-        // every declared binding, so the fallback is unreachable for real
-        // bindings and a forgotten table entry fails here instead.
-        for binding in Registry::new().bindings() {
-            if matches!(binding.key.code, KeyCode::BackTab) {
-                // BackTab carries its own full label; both forms are locked
-                // by the dedicated tests above.
-                assert_eq!(binding.key.chord(), "shift+tab");
-                assert_eq!(binding.key.display(), keyvocab::SHIFT_TAB);
-                continue;
-            }
-            assert_ne!(
-                chord_token(binding.key.code),
-                "·",
-                "undeclared key {:?}: add it to chord_token/display_token",
-                binding.key.code
-            );
-            let expected_chord = format!(
-                "{}{}",
-                chord_prefix(binding.key.modifiers),
-                chord_token(binding.key.code)
-            );
-            assert_eq!(
-                binding.key.chord(),
-                expected_chord,
-                "chord_str is missing an entry for {:?}",
-                binding.key
-            );
-            let expected_display = format!(
-                "{}{}",
-                display_prefix(binding.key.modifiers),
-                display_token(binding.key.code)
-            );
-            assert_eq!(
-                binding.key.display(),
-                expected_display,
-                "display_str is missing an entry for {:?}",
-                binding.key
-            );
-        }
+    fn find_by_slash_resolves_all_slash_triggers() {
+        assert_eq!(find_by_slash("/models").map(|c| c.id), Some(CommandId::OpenModels));
+        assert_eq!(find_by_slash("/settings").map(|c| c.id), Some(CommandId::NavigateSettings));
+        assert_eq!(find_by_slash("/help").map(|c| c.id), Some(CommandId::Help));
+        assert_eq!(find_by_slash("/commands").map(|c| c.id), Some(CommandId::CommandPalette));
     }
 
     #[test]
-    fn every_binding_has_a_nonempty_unique_label() {
-        let registry = Registry::new();
-        let mut labels = Vec::new();
-        for binding in registry.bindings() {
-            let label = binding.key.chord();
-            assert!(!label.is_empty(), "empty label for {:?}", binding.action);
-            assert!(
-                !labels.contains(&label),
-                "duplicate binding label {label:?}"
-            );
-            labels.push(label);
-            // The display form must also be non-empty and unique among the
-            // bindings (two distinct chords could in principle collapse to one
-            // display string; guard against that).
-            let disp = binding.key.display();
-            assert!(!disp.is_empty(), "empty display for {:?}", binding.action);
-            labels.push(disp);
-            assert!(!binding.description.is_empty());
-        }
+    fn footer_hints_respect_max_three_items() {
+        let mut ctx = AppContext::default();
+        ctx.active_view = View::Session;
+        ctx.session_focus = SessionFocusRegion::Composer;
+        ctx.is_responding = false;
+
+        let hints = footer_hints_for_context(&ctx);
+        assert!(hints.len() <= 3);
+
+        ctx.is_responding = true;
+        let hints_running = footer_hints_for_context(&ctx);
+        assert!(hints_running.len() <= 3);
+
+        ctx.session_focus = SessionFocusRegion::Transcript;
+        let hints_transcript = footer_hints_for_context(&ctx);
+        assert!(hints_transcript.len() <= 3);
     }
 }

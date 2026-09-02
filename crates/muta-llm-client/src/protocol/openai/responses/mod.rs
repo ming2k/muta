@@ -164,7 +164,8 @@ pub struct OpenAiResponsesProvider {
     /// `ChatGPT-Account-Id`).
     pub dialect: muta_contracts::OpenAiResponsesDialect,
     /// Whether upstream persists response state and accepts
-    /// `previous_response_id`. Subscription backends force this off.
+    /// `previous_response_id`. Stateless DeepSeek and subscription backends
+    /// force this off.
     pub store: bool,
     /// Route-scoped prompt-cache capabilities, defaults, and affinity.
     pub prompt_cache: crate::PromptCacheConfig,
@@ -255,6 +256,7 @@ impl OpenAiResponsesProvider {
     fn label(&self) -> &'static str {
         match self.dialect {
             muta_contracts::OpenAiResponsesDialect::Copilot => "Copilot",
+            muta_contracts::OpenAiResponsesDialect::DeepSeek => "DeepSeek",
             muta_contracts::OpenAiResponsesDialect::ChatGpt => "ChatGPT",
             muta_contracts::OpenAiResponsesDialect::Standard => "OpenAI Responses",
         }
@@ -683,5 +685,21 @@ mod stream_protocol_tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("X-Models-Etag", "  etag-42  ".parse().unwrap());
         assert_eq!(models_etag(&headers).as_deref(), Some("etag-42"));
+    }
+
+    #[test]
+    fn deepseek_uses_stateless_opaque_replay() {
+        let provider = OpenAiResponsesProvider::from_static_key(
+            "test-key".to_string(),
+            "deepseek-v4-flash".to_string(),
+            "https://api.deepseek.com/v1/responses",
+        )
+        .with_dialect(muta_contracts::OpenAiResponsesDialect::DeepSeek);
+
+        assert!(!provider.store);
+        assert_eq!(
+            provider.continuation_mode(),
+            muta_contracts::ContinuationMode::OpaqueReplay
+        );
     }
 }

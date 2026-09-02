@@ -486,7 +486,6 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         // Queue's exit hook (the open-time auto-block release) now lives in
         // `hide_active_panel` — every hide path releases it, not just this
         // one (ADR-0139).
-        app.modal_keymap_open = false;
         if !matches!(app.active_modal(), Modal::Models | Modal::Connections) {
             app.show_chat_surface();
         }
@@ -692,6 +691,9 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             };
             app.tree_modal_follow = true;
         }
+        Modal::ViewSwitcher => {
+            app.command_palette_selected = app.command_palette_selected.saturating_sub(1);
+        }
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
@@ -703,7 +705,6 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         | Modal::Mcp
         | Modal::Skills
         | Modal::Todos
-        | Modal::ViewSwitcher
         | Modal::None => {}
     }
 }
@@ -858,6 +859,9 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             app.modal_index = (app.modal_index + 1) % count;
             app.tree_modal_follow = true;
         }
+        Modal::ViewSwitcher => {
+            app.command_palette_selected = app.command_palette_selected.saturating_add(1);
+        }
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
@@ -869,7 +873,6 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Mcp
         | Modal::Skills
         | Modal::Todos
-        | Modal::ViewSwitcher
         | Modal::None => {}
     }
 }

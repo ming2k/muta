@@ -1621,15 +1621,16 @@ fn history_panel_uses_composer_padding_not_brand_column() {
     terminal.draw(|f| {
         panel = draw_history_panel(
             f,
-            &history,
-            &ranked,
-            0,
-            &mut 0,
-            true,
-            false,
-            false,
-            input_rect,
-            0,
+            crate::overlays::history::HistoryPanelProps {
+                history: &history,
+                ranked: &ranked,
+                modal_index: 0,
+                scroll: &mut 0,
+                follow_selection: true,
+                preview: false,
+                input_rect,
+                activity_height: 0,
+            },
             &theme,
             &selection,
             &mut layout_map,
@@ -1825,8 +1826,8 @@ fn composer_panel_carries_the_hint_row() {
         "hint row carries the Enter sentence: {row4:?}"
     );
     assert!(
-        row4.contains("Ctrl+X o focus") && row4.contains("Ctrl+X actions"),
-        "hint row carries the navigation and leader chord actions: {row4:?}"
+        row4.contains("Tab transcript"),
+        "hint row carries the navigation affordance: {row4:?}"
     );
     assert!(
         !row4.contains("lines") && !row4.contains("chars"),
@@ -1835,9 +1836,9 @@ fn composer_panel_carries_the_hint_row() {
     // The navigation clause begins at the text column (the `›` prefix width).
     let prefix_x = row4
         .char_indices()
-        .find(|(_, c)| *c == 'C')
+        .find(|(_, c)| *c == 'T')
         .map(|(i, _)| row4[..i].chars().count())
-        .expect("Ctrl+X clause");
+        .expect("Tab clause");
     assert_eq!(
         prefix_x,
         crate::design::COMPOSER_PROMPT_PREFIX_COLS,
@@ -1851,27 +1852,17 @@ fn composer_panel_carries_the_hint_row() {
 fn composer_hint_sentence_names_the_delivery_group() {
     use crate::components::composer_hints::{ComposeTarget, ComposerHints};
 
-    let steer = ComposeTarget::Steer;
     let hints = ComposerHints {
-        compose_target: steer,
+        compose_target: ComposeTarget::Running,
         ..Default::default()
     };
     let mut terminal = draw_frame_composer("wait", true, hints);
     let row4 = frame_row_text(&mut terminal, 3);
-    assert!(row4.contains("Enter send steer"), "steer verb: {row4:?}");
+    assert!(row4.contains("queue follow-up"), "follow-up verb: {row4:?}");
     assert!(
-        row4.contains("Tab follow-up"),
-        "Tab toggle names the other mode: {row4:?}"
+        row4.contains("steer now"),
+        "steer now affordance: {row4:?}"
     );
-
-    let follow_up_hints = ComposerHints {
-        compose_target: ComposeTarget::FollowUp,
-        ..Default::default()
-    };
-    let mut terminal = draw_frame_composer("next", true, follow_up_hints);
-    let row4 = frame_row_text(&mut terminal, 3);
-    assert!(row4.contains("Enter send follow-up"), "{row4:?}");
-    assert!(row4.contains("Tab steer"), "{row4:?}");
 }
 
 /// Once the draft outgrows the box, the three-part overflow affordance

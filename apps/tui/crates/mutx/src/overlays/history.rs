@@ -23,7 +23,7 @@ use mutx_engine::{
 use super::common::truncate_ellipsis;
 use crate::fuzzy::FuzzyMatch;
 use crate::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines, keyvocab, render_body,
+    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keyvocab, render_body,
     render_modal_footer_with_more,
 };
 use crate::view::Theme;
@@ -62,22 +62,36 @@ const HISTORY_PANEL_MAX_ROWS: u16 = 10;
 /// The returned rect is the panel's footprint (for click-outside-dismiss hit
 /// testing); it is `None` when there is no room above the activity bar
 /// (height 0), in which case nothing is drawn.
-#[allow(clippy::too_many_arguments)]
+/// Properties for rendering the input history panel.
+pub struct HistoryPanelProps<'a> {
+    pub history: &'a [HistoryEntry],
+    pub ranked: &'a [(usize, FuzzyMatch)],
+    pub modal_index: usize,
+    pub scroll: &'a mut usize,
+    pub follow_selection: bool,
+    pub preview: bool,
+    pub input_rect: Rect,
+    pub activity_height: u16,
+}
+
+/// Draw the input history dropdown panel.
 pub fn draw_history_panel(
     frame: &mut Frame,
-    history: &[HistoryEntry],
-    ranked: &[(usize, FuzzyMatch)],
-    modal_index: usize,
-    scroll: &mut usize,
-    follow_selection: bool,
-    preview: bool,
-    keymap_open: bool,
-    input_rect: Rect,
-    activity_height: u16,
+    props: HistoryPanelProps<'_>,
     theme: &Theme,
     selection: &crate::model::selection::SelectionState,
     layout_map: &mut crate::model::layout::LayoutMap,
 ) -> Option<Rect> {
+    let HistoryPanelProps {
+        history,
+        ranked,
+        modal_index,
+        scroll,
+        follow_selection,
+        preview,
+        input_rect,
+        activity_height,
+    } = props;
     // Compute the panel footprint: it grows upward from the top edge of the
     // composer. The activity bar sits flush above the composer, so reserve
     // its rows: the dropdown's ceiling is the activity bar's top edge, never
@@ -147,27 +161,6 @@ pub fn draw_history_panel(
 
     draw_header(frame, header_rect, history.len(), ranked.len(), theme);
 
-    if keymap_open {
-        let hints: [FooterHint; 4] = [
-            FooterHint::navigation(keyvocab::ARROWS_UD, "next entry"),
-            FooterHint::key_primary(crate::keymap::Key::ENTER, "insert"),
-            FooterHint::key_secondary(crate::keymap::Key::TAB, "preview"),
-            FooterHint::key_always(crate::keymap::Key::ESC, "close"),
-        ];
-        let body = keymap_body_lines(&hints, &[], theme);
-        // Selectable document: the keymap sub-page registers as MODAL_DOC
-        // rows so key labels and descriptions are copyable.
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
-            frame, body_rect, &rows, scroll, None, theme, selection, layout_map,
-        );
-        render_modal_footer_with_more(frame, footer_rect, &hints, &[], theme);
-        return Some(area);
-    }
-
     if preview {
         // Selectable document: the full text of the focused history entry is
         // exactly what a user would want to copy (e.g. to re-use elsewhere).
@@ -236,7 +229,7 @@ fn draw_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::key_primary(crate::keymap::Key::ENTER, "insert"),
-        FooterHint::key_always(crate::keymap::Key::CTRL_X, "clear"),
+        FooterHint::key_always(crate::keymap::Key::CTRL_U, "clear input"),
         FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     render_modal_footer_with_more(frame, rect, &hints, &[], theme);

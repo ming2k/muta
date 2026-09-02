@@ -66,10 +66,6 @@ pub struct InputContext {
     /// `/` enters search, `*`/`e`/`d`/`D` act on the row), `true` borrows the
     /// composer line as the live fuzzy query. Mirrors `App::model_search`.
     pub model_searching: bool,
-    /// Whether the active modal is showing its in-modal keybindings page
-    /// (`App::modal_keymap_open`). When true, `?` / Esc toggle or dismiss the
-    /// page instead of acting on the underlying list, and Enter is inert.
-    pub modal_keymap_open: bool,
     /// Focused text-field index of the provider editor, or `None` when the
     /// modal is closed or an inline selector is focused.
     pub custom_provider_field: Option<u8>,
@@ -98,8 +94,8 @@ pub struct InputContext {
 
     /// Which pane of the Settings View currently owns focus. Mirrors `App::config_focus`.
     pub config_focus: crate::overlays::ConfigFocus,
-    /// Active Emacs-style two-stroke leader chord state. Mirrors `App::leader_chord`.
-    pub leader_chord: crate::app::LeaderChord,
+    /// Active focus region in Session view. Mirrors `App::session_focus`.
+    pub session_focus: crate::app::SessionFocusRegion,
 }
 
 impl InputContext {
@@ -140,33 +136,6 @@ fn edits_input_field(context: &InputContext) -> bool {
 /// paste paths (Ctrl+V, bracketed paste) route into this field.
 fn question_other_field(context: &InputContext) -> bool {
     context.active_modal == super::Modal::Question && context.question_other_highlighted
-}
-
-/// Whether the active modal supports the in-modal keybindings page (`?`). These
-/// are the centered list/info modals whose footer may collapse under width
-/// pressure. Entry modals holding precious input (editor, custom provider,
-/// oauth), decision modals (question, permission), and Help (already a
-/// keybindings surface) are excluded.
-fn supports_keymap_page(modal: super::Modal) -> bool {
-    matches!(
-        modal,
-        super::Modal::Models
-            | super::Modal::Connections
-            | super::Modal::Sessions
-            | super::Modal::HistorySearch
-            | super::Modal::Tools
-            | super::Modal::Mcp
-            | super::Modal::Skills
-            | super::Modal::Permissions
-            | super::Modal::Config
-            | super::Modal::Todos
-            | super::Modal::Queue
-            | super::Modal::Telemetry
-            | super::Modal::UsageStats
-            | super::Modal::Host
-            | super::Modal::Btw
-            | super::Modal::Tree
-    )
 }
 
 /// Whether the active modal paints its own scrollable body — i.e. whether
@@ -225,8 +194,10 @@ pub enum InputAction {
     Quit,
     /// Send a chat message.
     SendChat(String),
-    /// Toggle live composer queue target mode (Steer ↔ FollowUp) while a round runs.
-    ToggleComposerSendMode,
+    /// Immediate steering intervention (Alt+S while running).
+    SteerImmediate(String),
+    /// Enqueue follow-up prompt into outbox queue (Enter while running).
+    QueueFollowUp(String),
     /// Send a slash command.
     SendSlash(String),
     /// Activate the highlighted row of the **Models** picker: a flat
@@ -468,10 +439,6 @@ pub enum InputAction {
     OpenSessionInfo,
     /// Close any modal.
     CloseModal,
-    /// Toggle the in-modal keybindings page (`?` while a collapsible modal is
-    /// open). Not a nested modal — the same `active_modal` stays open and the
-    /// body is swapped for the full keymap. Esc / a second `?` closes it.
-    ToggleModalKeymap,
     /// Scroll up.
     ScrollUp,
     /// Scroll down.
@@ -733,11 +700,6 @@ pub enum InputAction {
     /// leftover bytes back as spurious `KeyCode::Char` events (issue #854/#668).
     /// Re-arming capture is the cleanest way to get both sides back in step.
     TerminalResized,
-    /// Set the active Emacs leader chord state (`Ctrl+X`, `Ctrl+C`, or `None`).
-    SetLeaderChord(crate::app::LeaderChord),
-    /// Universal Emacs `keyboard-quit` (`Ctrl+G` / `Esc` fallback):
-    /// resets active leader chord, cancels selection, closes modal/panel.
-    KeyboardQuit,
 }
 
 impl InputAction {
@@ -1286,82 +1248,21 @@ pub fn process_event(
                 };
             }
 
-            // ── Emacs Leader Chord Processing ──────────────────────────────────
-            if context.leader_chord == crate::app::LeaderChord::CtrlX {
-                return match (key.code, key.modifiers) {
-                    (KeyCode::Char('b'), _) | (KeyCode::Char('B'), _) => {
-                        InputAction::ViewSwitcherToggle
-                    }
-                    (KeyCode::Char('k'), _) | (KeyCode::Char('K'), _) => {
-                        if context.active_modal != super::Modal::None {
-                            InputAction::CloseModal
-                        } else if context.in_runner_view {
-                            InputAction::ExitRunner
-                        } else if context.in_side_view {
-                            InputAction::ExitSideView
-                        } else {
-                            InputAction::ViewCloseSelected
-                        }
-                    }
-                    (KeyCode::Char('o'), _) | (KeyCode::Char('O'), _) => {
-                        if context.has_focused_target {
-                            InputAction::ClearFocusedTarget
-                        } else {
-                            InputAction::FocusNextTarget
-                        }
-                    }
-                    (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => InputAction::OpenTodos,
-                    (KeyCode::Char('q'), _) | (KeyCode::Char('Q'), _) => InputAction::OpenQueue,
-                    (KeyCode::Char('p'), _) | (KeyCode::Char('P'), _) => {
-                        InputAction::QueueToggleBlock
-                    }
-                    (KeyCode::Char('m'), _) | (KeyCode::Char('M'), _) => InputAction::OpenModels,
-                    (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) => {
-                        InputAction::OpenActiveConnectionDetail
-                    }
-                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => {
-                        InputAction::OpenTelemetry
-                    }
-                    (KeyCode::Char('a'), _) | (KeyCode::Char('A'), _) => InputAction::OpenBtwList,
-                    (KeyCode::Char('s'), _) | (KeyCode::Char('S'), _) => InputAction::OpenConfig,
-                    (KeyCode::Char('?'), _) => InputAction::OpenHelp,
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => InputAction::Quit,
-                    (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
-                        InputAction::SetLeaderChord(crate::app::LeaderChord::None)
-                    }
-                    _ => InputAction::SetLeaderChord(crate::app::LeaderChord::None),
-                };
-            }
+            let physical_key = crate::keymap::Key::from_event(key);
 
-            // Universal keyboard-quit (Ctrl+G)
-            if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return InputAction::KeyboardQuit;
-            }
-
-            // Extended command palette (M-x / Alt+x)
-            if (key.code == KeyCode::Char('x') || key.code == KeyCode::Char('X'))
-                && key.modifiers.contains(KeyModifiers::ALT)
-            {
-                return InputAction::ViewSwitcherToggle;
-            }
-
-            // Initiate Ctrl+X leader chord (unless inside HistorySearch clear-confirm)
-            if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                if context.active_modal == super::Modal::HistorySearch {
-                    return InputAction::HistoryClearAll;
+            // ── Stage 5: Global Hard-Bound Shortcuts ──────────────────────────
+            // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt), Ctrl+Q (Quit), CopySelection
+            if let Some(cmd_id) = crate::keymap::resolve_global_key(physical_key) {
+                match cmd_id {
+                    crate::keymap::CommandId::Help => return InputAction::OpenHelp,
+                    crate::keymap::CommandId::CommandPalette => {
+                        return InputAction::ViewSwitcherToggle;
+                    }
+                    crate::keymap::CommandId::InterruptTask => return InputAction::CtrlC,
+                    crate::keymap::CommandId::Quit => return InputAction::Quit,
+                    crate::keymap::CommandId::CopySelection => return InputAction::CopySelection,
+                    _ => {}
                 }
-                return InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX);
-            }
-
-            // Global shortcuts are resolved through the unified keybinding
-            // registry (`tui::keymap`), the single source of truth shared with
-            // the Help modal. Anything resolved here wins over the contextual
-            // match arms below. Keys not declared globally (text editing,
-            // modal-internal selection, Esc's modal hierarchy, …) return `None`
-            // and fall through to the contextual handling.
-            if let Some(global) = super::keymap::Registry::new().resolve(key, context.active_modal)
-            {
-                return global;
             }
 
             // While the `/host` dashboard's inline prompt is open, printable
@@ -1411,14 +1312,11 @@ pub fn process_event(
 
             match key.code {
                 KeyCode::Esc => {
-                    // In-modal keymap page: Esc closes the page first, never
-                    // the underlying modal. A second Esc then follows the
-                    // normal modal dismiss path.
-                    if context.modal_keymap_open
-                        && context.active_modal != super::Modal::None
-                        && context.active_modal != super::Modal::Help
+                    if context.active_modal == super::Modal::None
+                        && context.completion_kind != super::CompletionKind::None
+                        && !context.completion_dismissed
                     {
-                        return InputAction::ToggleModalKeymap;
+                        return InputAction::CloseCompletion;
                     }
                     if context.active_modal == super::Modal::Permission {
                         if context.permission_confirm_always {
@@ -1471,13 +1369,7 @@ pub fn process_event(
                         // hide (state saved) vs cancel-to-origin there.
                         InputAction::CloseModal
                     } else if context.in_side_view {
-                        // `/btw` aside view (ADR-0103 §2): Esc interrupts the
-                        // *viewed aside's* round — the same armed
-                        // press-twice-to-confirm contract as the main view —
-                        // and never leaves the view. Leaving is Ctrl+C's one
-                        // job. Takes priority over focus clearing and
-                        // completion so the interrupt intent is unambiguous.
-                        InputAction::InterruptSide
+                        InputAction::ExitSideView
                     } else if context.in_runner_view {
                         // Runner zoom: Esc returns to the parent view.
                         // Takes priority over focus clearing so one Esc
@@ -1505,27 +1397,12 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Ctrl+R is a declared global binding (registry →
-                    // OpenHistory). It only reaches this arm when a modal is
-                    // open (the gate blocks it at the top level), so it is a
-                    // no-op here.
-                    InputAction::None
-                }
-                // Ctrl+X inside the Ctrl+R panel arms the clear-history
-                // confirmation (next `y` wipes the whole history; any other
-                // key cancels). Nowhere else does Ctrl+X mean anything, so it
-                // stays a no-op at the top level and inside other modals —
-                // a stray Ctrl+X while composing can never wipe history.
-                KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if context.active_modal == super::Modal::HistorySearch {
-                        InputAction::HistoryClearAll
+                    if context.active_modal == super::Modal::None {
+                        InputAction::OpenHistory
                     } else {
                         InputAction::None
                     }
                 }
-                // F1 is a declared global binding (registry → OpenHelp) and
-                // only reaches this arm inside a modal, where it is a no-op.
-                KeyCode::F(1) => InputAction::None,
                 // Ctrl+P is a declared global binding (registry →
                 // ToggleQueueBlock) at the top level. Inside the Queue modal
                 // it also toggles the block so the user can resume without
@@ -1583,11 +1460,6 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Enter => {
-                    // While the in-modal keymap page is open, Enter is inert
-                    // (Esc / `?` close it) — never activate the hidden list row.
-                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
-                        return InputAction::ToggleModalKeymap;
-                    }
                     match context.active_modal {
                         super::Modal::Models => InputAction::ProviderPickerActivate,
                         super::Modal::Connections if context.connection_info_detail => {
@@ -1683,7 +1555,11 @@ pub fn process_event(
                                     _ => InputAction::SendSlash(text),
                                 }
                             } else if !text.is_empty() {
-                                InputAction::SendChat(text)
+                                if context.is_responding {
+                                    InputAction::QueueFollowUp(text)
+                                } else {
+                                    InputAction::SendChat(text)
+                                }
                             } else {
                                 InputAction::None
                             }
@@ -1694,21 +1570,9 @@ pub fn process_event(
                     if context.active_modal == super::Modal::None
                         && context.completion_kind != super::CompletionKind::None
                         && context.suggestion_count > 0
-                        // A fully-typed command is resolved: its completion popup
-                        // is hidden and its keys return to their ordinary roles, so
-                        // Tab must not invisibly cycle sibling candidates (e.g.
-                        // `/session` → `/sessions`). Type the target command to
-                        // reach a sibling.
                         && !context.has_exact_suggestion
                         && !context.completion_dismissed
                     {
-                        // A slash/path suggestion menu is open with a row
-                        // highlighted: Tab commits it — the same gesture as
-                        // Enter, down to sharing the terminal-accept
-                        // semantics in `accept_completion`. (The highlight
-                        // is now anchored to the first candidate whenever
-                        // the popup is visible, so this fires on a plain
-                        // Tab with no prior navigation.)
                         let idx = context.suggestion_index.unwrap_or(0);
                         InputAction::CommitSuggestion(idx.to_string())
                     } else if context.active_modal == super::Modal::None
@@ -1717,49 +1581,37 @@ pub fn process_event(
                         && context.has_trigger_text
                         && !context.is_responding
                     {
-                        // Esc closed the popup but the composer still holds a
-                        // completion trigger (a partial `/command` or an
-                        // `@mention`): Tab re-opens it without accepting
-                        // anything. Tab is the toggle's other half — Esc
-                        // closes, Tab reopens — so the user can always get
-                        // the menu back without re-editing the text.
                         InputAction::ReopenCompletion
+                    } else if context.active_modal == super::Modal::None {
+                        if context.has_focused_target {
+                            InputAction::ClearFocusedTarget
+                        } else {
+                            InputAction::FocusNextTarget
+                        }
                     } else if context.active_modal == super::Modal::ModelEditor {
-                        // Tab cycles focus between the editor's API-key and
-                        // model-id fields.
                         InputAction::ModelEditorNextField
                     } else if context.active_modal == super::Modal::CustomProvider {
-                        // Tab advances through the editor's visible fields.
                         InputAction::CustomProviderNextField
                     } else if context.active_modal == super::Modal::HistorySearch {
-                        // Tab confirms and inserts the selected history entry
-                        // into the composer, mirroring Enter.
                         InputAction::HistoryInsert
                     } else if context.active_modal == super::Modal::Host {
-                        // The dashboard has two panes: Tab moves focus between
-                        // the session list and the detail read-out.
                         InputAction::HostFocusToggle
                     } else if context.active_modal == super::Modal::Telemetry {
                         InputAction::TelemetryNextTab
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
-                    } else if context.is_responding && context.active_modal == super::Modal::None {
-                        // While a round runs, Tab toggles between Steer (turn-boundary injection)
-                        // and FollowUp (queued next-round dispatch).
-                        InputAction::ToggleComposerSendMode
                     } else {
-                        // No completion open (or it was dismissed without a
-                        // trigger left in the text) and no modal field to
-                        // cycle: Tab is a no-op. (There is no zone switching:
-                        // focus is toggled with Ctrl+Up/Ctrl-Down, never Tab.)
                         InputAction::None
                     }
                 }
                 KeyCode::BackTab => {
-                    // Shift+Tab steps backward through multi-field / multi-page
-                    // modal state; elsewhere it is a no-op (transcript focus
-                    // uses Ctrl+Up/Ctrl-Down, not Tab).
-                    if context.active_modal == super::Modal::CustomProvider {
+                    if context.active_modal == super::Modal::None {
+                        if context.has_focused_target {
+                            InputAction::ClearFocusedTarget
+                        } else {
+                            InputAction::None
+                        }
+                    } else if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionPrevious
@@ -1950,16 +1802,17 @@ pub fn process_event(
                     }
                     InputAction::None
                 }
-                // Alt+O: toggle focus between Composer and Transcript.
-                KeyCode::Char('o') | KeyCode::Char('O')
+                // Alt+S: steer immediately while running.
+                KeyCode::Char('s') | KeyCode::Char('S')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && context.active_modal == super::Modal::None =>
                 {
-                    if context.has_focused_target {
-                        InputAction::ClearFocusedTarget
-                    } else {
-                        InputAction::FocusPrevTarget
+                    if context.is_responding {
+                        let text = std::mem::take(input);
+                        *cursor_position = 0;
+                        return InputAction::SteerImmediate(text);
                     }
+                    InputAction::None
                 }
                 // Alt+P: previous prompt history.
                 KeyCode::Char('p') | KeyCode::Char('P')
@@ -1976,37 +1829,17 @@ pub fn process_event(
                     InputAction::HistoryNext
                 }
                 KeyCode::Char(c) => {
-                    // The quick switcher's filter owns every printable key
-                    // while it is up (ADR-0133 phase 5) — before any other
-                    // consumer, so `?`-help and list-action keys never
-                    // steal filter characters.
+                    // The command palette filter owns every printable key while it is up
                     if context.active_modal == super::Modal::ViewSwitcher {
                         return InputAction::ViewSwitcherFilter { ch: c };
                     }
-                    // `?` opens help from the top level when the input box is
-                    // empty — mirrors the conventional help key without ever
-                    // swallowing a `?` the user is typing. Like Ctrl+H it is
-                    // a fallback for terminals/multiplexers that lose the
-                    // Kitty protocol (see the Ctrl+H note above).
-                    if context.active_modal == super::Modal::None && c == '?' && input.is_empty() {
-                        return InputAction::OpenHelp;
-                    }
-                    // In-modal keymap page: `?` toggles the page on collapsible
-                    // list modals (Provider / Sessions / History / …). Not
-                    // offered while a free-text search field is active, so a
-                    // typed `?` in a filter still inserts. Help itself has no
-                    // nested keymap. While the page is open, `?` closes it.
-                    if c == '?'
-                        && context.active_modal != super::Modal::None
-                        && supports_keymap_page(context.active_modal)
-                        && !edits_input_field(&context)
-                    {
-                        return InputAction::ToggleModalKeymap;
-                    }
-                    // While the keymap page is open, swallow other list-action
-                    // keys so they do not act on the hidden list.
-                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
-                        return InputAction::None;
+                    // Auto-bounce back to Composer if typing in Transcript:
+                    if context.active_modal == super::Modal::None && context.has_focused_target {
+                        let byte_pos = normalized_cursor_byte(input, *cursor_position);
+                        *cursor_position = char_index_at_byte(input, byte_pos);
+                        input.insert(byte_pos, c);
+                        *cursor_position += 1;
+                        return InputAction::ClearFocusedTarget;
                     }
                     // Sibling runner navigation works in both zones (it is a
                     // runner view feature, not a typing-navigation thing)
@@ -2540,10 +2373,6 @@ pub fn process_event(
                     InputAction::ScrollPageDown
                 }
                 KeyCode::Up => {
-                    // While the in-modal keymap page is open, ↑/↓ scroll it.
-                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
-                        return InputAction::ScrollUp;
-                    }
                     match context.active_modal {
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalUp,
                         super::Modal::HistorySearch => InputAction::ModalUp,
@@ -2608,9 +2437,6 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Down => {
-                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
-                        return InputAction::ScrollDown;
-                    }
                     match context.active_modal {
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalDown,
                         super::Modal::HistorySearch => InputAction::ModalDown,

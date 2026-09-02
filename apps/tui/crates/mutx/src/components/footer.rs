@@ -5,7 +5,7 @@
 //! labels are stripped, a trailing `? help` chip is appended (mandatory — never
 //! omitted when collapsed) so the user can open the in-modal keymap page.
 
-use mutx_engine::{Frame, Line, Paragraph, Rect, Span, Style};
+use mutx_engine::{Frame, Line, Paragraph, Rect, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::Theme;
@@ -204,48 +204,6 @@ pub(crate) fn modal_footer_text_with_more(
     width: usize,
 ) -> String {
     layout_footer(hints, extra, width, true).text
-}
-
-/// Body lines for the in-modal keymap page: one row per hint, key brand+bold,
-/// description muted. Used when the user presses `?` on a collapsible modal.
-pub(crate) fn keymap_body_lines<'a>(
-    hints: &'a [FooterHint],
-    extra: &'a [FooterHintWithBand],
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    // Stable display order: standard hints first (caller order), then extras.
-    let mut rows: Vec<(&'static str, &'static str)> =
-        hints.iter().map(|h| (h.key, h.label)).collect();
-    rows.extend(extra.iter().map(|h| (h.key, h.label)));
-    let key_width = rows
-        .iter()
-        .map(|(k, _)| k.width())
-        .max()
-        .unwrap_or(0)
-        .max(2);
-    let mut lines = Vec::with_capacity(rows.len() + 2);
-    lines.push(Line::from(Span::styled(
-        " Keybindings",
-        Style::default().fg(theme.muted()),
-    )));
-    lines.push(Line::from(""));
-    for (key, label) in rows {
-        let pad = key_width.saturating_sub(key.width());
-        let key_cell = format!("  {}{}", key, " ".repeat(pad));
-        lines.push(Line::from(vec![
-            Span::styled(key_cell, keycap_style(theme)),
-            Span::styled(format!("  {}", label), theme.keycap_label_style()),
-        ]));
-    }
-    lines
-}
-
-/// Footer hints shown while the in-modal keymap page is open.
-pub(crate) fn keymap_page_footer_hints() -> [FooterHint; 2] {
-    [
-        FooterHint::navigation(super::super::keymap::keyvocab::ARROWS_UD, "scroll"),
-        FooterHint::key_always(super::super::keymap::Key::ESC, "back"),
-    ]
 }
 
 /// A single rendered segment of the footer line. Keys are tagged so the
