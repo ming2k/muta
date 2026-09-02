@@ -330,7 +330,7 @@ fn flatten_tools(tool_specs: Option<&[muta_contracts::ToolSpec]>) -> Option<Valu
 
 /// The per-request auth + provider headers for the Responses surface. Beyond
 /// the always-present `Authorization: Bearer`:
-/// - **ChatGPT/Codex mode** (`chatgpt == true`): `originator: muta` identifies
+/// - **ChatGPT/Codex mode** (`chatgpt == true`): `originator: codex_cli_rs` identifies
 ///   the client and the ChatGPT account id is attached as
 ///   `ChatGPT-Account-Id` when known.
 /// - **Copilot mode** (`copilot == true`): GitHub Copilot's required headers
@@ -364,7 +364,7 @@ pub fn headers(
     if !chatgpt {
         return h;
     }
-    h.push(("originator", "muta".to_string()));
+    h.push(("originator", "codex_cli_rs".to_string()));
     if let Some(id) = account_id.filter(|id| !id.trim().is_empty()) {
         h.push(("ChatGPT-Account-Id", id.to_string()));
     }
@@ -722,7 +722,7 @@ mod tests {
     fn headers_include_account_id_when_present() {
         let h = headers("tok", Some("acct-1"), false, true);
         assert_eq!(h[0].0, "Authorization");
-        assert_eq!(h[1], ("originator", "muta".to_string()));
+        assert_eq!(h[1], ("originator", "codex_cli_rs".to_string()));
         assert_eq!(h[2].0, "ChatGPT-Account-Id");
         assert_eq!(h[2].1, "acct-1");
         // No account id → no header.

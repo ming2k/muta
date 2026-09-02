@@ -384,7 +384,7 @@ pub async fn discover_models(
                     "client_version",
                     muta_contracts::client_identity::CODEX_VERSION,
                 )])
-                .header("originator", "muta");
+                .header("originator", "codex_cli_rs");
             if !req.api_key.expose_secret().trim().is_empty() {
                 builder = builder.bearer_auth(req.api_key.expose_secret());
             }

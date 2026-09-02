@@ -12,12 +12,6 @@ pub(super) fn draw_system_detail(
 ) {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(Line::from(Span::styled(
-        "Config file paths, runtime & daemon info — Active environment and configuration paths.",
-        Style::default().fg(props.theme.muted()),
-    )));
-    lines.push(Line::from(""));
-
     let items = [
         ("Config File", "~/.config/muta/config.toml"),
         (

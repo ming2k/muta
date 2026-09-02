@@ -13,12 +13,6 @@ pub(super) fn draw_transcript_detail(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
-    lines.push(Line::from(Span::styled(
-        "Turn bands, auto-scroll & disclosures — Message boundaries and auto-scroll policies.",
-        Style::default().fg(props.theme.muted()),
-    )));
-    lines.push(Line::from(""));
-
     // Item 0: Strategy
     {
         let i = 0;

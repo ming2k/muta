@@ -562,12 +562,10 @@ pub struct App {
     pub config_scroll: usize,
     /// Which pane of the `/config` Settings View currently owns the keyboard.
     pub config_focus: crate::overlays::ConfigFocus,
-    /// Selected category in the `/config` Settings View (0..4).
+    /// Selected category in the `/config` Settings View (0..5).
     pub config_category: usize,
     /// Selected item/field index in the active category's detail pane.
     pub config_detail_index: usize,
-    /// Selected segment in the Web settings tab (0 = Search, 1 = Fetch).
-    pub config_web_segment: usize,
     /// Scroll offset for the `/config` detail pane body.
     pub config_detail_scroll: usize,
     /// Latest `[websearch]` snapshot (presence-only view) from the harness.

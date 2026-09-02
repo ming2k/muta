@@ -13,12 +13,6 @@ pub(super) fn draw_behavior_detail(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
-    lines.push(Line::from(Span::styled(
-        "Click-outside dismiss & interaction rules — Dismiss triggers and mouse behaviors.",
-        Style::default().fg(props.theme.muted()),
-    )));
-    lines.push(Line::from(""));
-
     // Item 0: Click Outside Dismiss
     {
         let i = 0;

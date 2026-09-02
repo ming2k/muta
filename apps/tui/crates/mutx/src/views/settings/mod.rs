@@ -4,7 +4,7 @@
 //! - [`appearance`]: Themes and palette swatches
 //! - [`transcript`]: Message boundaries, Turn Band layout, auto-scroll
 //! - [`behavior`]: Click-outside dismiss and mouse rules
-//! - [`web`]: Search & Reader connection routing, proxy, timeout
+//! - [`web`]: Web Search and Web Fetch connection routing, proxy, timeout
 //! - [`system`]: Paths, runtime info, version
 
 pub mod appearance;
@@ -20,8 +20,8 @@ pub use web::{
 
 use muta_contracts::ColorSchemeConfig;
 use mutx_engine::{
-    Block as RtBlock, Clear, Constraint, Direction, Frame, Layout, Line, Modifier, Paragraph, Rect,
-    Span, Style, Wrap,
+    Alignment, Block as RtBlock, Clear, Constraint, Direction, Frame, Layout, Line, Modifier,
+    Paragraph, Rect, Span, Style, Wrap,
 };
 
 use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
@@ -33,7 +33,7 @@ use crate::view_header::{
 /// Which pane of the Settings View currently owns keyboard focus.
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
 pub enum ConfigFocus {
-    /// Left pane: Category navigation (Appearance, Transcript, Behavior, Web & Search, System).
+    /// Left pane: settings category navigation.
     #[default]
     Categories,
     /// Right pane: Detail configuration options and controls.
@@ -47,15 +47,17 @@ pub enum ConfigCategory {
     Transcript = 1,
     Behavior = 2,
     WebSearch = 3,
-    System = 4,
+    WebFetch = 4,
+    System = 5,
 }
 
 impl ConfigCategory {
-    pub const ALL: [ConfigCategory; 5] = [
+    pub const ALL: [ConfigCategory; 6] = [
         ConfigCategory::Appearance,
         ConfigCategory::Transcript,
         ConfigCategory::Behavior,
         ConfigCategory::WebSearch,
+        ConfigCategory::WebFetch,
         ConfigCategory::System,
     ];
 
@@ -65,6 +67,7 @@ impl ConfigCategory {
             1 => ConfigCategory::Transcript,
             2 => ConfigCategory::Behavior,
             3 => ConfigCategory::WebSearch,
+            4 => ConfigCategory::WebFetch,
             _ => ConfigCategory::System,
         }
     }
@@ -76,8 +79,11 @@ impl ConfigCategory {
             "0" | "appearance" | "theme" | "themes" | "look" => Some(ConfigCategory::Appearance),
             "1" | "transcript" | "chat" | "scroll" | "bands" => Some(ConfigCategory::Transcript),
             "2" | "behavior" | "interaction" | "mouse" | "dismiss" => Some(ConfigCategory::Behavior),
-            "3" | "web" | "websearch" | "search" | "fetch" | "reader" => Some(ConfigCategory::WebSearch),
-            "4" | "system" | "info" | "about" | "paths" | "runtime" => Some(ConfigCategory::System),
+            "3" | "search" | "websearch" | "web-search" => Some(ConfigCategory::WebSearch),
+            "4" | "web" | "fetch" | "reader" | "webfetch" | "web-fetch" => {
+                Some(ConfigCategory::WebFetch)
+            }
+            "5" | "system" | "info" | "about" | "paths" | "runtime" => Some(ConfigCategory::System),
             _ => None,
         }
     }
@@ -87,7 +93,8 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "appearance",
             ConfigCategory::Transcript => "transcript",
             ConfigCategory::Behavior => "behavior",
-            ConfigCategory::WebSearch => "web",
+            ConfigCategory::WebSearch => "search",
+            ConfigCategory::WebFetch => "web",
             ConfigCategory::System => "system",
         }
     }
@@ -97,18 +104,25 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "Appearance",
             ConfigCategory::Transcript => "Transcript",
             ConfigCategory::Behavior => "Behavior",
-            ConfigCategory::WebSearch => "Web",
+            ConfigCategory::WebSearch => "Web Search",
+            ConfigCategory::WebFetch => "Web Fetch",
             ConfigCategory::System => "System & Info",
         }
     }
 
     pub fn subtitle(self) -> &'static str {
+        self.description()
+    }
+
+    /// Concise, refined one-line summary for the category.
+    pub fn description(self) -> &'static str {
         match self {
-            ConfigCategory::Appearance => "Themes & palette swatches",
-            ConfigCategory::Transcript => "Turn bands, auto-scroll & disclosures",
-            ConfigCategory::Behavior => "Click-outside dismiss & interaction rules",
-            ConfigCategory::WebSearch => "Search & fetch connections, routing & proxy",
-            ConfigCategory::System => "Config file paths, runtime & daemon info",
+            ConfigCategory::Appearance => "Theme selection and color palette customization.",
+            ConfigCategory::Transcript => "Message layout, turn boundaries, and auto-scroll behavior.",
+            ConfigCategory::Behavior => "Interaction rules, dismiss triggers, and click policies.",
+            ConfigCategory::WebSearch => "Choose how the agent discovers relevant pages and sources.",
+            ConfigCategory::WebFetch => "Choose how the agent reads and extracts content from a URL.",
+            ConfigCategory::System => "Configuration file paths, runtime diagnostics, and system info.",
         }
     }
 }
@@ -125,7 +139,7 @@ impl std::str::FromStr for ConfigCategory {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_name(s).ok_or_else(|| {
             format!(
-                "unknown settings category '{s}' (expected appearance, transcript, behavior, web, system, or 0..4)"
+                "unknown settings category '{s}' (expected appearance, transcript, behavior, search, web, system, or 0..5)"
             )
         })
     }
@@ -144,7 +158,6 @@ pub struct ConfigRects {
 pub struct ConfigViewProps<'a> {
     pub category_index: usize,
     pub detail_index: usize,
-    pub web_segment: usize,
     pub focus: ConfigFocus,
     pub color_scheme: &'a str,
     pub custom_color_scheme: &'a ColorSchemeConfig,
@@ -233,14 +246,45 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
         detail_rect,
     );
 
+    // Left pane nav: top/bottom 1 row, left/right 2 cols
     draw_categories_pane(frame, category_rect, &mut props);
 
-    // Right pane interior padding: 2 columns left & right
+    // Right pane: split into Head (1 row, indented 2 cols), 1 row gap, Detail Content (上下 1 row, 左右 2 cols)
+    let detail_vertical_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Top margin 1 row
+            Constraint::Length(1), // Head row 1 row
+            Constraint::Length(1), // Gap 1 row below head
+            Constraint::Min(1),    // Content below
+            Constraint::Length(1), // Bottom margin 1 row
+        ])
+        .split(detail_rect);
+
+    let head_row = detail_vertical_chunks[1];
+    let content_row = detail_vertical_chunks[3];
+
+    let head_inner_rect = Rect {
+        x: head_row.x.saturating_add(2),
+        y: head_row.y,
+        width: head_row.width.saturating_sub(4),
+        height: head_row.height,
+    };
+
+    let desc = category.description();
+    let truncated_desc = truncate_ellipsis(desc, head_inner_rect.width as usize);
+    let head_para = Paragraph::new(Line::from(Span::styled(
+        truncated_desc,
+        Style::default().fg(props.theme.muted()),
+    )))
+    .style(Style::default().bg(props.theme.body()));
+    frame.render_widget(head_para, head_inner_rect);
+
     let detail_inner_rect = Rect {
-        x: detail_rect.x.saturating_add(2),
-        y: detail_rect.y,
-        width: detail_rect.width.saturating_sub(4),
-        height: detail_rect.height,
+        x: content_row.x.saturating_add(2),
+        y: content_row.y,
+        width: content_row.width.saturating_sub(4),
+        height: content_row.height,
     };
 
     let focused = props.focus == ConfigFocus::Detail;
@@ -255,14 +299,17 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
             behavior::draw_behavior_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::WebSearch => {
-            web::draw_websearch_detail(frame, detail_inner_rect, &mut props, focused)
+            web::draw_search_detail(frame, detail_inner_rect, &mut props, focused)
+        }
+        ConfigCategory::WebFetch => {
+            web::draw_fetch_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::System => {
             system::draw_system_detail(frame, detail_inner_rect, &mut props, focused)
         }
     }
 
-    // 4. Bottom Footer (3-Row Runner-Style with raised background)
+    // 4. Bottom Footer (3-Row Runner-Style with raised background, centered flexible equal division)
     draw_footer(frame, footer_rect, props.focus, props.theme);
 
     ConfigRects {
@@ -270,6 +317,29 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
         category_body: category_rect,
         detail_body: detail_rect,
     }
+}
+
+fn truncate_ellipsis(text: &str, max_width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return "...".chars().take(max_width).collect();
+    }
+    let target_width = max_width - 3;
+    let mut current_width = 0;
+    let mut result = String::new();
+    for c in text.chars() {
+        let cw = c.width().unwrap_or(0);
+        if current_width + cw > target_width {
+            break;
+        }
+        current_width += cw;
+        result.push(c);
+    }
+    result.push_str("...");
+    result
 }
 
 fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewProps<'_>) {
@@ -293,13 +363,26 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
             Style::default().fg(props.theme.muted())
         };
 
+        let marker = if is_selected { "› " } else { "  " };
         lines.push(Line::from(vec![
-            Span::styled(format!("  {}", cat.title()), style),
+            Span::styled(marker, Style::default().fg(if is_selected {
+                props.theme.brand()
+            } else {
+                props.theme.dim()
+            })),
+            Span::styled(cat.title(), style),
         ]));
         lines.push(Line::from(""));
     }
 
-    let visible_rows = area.height as usize;
+    let inner_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+
+    let visible_rows = inner_area.height as usize;
     let content_len = lines.len();
 
     let (content_offset, max_scroll) = resolve_scroll(
@@ -313,7 +396,7 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
     let p = Paragraph::new(lines)
         .scroll(content_offset as u16, 0)
         .style(Style::default().bg(props.theme.panel()));
-    frame.render_widget(p, area);
+    frame.render_widget(p, inner_area);
 
     if max_scroll > 0 {
         draw_scrollbar(frame, area, content_offset, max_scroll, props.theme);
@@ -345,51 +428,30 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
         ],
     };
 
-    const PAIR_GAP: usize = 3;
-    const MARGIN_MIN: usize = 2;
-    let width = rect.width as usize;
-
-    let total_pair_width: usize = pairs
-        .iter()
-        .map(|affordance| affordance.width())
-        .sum::<usize>()
-        + (pairs.len().saturating_sub(1) * PAIR_GAP);
-
-    let count = if total_pair_width + (MARGIN_MIN * 2) <= width {
-        pairs.len()
-    } else {
-        let mut running = 0;
-        let mut c = 0;
-        for (i, affordance) in pairs.iter().enumerate() {
-            let pair_w = affordance.width() + if i > 0 { PAIR_GAP } else { 0 };
-            if running + pair_w + (MARGIN_MIN * 2) <= width {
-                running += pair_w;
-                c += 1;
-            } else {
-                break;
-            }
-        }
-        c
-    };
-
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    for (i, affordance) in pairs[..count].iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("   "));
-        }
-        let [key_span, label_span] = affordance.render_spans(theme, bg);
-        spans.push(key_span);
-        spans.push(label_span);
-    }
-
-    let p = Paragraph::new(Line::from(spans)).style(fill);
     let row_rect = Rect {
         x: rect.x,
         y: rect.y + 1,
         width: rect.width,
         height: 1,
     };
-    frame.render_widget(p, row_rect);
+
+    let n = pairs.len();
+    if n == 0 || row_rect.width == 0 {
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![Constraint::Min(0); n])
+        .split(row_rect);
+
+    for (i, affordance) in pairs.iter().enumerate() {
+        let [key_span, label_span] = affordance.render_spans(theme, bg);
+        let p = Paragraph::new(Line::from(vec![key_span, label_span]))
+            .alignment(Alignment::Center)
+            .style(fill);
+        frame.render_widget(p, chunks[i]);
+    }
 }
 
 pub(super) fn render_scrollable(
@@ -440,15 +502,19 @@ mod tests {
         assert_eq!(ConfigCategory::from_name("mouse"), Some(ConfigCategory::Behavior));
         assert_eq!(ConfigCategory::from_name("2"), Some(ConfigCategory::Behavior));
 
-        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebSearch));
-        assert_eq!(ConfigCategory::from_name("websearch"), Some(ConfigCategory::WebSearch));
         assert_eq!(ConfigCategory::from_name("search"), Some(ConfigCategory::WebSearch));
+        assert_eq!(ConfigCategory::from_name("websearch"), Some(ConfigCategory::WebSearch));
         assert_eq!(ConfigCategory::from_name("3"), Some(ConfigCategory::WebSearch));
+
+        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebFetch));
+        assert_eq!(ConfigCategory::from_name("fetch"), Some(ConfigCategory::WebFetch));
+        assert_eq!(ConfigCategory::from_name("reader"), Some(ConfigCategory::WebFetch));
+        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::WebFetch));
 
         assert_eq!(ConfigCategory::from_name("system"), Some(ConfigCategory::System));
         assert_eq!(ConfigCategory::from_name("info"), Some(ConfigCategory::System));
         assert_eq!(ConfigCategory::from_name("about"), Some(ConfigCategory::System));
-        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::System));
+        assert_eq!(ConfigCategory::from_name("5"), Some(ConfigCategory::System));
 
         assert_eq!(ConfigCategory::from_name("invalid"), None);
     }
@@ -461,6 +527,17 @@ mod tests {
             assert_eq!(format!("{cat}"), slug);
             let parsed: ConfigCategory = slug.parse().unwrap();
             assert_eq!(parsed, cat);
+            assert!(!cat.description().is_empty());
         }
+    }
+
+    #[test]
+    fn test_truncate_ellipsis() {
+        assert_eq!(truncate_ellipsis("short", 10), "short");
+        assert_eq!(truncate_ellipsis("exact", 5), "exact");
+        assert_eq!(truncate_ellipsis("longer text here", 10), "longer ...");
+        assert_eq!(truncate_ellipsis("hello", 3), "...");
+        assert_eq!(truncate_ellipsis("hello", 2), "..");
+        assert_eq!(truncate_ellipsis("hello", 0), "");
     }
 }

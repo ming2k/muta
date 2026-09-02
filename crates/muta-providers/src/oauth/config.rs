@@ -637,7 +637,7 @@ pub fn chatgpt_preset() -> OAuthConfig {
                 Cow::Borrowed("codex_cli_simplified_flow"),
                 Cow::Borrowed("true"),
             ),
-            (Cow::Borrowed("originator"), Cow::Borrowed("muta")),
+            (Cow::Borrowed("originator"), Cow::Borrowed("codex_cli_rs")),
         ],
         extra_token_params: Vec::new(),
         extra_refresh_params: Vec::new(),

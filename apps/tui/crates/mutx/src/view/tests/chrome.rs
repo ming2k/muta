@@ -346,7 +346,6 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 transcript_layout: crate::layout::Strategy::TurnBand,
                 expand_auto_scroll: false,
                 click_outside_dismiss: true,
-                web_segment: 0,
                 websearch: None,
                 workspace: "~/workspace",
                 category_scroll: &mut 0,
@@ -378,7 +377,6 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
                 transcript_layout: crate::layout::Strategy::TurnBand,
                 expand_auto_scroll: false,
                 click_outside_dismiss: true,
-                web_segment: 0,
                 websearch: None,
                 workspace: "~/workspace",
                 category_scroll: &mut 0,
@@ -389,6 +387,60 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
         );
     });
     assert!(grid_row(&terminal, 0).contains("SETTINGS"));
+}
+
+#[test]
+fn web_settings_split_search_and_fetch_into_clear_panels() {
+    let theme = Theme::default();
+    let custom = muta_contracts::ColorSchemeConfig::default();
+    let mut web = muta_contracts::WebSearchConfigView::from(
+        &muta_contracts::WebSearchConfig::default(),
+    );
+    web.search_connections
+        .push(muta_contracts::WebSearchConnection {
+            id: "exa-team".to_string(),
+            name: Some("Team Search".to_string()),
+            preset_id: Some("exa".to_string()),
+            api_key_env: None,
+            base_url: None,
+            custom_headers: None,
+            enabled: true,
+        });
+
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+    for (category_index, expected_route) in [(3, "Search route"), (4, "Fetch route")] {
+        terminal.draw(|frame| {
+            draw_settings_view(
+                frame,
+                ConfigViewProps {
+                    category_index,
+                    detail_index: 0,
+                    focus: ConfigFocus::Detail,
+                    color_scheme: "zen",
+                    custom_color_scheme: &custom,
+                    transcript_layout: crate::layout::Strategy::TurnBand,
+                    expand_auto_scroll: false,
+                    click_outside_dismiss: true,
+                    websearch: Some(&web),
+                    workspace: "~/workspace",
+                    category_scroll: &mut 0,
+                    detail_scroll: &mut 0,
+                    breadcrumbs: Some("Main › Settings"),
+                    theme: &theme,
+                },
+            );
+        });
+        let screen = (0..24)
+            .map(|y| grid_row(&terminal, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("Web Search"));
+        assert!(screen.contains("Web Fetch"));
+        assert!(screen.contains(expected_route));
+        assert!(screen.contains("ROUTING"));
+        assert!(screen.contains("REQUEST POLICY"));
+        assert!(screen.contains("CONNECTIONS"));
+    }
 }
 
 #[test]

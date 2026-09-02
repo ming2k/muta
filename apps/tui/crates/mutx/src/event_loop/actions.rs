@@ -894,13 +894,24 @@ pub(super) async fn dispatch_action(
                                 app.click_outside_dismiss = !app.click_outside_dismiss;
                                 app.save_tui_config();
                             }
-                            3 => {
-                                // Web category (Category 3):
-                                // Segment 0 = Search, Segment 1 = Fetch
-                                if app.config_web_segment == 0 {
-                                    // ── Search Segment ─────────────────────────
-                                    match app.config_detail_index {
-                                        0 => {
+                            3 | 4 => {
+                                let is_search = app.config_category == 3;
+                                let connection_count = app
+                                    .websearch_config
+                                    .as_ref()
+                                    .map(|ws| {
+                                        if is_search {
+                                            ws.search_connections.len()
+                                        } else {
+                                            ws.reader_connections.len()
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                match app.config_detail_index {
+                                    0 => {
+                                        let anchor =
+                                            crate::components::dropdown::DropdownAnchor::center_screen();
+                                        if is_search {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
@@ -911,62 +922,8 @@ pub(super) async fn dispatch_action(
                                                     current,
                                                     app.websearch_config.as_ref(),
                                                 );
-                                            let anchor =
-                                                crate::components::dropdown::DropdownAnchor::center_screen();
                                             app.config_dropdown = Some((dropdown, anchor));
-                                        }
-                                        1 => {
-                                            let current = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .map(|ws| ws.timeout_secs)
-                                                .unwrap_or(20);
-                                            let next = if current >= 120 {
-                                                5
-                                            } else {
-                                                (current + 5).max(5)
-                                            };
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        timeout_secs: Some(next),
-                                                        ..Default::default()
-                                                    },
-                                                )),
-                                            );
-                                        }
-                                        2 => {
-                                            let dropdown =
-                                                crate::views::settings::build_add_web_connection_dropdown(0);
-                                            let anchor =
-                                                crate::components::dropdown::DropdownAnchor::center_screen();
-                                            app.config_dropdown = Some((dropdown, anchor));
-                                        }
-                                        idx if idx >= 3 => {
-                                            let conn_idx = idx - 3;
-                                            if let Some(conn) = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .and_then(|ws| ws.search_connections.get(conn_idx))
-                                            {
-                                                let _ =
-                                                    app.tx
-                                                        .send(AgentRequest::UpdateWebSearchConfig(
-                                                        Box::new(
-                                                            muta_contracts::WebSearchConfigUpdate {
-                                                                provider: Some(conn.id.clone()),
-                                                                ..Default::default()
-                                                            },
-                                                        ),
-                                                    ));
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                } else {
-                                    // ── Fetch Segment ──────────────────────────
-                                    match app.config_detail_index {
-                                        0 => {
+                                        } else {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
@@ -977,58 +934,71 @@ pub(super) async fn dispatch_action(
                                                     current,
                                                     app.websearch_config.as_ref(),
                                                 );
-                                            let anchor =
-                                                crate::components::dropdown::DropdownAnchor::center_screen();
                                             app.config_dropdown = Some((dropdown, anchor));
                                         }
-                                        1 => {
-                                            let current = app
+                                    }
+                                    1 => {
+                                        let current = app
+                                            .websearch_config
+                                            .as_ref()
+                                            .map(|ws| ws.timeout_secs)
+                                            .unwrap_or(20);
+                                        let next = if current >= 120 {
+                                            5
+                                        } else {
+                                            (current + 5).max(5)
+                                        };
+                                        let _ = app.tx.send(
+                                            AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                muta_contracts::WebSearchConfigUpdate {
+                                                    timeout_secs: Some(next),
+                                                    ..Default::default()
+                                                },
+                                            )),
+                                        );
+                                    }
+                                    idx if idx < 2 + connection_count => {
+                                        let conn_idx = idx - 2;
+                                        if is_search {
+                                            if let Some(conn) = app
                                                 .websearch_config
                                                 .as_ref()
-                                                .map(|ws| ws.timeout_secs)
-                                                .unwrap_or(20);
-                                            let next = if current >= 120 {
-                                                5
-                                            } else {
-                                                (current + 5).max(5)
-                                            };
+                                                .and_then(|ws| ws.search_connections.get(conn_idx))
+                                            {
+                                                let _ = app.tx.send(
+                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                        muta_contracts::WebSearchConfigUpdate {
+                                                            provider: Some(conn.id.clone()),
+                                                            ..Default::default()
+                                                        },
+                                                    )),
+                                                );
+                                            }
+                                        } else if let Some(conn) = app
+                                            .websearch_config
+                                            .as_ref()
+                                            .and_then(|ws| ws.reader_connections.get(conn_idx))
+                                        {
                                             let _ = app.tx.send(
                                                 AgentRequest::UpdateWebSearchConfig(Box::new(
                                                     muta_contracts::WebSearchConfigUpdate {
-                                                        timeout_secs: Some(next),
+                                                        reader: Some(conn.id.clone()),
                                                         ..Default::default()
                                                     },
                                                 )),
                                             );
                                         }
-                                        2 => {
-                                            let dropdown =
-                                                crate::views::settings::build_add_web_connection_dropdown(1);
-                                            let anchor =
-                                                crate::components::dropdown::DropdownAnchor::center_screen();
-                                            app.config_dropdown = Some((dropdown, anchor));
-                                        }
-                                        idx if idx >= 3 => {
-                                            let conn_idx = idx - 3;
-                                            if let Some(conn) = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .and_then(|ws| ws.reader_connections.get(conn_idx))
-                                            {
-                                                let _ =
-                                                    app.tx
-                                                        .send(AgentRequest::UpdateWebSearchConfig(
-                                                        Box::new(
-                                                            muta_contracts::WebSearchConfigUpdate {
-                                                                reader: Some(conn.id.clone()),
-                                                                ..Default::default()
-                                                            },
-                                                        ),
-                                                    ));
-                                            }
-                                        }
-                                        _ => {}
                                     }
+                                    idx if idx == 2 + connection_count => {
+                                        let dropdown =
+                                            crate::views::settings::build_add_web_connection_dropdown(
+                                                usize::from(!is_search),
+                                            );
+                                        let anchor =
+                                            crate::components::dropdown::DropdownAnchor::center_screen();
+                                        app.config_dropdown = Some((dropdown, anchor));
+                                    }
+                                    _ => {}
                                 }
                             }
                             _ => {}
@@ -1039,11 +1009,11 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::ConfigDeleteConnection => {
             if app.active_modal() == Modal::Config
-                && app.config_category == 3
-                && app.config_detail_index >= 3
+                && matches!(app.config_category, 3 | 4)
+                && app.config_detail_index >= 2
             {
-                let conn_idx = app.config_detail_index - 3;
-                if app.config_web_segment == 0 {
+                let conn_idx = app.config_detail_index - 2;
+                if app.config_category == 3 {
                     if let Some(conn) = app
                         .websearch_config
                         .as_ref()
@@ -1071,15 +1041,15 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ConfigSegmentPrev => {
-            if app.active_modal() == Modal::Config && app.config_category == 3 {
-                app.config_web_segment = 0;
+            if app.active_modal() == Modal::Config && app.config_category == 4 {
+                app.config_category = 3;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }
         }
         input::InputAction::ConfigSegmentNext => {
             if app.active_modal() == Modal::Config && app.config_category == 3 {
-                app.config_web_segment = 1;
+                app.config_category = 4;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }

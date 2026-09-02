@@ -104,7 +104,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "chatgpt-oauth",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
-    user_agent: None,
+    user_agent: Some(muta_contracts::client_identity::CODEX_USER_AGENT),
     // The Responses transport is the OpenAI wire family. Discovery uses the
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative

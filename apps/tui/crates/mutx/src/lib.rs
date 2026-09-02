@@ -166,7 +166,7 @@ pub enum StartupOverlay {
 impl StartupOverlay {
     /// Resolve startup overlay intent from acceptance / test / launch environment variables:
     /// - `MUTX_STARTUP_VIEW` / `MUTX_VIEW`: e.g. `settings`, `settings:web`, `settings:3`, `dashboard`, `sessions`.
-    /// - `MUTX_SETTINGS_NAV` / `MUTX_SETTINGS_CATEGORY`: e.g. `web`, `transcript`, `appearance`, `system`, `behavior`, `0..4`.
+    /// - `MUTX_SETTINGS_NAV` / `MUTX_SETTINGS_CATEGORY`: e.g. `search`, `web`, `transcript`, `appearance`, `system`, `behavior`, `0..5`.
     pub fn resolve_from_env() -> Option<Self> {
         let view_val = std::env::var("MUTX_STARTUP_VIEW")
             .or_else(|_| std::env::var("MUTX_VIEW"))
@@ -2291,7 +2291,6 @@ pub async fn run_tui(
             _ => 0,
         },
         config_detail_index: 0,
-        config_web_segment: 0,
 
         config_detail_scroll: 0,
         websearch_config: None,

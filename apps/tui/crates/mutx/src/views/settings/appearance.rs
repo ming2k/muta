@@ -17,12 +17,6 @@ pub(super) fn draw_appearance_detail(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
-    lines.push(Line::from(Span::styled(
-        "Themes & palette swatches — Select an active color palette.",
-        Style::default().fg(props.theme.muted()),
-    )));
-    lines.push(Line::from(""));
-
     let ws_path = if props.workspace.is_empty() {
         None
     } else {

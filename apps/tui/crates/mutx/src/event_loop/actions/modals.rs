@@ -607,7 +607,12 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                         .max(1),
                     1 => 5usize,
                     2 => 1usize,
-                    3 => 10usize,
+                    3 => crate::views::settings::web::search_item_count(
+                        app.websearch_config.as_ref(),
+                    ),
+                    4 => crate::views::settings::web::fetch_item_count(
+                        app.websearch_config.as_ref(),
+                    ),
                     _ => 4usize,
                 };
                 if count > 0 {
@@ -772,7 +777,12 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                         .max(1),
                     1 => 5usize,
                     2 => 1usize,
-                    3 => 10usize,
+                    3 => crate::views::settings::web::search_item_count(
+                        app.websearch_config.as_ref(),
+                    ),
+                    4 => crate::views::settings::web::fetch_item_count(
+                        app.websearch_config.as_ref(),
+                    ),
                     _ => 4usize,
                 };
                 if count > 0 {

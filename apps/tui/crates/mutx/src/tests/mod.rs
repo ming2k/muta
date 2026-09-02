@@ -171,8 +171,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         config_focus: crate::overlays::ConfigFocus::Categories,
         config_category: 0,
         config_detail_index: 0,
-        config_web_segment: 0,
-
         config_detail_scroll: 0,
         websearch_config: None,
         config_dropdown: None,

@@ -31,7 +31,7 @@ pub const CLAUDE_CODE_CLIENT_HEADERS: &[(&str, &str)] = &[
 pub const CODEX_VERSION: &str = "0.151.0";
 
 /// User-Agent header value sent for OpenAI Codex client profile.
-pub const CODEX_USER_AGENT: &str = "codex/0.151.0";
+pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.151.0";
 
 /// Client identity headers used for OpenAI Codex profile.
 pub const CODEX_CLIENT_HEADERS: &[(&str, &str)] = &[

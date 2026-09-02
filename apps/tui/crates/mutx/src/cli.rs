@@ -407,7 +407,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
                 "  MUTX_STARTUP_VIEW      boot view override (e.g. 'settings', 'settings:web', 'dashboard')\n",
             );
             out.push_str(
-                "  MUTX_SETTINGS_NAV      initial settings category (appearance, transcript, behavior, web, system)\n",
+                "  MUTX_SETTINGS_NAV      initial settings category (appearance, transcript, behavior, search, web, system)\n",
             );
             out.push_str("\nWith no command, mutx opens a fresh interactive session.\n");
             out.push_str("It checks the Muta daemon first and starts `muta` when needed.\n");
@@ -435,7 +435,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
                         "\nOpen the full-screen settings view. Optionally specify a category name\n",
                     );
                     out.push_str(
-                        "(appearance, transcript, behavior, web, system) or index (0..4).\n",
+                        "(appearance, transcript, behavior, search, web, system) or index (0..5).\n",
                     );
                 }
                 _ => {}

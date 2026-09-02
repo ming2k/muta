@@ -464,7 +464,7 @@ fn startup_overlay_env_resolution_accepts_settings_and_nav() {
     );
     assert_eq!(
         test_env(Some("settings:web"), None),
-        Some(crate::StartupOverlay::Settings { category: Some(3) })
+        Some(crate::StartupOverlay::Settings { category: Some(4) })
     );
     assert_eq!(
         test_env(Some("settings:transcript"), None),
@@ -476,7 +476,7 @@ fn startup_overlay_env_resolution_accepts_settings_and_nav() {
     );
     assert_eq!(
         test_env(Some("settings"), Some("system")),
-        Some(crate::StartupOverlay::Settings { category: Some(4) })
+        Some(crate::StartupOverlay::Settings { category: Some(5) })
     );
     assert_eq!(
         test_env(None, Some("behavior")),

@@ -1427,8 +1427,8 @@ fn config_view_navigation_and_theme_preview() {
     assert_eq!(app.config_focus, crate::overlays::ConfigFocus::Categories);
     assert_eq!(app.config_category, 0);
 
-    // Cycling down through all 5 categories
-    for expected_cat in [1, 2, 3, 4, 0] {
+    // Cycling down through all 6 categories
+    for expected_cat in [1, 2, 3, 4, 5, 0] {
         crate::event_loop::handle_modal_down(&mut app, "s1");
         assert_eq!(app.config_category, expected_cat);
     }

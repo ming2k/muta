@@ -125,7 +125,7 @@ async fn chatgpt_responses_chat_uses_streaming_transport_and_dynamic_credentials
         .mock("POST", "/backend-api/codex/responses")
         .match_header("authorization", "Bearer live-oauth-token")
         .match_header("chatgpt-account-id", "acct-test")
-        .match_header("originator", "muta")
+        .match_header("originator", "codex_cli_rs")
         .match_body(Matcher::PartialJson(json!({
             "model": "gpt-5.6-sol",
             "store": false,
@@ -825,7 +825,7 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
             muta_contracts::client_identity::CODEX_VERSION.to_string(),
         ))
         .match_header("authorization", "Bearer chatgpt-access")
-        .match_header("originator", "muta")
+        .match_header("originator", "codex_cli_rs")
         .match_header("chatgpt-account-id", "acct-test")
         .with_status(200)
         .with_header("content-type", "application/json")

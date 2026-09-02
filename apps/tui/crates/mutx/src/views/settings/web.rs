@@ -278,20 +278,49 @@ pub fn build_add_web_connection_dropdown(
     })
 }
 
-pub(super) fn draw_websearch_detail(
+/// Number of keyboard-selectable rows in the Web Search panel.
+pub fn search_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> usize {
+    3 + ws.map(|ws| ws.search_connections.len()).unwrap_or(0)
+}
+
+/// Number of keyboard-selectable rows in the Web Fetch panel.
+pub fn fetch_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> usize {
+    3 + ws.map(|ws| ws.reader_connections.len()).unwrap_or(0)
+}
+
+pub(super) fn draw_search_detail(
     frame: &mut Frame,
     body: Rect,
     props: &mut ConfigViewProps<'_>,
     focused: bool,
 ) {
+    draw_web_detail(frame, body, props, focused, WebPanel::Search);
+}
+
+pub(super) fn draw_fetch_detail(
+    frame: &mut Frame,
+    body: Rect,
+    props: &mut ConfigViewProps<'_>,
+    focused: bool,
+) {
+    draw_web_detail(frame, body, props, focused, WebPanel::Fetch);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebPanel {
+    Search,
+    Fetch,
+}
+
+fn draw_web_detail(
+    frame: &mut Frame,
+    body: Rect,
+    props: &mut ConfigViewProps<'_>,
+    focused: bool,
+    panel: WebPanel,
+) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
-
-    lines.push(Line::from(Span::styled(
-        "Search & fetch connections, routing & proxy — Backend providers and reader routing.",
-        Style::default().fg(props.theme.muted()),
-    )));
-    lines.push(Line::from(""));
 
     let Some(ws) = props.websearch else {
         lines.push(Line::from(Span::styled(
@@ -302,467 +331,164 @@ pub(super) fn draw_websearch_detail(
         return;
     };
 
-    // Segmented Control Tabs (Search vs Reader)
-    let is_search_tab = props.web_segment == 0;
-
-    let search_tab_style = if is_search_tab {
-        Style::default()
-            .bg(props.theme.panel())
-            .fg(props.theme.brand())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .bg(props.theme.body())
-            .fg(props.theme.muted())
+    let (active_id, active_name, route_label, connections_len) = match panel {
+        WebPanel::Search => (
+            ws.provider.as_str(),
+            search_display_name(ws),
+            "Search route",
+            ws.search_connections.len(),
+        ),
+        WebPanel::Fetch => (
+            ws.reader.as_str(),
+            fetch_display_name(ws),
+            "Fetch route",
+            ws.reader_connections.len(),
+        ),
     };
 
-    let reader_tab_style = if !is_search_tab {
-        Style::default()
-            .bg(props.theme.panel())
-            .fg(props.theme.brand())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .bg(props.theme.body())
-            .fg(props.theme.muted())
-    };
+    section_heading(
+        &mut lines,
+        "ROUTING",
+        match panel {
+            WebPanel::Search => "Used by search_web to discover sources",
+            WebPanel::Fetch => "Used by fetch_url to turn a page into readable content",
+        },
+        props,
+    );
+    push_setting_row(
+        &mut lines,
+        &mut selected_line,
+        0,
+        props.detail_index,
+        focused,
+        route_label,
+        &active_name,
+        if active_id == "none" {
+            "Disabled"
+        } else {
+            "Active"
+        },
+        "Enter to choose a connection",
+        props,
+    );
 
+    section_heading(
+        &mut lines,
+        "REQUEST POLICY",
+        "Shared by Search and Fetch",
+        props,
+    );
+    push_setting_row(
+        &mut lines,
+        &mut selected_line,
+        1,
+        props.detail_index,
+        focused,
+        "Timeout",
+        &format!("{} seconds", ws.timeout_secs),
+        "Shared",
+        "Enter to increase by 5 seconds (wraps after 120)",
+        props,
+    );
     lines.push(Line::from(vec![
-        Span::styled("[ Search ]", search_tab_style),
-        Span::raw("  "),
-        Span::styled("[ Reader ]", reader_tab_style),
-        Span::raw("   "),
-        Span::styled("[←/→ switch tab]", Style::default().fg(props.theme.dim())),
+        Span::raw("     "),
+        Span::styled("Proxy", Style::default().fg(props.theme.muted())),
+        Span::raw("             "),
+        Span::styled(
+            ws.proxy
+                .as_deref()
+                .unwrap_or("Direct connection")
+                .to_string(),
+            Style::default().fg(props.theme.fg()),
+        ),
     ]));
     lines.push(Line::from(""));
 
-    if is_search_tab {
-        // ── Search Tab ──────────────────────────────────────────────────────
-        let current_search_id = ws.provider.as_str();
+    section_heading(
+        &mut lines,
+        "CONNECTIONS",
+        &format!("{connections_len} saved"),
+        props,
+    );
 
-        // Item 0: Active Search Connection
-        {
-            let i = 0;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
+    match panel {
+        WebPanel::Search => {
+            if ws.search_connections.is_empty() {
+                empty_connections(
+                    &mut lines,
+                    "No saved connections. Built-in search presets are still available.",
+                    props,
+                );
             }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(props.theme.fg())
-                    .add_modifier(Modifier::BOLD)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("Active Search     ", row_style),
-                Span::styled(
-                    format!("[ {:<14} ]", current_search_id),
-                    Style::default()
-                        .fg(props.theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "Select active search connection [Enter to choose]",
-                        Style::default().fg(props.theme.muted()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Item 1: Timeout
-        {
-            let i = 1;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
-            }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(props.theme.fg())
-                    .add_modifier(Modifier::BOLD)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("Request Timeout   ", row_style),
-                Span::styled(
-                    format!("[ {:>2} s ]", ws.timeout_secs),
-                    Style::default()
-                        .fg(props.theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "[Enter to +5s (min 5s, max 120s)]",
-                        Style::default().fg(props.theme.dim()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Item 2: Add Search Connection Action
-        {
-            let i = 2;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
-            }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(props.theme.brand())
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("［ ＋ Add Search Connection ］", row_style),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "[Enter to open search preset chooser]",
-                        Style::default().fg(props.theme.dim()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Configured Search Instances Table
-        lines.push(Line::from(Span::styled(
-            "Configured Instances:",
-            Style::default()
-                .fg(props.theme.muted())
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-
-        for (idx, conn) in ws.search_connections.iter().enumerate() {
-            let row_idx = 3 + idx;
-            let is_sel = row_idx == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
-            }
-            let cursor = if is_sel { "›" } else { " " };
-
-            let is_active =
-                ws.provider == conn.id || ws.provider == conn.preset_id.as_deref().unwrap_or("");
-            let status_mark = if is_active { "●" } else { "○" };
-            let tag = if is_active { " [Active]" } else { "" };
-
-            let endpoint_info = conn
-                .base_url
-                .as_deref()
-                .unwrap_or_else(|| conn.preset_id.as_deref().unwrap_or("preset"));
-
-            let name_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(props.theme.fg())
-                    .add_modifier(Modifier::BOLD)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled(
-                    format!("{status_mark} "),
-                    Style::default().fg(if is_active {
-                        props.theme.ok()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled(format!("{:<20}", conn.display_name()), name_style),
-                Span::styled(
-                    format!("{:<30}", endpoint_info),
-                    Style::default().fg(props.theme.dim()),
-                ),
-                Span::styled(tag, Style::default().fg(props.theme.brand())),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        format!("ID: {}  [Enter: activate]  [d: delete instance]", conn.id),
-                        Style::default().fg(props.theme.muted()),
-                    ),
-                ]));
+            for (idx, conn) in ws.search_connections.iter().enumerate() {
+                let item_index = 2 + idx;
+                let active =
+                    connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
+                let (state, state_ok) = search_connection_state(ws, conn, active);
+                push_connection_row(
+                    &mut lines,
+                    &mut selected_line,
+                    item_index,
+                    props.detail_index,
+                    focused,
+                    &conn.display_name(),
+                    connection_origin(conn.preset_id.as_deref(), conn.base_url.as_deref()),
+                    state,
+                    state_ok,
+                    &conn.id,
+                    props,
+                );
             }
         }
-    } else {
-        // ── Fetch Tab ───────────────────────────────────────────────────────
-        let current_reader_id = ws.reader.as_str();
-
-        // Item 0: Active Reader Connection
-        {
-            let i = 0;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
+        WebPanel::Fetch => {
+            if ws.reader_connections.is_empty() {
+                empty_connections(
+                    &mut lines,
+                    "No saved readers. Add one to enable rich page extraction.",
+                    props,
+                );
             }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(props.theme.fg())
-                    .add_modifier(Modifier::BOLD)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("Active Reader     ", row_style),
-                Span::styled(
-                    format!("[ {:<14} ]", current_reader_id),
-                    Style::default()
-                        .fg(props.theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "Select active reader connection [Enter to choose]",
-                        Style::default().fg(props.theme.muted()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Item 1: Timeout
-        {
-            let i = 1;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
-            }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(props.theme.fg())
-                    .add_modifier(Modifier::BOLD)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("Request Timeout   ", row_style),
-                Span::styled(
-                    format!("[ {:>2} s ]", ws.timeout_secs),
-                    Style::default()
-                        .fg(props.theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "[Enter to +5s (min 5s, max 120s)]",
-                        Style::default().fg(props.theme.dim()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Item 2: Add Reader Connection Action
-        {
-            let i = 2;
-            let is_sel = i == props.detail_index;
-            if is_sel {
-                selected_line = Some(lines.len());
-            }
-            let cursor = if is_sel { "›" } else { " " };
-            let row_style = if is_sel && focused {
-                Style::default()
-                    .fg(props.theme.brand())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(props.theme.brand())
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(if is_sel {
-                        props.theme.brand()
-                    } else {
-                        props.theme.dim()
-                    }),
-                ),
-                Span::styled("［ ＋ Add Reader Connection ］", row_style),
-            ]));
-            if is_sel && focused {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        "[Enter to open reader preset chooser]",
-                        Style::default().fg(props.theme.dim()),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-
-        // Configured Reader Instances Table
-        lines.push(Line::from(Span::styled(
-            "Configured Instances:",
-            Style::default()
-                .fg(props.theme.muted())
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-
-        if ws.reader_connections.is_empty() {
-            lines.push(Line::from(vec![
-                Span::raw("   "),
-                Span::styled(
-                    "○ (No reader instances configured — reader is disabled)",
-                    Style::default().fg(props.theme.dim()),
-                ),
-            ]));
-        } else {
             for (idx, conn) in ws.reader_connections.iter().enumerate() {
-                let row_idx = 3 + idx;
-                let is_sel = row_idx == props.detail_index;
-                if is_sel {
-                    selected_line = Some(lines.len());
-                }
-                let cursor = if is_sel { "›" } else { " " };
-
-                let is_active =
-                    ws.reader == conn.id || ws.reader == conn.preset_id.as_deref().unwrap_or("");
-                let status_mark = if is_active { "●" } else { "○" };
-                let tag = if is_active { " [Active]" } else { "" };
-
-                let endpoint_info = conn
-                    .base_url
-                    .as_deref()
-                    .unwrap_or_else(|| conn.preset_id.as_deref().unwrap_or("preset"));
-
-                let name_style = if is_sel && focused {
-                    Style::default()
-                        .fg(props.theme.brand())
-                        .add_modifier(Modifier::BOLD)
+                let item_index = 2 + idx;
+                let active =
+                    connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
+                let state = if !conn.enabled {
+                    "Disabled"
+                } else if active {
+                    "Active"
                 } else {
-                    Style::default()
-                        .fg(props.theme.fg())
-                        .add_modifier(Modifier::BOLD)
+                    "Available"
                 };
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!(" {cursor} "),
-                        Style::default().fg(if is_sel {
-                            props.theme.brand()
-                        } else {
-                            props.theme.dim()
-                        }),
-                    ),
-                    Span::styled(
-                        format!("{status_mark} "),
-                        Style::default().fg(if is_active {
-                            props.theme.ok()
-                        } else {
-                            props.theme.dim()
-                        }),
-                    ),
-                    Span::styled(format!("{:<20}", conn.display_name()), name_style),
-                    Span::styled(
-                        format!("{:<30}", endpoint_info),
-                        Style::default().fg(props.theme.dim()),
-                    ),
-                    Span::styled(tag, Style::default().fg(props.theme.brand())),
-                ]));
-                if is_sel && focused {
-                    lines.push(Line::from(vec![
-                        Span::raw("     "),
-                        Span::styled(
-                            format!("ID: {}  [Enter: activate]  [d: delete instance]", conn.id),
-                            Style::default().fg(props.theme.muted()),
-                        ),
-                    ]));
-                }
+                push_connection_row(
+                    &mut lines,
+                    &mut selected_line,
+                    item_index,
+                    props.detail_index,
+                    focused,
+                    &conn.display_name(),
+                    connection_origin(conn.preset_id.as_deref(), conn.base_url.as_deref()),
+                    state,
+                    conn.enabled,
+                    &conn.id,
+                    props,
+                );
             }
         }
     }
+
+    let add_index = 2 + connections_len;
+    push_action_row(
+        &mut lines,
+        &mut selected_line,
+        add_index,
+        props.detail_index,
+        focused,
+        match panel {
+            WebPanel::Search => "+  Add search connection",
+            WebPanel::Fetch => "+  Add fetch reader",
+        },
+        props,
+    );
 
     render_scrollable(
         frame,
@@ -772,4 +498,281 @@ pub(super) fn draw_websearch_detail(
         selected_line,
         props.theme,
     );
+}
+
+fn section_heading(
+    lines: &mut Vec<Line<'static>>,
+    title: &str,
+    note: &str,
+    props: &ConfigViewProps<'_>,
+) {
+    lines.push(Line::from(vec![
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(props.theme.muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(note.to_string(), Style::default().fg(props.theme.dim())),
+    ]));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_setting_row(
+    lines: &mut Vec<Line<'static>>,
+    selected_line: &mut Option<usize>,
+    index: usize,
+    selected_index: usize,
+    focused: bool,
+    label: &str,
+    value: &str,
+    badge: &str,
+    help: &str,
+    props: &ConfigViewProps<'_>,
+) {
+    let selected = index == selected_index;
+    if selected {
+        *selected_line = Some(lines.len());
+    }
+    lines.push(Line::from(vec![
+        cursor_span(selected, props),
+        Span::styled(
+            format!("{label:<18}"),
+            selectable_style(selected, focused, props),
+        ),
+        Span::styled(
+            value.to_string(),
+            Style::default()
+                .fg(props.theme.fg())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            badge.to_string(),
+            Style::default().fg(if badge == "Active" {
+                props.theme.ok()
+            } else {
+                props.theme.dim()
+            }),
+        ),
+    ]));
+    if selected && focused {
+        lines.push(help_line(help, props));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_connection_row(
+    lines: &mut Vec<Line<'static>>,
+    selected_line: &mut Option<usize>,
+    index: usize,
+    selected_index: usize,
+    focused: bool,
+    name: &str,
+    origin: String,
+    state: &str,
+    state_ok: bool,
+    id: &str,
+    props: &ConfigViewProps<'_>,
+) {
+    let selected = index == selected_index;
+    if selected {
+        *selected_line = Some(lines.len());
+    }
+    lines.push(Line::from(vec![
+        cursor_span(selected, props),
+        Span::styled(
+            if state == "Active" { "● " } else { "○ " },
+            Style::default().fg(if state == "Active" {
+                props.theme.ok()
+            } else if state_ok {
+                props.theme.dim()
+            } else {
+                props.theme.warn()
+            }),
+        ),
+        Span::styled(
+            name.to_string(),
+            selectable_style(selected, focused, props),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            state.to_string(),
+            Style::default().fg(if state == "Active" {
+                props.theme.ok()
+            } else if state_ok {
+                props.theme.muted()
+            } else {
+                props.theme.warn()
+            }),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("       "),
+        Span::styled(origin, Style::default().fg(props.theme.dim())),
+    ]));
+    if selected && focused {
+        lines.push(help_line(
+            &format!("ID: {id}  ·  Enter to activate  ·  d to delete"),
+            props,
+        ));
+    }
+}
+
+fn push_action_row(
+    lines: &mut Vec<Line<'static>>,
+    selected_line: &mut Option<usize>,
+    index: usize,
+    selected_index: usize,
+    focused: bool,
+    label: &str,
+    props: &ConfigViewProps<'_>,
+) {
+    let selected = index == selected_index;
+    if selected {
+        *selected_line = Some(lines.len());
+    }
+    lines.push(Line::from(vec![
+        cursor_span(selected, props),
+        Span::styled(
+            label.to_string(),
+            if selected && focused {
+                Style::default()
+                    .fg(props.theme.brand())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(props.theme.brand())
+            },
+        ),
+    ]));
+    if selected && focused {
+        lines.push(help_line(
+            "Enter to choose a preset or custom endpoint",
+            props,
+        ));
+    }
+}
+
+fn empty_connections(lines: &mut Vec<Line<'static>>, text: &str, props: &ConfigViewProps<'_>) {
+    lines.push(Line::from(vec![
+        Span::raw("     "),
+        Span::styled(text.to_string(), Style::default().fg(props.theme.dim())),
+    ]));
+}
+
+fn cursor_span(selected: bool, props: &ConfigViewProps<'_>) -> Span<'static> {
+    Span::styled(
+        if selected { " ›  " } else { "    " },
+        Style::default().fg(if selected {
+            props.theme.brand()
+        } else {
+            props.theme.dim()
+        }),
+    )
+}
+
+fn selectable_style(selected: bool, focused: bool, props: &ConfigViewProps<'_>) -> Style {
+    Style::default()
+        .fg(if selected && focused {
+            props.theme.brand()
+        } else {
+            props.theme.fg()
+        })
+        .add_modifier(Modifier::BOLD)
+}
+
+fn help_line(text: &str, props: &ConfigViewProps<'_>) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("       "),
+        Span::styled(text.to_string(), Style::default().fg(props.theme.muted())),
+    ])
+}
+
+fn connection_matches(active: &str, id: &str, preset: Option<&str>) -> bool {
+    active == id || preset == Some(active)
+}
+
+fn connection_origin(preset: Option<&str>, base_url: Option<&str>) -> String {
+    if let Some(preset) = preset {
+        format!("Preset · {preset}")
+    } else if let Some(url) = base_url {
+        format!("Custom · {url}")
+    } else {
+        "Custom connection".to_string()
+    }
+}
+
+fn search_display_name(ws: &muta_contracts::WebSearchConfigView) -> String {
+    if ws.provider == "none" {
+        return "Disabled".to_string();
+    }
+    ws.search_connections
+        .iter()
+        .find(|conn| connection_matches(&ws.provider, &conn.id, conn.preset_id.as_deref()))
+        .map(|conn| conn.display_name().to_string())
+        .or_else(|| {
+            muta_contracts::WebSearchPresets::find(&ws.provider)
+                .map(|preset| preset.display_name.to_string())
+        })
+        .unwrap_or_else(|| ws.provider.clone())
+}
+
+fn fetch_display_name(ws: &muta_contracts::WebSearchConfigView) -> String {
+    if ws.reader == "none" {
+        return "Disabled".to_string();
+    }
+    ws.reader_connections
+        .iter()
+        .find(|conn| connection_matches(&ws.reader, &conn.id, conn.preset_id.as_deref()))
+        .map(|conn| conn.display_name().to_string())
+        .or_else(|| {
+            muta_contracts::WebReaderPresets::find(&ws.reader)
+                .map(|preset| preset.display_name.to_string())
+        })
+        .unwrap_or_else(|| ws.reader.clone())
+}
+
+fn search_connection_state(
+    ws: &muta_contracts::WebSearchConfigView,
+    conn: &muta_contracts::WebSearchConnection,
+    active: bool,
+) -> (&'static str, bool) {
+    if !conn.enabled {
+        return ("Disabled", false);
+    }
+    let ready = match conn.preset_id.as_deref().unwrap_or(&conn.id) {
+        "tavily" => ws.tavily_api_key_set || conn.api_key_env.is_some(),
+        "bocha" => ws.bocha_api_key_set || conn.api_key_env.is_some(),
+        "searxng" => ws.searxng_url.is_some() || conn.base_url.is_some(),
+        _ => true,
+    };
+    if !ready {
+        ("Needs setup", false)
+    } else if active {
+        ("Active", true)
+    } else {
+        ("Available", true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_counts_track_real_connections() {
+        let mut ws = muta_contracts::WebSearchConfigView::from(
+            &muta_contracts::WebSearchConfig::default(),
+        );
+        assert_eq!(search_item_count(Some(&ws)), 3);
+        assert_eq!(fetch_item_count(Some(&ws)), 3);
+
+        ws.search_connections
+            .push(muta_contracts::WebSearchConnection::default());
+        ws.reader_connections
+            .push(muta_contracts::WebReaderConnection::default());
+        assert_eq!(search_item_count(Some(&ws)), 4);
+        assert_eq!(fetch_item_count(Some(&ws)), 4);
+    }
 }

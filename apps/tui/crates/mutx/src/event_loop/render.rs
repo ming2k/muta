@@ -1126,7 +1126,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     transcript_layout: app.transcript_layout,
                     expand_auto_scroll: app.expand_auto_scroll,
                     click_outside_dismiss: app.click_outside_dismiss,
-                    web_segment: app.config_web_segment,
                     websearch: app.websearch_config.as_ref(),
                     workspace: &app.current_workspace,
                     category_scroll: &mut app.config_scroll,

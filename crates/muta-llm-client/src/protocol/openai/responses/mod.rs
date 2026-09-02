@@ -25,6 +25,91 @@ use std::sync::{Arc, Mutex};
 use crate::transport::{decode_response_json, ensure_success, transport_error};
 use crate::{Client, ClientProfile, Endpoint};
 
+fn parse_retry_after_from_message(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    let idx = lower.find("try again in")?;
+    let remainder = lower[idx + "try again in".len()..].trim_start();
+    let num_end = remainder.find(|c: char| !c.is_ascii_digit() && c != '.')?;
+    let val_str = &remainder[..num_end];
+    let unit_part = remainder[num_end..].trim_start();
+    let val = val_str.parse::<f64>().ok()?;
+    if unit_part.starts_with("ms") {
+        Some(val as u64)
+    } else if unit_part.starts_with('s') || unit_part.starts_with("sec") {
+        Some((val * 1000.0) as u64)
+    } else {
+        None
+    }
+}
+
+fn parse_responses_stream_error(
+    error_val: &serde_json::Value,
+    label: &'static str,
+) -> ProviderError {
+    let code = error_val
+        .get("code")
+        .and_then(serde_json::Value::as_str);
+    let message = error_val
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .filter(|m| !m.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if let Some(code) = code {
+                format!("Responses stream error: {code}")
+            } else if let Some(s) = error_val.as_str() {
+                s.to_string()
+            } else {
+                format!("Responses stream error: {error_val}")
+            }
+        });
+
+    let retry_delay = parse_retry_after_from_message(&message);
+
+    match code {
+        Some("server_is_overloaded" | "slow_down") => {
+            ProviderError::new(label, ProviderErrorKind::Unavailable, message)
+                .with_status(503)
+                .retryable(retry_delay.or(Some(2000)))
+        }
+        Some("rate_limit_exceeded") => {
+            ProviderError::new(label, ProviderErrorKind::RateLimited, message)
+                .with_status(429)
+                .retryable(retry_delay)
+        }
+        Some("context_length_exceeded" | "context_window_exceeded") => {
+            ProviderError::new(label, ProviderErrorKind::ContextOverflow, message)
+                .with_status(400)
+        }
+        Some("insufficient_quota" | "usage_not_included") => {
+            ProviderError::new(label, ProviderErrorKind::Unavailable, message)
+                .with_status(402)
+        }
+        Some("cyber_policy" | "misalignment_policy_violation" | "invalid_prompt" | "bio_policy") => {
+            ProviderError::new(label, ProviderErrorKind::InvalidRequest, message)
+                .with_status(400)
+        }
+        _ => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("overloaded") || lower.contains("capacity") {
+                ProviderError::new(label, ProviderErrorKind::Unavailable, message)
+                    .with_status(503)
+                    .retryable(retry_delay.or(Some(2000)))
+            } else if lower.contains("rate limit") {
+                ProviderError::new(label, ProviderErrorKind::RateLimited, message)
+                    .with_status(429)
+                    .retryable(retry_delay)
+            } else {
+                let mut err = ProviderError::new(label, ProviderErrorKind::Protocol, message);
+                if let Some(delay) = retry_delay {
+                    err = err.retryable(Some(delay));
+                }
+                err
+            }
+        }
+    }
+}
+
 fn decode_stream_payload(
     data: &str,
     label: &'static str,
@@ -37,17 +122,25 @@ fn decode_stream_payload(
         )
     })?;
     match value["type"].as_str() {
-        Some("response.failed") => Err(ProviderError::new(
-            label,
-            ProviderErrorKind::Protocol,
-            format!("Responses stream failed: {}", value["response"]["error"]),
-        )),
-        Some("error") => Err(ProviderError::new(
-            label,
-            ProviderErrorKind::Protocol,
-            format!("Responses stream error: {}", value["error"]),
-        )),
-        _ => Ok(value),
+        Some("response.failed") => {
+            let err_val = value
+                .get("response")
+                .and_then(|r| r.get("error"))
+                .unwrap_or(&value["response"]);
+            Err(parse_responses_stream_error(err_val, label))
+        }
+        Some("error") => {
+            let err_val = value.get("error").unwrap_or(&value);
+            Err(parse_responses_stream_error(err_val, label))
+        }
+        _ => {
+            if let Some(err_val) = value.get("error") {
+                if !err_val.is_null() {
+                    return Err(parse_responses_stream_error(err_val, label));
+                }
+            }
+            Ok(value)
+        }
     }
 }
 
@@ -192,6 +285,9 @@ impl OpenAiResponsesProvider {
         }
         if is_copilot_vision {
             req = req.header("Copilot-Vision-Request", "true");
+        }
+        if chatgpt {
+            req = req.header("x-codex-routing-hint", format!("model={}", self.endpoint.model));
         }
         for (name, value) in self.endpoint.headers() {
             if !copilot
@@ -542,6 +638,44 @@ mod stream_protocol_tests {
             let error = decode_stream_payload(payload, "ChatGPT").unwrap_err();
             assert_eq!(error.kind(), ProviderErrorKind::Protocol);
         }
+    }
+
+    #[test]
+    fn server_is_overloaded_and_slow_down_are_classified_as_unavailable_and_retryable() {
+        for payload in [
+            r#"{"type":"error","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","type":"service_unavailable_error"}}"#,
+            r#"{"type":"response.failed","response":{"error":{"code":"slow_down","message":"Please slow down."}}}"#,
+        ] {
+            let error = decode_stream_payload(payload, "ChatGPT").unwrap_err();
+            assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+            assert_eq!(error.status(), Some(503));
+            assert!(matches!(
+                error.retry_disposition(),
+                muta_contracts::RetryDisposition::Retry { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn rate_limit_with_parsed_duration_is_classified_as_rate_limited_and_retryable() {
+        let payload = r#"{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached. Please try again in 11.054s."}}}"#;
+        let error = decode_stream_payload(payload, "ChatGPT").unwrap_err();
+        assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+        assert_eq!(error.status(), Some(429));
+        assert_eq!(
+            error.retry_disposition(),
+            muta_contracts::RetryDisposition::Retry {
+                retry_after_ms: Some(11054)
+            }
+        );
+    }
+
+    #[test]
+    fn context_length_exceeded_is_classified_as_context_overflow() {
+        let payload = r#"{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window."}}}"#;
+        let error = decode_stream_payload(payload, "ChatGPT").unwrap_err();
+        assert_eq!(error.kind(), ProviderErrorKind::ContextOverflow);
+        assert_eq!(error.status(), Some(400));
     }
 
     #[test]

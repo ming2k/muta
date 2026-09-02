@@ -726,7 +726,7 @@ mod tests {
         assert!(url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
         assert!(url.contains("codex_cli_simplified_flow=true"));
         assert!(url.contains("id_token_add_organizations=true"));
-        assert!(url.contains("originator=muta"));
+        assert!(url.contains("originator=codex_cli_rs"));
         assert!(url.contains("scope=openid+profile+email+offline_access"));
         assert!(!url.contains("nonce="), "nonce must be absent for ChatGPT");
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
