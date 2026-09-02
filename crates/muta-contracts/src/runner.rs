@@ -252,7 +252,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
-    "fetch_url",
+    "read_url",
     "search_web",
 ];
 
@@ -327,7 +327,7 @@ const CODING_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
-    "fetch_url",
+    "read_url",
     "search_web",
     // Workspace mutation — the code-editing surface.
     "run_command",

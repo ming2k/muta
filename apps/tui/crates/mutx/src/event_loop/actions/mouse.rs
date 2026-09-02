@@ -157,36 +157,33 @@ pub(super) async fn handle_selection_start(
             app.drag.cancel();
         }
     } else if app.active_modal() == Modal::None
+        && let Some(idx) = app.modal_hit_map.completion_item_at(x, y)
+    {
+        app.accept_completion(idx);
+        app.suggestion_index = None;
+        app.completion_dismissed = true;
+        app.selection = SelectionState::None;
+        app.focused_target = None;
+        app.drag.cancel();
+    } else if app.active_modal() == Modal::None
+        && app.modal_hit_map.completion_menu_contains(x, y)
+    {
+        app.selection = SelectionState::None;
+        app.focused_target = None;
+        app.drag.cancel();
+    } else if app.active_modal() == Modal::None
         && app.todos_rect.is_some_and(|r| {
-            // Todo bar: open the Activity modal on the Todos
-            // section directly. Checked before the activity-bar
-            // rect in case the two bars ever overlap.
+            // Todo bar: open the Todos modal directly.
             r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
         })
     {
-        // The activity bar may still be painted while a modal
-        // owns the surface — especially the pending Permission
-        // sheet, whose expanded body grows up over this row.
-        // Gate on `Modal::None` so a click never stacks an
-        // Activity modal on top of an in-progress decision.
+        // Gate on `Modal::None` so a click never stacks a modal on top of
+        // an in-progress decision.
         // A retained view (ADR-0133): reopen restores the scroll the user
         // left; only the first open initialises.
         super::enter_panel(
             app,
             crate::surfaces::PanelId::Todos,
-            runtime,
-            viewed_session_id,
-        );
-    } else if app.active_modal() == Modal::None
-        && app
-            .activity_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-    {
-        // A retained view (ADR-0133): reopen restores the scroll the user
-        // left; only the first open initialises.
-        super::enter_panel(
-            app,
-            crate::surfaces::PanelId::Activity,
             runtime,
             viewed_session_id,
         );

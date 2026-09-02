@@ -55,14 +55,6 @@ pub struct InputContext {
     /// and `Esc` clears the focus. When `false` every key has its ordinary
     /// input-box meaning. Mirrors `App::focused_target.is_some()`.
     pub has_focused_target: bool,
-    /// Whether the send queue holds at least one staged user message. While
-    /// true, `↑` walks the queue pointer (before input history).
-    pub has_queued: bool,
-    /// Whether the queue pointer ([`crate::app::App::queue_pointer`]) is
-    /// armed — the composer is currently a projection of a queue item. While
-    /// true, `↓` steps the pointer back toward the newest item (and past it
-    /// dissolves the pointer, restoring the draft) before any history role.
-    pub queue_pointer_armed: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -167,7 +159,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Skills
             | super::Modal::Permissions
             | super::Modal::Config
-            | super::Modal::Activity
+            | super::Modal::Todos
             | super::Modal::Queue
             | super::Modal::Telemetry
             | super::Modal::UsageStats
@@ -192,7 +184,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
     matches!(
         modal,
         super::Modal::Help
-            | super::Modal::Activity
+            | super::Modal::Todos
             | super::Modal::Permissions
             | super::Modal::Config
             | super::Modal::Telemetry
@@ -575,12 +567,8 @@ pub enum InputAction {
     HistoryPrev,
     /// Navigate history down.
     HistoryNext,
-    /// Cancel queue pointer editing and restore the stashed draft (Esc).
-    QueuePointerCancel,
     /// Legacy destructive recall (pop the newest queue item into the
-    /// composer). Superseded at the top level by the non-destructive
-    /// [`InputAction::QueuePointerPrev`] / [`InputAction::QueuePointerNext`]
-    /// pair; kept for the queue modal's explicit pull-to-composer re-edit,
+    /// composer). Kept for the queue modal's explicit pull-to-composer re-edit,
     /// where removing the item from the list *is* the point.
     RecallQueued,
     /// Re-edit the queue modal's *selected* item (not always the newest):
@@ -593,14 +581,6 @@ pub enum InputAction {
     /// Reachable from `Ctrl+P` (bar, no modal) and the queue modal's block
     /// control.
     QueueToggleBlock,
-    /// `↑` at the top level with a non-empty outbox: arm/step the queue
-    /// pointer toward older items (newest first). Non-destructive — the queue
-    /// is untouched; the composer becomes an editable projection of the
-    /// pointed-at item.
-    QueuePointerPrev,
-    /// `↓` while the queue pointer is armed: step toward newer items and,
-    /// past the newest, dissolve the pointer (restoring the stashed draft).
-    QueuePointerNext,
     /// Delete the queue modal's selected item. Bound to `D` inside the queue
     /// modal (matching the destructive-delete convention in Connections /
     /// Sessions).
@@ -1518,10 +1498,6 @@ pub fn process_event(
                         // clears the dismissal latch, so Esc then ↑/↓ walks
                         // history instead of suggestions.
                         InputAction::CloseCompletion
-                    } else if context.queue_pointer_armed {
-                        // Queue pointer edit armed: Esc dissolves the pointer
-                        // and restores the stashed draft.
-                        InputAction::QueuePointerCancel
                     } else if context.is_responding {
                         InputAction::Interrupt
                     } else {
@@ -1651,7 +1627,7 @@ pub fn process_event(
                         // switcher's is a *switch* — both close the panel.
                         super::Modal::ViewSwitcher => InputAction::ViewSwitchActivate,
                         super::Modal::Config => InputAction::ConfigActivate,
-                        super::Modal::Activity => InputAction::CloseModal,
+                        super::Modal::Todos => InputAction::CloseModal,
                         super::Modal::Telemetry => InputAction::TelemetryActivate,
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
@@ -1985,27 +1961,19 @@ pub fn process_event(
                         InputAction::FocusPrevTarget
                     }
                 }
-                // Alt+P: previous prompt history (or queue pointer prev if armed).
+                // Alt+P: previous prompt history.
                 KeyCode::Char('p') | KeyCode::Char('P')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && context.active_modal == super::Modal::None =>
                 {
-                    if context.has_queued || context.queue_pointer_armed {
-                        InputAction::QueuePointerPrev
-                    } else {
-                        InputAction::HistoryPrev
-                    }
+                    InputAction::HistoryPrev
                 }
-                // Alt+N: next prompt history (or queue pointer next if armed).
+                // Alt+N: next prompt history.
                 KeyCode::Char('n') | KeyCode::Char('N')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && context.active_modal == super::Modal::None =>
                 {
-                    if context.queue_pointer_armed {
-                        InputAction::QueuePointerNext
-                    } else {
-                        InputAction::HistoryNext
-                    }
+                    InputAction::HistoryNext
                 }
                 KeyCode::Char(c) => {
                     // The quick switcher's filter owns every printable key
@@ -2595,7 +2563,7 @@ pub fn process_event(
                                 InputAction::ScrollUp
                             }
                         }
-                        super::Modal::Activity => InputAction::ScrollUp,
+                        super::Modal::Todos => InputAction::ScrollUp,
                         super::Modal::Tools => InputAction::SessionSelect { forward: false },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: false },
                         super::Modal::Skills => InputAction::SessionSelect { forward: false },
@@ -2658,7 +2626,7 @@ pub fn process_event(
                                 InputAction::ScrollDown
                             }
                         }
-                        super::Modal::Activity => InputAction::ScrollDown,
+                        super::Modal::Todos => InputAction::ScrollDown,
                         super::Modal::Tools => InputAction::SessionSelect { forward: true },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: true },
                         super::Modal::Skills => InputAction::SessionSelect { forward: true },
@@ -2702,19 +2670,10 @@ pub fn process_event(
                         }
                     }
                 }
-                // PageUp / PageDown: In composer, PageUp / PageDown walk prompt history
-                // (or queue items when queued). When a transcript step is focused or
-                // inside a scrollable modal, PageUp / PageDown scroll by one viewport page.
+                // PageUp / PageDown: Scroll transcript or modal body by one viewport page.
                 KeyCode::PageUp => {
-                    if context.active_modal == super::Modal::None {
-                        if context.has_focused_target {
-                            InputAction::ScrollPageUp
-                        } else if context.has_queued || context.queue_pointer_armed {
-                            InputAction::QueuePointerPrev
-                        } else {
-                            InputAction::HistoryPrev
-                        }
-                    } else if context.active_modal == super::Modal::Permission
+                    if context.active_modal == super::Modal::None
+                        || context.active_modal == super::Modal::Permission
                         || scrolls_own_body(context.active_modal)
                     {
                         InputAction::ScrollPageUp
@@ -2723,15 +2682,8 @@ pub fn process_event(
                     }
                 }
                 KeyCode::PageDown => {
-                    if context.active_modal == super::Modal::None {
-                        if context.has_focused_target {
-                            InputAction::ScrollPageDown
-                        } else if context.queue_pointer_armed {
-                            InputAction::QueuePointerNext
-                        } else {
-                            InputAction::HistoryNext
-                        }
-                    } else if context.active_modal == super::Modal::Permission
+                    if context.active_modal == super::Modal::None
+                        || context.active_modal == super::Modal::Permission
                         || scrolls_own_body(context.active_modal)
                     {
                         InputAction::ScrollPageDown

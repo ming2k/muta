@@ -200,8 +200,8 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "find_files" => &search::FindFilesPresenter,
         "list_dir" => &search::ListDirPresenter,
         "search_text" => &search::SearchTextPresenter,
-        "fetch_url" | "webfetch" => &web::WebFetchPresenter,
-        "search_web" | "websearch" => &web::WebSearchPresenter,
+        "read_url" => &web::WebReaderPresenter,
+        "search_web" => &web::WebSearchPresenter,
         "write_todos" | "update_todo" | "todo" | "todo_update" => &meta::TodoPresenter,
         "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => &meta::RunnerPresenter,
         "use_skill" => &meta::UseSkillPresenter,
@@ -324,10 +324,10 @@ mod tests {
         );
         assert_eq!(
             summary(
-                "fetch_url",
+                "read_url",
                 serde_json::json!({"url": "https://example.com"})
             ),
-            "Fetch https://example.com"
+            "Read https://example.com"
         );
     }
 

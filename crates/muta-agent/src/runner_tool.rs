@@ -834,12 +834,6 @@ impl RunnerTool {
         // interruption, a hard terminal error, or a non-retryable one.
         let retry_config = *self.retry_config.lock().unwrap_or_else(|e| e.into_inner());
         let retry_limit = retry_config.max_attempts.clamp(1, 60);
-        // Hidden-chain gate, computed once at the source. Evaluated via
-        // `provider.model_capabilities().chain_disclosed()`, which incorporates the
-        // canonical three-layer resolution order (user overrides -> remote -> baseline).
-        // Models with undisclosed reasoning (e.g. `ReasoningSummary` like GPT-5.x)
-        // do not stream reasoning deltas upward.
-        let hidden_chain = !self.provider.model_capabilities().chain_disclosed();
         let short_id = call_id
             .map(|id| {
                 let clean = id.trim_start_matches("call_");
@@ -862,7 +856,6 @@ impl RunnerTool {
                     Self::forward_event(
                         event,
                         position,
-                        hidden_chain,
                         Some(&origin_label),
                         &mut on_event,
                     )
@@ -1034,7 +1027,6 @@ impl RunnerTool {
     fn forward_event(
         event: muta_contracts::AgentEvent,
         position: (u64, usize),
-        hidden_chain: bool,
         origin: Option<&str>,
         on_event: &mut dyn FnMut(muta_contracts::RunnerEvent),
     ) {
@@ -1063,18 +1055,8 @@ impl RunnerTool {
                 on_event(muta_contracts::RunnerEvent::StreamEnd(content));
             }
             // The runner's reasoning chain, streamed live instead of surfacing
-            // only after a session reload. Without these arms the child's
-            // thinking fell into the catch-all `_ => {}` below — the durable
-            // transcript kept it (`Message::reasoning_content`) and a resumed
-            // session rendered it, but the run itself showed nothing: a live
-            // drill-in and a reloaded one disagreed about what the runner did.
-            // Gated at the source for hidden-chain models so the summary-only
-            // chain is never disclosed (the caller computed `hidden_chain`
-            // once; the principal's live path applies the same gate).
+            // only after a session reload.
             muta_contracts::AgentEvent::ReasoningDelta { delta, start } => {
-                if hidden_chain {
-                    return;
-                }
                 if start {
                     on_event(muta_contracts::RunnerEvent::StreamReasoningStart {
                         round: position.0,
@@ -1084,9 +1066,6 @@ impl RunnerTool {
                 on_event(muta_contracts::RunnerEvent::StreamReasoningDelta(delta));
             }
             muta_contracts::AgentEvent::ReasoningEnd(content) => {
-                if hidden_chain {
-                    return;
-                }
                 on_event(muta_contracts::RunnerEvent::StreamReasoningEnd(content));
             }
             muta_contracts::AgentEvent::ToolCall {

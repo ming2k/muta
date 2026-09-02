@@ -2,7 +2,7 @@
 //! (`AgentRequest::QueryWebSearchConfig` / `UpdateWebSearchConfig`).
 //!
 //! The `[websearch]` table selects the `websearch` backends and the
-//! `webfetch` reader (ADR-0117/0118's two-stage research pipeline). Before
+//! `read_url` reader (ADR-0117/0118's two-stage research pipeline). Before
 //! these handlers existed the table was read exactly once at bootstrap and
 //! could only be changed by editing `config.toml` and restarting. The wire
 //! entry points make it a live setting like any other:
@@ -18,7 +18,7 @@
 //!   empty-string key **clears** it.
 //! * After persisting, the effective config is pushed into the shared
 //!   hot-reload handle ([`muta_contracts::SharedWebSearchConfig`]) so the
-//!   live `websearch`/`webfetch` tools rebuild their provider chain / HTTP
+//!   live `websearch`/`read_url` tools rebuild their provider chain / HTTP
 //!   client on the next call — no toolset rebuild, no restart.
 //!
 //! Keys sent in an update replace the whole credentials `[websearch]` table

@@ -54,32 +54,6 @@ pub(super) async fn handle_send_chat(
     let images = std::mem::take(&mut app.pending_images);
     let text_pastes = std::mem::take(&mut app.pending_text_pastes);
 
-    // Queue pointer is armed: Enter is an **in-place edit commit**, not a
-    // send. The composer holds a projection of the pointed-at queue item;
-    // the edit writes back into that item (same id, same slot), so the
-    // queue's length and order are untouched. If the target vanished while
-    // the user was editing (it shipped, was deleted, or was recalled), the
-    // commit dissolves the pointer and returns None — the composer then
-    // falls through to the ordinary send path below, exactly as if the user
-    // had typed a fresh message (queued if the session is busy).
-    if app.queue_pointer.is_some()
-        && let Some(()) = app.commit_queue_pointer(
-            viewed_session_id,
-            text.clone(),
-            images.clone(),
-            text_pastes.clone(),
-        )
-    {
-        // The edit landed (and the commit already dissolved the pointer and
-        // dropped its stash). Clear the composer — the content now lives in
-        // the queue item — and record the edited text in history.
-        app.input.clear();
-        app.cursor_position = 0;
-        app.record_input_history(text, images, text_pastes);
-        app.clear_history_draft();
-        return;
-    }
-
     // Stage the chips' backing payloads so they ship with
     // this message. The text is expanded into the real paste
     // contents at the moment of dispatch — either inline
@@ -220,11 +194,6 @@ pub(crate) async fn handle_send_slash(
 ) -> ActionFlow {
     app.suggestion_index = None;
     app.input_scroll = 0;
-    // The composer's content left any queue-pointer projection (a queued
-    // message may itself start with `/`, in which case the projection was
-    // just dispatched as this command): drop the pointer without restoring
-    // so no stale projection survives into the next composer state.
-    app.drop_queue_pointer_without_restore();
     // A command is a synchronous control-plane operation, not a round
     // (ADR-0110): it never enters the round state machine, so it must not
     // arm the activity bar's liveness surface — no `is_responding`, no

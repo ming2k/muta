@@ -266,7 +266,7 @@ impl ContentModalSpec {
     /// tables breathe; the viewport ceiling keeps long histories scrolled
     /// rather than full-height.
     pub const USAGE_STATS: Self = Self::new(76, 12, 86);
-    pub const ACTIVITY: Self = Self::new(72, 10, 80);
+    pub const TODOS: Self = Self::new(72, 10, 80);
     /// The unified provider/model editor (`draw_model_editor`). Sizes to its
     /// content — at most three rows (API key, reasoning effort, extended
     /// thinking) — instead of reserving a fixed 30% slab that left most of
@@ -1290,7 +1290,7 @@ mod tests {
         for &rows in &[30u16, 40, 45, 50, 60] {
             let mut grid = mutx_engine::Grid::new(100, rows);
             let frame = Frame::new(&mut grid);
-            let area = content_modal_area(&frame, ContentModalSpec::ACTIVITY, 15);
+            let area = content_modal_area(&frame, ContentModalSpec::TODOS, 15);
             let top_gap = area.y;
             let bot_gap = rows.saturating_sub(area.y + area.height);
             assert!(

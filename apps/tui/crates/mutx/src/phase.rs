@@ -154,10 +154,11 @@ impl Phase {
 
 fn tool_verb(name: &str) -> ToolVerb {
     match name {
-        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url"
-        | "webfetch" => ToolVerb::Exploring,
+        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "read_url" => {
+            ToolVerb::Exploring
+        }
         "search_text" => ToolVerb::Searching,
-        "search_web" | "websearch" => ToolVerb::WebSearching,
+        "search_web" => ToolVerb::WebSearching,
         "write_file" | "edit_file" => ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => ToolVerb::UpdatingTasks,

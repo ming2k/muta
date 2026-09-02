@@ -1,14 +1,14 @@
-//! Presenters for `webfetch` and `websearch`.
+//! Presenters for `read_url` and `search_web`.
 
 use super::{ToolPresenter, ToolView, truncate};
 
-pub struct WebFetchPresenter;
+pub struct WebReaderPresenter;
 
-impl ToolPresenter for WebFetchPresenter {
+impl ToolPresenter for WebReaderPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("url")
-            .map(|url| format!("Fetch {}", url))
-            .unwrap_or_else(|| "Fetch URL".to_string())
+            .map(|url| format!("Read {}", url))
+            .unwrap_or_else(|| "Read URL".to_string())
     }
 }
 

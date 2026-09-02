@@ -1,4 +1,4 @@
-//! Web settings panel: orthogonal Search (breadth) and Fetch (depth) segment control and connection routing.
+//! Web settings panel: orthogonal Search (breadth) and Reader (depth) segment control and connection routing.
 
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
@@ -140,7 +140,7 @@ pub fn build_websearch_provider_dropdown(
     state
 }
 
-/// Build a floating dropdown picker for Web Fetch page readers.
+/// Build a floating dropdown picker for Web Reader page readers.
 pub fn build_websearch_reader_dropdown(
     current: &str,
     ws: Option<&muta_contracts::WebSearchConfigView>,
@@ -181,7 +181,7 @@ pub fn build_websearch_reader_dropdown(
 
     items.push(
         DropdownItem::new("none", "Disabled", "none".to_string())
-            .with_description("Disable web fetch tool")
+            .with_description("Disable web reader tool")
             .with_indicator(DropdownIndicator::Inactive),
     );
 
@@ -196,7 +196,7 @@ pub fn build_websearch_reader_dropdown(
     );
 
     let mut state =
-        DropdownState::new(Some("Select Web Fetch Reader"), items).with_context("websearch_reader");
+        DropdownState::new(Some("Select Web Reader"), items).with_context("websearch_reader");
     state.select_by_id(current);
     state
 }
@@ -283,8 +283,8 @@ pub fn search_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> us
     3 + ws.map(|ws| ws.search_connections.len()).unwrap_or(0)
 }
 
-/// Number of keyboard-selectable rows in the Web Fetch panel.
-pub fn fetch_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> usize {
+/// Number of keyboard-selectable rows in the Web Reader panel.
+pub fn reader_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> usize {
     3 + ws.map(|ws| ws.reader_connections.len()).unwrap_or(0)
 }
 
@@ -297,19 +297,19 @@ pub(super) fn draw_search_detail(
     draw_web_detail(frame, body, props, focused, WebPanel::Search);
 }
 
-pub(super) fn draw_fetch_detail(
+pub(super) fn draw_reader_detail(
     frame: &mut Frame,
     body: Rect,
     props: &mut ConfigViewProps<'_>,
     focused: bool,
 ) {
-    draw_web_detail(frame, body, props, focused, WebPanel::Fetch);
+    draw_web_detail(frame, body, props, focused, WebPanel::Reader);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WebPanel {
     Search,
-    Fetch,
+    Reader,
 }
 
 fn draw_web_detail(
@@ -338,10 +338,10 @@ fn draw_web_detail(
             "Search route",
             ws.search_connections.len(),
         ),
-        WebPanel::Fetch => (
+        WebPanel::Reader => (
             ws.reader.as_str(),
-            fetch_display_name(ws),
-            "Fetch route",
+            reader_display_name(ws),
+            "Reader route",
             ws.reader_connections.len(),
         ),
     };
@@ -351,7 +351,7 @@ fn draw_web_detail(
         "ROUTING",
         match panel {
             WebPanel::Search => "Used by search_web to discover sources",
-            WebPanel::Fetch => "Used by fetch_url to turn a page into readable content",
+            WebPanel::Reader => "Used by read_url to turn a page into readable content",
         },
         props,
     );
@@ -375,7 +375,7 @@ fn draw_web_detail(
     section_heading(
         &mut lines,
         "REQUEST POLICY",
-        "Shared by Search and Fetch",
+        "Shared by Search and Reader",
         props,
     );
     push_setting_row(
@@ -440,7 +440,7 @@ fn draw_web_detail(
                 );
             }
         }
-        WebPanel::Fetch => {
+        WebPanel::Reader => {
             if ws.reader_connections.is_empty() {
                 empty_connections(
                     &mut lines,
@@ -485,7 +485,7 @@ fn draw_web_detail(
         focused,
         match panel {
             WebPanel::Search => "+  Add search connection",
-            WebPanel::Fetch => "+  Add fetch reader",
+            WebPanel::Reader => "+  Add page reader",
         },
         props,
     );
@@ -718,7 +718,7 @@ fn search_display_name(ws: &muta_contracts::WebSearchConfigView) -> String {
         .unwrap_or_else(|| ws.provider.clone())
 }
 
-fn fetch_display_name(ws: &muta_contracts::WebSearchConfigView) -> String {
+fn reader_display_name(ws: &muta_contracts::WebSearchConfigView) -> String {
     if ws.reader == "none" {
         return "Disabled".to_string();
     }
@@ -766,13 +766,13 @@ mod tests {
             &muta_contracts::WebSearchConfig::default(),
         );
         assert_eq!(search_item_count(Some(&ws)), 3);
-        assert_eq!(fetch_item_count(Some(&ws)), 3);
+        assert_eq!(reader_item_count(Some(&ws)), 3);
 
         ws.search_connections
             .push(muta_contracts::WebSearchConnection::default());
         ws.reader_connections
             .push(muta_contracts::WebReaderConnection::default());
         assert_eq!(search_item_count(Some(&ws)), 4);
-        assert_eq!(fetch_item_count(Some(&ws)), 4);
+        assert_eq!(reader_item_count(Some(&ws)), 4);
     }
 }

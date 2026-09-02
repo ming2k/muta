@@ -138,8 +138,8 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 /// bar and the transient activity bar) and surfaces the live task list — a
 /// `TODOS d/t` identity and a one-line preview of the current item (the
 /// `InProgress` one, or the first `Pending` when nothing is mid-flight). The
-/// whole bar is the click target that opens the Activity modal on the Todos
-/// section. Always one row tall when visible (hidden only while an overlay
+/// whole bar is the click target that opens the Todos modal.
+/// Always one row tall when visible (hidden only while an overlay
 /// modal replaces the chrome, inside an runner zoom, or when the task list is
 /// empty). It is the permanent home for todo affordances, so the activity bar
 /// no longer needs to embed the `todos d/t` badge. Rendered on the plain

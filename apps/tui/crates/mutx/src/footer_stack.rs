@@ -49,13 +49,12 @@ pub(crate) enum FooterRowId {
     /// the stack's geometry is complete in one place.
     TopGap,
     /// The ambient task-list summary (`TODOS d/t · preview`). Click →
-    /// Activity modal, Todos tab.
+    /// Todos modal.
     Todos,
     /// The ambient outbox summary (`QUEUE n · preview · keys`). Click →
     /// Queue modal.
     Queue,
     /// The transient live-status bar (breathing dot + status + elapsed).
-    /// Click → Activity modal, Activity tab.
     Activity,
     /// The transient step-focus inspector bar (`◈ STEP FOCUS ...`). Active only
     /// while a transcript step is keyboard-focused.

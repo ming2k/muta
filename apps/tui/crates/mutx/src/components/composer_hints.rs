@@ -54,36 +54,10 @@ impl ActionDensity {
 
 // Compose target (what the buffer is / will become)
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QueueEditKind {
-    Steer,
-    FollowUp,
-}
-
-impl QueueEditKind {
-    /// The plural noun naming the group of queued items being pointed at —
-    /// the same word the hint row's `update follow-ups[2]` verb uses.
-    pub(crate) fn plural_noun(self) -> &'static str {
-        match self {
-            QueueEditKind::Steer => "steers",
-            QueueEditKind::FollowUp => "follow-ups",
-        }
-    }
-
-    pub(crate) fn consequence_color(self, theme: &Theme) -> Color {
-        match self {
-            // Amber: re-delivery interrupts the running round.
-            QueueEditKind::Steer => theme.warn(),
-            // Info blue: re-delivery appends to the queue.
-            QueueEditKind::FollowUp => theme.info(),
-        }
-    }
-}
-
 /// What the live buffer currently holds and what it becomes on `Enter`.
 ///
 /// Derived entirely from state the frame already tracks (buffer prefix,
-/// `ComposerSendMode × busy`, queue pointer, completion, modal) — no new app-level state.
+/// `ComposerSendMode × busy`, completion, modal) — no new app-level state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ComposeTarget {
     /// A plain prompt opening a new round (idle).
@@ -95,12 +69,6 @@ pub(crate) enum ComposeTarget {
     Steer,
     /// Mid-round follow-up appended to the delivery queue.
     FollowUp,
-    /// An in-place edit of a queued message, armed via the queue pointer.
-    QueueEdit {
-        kind: QueueEditKind,
-        number: usize,
-        dirty: bool,
-    },
     /// Active completion popup (slash commands or path mentions).
     Completion {
         kind: crate::completion::CompletionKind,
@@ -117,7 +85,6 @@ impl ComposeTarget {
         match self {
             ComposeTarget::Steer => theme.warn(),
             ComposeTarget::FollowUp => theme.info(),
-            ComposeTarget::QueueEdit { kind, .. } => kind.consequence_color(theme),
             ComposeTarget::Completion { .. } => theme.brand(),
             ComposeTarget::HistorySearch => theme.brand(),
             ComposeTarget::Prompt | ComposeTarget::Command => Color::Reset,
@@ -129,11 +96,9 @@ impl ComposeTarget {
 ///
 /// `is_history_search` marks the Ctrl+R panel.
 /// `completion_active` marks an open candidate list.
-/// `queue_editing` carries `(kind, number)` for an armed queue pointer.
 pub(crate) fn compose_target(
     busy: bool,
     send_mode: Option<ComposerSendMode>,
-    queue_editing: Option<(QueueEditKind, usize)>,
     is_slash: bool,
     completion_active: Option<crate::completion::CompletionKind>,
     is_history_search: bool,
@@ -143,13 +108,6 @@ pub(crate) fn compose_target(
     }
     if let Some(kind) = completion_active {
         return ComposeTarget::Completion { kind };
-    }
-    if let Some((kind, number)) = queue_editing {
-        return ComposeTarget::QueueEdit {
-            kind,
-            number,
-            dirty: false,
-        };
     }
     if busy {
         return match send_mode.unwrap_or_default() {
@@ -247,21 +205,6 @@ pub(crate) fn hint_row_parts(
             ];
             (left, right)
         }
-        ComposeTarget::QueueEdit { kind, number, .. } => {
-            let left = vec![
-                Span::styled(Key::ESC.display(), key_style),
-                Span::styled(" draft", hint_style),
-            ];
-            let right = vec![
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(" update ", hint_style),
-                Span::styled(
-                    format!("{}[{number}]", kind.plural_noun()),
-                    verb_style.fg(kind.consequence_color(theme)),
-                ),
-            ];
-            (left, right)
-        }
         ComposeTarget::Command => {
             let left = if matches!(density, ActionDensity::Tiny) {
                 Vec::new()
@@ -300,7 +243,7 @@ pub(crate) fn hint_row_parts(
                     Span::styled(Key::TAB.display(), key_style),
                     Span::styled(" follow-up", hint_style),
                     Span::styled("   ", hint_style),
-                    Span::styled(Key::CTRL_C.display(), key_style),
+                    Span::styled("Esc Esc", key_style),
                     Span::styled(" interrupt", hint_style),
                 ]
             };
@@ -322,7 +265,7 @@ pub(crate) fn hint_row_parts(
                     Span::styled(Key::TAB.display(), key_style),
                     Span::styled(" steer", hint_style),
                     Span::styled("   ", hint_style),
-                    Span::styled(Key::CTRL_C.display(), key_style),
+                    Span::styled("Esc Esc", key_style),
                     Span::styled(" interrupt", hint_style),
                 ]
             };
@@ -423,7 +366,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(steer, "Tab follow-up   Ctrl+C interrupt   Enter send steer");
+        assert_eq!(steer, "Tab follow-up   Esc Esc interrupt   Enter send steer");
 
         let follow_up = text(&hint_row_spans(
             false,
@@ -433,6 +376,18 @@ mod tests {
             Color::default(),
         ));
         assert_eq!(follow_up, "Tab steer   Enter send follow-up");
+
+        let follow_up_full = text(&hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::FollowUp,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(
+            follow_up_full,
+            "Tab steer   Esc Esc interrupt   Enter send follow-up"
+        );
 
         let completion = text(&hint_row_spans(
             false,
@@ -466,36 +421,6 @@ mod tests {
             Color::default(),
         ));
         assert_eq!(row, "Ctrl+X o focus   Ctrl+X actions   Enter send command");
-    }
-
-    #[test]
-    fn queue_edit_verb_names_the_group_and_position() {
-        let theme = Theme::default();
-        let row = text(&hint_row_spans(
-            false,
-            ActionDensity::Full,
-            ComposeTarget::QueueEdit {
-                kind: QueueEditKind::FollowUp,
-                number: 2,
-                dirty: true,
-            },
-            &theme,
-            Color::default(),
-        ));
-        assert_eq!(row, "Esc draft   Enter update follow-ups[2]");
-
-        let steer_edit = text(&hint_row_spans(
-            false,
-            ActionDensity::Full,
-            ComposeTarget::QueueEdit {
-                kind: QueueEditKind::Steer,
-                number: 1,
-                dirty: false,
-            },
-            &theme,
-            Color::default(),
-        ));
-        assert_eq!(steer_edit, "Esc draft   Enter update steers[1]");
     }
 
     #[test]
@@ -543,23 +468,6 @@ mod tests {
             follow_up.iter().any(|span| span.style.fg == theme.info()),
             "follow-up verb must carry the info hue"
         );
-
-        // Queue-edit verb inherits the delivery group's consequence color.
-        let edit = hint_row_spans(
-            false,
-            ActionDensity::Full,
-            ComposeTarget::QueueEdit {
-                kind: QueueEditKind::FollowUp,
-                number: 2,
-                dirty: false,
-            },
-            &theme,
-            bg,
-        );
-        assert!(
-            edit.iter().any(|span| span.style.fg == theme.info()),
-            "queue-edit verb must carry the group's consequence hue"
-        );
     }
 
     #[test]
@@ -570,19 +478,17 @@ mod tests {
             compose_target(
                 true,
                 Some(ComposerSendMode::Steer),
-                Some((QueueEditKind::FollowUp, 3)),
                 true,
                 Some(crate::completion::CompletionKind::Slash),
                 true
             ),
             ComposeTarget::HistorySearch
         );
-        // …completion wins over queue and busy mode…
+        // …completion wins over busy mode…
         assert_eq!(
             compose_target(
                 true,
                 Some(ComposerSendMode::Steer),
-                Some((QueueEditKind::FollowUp, 3)),
                 false,
                 Some(crate::completion::CompletionKind::Slash),
                 false
@@ -591,28 +497,11 @@ mod tests {
                 kind: crate::completion::CompletionKind::Slash
             }
         );
-        // …queue pointer wins over busy-mode classification…
-        assert_eq!(
-            compose_target(
-                true,
-                Some(ComposerSendMode::Steer),
-                Some((QueueEditKind::FollowUp, 3)),
-                false,
-                None,
-                false
-            ),
-            ComposeTarget::QueueEdit {
-                kind: QueueEditKind::FollowUp,
-                number: 3,
-                dirty: false
-            }
-        );
         // …busy mode wins over the slash prefix…
         assert_eq!(
             compose_target(
                 true,
                 Some(ComposerSendMode::FollowUp),
-                None,
                 true,
                 None,
                 false
@@ -621,11 +510,11 @@ mod tests {
         );
         // …and slash only classifies an idle buffer.
         assert_eq!(
-            compose_target(false, None, None, true, None, false),
+            compose_target(false, None, true, None, false),
             ComposeTarget::Command
         );
         assert_eq!(
-            compose_target(false, None, None, false, None, false),
+            compose_target(false, None, false, None, false),
             ComposeTarget::Prompt
         );
     }

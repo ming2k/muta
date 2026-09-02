@@ -994,3 +994,53 @@ fn thinking_summary_sprays_tokens_then_settles() {
     );
     assert!(settled.ends_with("2.4s"), "humanized duration: {settled}");
 }
+
+#[test]
+fn thinking_summary_handles_structured_milestones() {
+    use super::{count_milestones, extract_active_milestone};
+
+    // Live streaming with a single milestone heading
+    let streaming_single = TranscriptMessage::thinking("**Planning architectural changes**\n\n");
+    assert_eq!(
+        streaming_single.thinking_summary().as_deref(),
+        Some("Thinking · Planning architectural changes")
+    );
+
+    // Live streaming updating to subsequent milestone heading
+    let streaming_multi = TranscriptMessage::thinking(
+        "**Planning architectural changes**\n\nAnalyzed codebase.\n\n**Executing database migration**\n\n",
+    );
+    assert_eq!(
+        streaming_multi.thinking_summary().as_deref(),
+        Some("Thinking · Executing database migration")
+    );
+
+    // Helper functions verification
+    assert_eq!(
+        extract_active_milestone("### Validating test suite"),
+        Some("Validating test suite".to_string())
+    );
+    assert_eq!(
+        count_milestones(
+            "**Step 1: Planning**\n\nDetails\n\n**Step 2: Execution**\n\nDetails\n\n**Step 3: Verification**\n\n"
+        ),
+        3
+    );
+
+    // Finished trace with multiple milestones
+    let mut done_multi = TranscriptMessage::thinking(
+        "**Step 1: Planning**\n\nDetails\n\n**Step 2: Execution**\n\nDetails\n\n**Step 3: Verification**\n\n",
+    );
+    done_multi.set_thinking_duration(4_500);
+    let summary = done_multi.thinking_summary().unwrap();
+    assert!(summary.starts_with("Thinking · 3 steps · "), "got: {summary}");
+    assert!(summary.ends_with("4.5s"), "got: {summary}");
+
+    // Finished trace with single milestone
+    let mut done_single = TranscriptMessage::thinking("**Planning architectural changes**\n\nDetails\n\n");
+    done_single.set_thinking_duration(1_200);
+    assert_eq!(
+        done_single.thinking_summary().as_deref(),
+        Some("Thinking · Planning architectural changes · 1.2s")
+    );
+}

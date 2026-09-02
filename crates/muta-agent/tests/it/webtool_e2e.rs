@@ -6,14 +6,14 @@
 //!
 //! Together they verify the two-stage research pipeline end to end:
 //! `websearch` (breadth, via the configured search provider chain) finds
-//! URLs, `webfetch` (depth, via the configured reader) reads one of them.
+//! URLs, `read_url` (depth, via the configured reader) reads one of them.
 
 // Failure paths are the interesting part of an E2E test, so panicking with
 // the message beats propagating errors here (same rationale as the other
 // integration tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use muta_agent::tools::{WebFetchTool, WebSearchTool};
+use muta_agent::tools::{WebReaderTool, WebSearchTool};
 use muta_contracts::{Tool, WebSearchConfig};
 
 /// Shape a config mirroring the developer workstation: socks5 proxy, Exa
@@ -31,11 +31,11 @@ fn proxied_config() -> WebSearchConfig {
 #[ignore = "live network"]
 async fn jina_reader_works() {
     let cfg = proxied_config();
-    let jina = WebFetchTool::with_config(cfg);
+    let jina = WebReaderTool::with_config(cfg);
     let out = jina
         .call(r#"{"url":"https://example.com"}"#)
         .await
-        .expect("jina fetch");
+        .expect("jina read");
     assert!(
         out.to_lowercase().contains("example domain"),
         "got: {out:.200}"
@@ -44,7 +44,7 @@ async fn jina_reader_works() {
 
 #[tokio::test]
 #[ignore = "live network"]
-async fn search_then_fetch_pipeline_works() {
+async fn search_then_reader_pipeline_works() {
     let cfg = proxied_config();
     let search = WebSearchTool::with_config(cfg.clone());
     let results = search
@@ -75,10 +75,10 @@ async fn search_then_fetch_pipeline_works() {
             })
         })
         .expect("a https URL in the search results");
-    let fetch = WebFetchTool::with_config(cfg);
-    let page = fetch
+    let reader = WebReaderTool::with_config(cfg);
+    let page = reader
         .call(&format!(r#"{{"url":"{url}"}}"#))
         .await
-        .expect("webfetch of a search hit");
+        .expect("read_url of a search hit");
     assert!(!page.trim().is_empty(), "page body should not be empty");
 }

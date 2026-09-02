@@ -23,7 +23,7 @@ use crate::transcript::{
 };
 use crate::versioned::{TranscriptPatch, TranscriptUpdate};
 use crate::view::Theme;
-use crate::{ActivityTab, Modal};
+use crate::Modal;
 use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;
@@ -117,7 +117,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         max_scroll: 0,
         sticky_step: None,
         sticky_rect: None,
-        activity_rect: None,
         hint_context_rect: None,
         hint_performance_rect: None,
         hint_connection_rect: None,
@@ -188,7 +187,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
         phase: None,
-        pulse: crate::pulse::TokenWatch::default(),
         provider_retry: None,
         delegated: false,
         unconfined: false,
@@ -196,8 +194,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         round_count: 0,
         current_turn: 0,
         round_started_at: None,
-        activity_tab: ActivityTab::Activity,
-        activity_scroll: 0,
+        todos_scroll: 0,
         queue_scroll: 0,
         queue_modal_follow: true,
         help_scroll: 0,
@@ -231,10 +228,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         history_draft: String::new(),
         history_draft_images: Vec::new(),
         history_draft_text_pastes: Vec::new(),
-        queue_pointer: None,
-        queue_pointer_draft: String::new(),
-        queue_pointer_draft_images: Vec::new(),
-        queue_pointer_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),

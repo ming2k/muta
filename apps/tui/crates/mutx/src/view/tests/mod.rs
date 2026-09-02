@@ -26,7 +26,6 @@ fn render_full_view(
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

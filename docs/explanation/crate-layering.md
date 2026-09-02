@@ -83,7 +83,7 @@ dispatch and compatibility parsing, context projection, shell input policy,
 `ProxyProvider`, skill context injection,
 `EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It also owns the built-in tools
-(`execute_command`, `read_text`, `find_files`, `search_text`, `webfetch`, todo management, …) in its
+(`execute_command`, `read_text`, `find_files`, `search_text`, `read_url`, todo management, …) in its
 `tools` module: most self-register via `inventory`, and stateful todo tools
 receive an agent-owned context bound in `tool_integration`. It consumes
 `muta-skills` and interacts

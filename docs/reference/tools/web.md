@@ -1,11 +1,11 @@
 # Web tools
 
-Fetch URLs and search the web. Both are `Read`. Source:
-`crates/muta-agent/src/tools/web.rs`. Provider configuration lives in
+Read URLs and search the web. Both are `Read`. Source:
+`crates/muta-agent/src/tools/web/`. Provider configuration lives in
 `config.toml` under `[websearch]`.
 
 Research is a two-stage pipeline ([ADR-0118](../../adr/0118-two-stage-web-research-search-breadth-fetch-depth.md)):
-`websearch` is the **breadth** stage (pluggable search provider), `webfetch`
+`search_web` is the **breadth** stage (pluggable search provider), `read_url`
 is the **depth** stage (pluggable reader). The two axes are configured
 independently and compose freely — e.g. `provider = "tavily"` for semantic
 search plus `reader = "jina"` for clean full-page reading.
@@ -13,7 +13,7 @@ search plus `reader = "jina"` for clean full-page reading.
 ## Untrusted content
 
 Everything the web tools return — page bodies, search snippets, summaries —
-is third-party content and a prompt-injection surface. `webfetch` wraps its
+is third-party content and a prompt-injection surface. `read_url` wraps its
 output in `[BEGIN/END UNTRUSTED WEB CONTENT]` markers and a system-prompt
 section (`system.web_untrusted_content`, active whenever a web tool is
 admitted) teaches the model to treat everything inside those markers (and in
@@ -21,14 +21,14 @@ search snippets) as data, never as instructions.
 
 ## SSRF and redirect safety
 
-Fetches resolve the target host and refuse non-public addresses (loopback,
+Page reads resolve the target host and refuse non-public addresses (loopback,
 RFC1918, link-local, the cloud metadata endpoint, reserved ranges) *before*
 connecting. Redirects are followed manually — each hop re-runs the same
 check — so a public URL answering `302 → http://169.254.169.254/` is refused
 mid-chain instead of being followed into the metadata endpoint. Response
 bodies are streamed with an 8 MiB hard cap.
 
-## `webfetch`
+## `read_url`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
@@ -36,7 +36,7 @@ bodies are streamed with an 8 MiB hard cap.
 | `raw` | boolean | no | `false` | Skip text extraction |
 
 Output is capped at 4 000 tokens (keeping the first half on truncation) —
-the same budget `websearch` uses. The truncation notice suggests a narrower
+the same budget `search_web` uses. The truncation notice suggests a narrower
 URL or anchor; `raw=true` only disables HTML stripping and does not raise
 the cap.
 
@@ -45,9 +45,9 @@ HTML pages are converted to text by the configured **reader**:
 | `reader` | Behavior |
 |----------|----------|
 | `jina` (default) | Delegate to `r.jina.ai`: server-side JavaScript rendering, readability-style main-content extraction, Markdown output. Handles SPA pages and extracts clean content. Anonymous use works with generous rate limits; `jina_api_key` raises it. |
-| `disabled` / `none` | Disable `webfetch`. |
+| `disabled` / `none` | Disable `read_url`. |
 
-## `websearch`
+## `search_web`
 
 | Parameter | Type | Required | Notes |
 |-----------|------|----------|-------|
@@ -102,12 +102,12 @@ protocol now exposes the table as a live setting for both frontends:
   `searxng` selection without a URL are rejected with a pointing error),
   persists behavior fields to `config.toml` and keys to
   `credentials.toml` (an empty-string key **clears** it), then hot-applies
-  through a shared config handle — the running `websearch`/`webfetch`
+  through a shared config handle — the running `search_web`/`read_url`
   tools rebuild their provider chain and HTTP client on the next call, no
   restart needed. `/settings reload` goes through the same hot-apply path
   for out-of-band `config.toml` edits.
 
-The TUI exposes this as the Settings view's **Web Search** category
+The TUI exposes this as the Settings view's **Web Search** and **Web Reader** categories
 (`/settings`); the web frontend as the `⌕ web` header dialog.
 
 > **Privacy note:** the default (anonymous) Exa and Parallel backends send

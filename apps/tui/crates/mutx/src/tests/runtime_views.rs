@@ -3,41 +3,7 @@
 use super::*;
 
 #[test]
-fn activity_modal_renders_provider_retry_status() {
-    let now = std::time::Instant::now();
-    let retry = ProviderRetryState {
-        attempt: 3,
-        max_attempts: 30,
-        retry_at: now + std::time::Duration::from_millis(4_000),
-        failure: "HTTP 429: rate limit exceeded".to_string(),
-    };
-    let mut grid = mutx_engine::Grid::new(80, 24);
-    let mut frame = mutx_engine::Frame::new(&mut grid);
-    let mut scroll = 0;
-    let theme = Theme::default();
-    let rect = crate::overlays::draw_activity_modal(
-        &mut frame,
-        crate::overlays::ActivityModalView {
-            active_tab: crate::modal::ActivityTab::Activity,
-            todos: None,
-            user_prompt: Some("Fix issue in parser"),
-            round_count: 1,
-            current_turn: 1,
-            current_model: "claude-sonnet",
-            round_started_at: Some(now),
-            activity: "waiting to retry",
-            provider_retry: Some(&retry),
-        },
-        &mut scroll,
-        &theme,
-        &crate::model::selection::SelectionState::None,
-        &mut crate::model::layout::LayoutMap::new(),
-    );
-    assert!(rect.width > 0 && rect.height > 0);
-}
-
-#[test]
-fn activity_modal_todos_align_with_header() {
+fn todos_modal_aligns_with_header() {
     let mut todos = muta_contracts::TodoList::new();
     todos.items.push(muta_contracts::TodoItem {
         id: muta_contracts::TodoId(1),
@@ -52,18 +18,10 @@ fn activity_modal_todos_align_with_header() {
     let mut layout_map = crate::model::layout::LayoutMap::new();
     let mut rect = mutx_engine::Rect::default();
     terminal.draw(|frame| {
-        rect = crate::overlays::draw_activity_modal(
+        rect = crate::overlays::draw_todos_modal(
             frame,
-            crate::overlays::ActivityModalView {
-                active_tab: crate::modal::ActivityTab::Todos,
+            crate::overlays::TodosModalView {
                 todos: Some(&todos),
-                user_prompt: None,
-                round_count: 0,
-                current_turn: 0,
-                current_model: "",
-                round_started_at: None,
-                activity: "",
-                provider_retry: None,
             },
             &mut scroll,
             &theme,
@@ -84,26 +42,17 @@ fn activity_modal_todos_align_with_header() {
 }
 
 #[test]
-fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
-    let long_prompt = "This is a very long prompt submitted by the user that will wrap across multiple visual lines when displayed inside the modal body in an eighty column terminal viewport.";
-    let mut terminal = mutx_engine::TestTerminal::new(80, 40);
+fn todos_modal_renders_empty_state() {
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
     let mut scroll = 0;
     let theme = Theme::default();
     let mut layout_map = crate::model::layout::LayoutMap::new();
     let mut rect = mutx_engine::Rect::default();
     terminal.draw(|frame| {
-        rect = crate::overlays::draw_activity_modal(
+        rect = crate::overlays::draw_todos_modal(
             frame,
-            crate::overlays::ActivityModalView {
-                active_tab: crate::modal::ActivityTab::Activity,
+            crate::overlays::TodosModalView {
                 todos: None,
-                user_prompt: Some(long_prompt),
-                round_count: 1,
-                current_turn: 1,
-                current_model: "claude-sonnet",
-                round_started_at: None,
-                activity: "idle",
-                provider_retry: None,
             },
             &mut scroll,
             &theme,
@@ -111,22 +60,8 @@ fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
             &mut layout_map,
         );
     });
-
-    // In an 80-column terminal, modal width is 72% (56 cols) and body width is 54 cols.
-    // The prompt wraps to 3 visual lines.
-    // Total visual rows: 1 (Prompt heading) + 3 (prompt) + 1 (blank) + 1 (Status heading) + 1 (detail) + 1 (idle) = 8 rows.
-    // With 6 chrome rows, desired is 14 rows.
-    assert!(rect.height >= 14);
-
-    // Ensure all visual lines fit in the body without triggering scroll
+    assert!(rect.width > 0 && rect.height > 0);
     assert_eq!(scroll, 0);
-
-    // Ensure no scrollbar arrow is drawn because max_scroll is 0
-    let buffer = terminal.buffer();
-    let track_x = rect.x + rect.width - crate::design::MODAL_INNER_H_PADDING;
-    let track_y = rect.y + crate::design::MODAL_INNER_V_PADDING + 2;
-    // The top scrollbar cap is not "▲"
-    assert_ne!(buffer.get(track_x, track_y).map(|c| c.symbol()), Some("▲"));
 }
 
 /// Regression for the wiring itself: the event loop feeds the input layer the

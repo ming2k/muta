@@ -37,7 +37,6 @@ pub mod interaction;
 pub mod keymap;
 pub mod paths;
 pub mod phase;
-pub mod pulse;
 pub mod question_model;
 pub mod step_interaction;
 mod terminal;
@@ -94,7 +93,7 @@ mod snapshot_tests;
 
 pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, SelectionEdge};
 pub(crate) use completion::CompletionKind;
-pub(crate) use modal::{ActivityTab, Modal, Recess, TelemetryTab};
+pub(crate) use modal::{Modal, Recess, TelemetryTab};
 pub(crate) use providers::{CustomField, PROVIDER_PRESETS, preset_label_for};
 
 use muta_contracts::{
@@ -109,7 +108,6 @@ use std::{
     io,
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
-    time::Instant,
 };
 use tokio::sync::{Mutex, mpsc};
 
@@ -371,12 +369,6 @@ pub async fn run_tui(
     // `provider_retry`, never here — see `crate::phase`.
     let phase: Arc<Mutex<Option<Phase>>> = Arc::new(Mutex::new(None));
     let activity_clone = phase.clone();
-    // Token-stall watch for the primary: every token re-stamps the stall
-    // clock; armed on each new model-request cycle so old arrivals can't
-    // alias.
-    let pulse: Arc<Mutex<crate::pulse::TokenWatch>> =
-        Arc::new(Mutex::new(crate::pulse::TokenWatch::default()));
-    let pulse_clone = pulse.clone();
     let provider_retry: Arc<Mutex<Option<ProviderRetryState>>> = Arc::new(Mutex::new(None));
     let provider_retry_clone = provider_retry.clone();
     let pending_permission = Arc::new(Mutex::new(VecDeque::<PermissionRequest>::new()));
@@ -962,10 +954,6 @@ pub async fn run_tui(
                                 // 1-indexed for display: turn 0 is the first
                                 // model request, shown as `turn 1`.
                                 *current_turn_clone.lock().await = turn;
-                                // Fresh model-request cycle: stale token
-                                // stamps from the previous turn must not
-                                // count as liveness (or silence) of this one.
-                                pulse_clone.lock().await.arm(Instant::now());
                             }
                             // View-scoped chrome: per-session structural
                             // counters (Activity modal's `round N · turn M`).
@@ -1019,8 +1007,6 @@ pub async fn run_tui(
                             // the model is writing the answer now.
                             if !routes_to_side {
                                 *activity_clone.lock().await = Some(Phase::Answering);
-                                // Heartbeat: this arrival proves tokens flow.
-                                pulse_clone.lock().await.note_token(Instant::now());
                             }
                             chrome_updater.edit(|c| c.phase = Some(Phase::Answering));
                             let position = positions_by_session.get(&session_id).copied();
@@ -1167,7 +1153,6 @@ pub async fn run_tui(
                             // here (their summary deltas still prove thinking).
                             if !routes_to_side {
                                 *activity_clone.lock().await = Some(Phase::Thinking);
-                                pulse_clone.lock().await.note_token(Instant::now());
                             }
                             chrome_updater.edit(|c| c.phase = Some(Phase::Thinking));
                             // surface only a reasoning summary, never their full
@@ -2232,7 +2217,6 @@ pub async fn run_tui(
         max_scroll: 0,
         sticky_step: None,
         sticky_rect: None,
-        activity_rect: None,
         hint_context_rect: None,
         hint_performance_rect: None,
         hint_connection_rect: None,
@@ -2309,7 +2293,6 @@ pub async fn run_tui(
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
         phase: None,
-        pulse: crate::pulse::TokenWatch::default(),
         provider_retry: None,
         delegated: false,
         unconfined: false,
@@ -2317,8 +2300,7 @@ pub async fn run_tui(
         round_count: 0,
         current_turn: 0,
         round_started_at: None,
-        activity_tab: ActivityTab::Activity,
-        activity_scroll: 0,
+        todos_scroll: 0,
         queue_scroll: 0,
         queue_modal_follow: true,
         help_scroll: 0,
@@ -2363,10 +2345,6 @@ pub async fn run_tui(
         history_draft: String::new(),
         history_draft_images: Vec::new(),
         history_draft_text_pastes: Vec::new(),
-        queue_pointer: None,
-        queue_pointer_draft: String::new(),
-        queue_pointer_draft_images: Vec::new(),
-        queue_pointer_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),
@@ -2477,7 +2455,6 @@ pub async fn run_tui(
             context_tokens,
             harness,
             phase,
-            pulse,
             provider_retry,
             pending_permission,
             pending_question,

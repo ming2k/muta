@@ -31,7 +31,7 @@ use crate::providers::{
     models_flat_filtered_from, providers_filtered_from,
 };
 use crate::view::Theme;
-use crate::{ActivityTab, Modal, TelemetryTab};
+use crate::{Modal, TelemetryTab};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -336,10 +336,6 @@ pub struct App {
     /// when its body is scrolled into view. Clicks inside the rect collapse it.
     pub sticky_step: Option<usize>,
     pub sticky_rect: Option<mutx_engine::Rect>,
-    /// Screen rect of the activity bar for the current frame, so clicks inside
-    /// it open the Activity modal. `None` when no activity bar is shown (idle,
-    /// streaming, runner view, or chrome hidden).
-    pub activity_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the context-meter segment in the hint bar (the
     /// `89.2k (8%)` indicator), so a click on it opens the Telemetry modal.
     /// `None` when the hint bar or context meter is not shown.
@@ -631,9 +627,6 @@ pub struct App {
     /// Typed activity-bar phase for the primary session (`None` = idle /
     /// bar hidden). Never holds transport setbacks — see `crate::phase`.
     pub phase: Option<crate::phase::Phase>,
-    /// Token-stall watch mirrored from the runtime; drives the silent
-    /// clause.
-    pub pulse: crate::pulse::TokenWatch,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether all tool permissions are auto-approved this session
     /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.
@@ -642,31 +635,22 @@ pub struct App {
     /// (`/jail off`). Mirrored from the harness snapshot.
     pub unconfined: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
-    /// inside the Activity modal (and no longer pinned above the input box) so
-    /// the footer reclaims the vertical space. `None` (or an empty list)
-    /// hides it. A plan approved via `plan_exit` seeds this list from its
-    /// `##` headings.
+    /// inside the Todos modal (`Modal::Todos`) and on the ambient todo bar.
+    /// `None` (or an empty list) hides it. A plan approved via `plan_exit`
+    /// seeds this list from its `##` headings.
     pub todos: Option<TodoList>,
-    /// Harness round counter, mirrored each frame. Surfaced inside the
-    /// Activity modal as `round N` (the activity bar itself no longer shows
-    /// the structural counters — it surfaces status/plan/elapsed and is the
-    /// click target that opens the modal).
+    /// Harness round counter, mirrored each frame.
     pub round_count: u64,
     /// Current turn within the active round (1-indexed for display:
     /// `0` means the round has started but no model request has fired yet —
-    /// e.g. the "queued" / "preparing context" phase). Mirrored each frame
-    /// from the response listener; shown in the Activity modal as
-    /// `round N · turn M · <status>`.
+    /// e.g. the "queued" / "preparing context" phase).
     pub current_turn: u64,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,
-    /// Active tab inside the Activity modal (`Modal::Activity`).
-    /// Ignored while any other modal is open.
-    pub activity_tab: ActivityTab,
-    /// Scroll offset inside `Modal::Activity`. Reset to 0 each time the modal
+    /// Scroll offset inside `Modal::Todos`. Reset to 0 each time the modal
     /// opens; clamped each frame by the modal's body renderer.
-    pub activity_scroll: usize,
+    pub todos_scroll: usize,
     /// Scroll offset inside `Modal::Queue`. Reset to 0 each time the modal
     /// opens; clamped each frame by the modal's body renderer. When
     /// `queue_modal_follow` is set, it is nudged so the ↑/↓ selection stays
@@ -855,21 +839,6 @@ pub struct App {
     ///   (newest → oldest and back) without removing anything, and Enter
     ///   writes the edited content back **into that item in place** (the
     ///   queue's length and order are untouched).
-    ///
-    /// Held as an id (not an index) so dispatch/reorder/delete cannot
-    /// invalidate it silently; a vanished target makes Enter fall back to an
-    /// ordinary send (see [`Self::queue_pointer_target`]).
-    ///
-    /// The pointer walks the queue *before* history: ↑ from the draft enters
-    /// the queue first (the outbox is the newer, more urgent surface), and
-    /// only an exhausted queue hands ↑ on to input history.
-    pub queue_pointer: Option<String>,
-    /// The draft stashed aside when the queue pointer is armed — the exact
-    /// counterpart of [`Self::history_draft`] for queue navigation, restored
-    /// when ↓ walks back past the newest queue item.
-    pub queue_pointer_draft: String,
-    pub queue_pointer_draft_images: Vec<ImagePart>,
-    pub queue_pointer_draft_text_pastes: Vec<String>,
     /// Images pasted (Ctrl+V) and waiting to be sent with the next message.
     /// Each entry is paired 1-to-1 with an `[Image #N]` chip inside
     /// [`App::input`]; the chip's `#N` is `index + 1` after
@@ -882,8 +851,7 @@ pub struct App {
     pub pending_text_pastes: Vec<String>,
     /// Session-affine compact outbox — the **next-round queue**. Pending items
     /// are never appended to the transcript; the queue bar shows counts and
-    /// ↑/↓ walk a non-destructive pointer over the items (see
-    /// [`Self::queue_pointer`]). Every staged message waits for the running
+    /// the follow-ups modal manages the items. Every staged message waits for the running
     /// round to finish naturally before starting a new one (next-round only).
     pub pending_dispatch: VecDeque<QueuedDispatch>,
     /// Target queue mode for the live composer while a round is running.

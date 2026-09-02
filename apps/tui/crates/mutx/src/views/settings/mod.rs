@@ -47,7 +47,7 @@ pub enum ConfigCategory {
     Transcript = 1,
     Behavior = 2,
     WebSearch = 3,
-    WebFetch = 4,
+    WebReader = 4,
     System = 5,
 }
 
@@ -57,7 +57,7 @@ impl ConfigCategory {
         ConfigCategory::Transcript,
         ConfigCategory::Behavior,
         ConfigCategory::WebSearch,
-        ConfigCategory::WebFetch,
+        ConfigCategory::WebReader,
         ConfigCategory::System,
     ];
 
@@ -67,7 +67,7 @@ impl ConfigCategory {
             1 => ConfigCategory::Transcript,
             2 => ConfigCategory::Behavior,
             3 => ConfigCategory::WebSearch,
-            4 => ConfigCategory::WebFetch,
+            4 => ConfigCategory::WebReader,
             _ => ConfigCategory::System,
         }
     }
@@ -80,8 +80,8 @@ impl ConfigCategory {
             "1" | "transcript" | "chat" | "scroll" | "bands" => Some(ConfigCategory::Transcript),
             "2" | "behavior" | "interaction" | "mouse" | "dismiss" => Some(ConfigCategory::Behavior),
             "3" | "search" | "websearch" | "web-search" => Some(ConfigCategory::WebSearch),
-            "4" | "web" | "fetch" | "reader" | "webfetch" | "web-fetch" => {
-                Some(ConfigCategory::WebFetch)
+            "4" | "reader" | "webreader" | "web-reader" | "web" => {
+                Some(ConfigCategory::WebReader)
             }
             "5" | "system" | "info" | "about" | "paths" | "runtime" => Some(ConfigCategory::System),
             _ => None,
@@ -94,7 +94,7 @@ impl ConfigCategory {
             ConfigCategory::Transcript => "transcript",
             ConfigCategory::Behavior => "behavior",
             ConfigCategory::WebSearch => "search",
-            ConfigCategory::WebFetch => "web",
+            ConfigCategory::WebReader => "reader",
             ConfigCategory::System => "system",
         }
     }
@@ -105,7 +105,7 @@ impl ConfigCategory {
             ConfigCategory::Transcript => "Transcript",
             ConfigCategory::Behavior => "Behavior",
             ConfigCategory::WebSearch => "Web Search",
-            ConfigCategory::WebFetch => "Web Fetch",
+            ConfigCategory::WebReader => "Web Reader",
             ConfigCategory::System => "System & Info",
         }
     }
@@ -121,7 +121,7 @@ impl ConfigCategory {
             ConfigCategory::Transcript => "Message layout, turn boundaries, and auto-scroll behavior.",
             ConfigCategory::Behavior => "Interaction rules, dismiss triggers, and click policies.",
             ConfigCategory::WebSearch => "Choose how the agent discovers relevant pages and sources.",
-            ConfigCategory::WebFetch => "Choose how the agent reads and extracts content from a URL.",
+            ConfigCategory::WebReader => "Choose how the agent reads and extracts content from a URL.",
             ConfigCategory::System => "Configuration file paths, runtime diagnostics, and system info.",
         }
     }
@@ -301,8 +301,8 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
         ConfigCategory::WebSearch => {
             web::draw_search_detail(frame, detail_inner_rect, &mut props, focused)
         }
-        ConfigCategory::WebFetch => {
-            web::draw_fetch_detail(frame, detail_inner_rect, &mut props, focused)
+        ConfigCategory::WebReader => {
+            web::draw_reader_detail(frame, detail_inner_rect, &mut props, focused)
         }
         ConfigCategory::System => {
             system::draw_system_detail(frame, detail_inner_rect, &mut props, focused)
@@ -506,10 +506,10 @@ mod tests {
         assert_eq!(ConfigCategory::from_name("websearch"), Some(ConfigCategory::WebSearch));
         assert_eq!(ConfigCategory::from_name("3"), Some(ConfigCategory::WebSearch));
 
-        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebFetch));
-        assert_eq!(ConfigCategory::from_name("fetch"), Some(ConfigCategory::WebFetch));
-        assert_eq!(ConfigCategory::from_name("reader"), Some(ConfigCategory::WebFetch));
-        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::WebFetch));
+        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebReader));
+        assert_eq!(ConfigCategory::from_name("reader"), Some(ConfigCategory::WebReader));
+        assert_eq!(ConfigCategory::from_name("webreader"), Some(ConfigCategory::WebReader));
+        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::WebReader));
 
         assert_eq!(ConfigCategory::from_name("system"), Some(ConfigCategory::System));
         assert_eq!(ConfigCategory::from_name("info"), Some(ConfigCategory::System));

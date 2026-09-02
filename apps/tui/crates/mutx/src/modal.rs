@@ -119,11 +119,10 @@ pub enum Modal {
     /// `/settings`, ADR-0141): dual-pane configuration center. `Tab`
     /// switches focus between categories and detail; `Esc` closes.
     Config,
-    /// Activity overview: the current pursuit (objective + checklist), the live
-    /// plan-progress breakdown, and the running round/turn/model/elapsed/
-    /// status. Opened by clicking the activity bar. The body scrolls via
-    /// `App::activity_scroll`.
-    Activity,
+    /// Todos overview: the unified task list with status glyphs and progress counter.
+    /// Opened by `Ctrl+T` or by clicking the todo bar. The body scrolls via
+    /// `App::todos_scroll`.
+    Todos,
     /// Queue overview: the full list of staged outbox messages for the viewed
     /// session, in dispatch order, each with its target modifier, queued time,
     /// and (truncated) text. Opened by clicking the persistent queue bar below
@@ -239,7 +238,7 @@ impl Modal {
                 | Modal::Skills
                 | Modal::Sessions
                 | Modal::Permissions
-                | Modal::Activity
+                | Modal::Todos
                 | Modal::Queue
                 | Modal::HistorySearch
                 | Modal::Models
@@ -258,26 +257,6 @@ impl Modal {
     /// Read-only overlays and decision sheets do not own a caret.
     pub fn owns_caret(self) -> bool {
         matches!(self, Modal::CustomProvider | Modal::InputInjection)
-    }
-}
-
-/// Which section the Activity modal is showing. Each section is opened
-/// independently by clicking the corresponding segment on the activity bar,
-/// so there is no tab strip or Left/Right cycling — the variant simply
-/// controls which content the modal body renders.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ActivityTab {
-    Activity,
-    Todos,
-}
-
-impl ActivityTab {
-    /// Modal title shown in the header.
-    pub fn title(self) -> &'static str {
-        match self {
-            ActivityTab::Activity => "Activity",
-            ActivityTab::Todos => "Todos",
-        }
     }
 }
 

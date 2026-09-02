@@ -311,7 +311,7 @@ fn view_switcher_restore_roundtrip() {
     );
 
     // Help's retained state survived the switcher round-trip.
-    app.open_panel(crate::surfaces::PanelId::Activity);
+    app.open_panel(crate::surfaces::PanelId::Todos);
     assert!(!app.open_panel(crate::surfaces::PanelId::Help));
     assert_eq!(app.modal_index, 4, "retained selection intact");
 }

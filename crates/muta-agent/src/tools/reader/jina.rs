@@ -9,7 +9,7 @@
 //! the URL to a third party — is opt-in via `[websearch] reader = "jina"`.
 //!
 //! Fallback contract: on any transport error or HTTP >= 400 from Jina itself
-//! we return `Err`, and the *caller* (`webfetch`) retries via the builtin
+//! we return `Err`, and the *caller* (`read_url`) retries via the builtin
 //! direct fetch. Jina's "Warning: Target URL returned error" lines (it
 //! relays the *target's* status) are passed through as content, not errors,
 //! because the page text is often still useful.

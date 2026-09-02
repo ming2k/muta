@@ -103,7 +103,6 @@ impl View {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PanelId {
     Help,
-    Activity,
     Todos,
     Tools,
     Mcp,
@@ -137,10 +136,7 @@ impl PanelId {
     pub(crate) fn modal(self) -> Modal {
         match self {
             PanelId::Help => Modal::Help,
-            // Todos is the Activity surface pinned to its Todos section —
-            // one panel id per *place the user can stand*, matching how the
-            // open actions distinguish them (`Ctrl+T` vs the activity bar).
-            PanelId::Activity | PanelId::Todos => Modal::Activity,
+            PanelId::Todos => Modal::Todos,
             PanelId::Tools => Modal::Tools,
             PanelId::Mcp => Modal::Mcp,
             PanelId::Skills => Modal::Skills,
@@ -158,11 +154,10 @@ impl PanelId {
     }
 
     /// Every panel id, in quick-switcher display order: reference surfaces
-    /// first (Help, Activity, Todos), then manager lists, then reports,
+    /// first (Help, Todos), then manager lists, then reports,
     /// then the pickers.
-    pub(crate) const ALL: [PanelId; 16] = [
+    pub(crate) const ALL: [PanelId; 15] = [
         PanelId::Help,
-        PanelId::Activity,
         PanelId::Todos,
         PanelId::Tools,
         PanelId::Mcp,
@@ -183,7 +178,6 @@ impl PanelId {
     pub(crate) fn label(self) -> &'static str {
         match self {
             PanelId::Help => "Help / keys",
-            PanelId::Activity => "Activity",
             PanelId::Todos => "Todos",
             PanelId::Tools => "Tools",
             PanelId::Mcp => "MCP servers",
@@ -206,7 +200,6 @@ impl PanelId {
     pub(crate) fn hint(self) -> &'static str {
         match self {
             PanelId::Help => "F1 / ?",
-            PanelId::Activity => "activity bar",
             PanelId::Todos => "Ctrl+T / todo bar",
             PanelId::Tools => "/tools",
             PanelId::Mcp => "/mcp",
@@ -745,15 +738,12 @@ mod tests {
     }
 
     #[test]
-    fn router_preserves_todos_and_activity_identity() {
-        assert_eq!(PanelId::Todos.modal(), Modal::Activity);
-        assert_eq!(PanelId::Activity.modal(), Modal::Activity);
-        let mut router = SurfaceRouter::with_panel(PanelId::Todos);
-        assert_eq!(router.modal(), Modal::Activity);
+    fn router_preserves_todos_panel_identity() {
+        assert_eq!(PanelId::Todos.modal(), Modal::Todos);
+        let router = SurfaceRouter::with_panel(PanelId::Todos);
+        assert_eq!(router.modal(), Modal::Todos);
         assert_eq!(router.active_panel(), Some(PanelId::Todos));
         assert_eq!(router.active_view(), View::Session);
-        router.show_panel(PanelId::Activity);
-        assert_eq!(router.active_panel(), Some(PanelId::Activity));
     }
 
     #[test]

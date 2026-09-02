@@ -160,7 +160,7 @@ impl Dirs {
     }
 
     /// Web connections (`$XDG_STATE_HOME/muta/web_connections.toml`).
-    /// The program-managed state for web search and fetch connections.
+    /// The program-managed state for web search and reader connections.
     pub fn web_connections_file(&self) -> PathBuf {
         self.state_dir.join("web_connections.toml")
     }

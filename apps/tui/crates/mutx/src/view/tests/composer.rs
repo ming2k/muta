@@ -58,7 +58,6 @@ fn input_box_grows_with_wrapped_content() {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     backoff_clause: None,
-                    silent_clause: None,
                     activity: "",
                     awaiting_permission: false,
                     spinner_phase: 0,
@@ -1180,7 +1179,6 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1442,7 +1440,6 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1534,7 +1531,6 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1704,7 +1700,6 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1877,21 +1872,6 @@ fn composer_hint_sentence_names_the_delivery_group() {
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(row4.contains("Enter send follow-up"), "{row4:?}");
     assert!(row4.contains("Tab steer"), "{row4:?}");
-
-    let edit_hints = ComposerHints {
-        compose_target: ComposeTarget::QueueEdit {
-            kind: crate::components::composer_hints::QueueEditKind::FollowUp,
-            number: 2,
-            dirty: true,
-        },
-        ..Default::default()
-    };
-    let mut terminal = draw_frame_composer("edited", true, edit_hints);
-    let row4 = frame_row_text(&mut terminal, 3);
-    assert!(
-        row4.contains("Enter update follow-ups[2]"),
-        "queue edit names group + position: {row4:?}"
-    );
 }
 
 /// Once the draft outgrows the box, the three-part overflow affordance
@@ -2046,7 +2026,7 @@ fn composer_panel_degrades_gracefully_on_narrow_widths() {
 
 #[test]
 fn composer_top_row_renders_history_mode_badges() {
-    use crate::components::composer_hints::{ComposeTarget, ComposerHints, QueueEditKind};
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
 
     // HistorySearch mode badge on row 0 right side
     let search_hints = ComposerHints {
@@ -2058,21 +2038,5 @@ fn composer_top_row_renders_history_mode_badges() {
     assert!(
         row0.contains("[history search · draft saved]"),
         "top row has history search badge: {row0:?}"
-    );
-
-    // QueueEdit mode badge on row 0 right side
-    let edit_hints = ComposerHints {
-        compose_target: ComposeTarget::QueueEdit {
-            kind: QueueEditKind::FollowUp,
-            number: 1,
-            dirty: false,
-        },
-        ..Default::default()
-    };
-    let mut edit_terminal = draw_frame_composer("follow up text", true, edit_hints);
-    let edit_row0 = frame_row_text(&mut edit_terminal, 0);
-    assert!(
-        edit_row0.contains("[edit: follow-up #1 · draft saved]"),
-        "top row has queue edit badge: {edit_row0:?}"
     );
 }

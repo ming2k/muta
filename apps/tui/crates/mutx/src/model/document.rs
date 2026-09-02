@@ -2130,22 +2130,20 @@ impl TranscriptMessage {
     }
 
     /// Human-readable summary for the reasoning trace (always one line).
-    /// Reports **tokens** (ADR-0120) — the unit of what this thinking block
-    /// costs against the context window, not a scalar count of the text.
     ///
-    /// Live style: while the trace streams, the line counts tokens up as
-    /// they arrive (`Thinking · 148 tokens`), reading like a filling meter
-    /// rather than an estimate. A finished trace settles into its final
-    /// form and appends the duration (`Thinking · 1318 tokens · 2.4s`).
+    /// For models reporting structured thought milestones/outlines (e.g. GPT-5.6
+    /// Sol, ChatGPT Responses `reasoning_summary_text`), this dynamically extracts
+    /// the active milestone header while streaming (`Thinking · Planning…`) and
+    /// reports the completed milestone steps once finished.
     ///
-    /// Above `STREAM_COUNT_QUANTUM` tokens the streamed count is
-    /// floored to a multiple of that quantum rather than reported exactly:
-    /// the streaming summary repaints on every render heartbeat, and a
-    /// per-token count would dirty the row for nearly every delta — the
-    /// per-frame redraw churn the middle-component flicker is made of.
-    /// The floor keeps the label changes O(n ÷ quantum) while the number
-    /// still climbs monotonically like a real count. A finished trace
-    /// reports the exact count.
+    /// For models with raw unstructured chain-of-thought, it reports **tokens**
+    /// (ADR-0120) — the unit of what this thinking block costs against the
+    /// context window.
+    ///
+    /// Live style: while the trace streams, unstructured traces count tokens up
+    /// as they arrive (`Thinking · 148 tokens`), reading like a filling meter.
+    /// A finished trace settles into its final form and appends the duration
+    /// (`Thinking · 1318 tokens · 2.4s` or `Thinking · 3 steps · 180 tokens · 2.4s`).
     pub fn thinking_summary(&self) -> Option<String> {
         /// Live-count floor applied while streaming (see method doc).
         const STREAM_COUNT_QUANTUM: usize = 25;
@@ -2163,19 +2161,35 @@ impl TranscriptMessage {
             return None;
         };
         let tokens = muta_contracts::tokenizer::count_tokens(content);
+        let active_milestone = extract_active_milestone(content);
+        let milestones = count_milestones(content);
+
         Some(match duration_ms {
             None => {
-                // Floor to the quantum once the count grows past the
-                // per-token regime so the number climbs in visible steps
-                // instead of strobing digit-by-digit every heartbeat.
-                let shown = if tokens < STREAM_EXACT_UNDER {
-                    tokens
+                if let Some(milestone) = active_milestone {
+                    format!("Thinking · {milestone}")
                 } else {
-                    tokens - tokens % STREAM_COUNT_QUANTUM
-                };
-                format!("Thinking · {shown} tokens")
+                    // Floor to the quantum once the count grows past the
+                    // per-token regime so the number climbs in visible steps
+                    // instead of strobing digit-by-digit every heartbeat.
+                    let shown = if tokens < STREAM_EXACT_UNDER {
+                        tokens
+                    } else {
+                        tokens - tokens % STREAM_COUNT_QUANTUM
+                    };
+                    format!("Thinking · {shown} tokens")
+                }
             }
-            Some(ms) => format!("Thinking · {tokens} tokens · {}", duration_text(Some(*ms))),
+            Some(ms) => {
+                let duration = duration_text(Some(*ms));
+                if milestones > 1 {
+                    format!("Thinking · {milestones} steps · {tokens} tokens · {duration}")
+                } else if milestones == 1 && let Some(milestone) = active_milestone {
+                    format!("Thinking · {milestone} · {duration}")
+                } else {
+                    format!("Thinking · {tokens} tokens · {duration}")
+                }
+            }
         })
     }
 
@@ -2418,6 +2432,57 @@ fn truncate(value: &str, max_chars: usize) -> String {
     } else {
         prefix
     }
+}
+
+/// Extract the latest active milestone or heading from reasoning content.
+pub fn extract_active_milestone(text: &str) -> Option<String> {
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("**") {
+            let title = if let Some(end) = rest.find("**") {
+                &rest[..end]
+            } else {
+                rest
+            };
+            let clean = title.trim().trim_matches(':').trim();
+            if !clean.is_empty() {
+                return Some(clean.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let header = rest.trim_start_matches('#').trim();
+            if !header.is_empty() {
+                return Some(header.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Count distinct milestone/heading sections in reasoning content.
+pub fn count_milestones(text: &str) -> usize {
+    let mut count = 0;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("**") && trimmed.len() > 4 {
+            let rest = &trimmed[2..];
+            if rest.contains("**") {
+                count += 1;
+            }
+        } else if trimmed.starts_with('#') {
+            let header = trimmed.trim_start_matches('#').trim();
+            if !header.is_empty() {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Parse raw markdown-like text into semantic blocks.

@@ -28,7 +28,6 @@ pub(crate) async fn sync_runtime_state_to_app(
     app.harness_retry_pending = harness.retry_pending;
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.phase = runtime.phase.lock().await.clone();
-    app.pulse = runtime.pulse.lock().await.clone();
     app.todos = runtime.todos.lock().await.clone();
     app.round_count = *runtime.round_count.lock().await;
     app.current_turn = *runtime.current_turn.lock().await;
@@ -399,12 +398,6 @@ pub(crate) async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
                 input_id,
             } => {
                 app.remove_dispatch(&session_id, &input_id);
-                if app.queue_pointer.is_some() {
-                    app.queue_pointer = None;
-                    app.queue_pointer_draft.clear();
-                    app.queue_pointer_draft_images.clear();
-                    app.queue_pointer_draft_text_pastes.clear();
-                }
             }
             OutboxSignal::Unavailable {
                 session_id,

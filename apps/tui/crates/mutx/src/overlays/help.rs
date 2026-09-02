@@ -64,7 +64,8 @@ pub fn draw_help_modal(
         Line::from(section("General")),
         row("enter", "send message"),
         row("alt+enter", "insert newline (ctrl+j)"),
-        row("esc", "interrupt (×2) / close"),
+        row("esc esc", "interrupt running task"),
+        row("esc", "close modal / return to composer"),
     ];
 
     // ── Global shortcuts (from the keybinding registry) ──
@@ -79,7 +80,7 @@ pub fn draw_help_modal(
         Line::from(section("While the agent is running")),
         row("enter", "perform the action shown below the prompt"),
         row("tab", "change what Enter will do"),
-        row("↑", "with an empty prompt: edit newest waiting message"),
+        row("esc esc", "interrupt running task"),
         Line::from(""),
         Line::from(section("Line editing")),
         row("ctrl+a / ctrl+e", "caret to line start / end"),
@@ -93,8 +94,12 @@ pub fn draw_help_modal(
         row("alt+b / alt+f", "move word back / forward"),
         Line::from(""),
         Line::from(section("Prompt history")),
-        row("pageup / pagedown", "previous / next prompt history"),
         row("alt+p / alt+n", "previous / next prompt history"),
+        row("ctrl+r", "search prompt history"),
+        Line::from(""),
+        Line::from(section("Page navigation & scrolling")),
+        row("pageup / pagedown", "scroll page up / down (transcript & modals)"),
+        row("ctrl+↑ / ctrl+↓", "scroll page up / down (in modals)"),
         Line::from(""),
         Line::from(section("Transcript focus")),
         Line::from(desc(

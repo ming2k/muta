@@ -162,6 +162,8 @@ pub struct ModalHitMap {
     pub oauth_url_rect: Option<Rect>,
     pub oauth_code_rect: Option<Rect>,
     pub oauth_modal_rect: Option<Rect>,
+    pub completion_menu_rect: Option<Rect>,
+    pub completion_items: Vec<(usize, Rect)>,
 }
 
 /// A visible row range belonging to one selectable question option.
@@ -499,6 +501,27 @@ impl ModalHitMap {
         self.oauth_url_rect = None;
         self.oauth_code_rect = None;
         self.oauth_modal_rect = None;
+        self.completion_menu_rect = None;
+        self.completion_items.clear();
+    }
+
+    pub fn set_completion_menu_rect(&mut self, rect: Rect) {
+        self.completion_menu_rect = Some(rect);
+    }
+
+    pub fn push_completion_item(&mut self, idx: usize, rect: Rect) {
+        self.completion_items.push((idx, rect));
+    }
+
+    pub fn completion_menu_contains(&self, x: u16, y: u16) -> bool {
+        self.completion_menu_rect.is_some_and(|rect| contains(rect, x, y))
+    }
+
+    pub fn completion_item_at(&self, x: u16, y: u16) -> Option<usize> {
+        self.completion_items
+            .iter()
+            .find(|(_, rect)| contains(*rect, x, y))
+            .map(|(idx, _)| *idx)
     }
 
     pub fn push_question_option(&mut self, hit: QuestionOptionHit) {

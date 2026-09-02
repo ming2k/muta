@@ -31,8 +31,8 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `ask_user` | `Read` | `*` | [interaction](interaction.md) |
 | `todo` | `Read` | `*` | [interaction](interaction.md) |
 | `todo_update` | `Read` | `*` | [interaction](interaction.md) |
-| `webfetch` | `Read` | `*` | [web](web.md) |
-| `websearch` | `Read` | `*` | [web](web.md) |
+| `read_url` | `Read` | `*` | [web](web.md) |
+| `search_web` | `Read` | `*` | [web](web.md) |
 | `spawn_runner` / `runner` | `Read` (spawns runner) | `*` | [runner](envoy.md) |
 | `runner_code` | `Read` (spawns runner) | `*` | [runner](envoy.md) |
 | `runner_mcp` | `Read` (spawns runner) | `*` | [runner](envoy.md) |

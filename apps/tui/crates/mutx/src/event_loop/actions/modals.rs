@@ -610,7 +610,7 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     3 => crate::views::settings::web::search_item_count(
                         app.websearch_config.as_ref(),
                     ),
-                    4 => crate::views::settings::web::fetch_item_count(
+                    4 => crate::views::settings::web::reader_item_count(
                         app.websearch_config.as_ref(),
                     ),
                     _ => 4usize,
@@ -702,7 +702,7 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills
-        | Modal::Activity
+        | Modal::Todos
         | Modal::ViewSwitcher
         | Modal::None => {}
     }
@@ -780,7 +780,7 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     3 => crate::views::settings::web::search_item_count(
                         app.websearch_config.as_ref(),
                     ),
-                    4 => crate::views::settings::web::fetch_item_count(
+                    4 => crate::views::settings::web::reader_item_count(
                         app.websearch_config.as_ref(),
                     ),
                     _ => 4usize,
@@ -868,7 +868,7 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills
-        | Modal::Activity
+        | Modal::Todos
         | Modal::ViewSwitcher
         | Modal::None => {}
     }

@@ -37,8 +37,6 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -88,8 +86,6 @@ fn enter_with_completion(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -133,8 +129,6 @@ fn enter_shell(input: &mut String) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -182,8 +176,6 @@ fn key_in_side_view_with(
         in_runner_view: false,
         in_side_view: true,
         has_focused_target: false,
-        has_queued: false,
-        queue_pointer_armed: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -234,8 +226,6 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: true,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -288,8 +278,6 @@ fn run_key(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: has_focus,
-            has_queued: false,
-            queue_pointer_armed: false,
             // Editing text in the history and model-picker modals only
             // happens inside their search sub-layer, so treat those cases
             // here as search mode (browse mode never reaches editing keys).
@@ -344,8 +332,6 @@ fn run_history_key(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: true,
             model_searching: false,
             modal_keymap_open: false,
@@ -361,12 +347,12 @@ fn run_history_key(
     )
 }
 
-/// Helper: send `PageUp` in the compose zone with explicit `has_queued`.
-fn pageup_with_queued(has_queued: bool) -> InputAction {
-    key_with_queued(KeyCode::PageUp, has_queued)
+/// Helper: send `PageUp` in the compose zone.
+fn pageup_key() -> InputAction {
+    key_without_modal(KeyCode::PageUp)
 }
 
-fn key_with_queued(code: KeyCode, has_queued: bool) -> InputAction {
+fn key_without_modal(code: KeyCode) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -393,8 +379,6 @@ fn key_with_queued(code: KeyCode, has_queued: bool) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -442,8 +426,6 @@ fn compose_key_with_completion(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },
@@ -481,8 +463,6 @@ fn queue_modal_char(c: char) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: true,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -530,8 +510,6 @@ fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Inp
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: true,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -577,8 +555,6 @@ fn run_paste(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             // The history and model-picker modals only take text in their
             // search sub-layer; treat those cases as search mode here.
             history_searching: modal == crate::Modal::HistorySearch,
@@ -623,8 +599,6 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -707,8 +681,6 @@ fn oauth_key(c: char) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -753,8 +725,6 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -785,8 +755,6 @@ fn mouse_ctx_for(modal: crate::Modal) -> InputContext {
         in_runner_view: false,
         in_side_view: false,
         has_focused_target: false,
-        has_queued: false,
-        queue_pointer_armed: false,
         history_searching: false,
         ..Default::default()
     }
@@ -826,8 +794,6 @@ fn run_history_clear_key(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },
@@ -859,8 +825,6 @@ fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputActio
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             editor_field: Some(editor_field),
             ..Default::default()
@@ -897,8 +861,6 @@ fn compose_key(
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
-            has_queued: false,
-            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },

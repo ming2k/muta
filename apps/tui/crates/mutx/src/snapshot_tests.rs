@@ -538,7 +538,6 @@ fn render_transcript_frame(
                 selection: &selection,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

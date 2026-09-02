@@ -114,9 +114,9 @@
         </section>
 
         <section>
-          <h4>Page reader <span class="tag">webfetch</span></h4>
+          <h4>Page reader <span class="tag">read_url</span></h4>
           <p class="section-hint">
-            How <code>webfetch</code> converts HTML pages to text using Jina Reader (server-side JS rendering and readability extraction).
+            How <code>read_url</code> converts HTML pages to text using Jina Reader (server-side JS rendering and readability extraction).
           </p>
           <div class="option-grid">
             {#each READERS as r (r.id)}

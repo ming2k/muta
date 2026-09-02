@@ -154,14 +154,9 @@ pub struct TranscriptView<'a> {
     /// (including "responding") keeps the bar up for the full round lifecycle.
     pub activity: &'a str,
     /// Transport-setback clause rendered beside (never inside) the master
-    /// label — e.g. `· retry 2/8 next in 4s` while a provider retry backs
+    /// label — e.g. `retry 2/8 (next in 4s)` while a provider retry backs
     /// off. Muted styling; first casualty under width pressure.
     pub backoff_clause: Option<&'a str>,
-    /// Stream-silence note (`· silent 9s`, `· no tokens 52s`) shown while a
-    /// model request is open and no token has arrived within tolerance.
-    /// Phase-exclusive with the transport clause, so the annotation slot
-    /// never arbitrates.
-    pub silent_clause: Option<&'a str>,
     /// Whether a tool permission request is awaiting the user's decision. When
     /// true the activity bar is forced visible even if the loop has gone idle,
     /// and its label reads as a permission state so the live status surface
@@ -204,7 +199,7 @@ pub struct TranscriptView<'a> {
     pub session_head: Option<SessionHead<'a>>,
     /// Live unified task list, if any. Surfaced on the todo bar (a one-row
     /// summary: tag · progress · current item); the full per-item breakdown
-    /// lives in the Activity modal.
+    /// lives in the Todos modal.
     pub todos: Option<&'a muta_contracts::TodoList>,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
@@ -430,7 +425,6 @@ pub fn draw_transcript(
         cell_selection,
         activity,
         backoff_clause,
-        silent_clause,
         awaiting_permission,
         spinner_phase,
         input,
@@ -840,10 +834,7 @@ pub fn draw_transcript(
     // agent is doing right now" status reads as part of the composer cluster;
     // the todo and queue bars are ambient meta-info and float above it. The
     // separator keeps the latest response visually distinct from the controls
-    // even when the activity row appears or disappears. The activity bar
-    // doubles as the click target that opens the Activity modal (the
-    // pursuit and plan summaries that used to live here now scroll inside that
-    // modal and as inline notices in the transcript).
+    // even when the activity row appears or disappears.
     // One `place` pass walks the declared stack and yields every row's rect
     // plus the hit-test registry; each draw call below just looks its own
     // rect up. The height sum (which feeds the layout split) and the per-row
@@ -854,7 +845,7 @@ pub fn draw_transcript(
 
     // The persistent todo bar leads the footer stack. It surfaces the live task
     // list — the `TODOS d/t` identity and a preview of the current item — and
-    // is the click target that opens the Activity modal on the Todos section
+    // is the click target that opens the Todos modal
     // (the event loop resolves the click from the placed registry).
     footer_stack::rect_of(&placed_footer, FooterRowId::Todos)
         .filter(|_| todo_row_needed)
@@ -875,8 +866,7 @@ pub fn draw_transcript(
     // finalizing), including the streaming phase, and hides only when idle.
     // Keeping it up during "responding" avoids a layout shift at the stream
     // boundary and sustains the breathing-dot liveness anchor (ADR-0008)
-    // through the longest phase. The bar is the click target that opens the
-    // Activity modal.
+    // through the longest phase.
     footer_stack::rect_of(&placed_footer, FooterRowId::Activity)
         .filter(|_| activity_row_needed)
         .and_then(|rect| {
@@ -887,7 +877,6 @@ pub fn draw_transcript(
                 ActivityBarView {
                     status: activity,
                     backoff_clause,
-                    silent_clause: silent_clause.map(|s| s.to_string()),
                     awaiting_permission,
                 },
                 spinner_phase,

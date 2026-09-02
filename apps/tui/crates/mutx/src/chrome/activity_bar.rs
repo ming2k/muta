@@ -14,14 +14,9 @@ use crate::view::Theme;
 pub struct ActivityBarView<'a> {
     /// Master-slot label (the typed phase's text).
     pub status: &'a str,
-    /// Transport-setback clause rendered beside the label, muted. `None`
-    /// when transport is healthy (silence is healthy).
+    /// Transport-setback clause rendered beside the label, warning-tinted. `None`
+    /// when transport is healthy.
     pub backoff_clause: Option<&'a str>,
-    /// Stream-silence clause (`· silent 9s`, `· no tokens 52s`), armed only
-    /// while a model request is open and no token has arrived within the
-    /// applicable tolerance (generous for the first byte, tighter once a
-    /// stream has flowed). `None` while tokens flow or the request is closed.
-    pub silent_clause: Option<String>,
     /// Warning-tinted gate state (permission / ask_user pending).
     pub awaiting_permission: bool,
 }
@@ -37,7 +32,6 @@ pub fn draw_activity_bar(
     let ActivityBarView {
         status,
         backoff_clause,
-        silent_clause,
         awaiting_permission,
     } = view;
     let status_active = !status.is_empty() && status != "idle";
@@ -71,21 +65,16 @@ pub fn draw_activity_bar(
     };
     let interrupt_gap = if show_interrupt_keys { SEGMENT_GAP } else { 0 };
 
-    let effective_full = backoff_clause.or(silent_clause.as_deref());
-    let full_clause = effective_full.unwrap_or("");
-    let full_clause_w = UnicodeWidthStr::width(full_clause);
-    let compact_clause = if backoff_clause.is_some() {
-        backoff_clause.map(|clause| {
-            let attempt = clause
-                .split("retry ")
-                .nth(1)
-                .and_then(|rest| rest.split_whitespace().next())
-                .unwrap_or("");
-            format!(" · {attempt}")
-        })
-    } else {
-        None
-    };
+    let natural_full_clause = backoff_clause.map(|c| format!("  {c}")).unwrap_or_default();
+    let full_clause_w = UnicodeWidthStr::width(natural_full_clause.as_str());
+    let compact_clause = backoff_clause.map(|clause| {
+        let attempt = clause
+            .split("retry ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or(clause);
+        format!("  ({attempt})")
+    });
     let compact_clause_w = compact_clause
         .as_deref()
         .map(UnicodeWidthStr::width)
@@ -144,22 +133,15 @@ pub fn draw_activity_bar(
     left_spans.push(Span::styled(status_display, lead_style));
 
     match chosen_clause {
-        Clause::Full if !full_clause.is_empty() => {
-            let style = if backoff_clause.is_some() {
-                Style::default().fg(theme.warning)
-            } else {
-                dim
-            };
-            left_spans.push(Span::styled(full_clause.to_string(), style));
+        Clause::Full if !natural_full_clause.is_empty() => {
+            left_spans.push(Span::styled(
+                natural_full_clause,
+                Style::default().fg(theme.warning),
+            ));
         }
         Clause::Compact => {
             if let Some(clause) = compact_clause {
-                let style = if backoff_clause.is_some() {
-                    Style::default().fg(theme.warning)
-                } else {
-                    dim
-                };
-                left_spans.push(Span::styled(clause, style));
+                left_spans.push(Span::styled(clause, Style::default().fg(theme.warning)));
             }
         }
         _ => {}

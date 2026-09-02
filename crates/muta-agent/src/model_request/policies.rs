@@ -282,9 +282,9 @@ impl SystemPromptSection for FileEditingGuidance {
 }
 
 /// Guidance for handling untrusted web content. Active only when a web tool
-/// (`webfetch` / `websearch`) is admitted this turn — the same mechanical
+/// (`read_url` / `search_web`) is admitted this turn — the same mechanical
 /// tool-name guard the other sections use. This is the prompt-injection
-/// boundary: `webfetch` wraps its output in UNTRUSTED markers, and this
+/// boundary: `read_url` wraps its output in UNTRUSTED markers, and this
 /// paragraph teaches the model what those markers mean. Without it the
 /// markers are just decoration; with it, instructions found inside fetched
 /// pages are treated as data, not directives.
@@ -310,7 +310,7 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names.iter().any(|name| {
-            name == "fetch_url" || name == "search_web" || name == "webfetch" || name == "websearch"
+            name == "read_url" || name == "search_web"
         })
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {

@@ -1,5 +1,5 @@
-//! Pluggable page-content backends ("readers") for `webfetch` — the depth
-//! half of the two-stage research pipeline (websearch = breadth, webfetch =
+//! Pluggable page-content backends ("readers") for `read_url` — the depth
+//! half of the two-stage research pipeline (websearch = breadth, read_url =
 //! depth; ADR-0117).
 //!
 //! A reader turns one URL into clean page text. The Jina reader delegates to
@@ -9,13 +9,13 @@
 //! SSRF note: readers receive only URLs that already passed
 //! [`crate::tools::ssrf::assert_public_url`]. The Jina reader sends the URL to
 //! a third party, so it must never be pointed at private addresses — the
-//! pre-check in `webfetch` enforces this before any reader runs.
+//! pre-check in `read_url` enforces this before any reader runs.
 
 use crate::tools::reader::jina::ReadPage;
 
 pub mod jina;
 
-/// Which page-content backend `webfetch` uses.
+/// Which page-content backend `read_url` uses.
 pub(crate) enum Reader {
     Jina(jina::JinaReader),
     Disabled,
@@ -42,7 +42,7 @@ impl Reader {
         }
     }
 
-    /// Fetch one URL and return clean page text plus the content type of the
+    /// Read one URL and return clean page text plus the content type of the
     /// underlying response. `raw` skips text extraction for non-HTML
     /// content when applicable.
     ///
@@ -55,7 +55,7 @@ impl Reader {
     ) -> Result<ReaderOutput, String> {
         match self {
             Reader::Jina(j) => j.read(client, url).await,
-            Reader::Disabled => Err("webfetch reader is disabled in configuration".to_string()),
+            Reader::Disabled => Err("web reader is disabled in configuration".to_string()),
         }
     }
 }
@@ -66,7 +66,7 @@ pub(crate) struct ReaderOutput {
     /// this is the body verbatim.
     pub text: String,
     /// Content type reported by the *underlying* fetch (e.g. from Jina's
-    /// target response), used by `webfetch` to label the output.
+    /// target response), used by `read_url` to label the output.
     pub content_type: String,
 }
 

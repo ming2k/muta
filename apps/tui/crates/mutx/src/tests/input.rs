@@ -114,7 +114,7 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         Modal::Tools,
         Modal::Mcp,
         Modal::Permissions,
-        Modal::Activity,
+        Modal::Todos,
         // `Question` is listed here to cover the *default* state — any option
         // but "Other" highlighted (or no question model at all). Its caret
         // ownership is conditional: see `caret_owner_question_owns_caret_only_on_other`.

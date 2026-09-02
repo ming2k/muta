@@ -1,6 +1,6 @@
 //! Shared configuration and connection schema for the web tools.
 //!
-//! Web search (breadth) and web fetch (depth) are decoupled into two orthogonal
+//! Web search (breadth) and web reader (depth) are decoupled into two orthogonal
 //! sets of connections and presets:
 //! - Search connections: declarations for search backends (Exa, Tavily, Bocha, SearXNG, DuckDuckGo, custom)
 //! - Reader connections: declarations for page reader / scraper backends (Jina, Firecrawl, custom)
@@ -69,7 +69,7 @@ pub struct WebReaderConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub custom_headers: Option<HashMap<String, String>>,
-    /// Whether this connection is active and enabled for fetch routing.
+    /// Whether this connection is active and enabled for reader routing.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -256,7 +256,7 @@ impl WebReaderPresets {
 pub struct WebSearchConfig {
     /// Primary search backend or connection id. Default is `"exa"`.
     pub provider: String,
-    /// Optional proxy URL applied to both `fetch_url` and `search_web`.
+    /// Optional proxy URL applied to both `read_url` and `search_web`.
     pub proxy: Option<String>,
     /// Per-request timeout in seconds (default 20).
     pub timeout_secs: u64,
@@ -277,7 +277,7 @@ pub struct WebSearchConfig {
     /// Jina Reader API key (r.jina.ai). Optional.
     #[serde(skip_serializing)]
     pub jina_api_key: Option<crate::SecretString>,
-    /// Page-content backend used by `fetch_url`. Default is `"none"` (disabled).
+    /// Page-content backend used by `read_url`. Default is `"none"` (disabled).
     pub reader: String,
 }
 

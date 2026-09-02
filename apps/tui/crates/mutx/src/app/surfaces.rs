@@ -103,11 +103,7 @@ impl App {
         use crate::surfaces::{PanelId, View};
         let panel = match modal {
             Modal::Help => Some(PanelId::Help),
-            Modal::Activity => Some(if self.activity_tab == ActivityTab::Todos {
-                PanelId::Todos
-            } else {
-                PanelId::Activity
-            }),
+            Modal::Todos => Some(PanelId::Todos),
             Modal::Tools => Some(PanelId::Tools),
             Modal::Mcp => Some(PanelId::Mcp),
             Modal::Skills => Some(PanelId::Skills),
@@ -160,7 +156,7 @@ impl App {
         let modal = self.active_modal();
         match modal {
             Modal::Help => Some((&mut self.help_scroll, None)),
-            Modal::Activity => Some((&mut self.activity_scroll, None)),
+            Modal::Todos => Some((&mut self.todos_scroll, None)),
             Modal::Permissions => Some((&mut self.permissions_scroll, None)),
             Modal::Config => match self.config_focus {
                 crate::overlays::ConfigFocus::Categories => Some((&mut self.config_scroll, None)),
@@ -256,14 +252,6 @@ impl App {
         // carrying it across the boundary could fire session A's interrupt
         // against session B. Disarm so the next Esc starts fresh.
         self.esc_armed_until = None;
-        // The queue pointer is scoped like the history cursor: its target
-        // belongs to the conversation being left, so a carried pointer would
-        // dangle into the new session's outbox. Dissolve without restoring
-        // (the composer is emptied right below anyway).
-        self.queue_pointer = None;
-        self.queue_pointer_draft.clear();
-        self.queue_pointer_draft_images.clear();
-        self.queue_pointer_draft_text_pastes.clear();
         self.input.clear();
         self.pending_images.clear();
         self.pending_text_pastes.clear();
@@ -292,11 +280,6 @@ impl App {
         self.surfaces.show_panel(id);
         self.restore_panel_state(id);
         self.modal_keymap_open = false;
-        if id == crate::surfaces::PanelId::Todos {
-            self.activity_tab = crate::modal::ActivityTab::Todos;
-        } else if id == crate::surfaces::PanelId::Activity {
-            self.activity_tab = crate::modal::ActivityTab::Activity;
-        }
         first
     }
 
@@ -492,7 +475,7 @@ impl App {
         use crate::surfaces::PanelId;
         match id {
             PanelId::Help => self.help_scroll = 0,
-            PanelId::Activity | PanelId::Todos => self.activity_scroll = 0,
+            PanelId::Todos => self.todos_scroll = 0,
             PanelId::Tools | PanelId::Mcp => {
                 self.session_scroll = 0;
                 self.session_modal_follow = true;
@@ -639,9 +622,7 @@ impl App {
     fn panel_scroll(&self, id: crate::surfaces::PanelId) -> usize {
         match id {
             crate::surfaces::PanelId::Help => self.help_scroll,
-            crate::surfaces::PanelId::Activity | crate::surfaces::PanelId::Todos => {
-                self.activity_scroll
-            }
+            crate::surfaces::PanelId::Todos => self.todos_scroll,
             crate::surfaces::PanelId::Tools
             | crate::surfaces::PanelId::Mcp
             | crate::surfaces::PanelId::Skills => self.session_scroll,
@@ -662,9 +643,7 @@ impl App {
     fn apply_panel_scroll(&mut self, id: crate::surfaces::PanelId, scroll: usize) {
         match id {
             crate::surfaces::PanelId::Help => self.help_scroll = scroll,
-            crate::surfaces::PanelId::Activity | crate::surfaces::PanelId::Todos => {
-                self.activity_scroll = scroll;
-            }
+            crate::surfaces::PanelId::Todos => self.todos_scroll = scroll,
             crate::surfaces::PanelId::Tools
             | crate::surfaces::PanelId::Mcp
             | crate::surfaces::PanelId::Skills => {

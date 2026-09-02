@@ -11,14 +11,14 @@
 //! model sees "I read it successfully" right next to "don't read it again", a
 //! self-contradictory signal that strong models routinely resolve in favour of
 //! re-running the call. Coverage is also limited to read-tier tools, so a
-//! `bash` re-run, a `webfetch` re-fetch, or an `edit` A→B→A thrash sails
+//! `bash` re-run, a `read_url` re-read, or an `edit` A→B→A thrash sails
 //! straight through.
 //!
 //! This guard is the inverse on every axis:
 //! - **Pre-dispatch**: it runs *before* tools execute, so a repeated call never
 //!   produces side effects or output. The model only ever sees the refusal.
 //! - **All tools**: covers the common doom-loop culprits — `read`,
-//!   `find_files`, `list_dir`, `search_text`, `bash`, `webfetch`, `websearch`, `edit_file`,
+//!   `find_files`, `list_dir`, `search_text`, `bash`, `read_url`, `search_web`, `edit_file`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
 //! - **Threshold-gated (default 3, ADR-0148)**: one same-signature re-run per
 //!   window is tolerated — a transient retry, or re-running the same test
@@ -53,17 +53,15 @@ use crate::loop_guard::GuardAction;
 const WATCHED_TOOLS: &[&str] = &[
     "edit_file",
     "execute_command",
-    "fetch_url",
     "find_files",
     "list_dir",
     "read",
     "read_image",
     "read_text",
+    "read_url",
     "run_command",
     "search_text",
     "search_web",
-    "webfetch",
-    "websearch",
     "write_file",
 ];
 
@@ -95,10 +93,10 @@ pub(crate) fn covers(name: &str) -> bool {
 ///   `name|path` — the target dir/file.
 /// - **Command-addressed calls** (`bash`): `name|command` — the literal command
 ///   string. Running the identical command twice in a turn is never productive.
-/// - **Query-addressed calls** (`search_text`, `websearch`): `name|query` — the search
+/// - **Query-addressed calls** (`search_text`, `search_web`): `name|query` — the search
 ///   text. A different query is a different call; the same query again is a
 ///   repeat.
-/// - **URL-addressed calls** (`webfetch`): `name|url`.
+/// - **URL-addressed calls** (`read_url`): `name|url`.
 /// - **Pattern-list calls** (`find_files`): the whole normalized argument set.
 /// - **Anything else / unparseable**: fall back to `name|<raw args>` so the
 ///   call is still keyed (two identical blobs still collide) but distinct

@@ -71,37 +71,6 @@ fn top_chrome_row(
         return chrome_row(full_w, bg, theme, '↑', hidden_above);
     }
     if focused {
-        if let crate::components::composer_hints::ComposeTarget::QueueEdit {
-            kind, number, ..
-        } = target
-        {
-            let noun = match kind {
-                crate::components::composer_hints::QueueEditKind::Steer => "steer",
-                crate::components::composer_hints::QueueEditKind::FollowUp => "follow-up",
-            };
-            let label = if full_w >= 36 {
-                format!("[edit: {noun} #{number} · draft saved]")
-            } else if full_w >= 20 {
-                format!("[edit: {noun} #{number}]")
-            } else {
-                format!("[edit #{number}]")
-            };
-            let label_len = label.chars().count();
-            if full_w > label_len + 2 {
-                let gap_cols = full_w.saturating_sub(label_len + 1);
-                return Line::from(vec![
-                    Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
-                    Span::styled(
-                        label,
-                        Style::default()
-                            .bg(bg)
-                            .fg(kind.consequence_color(theme))
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(" ".to_string(), Style::default().bg(bg)),
-                ]);
-            }
-        }
         if target == crate::components::composer_hints::ComposeTarget::HistorySearch {
             let label = if full_w >= 36 {
                 "[history search · draft saved]"

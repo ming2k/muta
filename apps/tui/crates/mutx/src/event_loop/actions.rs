@@ -1373,7 +1373,7 @@ pub(super) async fn dispatch_action(
                     app.history_modal_follow = true;
                 }
                 Modal::Help => app.help_scroll = 0,
-                Modal::Activity => app.activity_scroll = 0,
+                Modal::Todos => app.todos_scroll = 0,
                 Modal::Permissions => app.permissions_scroll = 0,
                 Modal::Tools | Modal::Mcp | Modal::Skills => {
                     app.session_scroll = 0;
@@ -1450,24 +1450,7 @@ pub(super) async fn dispatch_action(
             scroll_tick(app, true);
         }
         input::InputAction::Wheel { up, x, y } => {
-            // Spatial routing for the mouse wheel: a modal body keeps the
-            // tick exactly like the bare keyboard variants; otherwise a tick
-            // landing inside the composer panel scrolls the input's own
-            // viewport (the panel is a scroll region once the draft outgrows
-            // the box — the ↑/↓ indicators and position readout make that
-            // visible), and only ticks elsewhere reach the transcript.
-            let over_composer = app.modal_scroll_field().is_none()
-                && app.active_modal() == Modal::None
-                && app.input_rect.is_some_and(|r| {
-                    r.height > crate::design::COMPOSER_VERTICAL_CHROME_ROWS
-                        && r.x <= x
-                        && x < r.x + r.width
-                        && r.y <= y
-                        && y < r.y + r.height
-                });
-            if !(over_composer && app.step_input_scroll(up, 4).is_some()) {
-                scroll_tick(app, !up);
-            }
+            handle_wheel(app, up, x, y);
         }
         input::InputAction::ScrollPageUp => {
             // Read the (Copy) page step up front so the subsequent
@@ -1970,45 +1953,13 @@ pub(super) async fn dispatch_action(
             let session_rows = app.current_session_history();
             app.history_prev(&session_rows);
         }
-        input::InputAction::QueuePointerCancel => {
-            // Esc during queue pointer edit: immediately dissolve pointer and restore draft.
-            app.dissolve_queue_pointer();
-        }
-        input::InputAction::QueuePointerPrev => {
-            // Inline ↑ with a non-empty outbox: arm/step the queue pointer
-            // (newest → older). Non-destructive — nothing leaves the queue;
-            // the composer becomes an editable projection of the pointed-at
-            // item. An empty queue returns false, in which case ↑ falls
-            // through to its ordinary history role.
-            if !app.queue_pointer_prev(viewed_session_id) {
-                let session_rows = app.current_session_history();
-                app.history_prev(&session_rows);
-            }
-        }
-        input::InputAction::QueuePointerNext => {
-            // Inline ↓ while the pointer is armed: step toward newer items;
-            // past the newest it dissolves and restores the stashed draft.
-            // A dissolved pointer (false) hands the key back to history
-            // navigation, matching the history pointer's own exit.
-            if !app.queue_pointer_next(viewed_session_id) {
-                let session_rows = app.current_session_history();
-                app.history_next(&session_rows);
-            }
-        }
         input::InputAction::RecallQueued => {
-            // Legacy destructive recall. No top-level key produces this
-            // anymore (↑ routes to the non-destructive queue pointer); the
-            // arm stays for the queue modal's explicit pull-to-composer
+            // Destructive recall for the queue modal's explicit pull-to-composer
             // gesture, where removing the item from the list is the point.
-            match app.recall_queued(viewed_session_id) {
-                Some(crate::app::RecallQueued::Restored(dispatch)) => {
-                    app.queue_pointer = None;
-                    app.queue_pointer_draft.clear();
-                    app.queue_pointer_draft_images.clear();
-                    app.queue_pointer_draft_text_pastes.clear();
-                    app.restore_dispatch(dispatch);
-                }
-                None => {}
+            if let Some(crate::app::RecallQueued::Restored(dispatch)) =
+                app.recall_queued(viewed_session_id)
+            {
+                app.restore_dispatch(dispatch);
             }
         }
         input::InputAction::RecallQueuedSelected => {
@@ -2018,22 +1969,14 @@ pub(super) async fn dispatch_action(
             // auto-block the modal set on open.
             let idx = app.modal_index;
             app.hide_active_panel();
-            match app.recall_queued_at(viewed_session_id, idx) {
-                Some(crate::app::RecallQueued::Restored(dispatch)) => {
-                    // The item left the queue, so a pointer at it (or at a
-                    // neighbor the removal shifted) would dangle; dissolve
-                    // first and let the recall adopt the composer cleanly.
-                    app.queue_pointer = None;
-                    app.queue_pointer_draft.clear();
-                    app.queue_pointer_draft_images.clear();
-                    app.queue_pointer_draft_text_pastes.clear();
-                    app.restore_dispatch(dispatch);
-                }
-                None => {}
+            if let Some(crate::app::RecallQueued::Restored(dispatch)) =
+                app.recall_queued_at(viewed_session_id, idx)
+            {
+                app.restore_dispatch(dispatch);
             }
         }
         input::InputAction::QueueToggleBlock => {
-            // `F3` (top-level or inside the queue modal): toggle the
+            // `Ctrl+P` (top-level or inside the queue modal): toggle the
             // hard block on the viewed session's outbox. While blocked
             // no queued message auto-drains, even after the round
             // completes. This is the persistent user choice, distinct
@@ -2041,24 +1984,13 @@ pub(super) async fn dispatch_action(
             app.toggle_queue_block(viewed_session_id);
         }
         input::InputAction::QueueDelete => {
-            // `Shift+D` in the queue modal: remove the highlighted
+            // `D` in the queue modal: remove the highlighted
             // item outright. The queue is auto-blocked on open, so the
             // index can't drift under us. Clamp the selection to the
             // now-shorter list.
             if app.active_modal() == Modal::Queue {
                 let idx = app.modal_index;
-                let removed = app.remove_queued_at(viewed_session_id, idx);
-                // A pointer at the deleted item would dangle; dissolve it
-                // without restoring (the modal owns the surface and the
-                // composer's next projection recomputes anyway).
-                if let Some(removed) = removed.as_ref()
-                    && app.queue_pointer.as_deref() == Some(removed.id.as_str())
-                {
-                    app.queue_pointer = None;
-                    app.queue_pointer_draft.clear();
-                    app.queue_pointer_draft_images.clear();
-                    app.queue_pointer_draft_text_pastes.clear();
-                }
+                let _removed = app.remove_queued_at(viewed_session_id, idx);
                 let count = app.pending_count(viewed_session_id);
                 if count == 0 {
                     app.modal_index = 0;
@@ -2482,6 +2414,61 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
     let _ = runtime;
 }
 
+pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
+    if app.active_modal() == Modal::Permission {
+        if app.modal_hit_map.permission_sheet_contains(x, y) {
+            if app.permission_show_details {
+                if up {
+                    app.permission_scroll = app.permission_scroll.saturating_sub(1);
+                } else {
+                    app.permission_scroll = app
+                        .permission_scroll
+                        .saturating_add(1)
+                        .min(app.permission_max_scroll);
+                }
+            }
+        } else {
+            scroll_tick(app, !up);
+        }
+    } else if app.active_modal() != Modal::None {
+        let inside_modal = app.modal_rect.is_some_and(|r| {
+            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
+        }) || app.modal_hit_map.oauth_modal_contains(x, y);
+
+        if inside_modal {
+            scroll_tick(app, !up);
+        }
+    } else if app.modal_hit_map.completion_menu_contains(x, y) {
+        let count = app.completions().len();
+        if count > 0 {
+            if up {
+                let prev = match app.suggestion_index {
+                    Some(0) | None => count.saturating_sub(1),
+                    Some(i) => i.saturating_sub(1),
+                };
+                app.suggestion_index = Some(prev);
+            } else {
+                let next = match app.suggestion_index {
+                    Some(i) if i + 1 < count => i + 1,
+                    _ => 0,
+                };
+                app.suggestion_index = Some(next);
+            }
+        }
+    } else {
+        let over_composer = app.input_rect.is_some_and(|r| {
+            r.height > crate::design::COMPOSER_VERTICAL_CHROME_ROWS
+                && r.x <= x
+                && x < r.x + r.width
+                && r.y <= y
+                && y < r.y + r.height
+        });
+        if !(over_composer && app.step_input_scroll(up, 4).is_some()) {
+            scroll_tick(app, !up);
+        }
+    }
+}
+
 #[cfg(test)]
 mod transcript_scroll_tests {
     use super::*;
@@ -2532,6 +2519,70 @@ mod transcript_scroll_tests {
         scroll_transcript_to_edge(&mut app, true);
         assert_eq!(app.scroll, 100);
         assert!(app.follow_bottom);
+    }
+
+    #[test]
+    fn wheel_spatial_routing_under_permission_modal() {
+        let mut app = scrollable_app();
+        app.set_active_modal_for_test(Modal::Permission);
+        app.modal_hit_map.set_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
+        app.permission_show_details = true;
+        app.permission_max_scroll = 10;
+        app.permission_scroll = 2;
+
+        // 1. Wheel over permission sheet (y=16) scrolls details down
+        handle_wheel(&mut app, false, 10, 16);
+        assert_eq!(app.permission_scroll, 3);
+        assert_eq!(app.scroll, 100, "transcript scroll untouched");
+
+        // 2. Wheel over permission sheet (y=16) scrolls details up
+        handle_wheel(&mut app, true, 10, 16);
+        assert_eq!(app.permission_scroll, 2);
+        assert_eq!(app.scroll, 100, "transcript scroll untouched");
+
+        // 3. Wheel above permission sheet (y=5) scrolls transcript
+        handle_wheel(&mut app, true, 10, 5);
+        assert_eq!(app.scroll, 96, "transcript scrolled up");
+        assert_eq!(app.permission_scroll, 2, "permission scroll untouched");
+    }
+
+    #[test]
+    fn wheel_spatial_routing_under_overlay_modal_isolates_backdrop() {
+        let mut app = scrollable_app();
+        app.set_active_modal_for_test(Modal::Help);
+        app.modal_rect = Some(mutx_engine::Rect::new(10, 5, 60, 10));
+        app.help_scroll = 5;
+
+        // 1. Wheel on backdrop (x=2, y=2) outside modal_rect: absorbed, neither modal nor transcript scrolls
+        handle_wheel(&mut app, false, 2, 2);
+        assert_eq!(app.help_scroll, 5, "modal scroll untouched on backdrop");
+        assert_eq!(app.scroll, 100, "transcript scroll untouched on backdrop");
+
+        // 2. Wheel inside modal (x=20, y=8): scrolls modal body
+        handle_wheel(&mut app, false, 20, 8);
+        assert_eq!(app.help_scroll, 6, "modal scrolled inside modal_rect");
+        assert_eq!(app.scroll, 100, "transcript scroll untouched");
+    }
+
+    #[tokio::test]
+    async fn completion_menu_mouse_wheel_and_click() {
+        let mut app = scrollable_app();
+        app.input = "/m".to_string();
+        app.cursor_position = 2;
+        app.modal_hit_map.set_completion_menu_rect(mutx_engine::Rect::new(0, 8, 30, 2));
+        app.modal_hit_map.push_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
+        app.modal_hit_map.push_completion_item(1, mutx_engine::Rect::new(0, 9, 30, 1));
+
+        let runtime = UiRuntime::minimal_for_test();
+
+        // Wheel over menu cycles suggestions
+        handle_wheel(&mut app, false, 5, 8);
+        assert!(app.suggestion_index.is_some());
+
+        // Click on completion item 0 accepts completion
+        mouse::handle_selection_start(&mut app, &runtime, "s1", 5, 8).await;
+        assert!(app.completion_dismissed);
+        assert_eq!(app.suggestion_index, None);
     }
 }
 

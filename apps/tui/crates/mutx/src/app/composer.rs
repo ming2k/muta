@@ -482,15 +482,6 @@ impl App {
         !self.selection.is_active() && self.caret_owner() != CaretOwner::None
     }
 
-    /// Stash the live draft into the pointer's draft slots (the counterpart
-    /// of the history pointer's stash), so walking back out restores exactly
-    /// what the user was composing.
-    pub(super) fn stash_queue_pointer_draft(&mut self) {
-        self.queue_pointer_draft = std::mem::take(&mut self.input);
-        self.queue_pointer_draft_images = std::mem::take(&mut self.pending_images);
-        self.queue_pointer_draft_text_pastes = std::mem::take(&mut self.pending_text_pastes);
-    }
-
     /// Mint the correlation id for an in-flight busy-Enter steer.
     ///
     /// The insert is **transcript-owned** (ADR-0126): it becomes a

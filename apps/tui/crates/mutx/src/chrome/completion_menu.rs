@@ -11,6 +11,7 @@ use crate::view::Theme;
 pub fn draw_completion_menu(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
+    hit_map: Option<&mut crate::model::layout::ModalHitMap>,
     completions: &[crate::completion::Completion],
     selected_idx: Option<usize>,
     anchor: Rect,
@@ -67,6 +68,15 @@ pub fn draw_completion_menu(
 
     let menu_area = Rect::new(x, y, menu_width, menu_height);
     frame.render_widget(Clear, menu_area);
+
+    if let Some(hm) = hit_map {
+        hm.set_completion_menu_rect(menu_area);
+        for row in 0..visible_rows.len() {
+            let global_idx = row + scroll_offset;
+            let row_rect = Rect::new(menu_area.x, menu_area.y + row as u16, menu_area.width, 1);
+            hm.push_completion_item(global_idx, row_rect);
+        }
+    }
 
     let block = RtBlock::default().style(Style::default().bg(theme.body()));
     let menu_w = menu_area.width as usize;

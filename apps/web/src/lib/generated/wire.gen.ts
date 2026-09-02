@@ -1903,7 +1903,7 @@ base_url?: string,
  */
 custom_headers?: { [key in string]: string }, 
 /**
- * Whether this connection is active and enabled for fetch routing.
+ * Whether this connection is active and enabled for reader routing.
  */
 enabled: boolean, };
 
@@ -1925,7 +1925,7 @@ export type WebSearchConfigUpdate = {
  */
 provider?: string, 
 /**
- * Page-content reader used by `webfetch` (`builtin` | `jina`).
+ * Page-content reader used by `read_url` (`builtin` | `jina`).
  */
 reader?: string, 
 /**

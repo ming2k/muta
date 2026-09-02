@@ -145,7 +145,7 @@ impl Agent {
         // repeat of one already issued this round. A repeat is blocked here
         // and now — the tool never executes, so its result never enters
         // context. Unlike the post-hoc read-loop guard, this covers all
-        // watched tools (bash/webfetch/edit/...), not just reads, and trips
+        // watched tools (run_command/read_url/edit_file/...), not just reads, and trips
         // when a same-signature call reaches `threshold` occurrences
         // (default 3: one re-run tolerated, ADR-0148). `Block` records the
         // repeated signatures into the per-round mask, so the per-call

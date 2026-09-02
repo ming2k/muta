@@ -395,7 +395,7 @@ pub struct WebSearchConfigUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub provider: Option<String>,
-    /// Page-content reader used by `webfetch` (`builtin` | `jina`).
+    /// Page-content reader used by `read_url` (`builtin` | `jina`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reader: Option<String>,

@@ -805,9 +805,9 @@ impl ToolPool {
 ///   which `$build` may then reference. Use `?` / early `return None` to
 ///   decline (the tool then won't appear in the assembled set):
 ///   ```ignore
-///   muta_contracts::register_tool!(WebFetchFactory => |ctx| {
+///   muta_contracts::register_tool!(WebReaderFactory => |ctx| {
 ///       let cfg = ctx.get::<muta_contracts::WebSearchConfig>()?.clone();
-///       WebFetchTool::with_config(cfg)
+///       WebReaderTool::with_config(cfg)
 ///   });
 ///   ```
 ///

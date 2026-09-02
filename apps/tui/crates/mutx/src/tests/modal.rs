@@ -191,119 +191,6 @@ fn cancel_provider_delete_clears_and_resets_focus() {
     );
 }
 
-// ── Queue pointer navigation (ADR-0126) ─────────────────────────────────────
-
-#[test]
-fn queue_pointer_walks_without_removing_items() {
-    // The pointer is non-destructive: three ↑ presses walk c → b → a while
-    // the queue keeps all three items in order.
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch
-        .push_back(queued_dispatch("a", "session-a", "msg a"));
-    app.pending_dispatch
-        .push_back(queued_dispatch("b", "session-b", "msg b other session"));
-    app.pending_dispatch
-        .push_back(queued_dispatch("c", "session-a", "msg c"));
-
-    // First ↑ arms at the newest session-a item ("c") and stashes the draft.
-    app.input = "my draft".to_string();
-    assert!(app.queue_pointer_prev("session-a"));
-    assert_eq!(app.input, "msg c");
-    assert_eq!(app.queue_pointer.as_deref(), Some("c"));
-    assert_eq!(app.pending_count("session-a"), 2, "nothing left the queue");
-
-    // Second ↑ → "a" (the only older item); third ↑ clamps there.
-    assert!(app.queue_pointer_prev("session-a"));
-    assert_eq!(app.input, "msg a");
-    assert!(app.queue_pointer_prev("session-a"));
-    assert_eq!(app.input, "msg a", "clamped at the oldest item");
-    assert_eq!(app.pending_count("session-a"), 2);
-}
-
-#[test]
-fn queue_pointer_down_restores_the_draft() {
-    // ↓ walks back toward newer items and, past the newest, dissolves the
-    // pointer and restores the stashed draft — the same exit as the history
-    // pointer.
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch
-        .push_back(queued_dispatch("a", "session-a", "msg a"));
-    app.pending_dispatch
-        .push_back(queued_dispatch("c", "session-a", "msg c"));
-
-    app.input = "my draft".to_string();
-    assert!(app.queue_pointer_prev("session-a")); // → c
-    assert!(app.queue_pointer_prev("session-a")); // → a
-    assert!(app.queue_pointer_next("session-a")); // → c
-    assert_eq!(app.input, "msg c");
-    // Past the newest: the press dissolves the pointer (consumed) and
-    // restores the stashed draft.
-    assert!(
-        app.queue_pointer_next("session-a"),
-        "dissolve consumes the key"
-    );
-    assert!(app.queue_pointer.is_none());
-    assert_eq!(app.input, "my draft");
-    // An unarmed ↓ is inert (the caller falls through to history).
-    assert!(!app.queue_pointer_next("session-a"));
-}
-
-#[test]
-fn queue_pointer_commit_edits_in_place() {
-    // Enter writes the edited content back into the pointed-at item — in
-    // place. Queue a=α, b=β, c=γ; walk to a; edit to δ; Enter → the queue is
-    // δ, β, γ (same length, same order, same slot) — never β, γ, δ and never
-    // a duplicate.
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch
-        .push_back(queued_dispatch("a", "session-a", "alpha"));
-    app.pending_dispatch
-        .push_back(queued_dispatch("b", "session-a", "beta"));
-    app.pending_dispatch
-        .push_back(queued_dispatch("c", "session-a", "gamma"));
-
-    assert!(app.queue_pointer_prev("session-a")); // → c
-    assert!(app.queue_pointer_prev("session-a")); // → b
-    assert!(app.queue_pointer_prev("session-a")); // → a
-    app.input = "delta".to_string();
-    assert!(
-        app.commit_queue_pointer("session-a", "delta".to_string(), Vec::new(), Vec::new(),)
-            .is_some()
-    );
-
-    let texts: Vec<&str> = app
-        .pending_dispatch
-        .iter()
-        .filter(|d| d.session_id == "session-a")
-        .map(|d| d.text.as_str())
-        .collect();
-    assert_eq!(texts, vec!["delta", "beta", "gamma"], "edit lands in place");
-    assert!(app.queue_pointer.is_none(), "commit dissolves the pointer");
-    assert_eq!(app.pending_count("session-a"), 3, "queue length unchanged");
-}
-
-#[test]
-fn queue_pointer_vanished_target_sends_as_new_message() {
-    // If the pointed-at item shipped while the user was editing, the pointer
-    // is empty: the composer keeps the edit and Enter falls through to an
-    // ordinary send (the caller's fresh-message path).
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch
-        .push_back(queued_dispatch("a", "session-a", "alpha"));
-    assert!(app.queue_pointer_prev("session-a"));
-    app.input = "edited".to_string();
-
-    // The item leaves the queue (shipped) behind the user's back…
-    app.remove_dispatch("session-a", "a");
-    // …so the commit dissolves the pointer but preserves the edit.
-    assert!(
-        app.commit_queue_pointer("session-a", "edited".to_string(), Vec::new(), Vec::new(),)
-            .is_none()
-    );
-    assert!(app.queue_pointer.is_none());
-    assert_eq!(app.input, "edited", "the edit must survive the race");
-}
-
 /// Switching the viewed session must not carry composer state across the
 /// boundary: the ↑/↓ cursor, the stashed draft, staged attachments, and the
 /// backfill all belong to the conversation being left.
@@ -879,7 +766,7 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         Modal::Tools,
         Modal::Mcp,
         Modal::Permissions,
-        Modal::Activity,
+        Modal::Todos,
         Modal::Question,
         Modal::Permission,
         Modal::Config,
@@ -948,7 +835,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     // Pure-content modals return a scroll ref but no follow flag.
     for m in [
         Modal::Help,
-        Modal::Activity,
+        Modal::Todos,
         Modal::Permissions,
         Modal::Config,
     ] {
@@ -959,11 +846,11 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         *s = 7;
     }
     assert_eq!(app.help_scroll, 7);
-    app.set_active_modal_for_test(Modal::Activity);
+    app.set_active_modal_for_test(Modal::Todos);
     if let Some((s, _)) = app.modal_scroll_field() {
         *s = 9;
     }
-    assert_eq!(app.activity_scroll, 9);
+    assert_eq!(app.todos_scroll, 9);
     assert_ne!(app.help_scroll, 9, "each modal has its own field");
 
     // The non-scrolling modals resolve to None so the action falls through to
@@ -1379,17 +1266,11 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
 }
 
 #[test]
-fn todos_and_activity_are_separate_places() {
-    // Two view ids share the Activity modal but keep their own tab —
-    // switching between them lands on the section the id names.
+fn todos_panel_opens_todos_modal() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_panel(crate::surfaces::PanelId::Todos);
-    assert_eq!(app.active_modal(), Modal::Activity);
-    assert_eq!(app.activity_tab, ActivityTab::Todos);
+    assert_eq!(app.active_modal(), Modal::Todos);
     assert!(app.dismiss_surface());
-
-    app.open_panel(crate::surfaces::PanelId::Activity);
-    assert_eq!(app.activity_tab, ActivityTab::Activity);
 }
 
 #[test]
@@ -1490,9 +1371,8 @@ fn transient_sheet_returns_to_exact_todos_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_panel(crate::surfaces::PanelId::Todos);
     app.push_transient_surface(Modal::Question);
-    assert_eq!(app.pop_transient_surface(), Modal::Activity);
+    assert_eq!(app.pop_transient_surface(), Modal::Todos);
     assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
-    assert_eq!(app.activity_tab, ActivityTab::Todos);
 }
 
 #[test]

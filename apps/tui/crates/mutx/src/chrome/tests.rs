@@ -25,7 +25,6 @@ fn activity_row_text_with_clause(
             crate::chrome::ActivityBarView {
                 status,
                 backoff_clause,
-                silent_clause: None,
                 awaiting_permission: awaiting,
             },
             phase,
@@ -63,7 +62,6 @@ fn activity_row_colors_with_clause(
             crate::chrome::ActivityBarView {
                 status,
                 backoff_clause,
-                silent_clause: None,
                 awaiting_permission: awaiting,
             },
             phase,
@@ -141,26 +139,26 @@ fn backoff_clause_renders_beside_status_and_degrades_narrow() {
     let wide = activity_row_text_with_clause(
         100,
         "waiting for model",
-        Some(" · retry 2/8 next in 4s"),
+        Some("retry 2/8 (next in 4s)"),
         false,
         0,
     );
     assert!(wide.contains("waiting for model"), "{wide:?}");
-    assert!(wide.contains("retry 2/8 next in 4s"), "{wide:?}");
+    assert!(wide.contains("retry 2/8 (next in 4s)"), "{wide:?}");
 
     // Under width pressure the compact attempt counter survives and the
     // master label is still intact.
     let narrow = activity_row_text_with_clause(
-        44,
+        48,
         "waiting for model",
-        Some(" · retry 2/8 next in 4s"),
+        Some("retry 2/8 (next in 4s)"),
         false,
         0,
     );
     assert!(narrow.contains("waiting for model"), "{narrow:?}");
     assert!(
-        narrow.contains("2/8") || !narrow.contains("next in"),
-        "compact form should drop the countdown tail: {narrow:?}"
+        narrow.contains("(2/8)"),
+        "compact form should drop the countdown tail and keep (2/8): {narrow:?}"
     );
 
     // No clause configured → no stray separators.
@@ -262,7 +260,6 @@ fn activity_bar_carries_no_todos_badge() {
             ActivityBarView {
                 status: "Working",
                 backoff_clause: None,
-                silent_clause: None,
                 awaiting_permission: false,
             },
             0,
@@ -290,7 +287,6 @@ fn narrow_runtime_row_keeps_interrupt_keys_without_todos_badge() {
             ActivityBarView {
                 status: "retrying a provider request after a detailed transient failure",
                 backoff_clause: None,
-                silent_clause: None,
                 awaiting_permission: false,
             },
             8,
@@ -788,6 +784,7 @@ fn paint_completion_menu(
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             selected,
             Rect::new(0, 10, 80, 2), // input box occupies rows 10..12
@@ -892,6 +889,7 @@ fn completion_menu_caps_width_and_stays_anchored() {
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             None,
             Rect::new(0, 10, 80, 2),
@@ -970,6 +968,7 @@ fn completion_menu_marks_alias_rows_with_canonical_target() {
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             None,
             Rect::new(0, 10, 80, 2),
@@ -1033,6 +1032,7 @@ fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             None,
             Rect::new(0, 10, 80, 2),
@@ -1056,6 +1056,7 @@ fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             Some(0),
             Rect::new(0, 10, 80, 2),
@@ -1099,6 +1100,7 @@ fn completion_menu_hover_doc_flyout_shows_alias_to_target_header() {
         draw_completion_menu(
             f,
             &mut layout_map,
+            None,
             &completions,
             Some(0),
             Rect::new(0, 10, 80, 2),

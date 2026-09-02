@@ -43,7 +43,7 @@ pub use read_text::{ReadTextTerseTool, ReadTextTool};
 pub use search_text::SearchTextTool;
 pub use todo::{TodoToolContext, TodoUpdateTool, TodoWriteTool};
 pub(crate) use web::html_to_text;
-pub use web::{WebFetchTool, WebPageSnapshot, WebSearchTool, WebSnapshotResult};
+pub use web::{WebPageSnapshot, WebReaderTool, WebSearchTool, WebSnapshotResult};
 pub use write_file::WriteFileTool;
 
 #[cfg(test)]

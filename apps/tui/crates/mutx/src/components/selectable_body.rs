@@ -97,6 +97,7 @@ impl SelectableRow {
     }
 
     /// An empty (spacer) row — occupies one visual row, copies as "".
+    #[allow(dead_code)]
     pub(crate) fn empty() -> Self {
         Self {
             prefix: None,
@@ -774,7 +775,7 @@ mod tests {
     fn visual_row_count_and_desired_rows_match_wrapped_rendering() {
         let mut grid = mutx_engine::Grid::new(80, 24);
         let frame = mutx_engine::Frame::new(&mut grid);
-        let geometry = ContentModalSpec::ACTIVITY;
+        let geometry = ContentModalSpec::TODOS;
 
         let rows = vec![
             SelectableRow::styled("Header", mutx_engine::Style::default()),

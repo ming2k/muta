@@ -90,13 +90,12 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         app.loop_status,
         gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
     );
-    // Transport-setback clause: rides *beside* the master label (never in its
+    // Transport-setback clause: rides beside the master label (never in its
     // slot), counting down while a provider retry backs off.
     let backoff_clause = app
         .provider_retry
         .as_ref()
-        .map(|retry| format!(" · {}", retry.summary(std::time::Instant::now())));
-    let backoff = backoff_clause.clone();
+        .map(|retry| retry.summary(std::time::Instant::now()));
 
     // Compute the displayed input text first so the transcript layout can
     // reserve the right height for a wrapping, growing input box.
@@ -259,36 +258,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .collect();
     let queue_modal_items: Vec<view::QueueItemView> = queue_items.clone();
 
-    // Annotation slot: at most one lives here per frame. The two clauses
-    // are phase-exclusive by construction — transport retries only occur in
-    // AwaitingModel (and own that slot while counting down), and stream
-    // silence only while a model request is still open (a tool exec has no
-    // HTTP stream that could go silent; its liveness story is the step
-    // clock). ADR-0154: what matters is a held connection with no tokens
-    // coming out, in either regime — overdue first byte or a flowing
-    // stream gone quiet.
-    let model_request_open = matches!(
-        app.phase,
-        Some(
-            crate::phase::Phase::AwaitingModel
-                | crate::phase::Phase::Thinking
-                | crate::phase::Phase::Answering
-        )
-    );
-    let silent_clause_display = if model_request_open {
-        app.pulse
-            .stalled_secs(std::time::Instant::now())
-            .map(|secs| {
-                if app.pulse.saw_token() {
-                    format!(" · silent {secs}s")
-                } else {
-                    format!(" · no tokens {secs}s")
-                }
-            })
-    } else {
-        None
-    };
-    let clause = backoff.as_deref().or(silent_clause_display.as_deref());
     let transcript_render = view::draw_transcript(
         f,
         &mut layout_map,
@@ -298,8 +267,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             selection: &app.selection,
             cell_selection: app.drag.cell_info.as_ref(),
             activity: &status,
-            backoff_clause: clause,
-            silent_clause: None,
+            backoff_clause: backoff_clause.as_deref(),
             // A pending permission request forces the activity bar on (and
             // tints it warning) so it stays the visible anchor above the
             // permission sheet even if the loop has gone idle.
@@ -503,7 +471,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // Compose-target derivation happens while `&app` borrows are
             // still immutable; the result is an owned value the composer can
             // consume after taking its mutable borrows.
-            let queue_editing = app.queue_editing_target(viewed_session_id);
             let busy = app.running_sessions.contains(viewed_session_id);
             let is_history_search = app.active_modal() == Modal::HistorySearch;
             let completion_active = if app.active_modal() == Modal::None
@@ -523,19 +490,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 None
             };
             let composer_hints = {
-                use crate::components::composer_hints::{
-                    ComposerHints, QueueEditKind, compose_target,
-                };
+                use crate::components::composer_hints::{ComposerHints, compose_target};
                 ComposerHints {
                     compose_target: compose_target(
                         busy,
                         Some(app.composer_send_mode),
-                        queue_editing.map(|(kind, number)| match kind {
-                            crate::model::document::UserMessageOrigin::Steer => {
-                                (QueueEditKind::Steer, number)
-                            }
-                            _ => (QueueEditKind::FollowUp, number),
-                        }),
                         slash_len.is_some() || app.input.starts_with('/'),
                         completion_active,
                         is_history_search,
@@ -640,7 +599,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Hit-test rects for the footer bars, resolved from the one registry the
     // renderer placed this frame (`TranscriptRender::footer`) — one source
     // of truth instead of per-bar plumbing.
-    app.activity_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity);
     app.todos_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Todos);
     app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
     // The composer panel's own rect, for the spatial mouse router (wheel
@@ -699,6 +657,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             view::draw_completion_menu(
                 f,
                 &mut layout_map,
+                Some(&mut app.modal_hit_map),
                 &completions,
                 app.suggestion_index,
                 input_rect,
@@ -1139,41 +1098,16 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             }
             Some(rects.area)
         }
-        Modal::Activity => {
-            let user_prompt: Option<String> = app
-                .focused_messages()
-                .iter()
-                .rev()
-                // Only a genuine chat prompt is the round's driving
-                // prompt. Slash commands (`/review …`) and shell
-                // passthroughs (`!ls`) are surfaced as `Role::User`
-                // in the transcript but are handled by the harness /
-                // bash tool, never seen by the model — so they must
-                // not be shown as the Activity modal's "Prompt".
-                .find(|m| {
-                    m.role == muta_contracts::Role::User
-                        && m.origin == crate::model::document::UserMessageOrigin::Chat
-                })
-                .map(|m| m.raw.clone());
-            Some(view::draw_activity_modal(
-                f,
-                view::ActivityModalView {
-                    active_tab: app.activity_tab,
-                    todos: app.todos.as_ref(),
-                    user_prompt: user_prompt.as_deref(),
-                    round_count: viewed_chrome.round_count,
-                    current_turn: viewed_chrome.current_turn,
-                    current_model: app.current_model.as_str(),
-                    round_started_at: viewed_chrome.round_started_at,
-                    activity: &status,
-                    provider_retry: app.provider_retry.as_ref(),
-                },
-                &mut app.activity_scroll,
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
+        Modal::Todos => Some(view::draw_todos_modal(
+            f,
+            view::TodosModalView {
+                todos: app.todos.as_ref(),
+            },
+            &mut app.todos_scroll,
+            &app.theme,
+            &app.selection,
+            &mut layout_map,
+        )),
         Modal::Queue => Some(view::draw_queue_modal(
             f,
             view::QueueModalView {

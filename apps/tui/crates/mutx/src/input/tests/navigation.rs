@@ -168,7 +168,7 @@ fn page_keys_scroll_question_modal_body() {
 fn page_keys_scroll_every_scrollable_modal_body() {
     let scrollable = [
         crate::Modal::Help,
-        crate::Modal::Activity,
+        crate::Modal::Todos,
         crate::Modal::Permissions,
         crate::Modal::Config,
         crate::Modal::Telemetry,
@@ -347,20 +347,8 @@ fn line_aware_movement_respects_newlines() {
 }
 
 #[test]
-fn pageup_walks_the_queue_pointer_when_queue_nonempty() {
-    // While at least one message is staged in the send queue, PageUp arms the
-    // non-destructive queue pointer at the newest item instead of walking
-    // input history — the queue is the newer, more urgent surface. Nothing
-    // leaves the queue; the composer becomes an editable projection and
-    // Enter writes the edit back in place.
-    assert_eq!(pageup_with_queued(true), InputAction::QueuePointerPrev);
-}
-
-#[test]
-fn pageup_walks_history_when_queue_empty() {
-    // Once the queue drains (or was never populated), PageUp resumes its
-    // normal role of walking the prompt history.
-    assert_eq!(pageup_with_queued(false), InputAction::HistoryPrev);
+fn pageup_scrolls_transcript_page() {
+    assert_eq!(pageup_key(), InputAction::ScrollPageUp);
 }
 
 #[test]
@@ -428,8 +416,6 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             in_runner_view: false,
             in_side_view: false,
             has_focused_target: true,
-            has_queued: true,
-            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,

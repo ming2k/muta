@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::tools::web::client::{UNTRUSTED_PREFIX, UNTRUSTED_SUFFIX, http_client};
 use crate::tools::web::snapshot::{WebSnapshotResult, take_snapshot};
 
-pub const WEB_FETCH_MAX_TOKENS: usize = 4_000;
+pub const WEB_READER_MAX_TOKENS: usize = 4_000;
 
 #[derive(ToolSchema, Deserialize)]
 struct WebReaderArgs {
@@ -80,7 +80,7 @@ impl Default for WebReaderTool {
 #[async_trait]
 impl Tool for WebReaderTool {
     fn name(&self) -> &str {
-        "fetch_url"
+        "read_url"
     }
     fn is_available(&self) -> bool {
         let snapshot = self.config.get();
@@ -98,7 +98,7 @@ impl Tool for WebReaderTool {
         }
     }
     fn description(&self) -> &str {
-        "Fetch a web page and return its text content as clean Markdown."
+        "Read a web page and return its text content as clean Markdown."
     }
     fn parameters(&self) -> serde_json::Value {
         WebReaderArgs::parameters_schema()
@@ -120,20 +120,18 @@ impl Tool for WebReaderTool {
         let body = output.text;
         let content_type = output.content_type;
         let tokens = muta_contracts::tokenizer::count_tokens(&body);
-        if tokens > WEB_FETCH_MAX_TOKENS {
+        if tokens > WEB_READER_MAX_TOKENS {
             let (keep, _kept) =
-                muta_contracts::tokenizer::truncate_to_tokens(&body, WEB_FETCH_MAX_TOKENS / 2);
+                muta_contracts::tokenizer::truncate_to_tokens(&body, WEB_READER_MAX_TOKENS / 2);
             return Ok(format!(
                 "{UNTRUSTED_PREFIX}[Read {tokens} tokens from {url} (reader: {reader_name}, \
 content-type: {content_type}); kept the first {}/{} tokens — the page is longer than the tool's \
 context budget. Request a more specific URL/anchor or a section link for the part you need.]\n{keep}\
 {UNTRUSTED_SUFFIX}",
-                WEB_FETCH_MAX_TOKENS / 2,
-                WEB_FETCH_MAX_TOKENS
+                WEB_READER_MAX_TOKENS / 2,
+                WEB_READER_MAX_TOKENS
             ));
         }
         Ok(format!("{UNTRUSTED_PREFIX}{body}{UNTRUSTED_SUFFIX}"))
     }
 }
-
-pub use WebReaderTool as WebFetchTool;

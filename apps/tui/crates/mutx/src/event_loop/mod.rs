@@ -99,7 +99,7 @@ fn event_rearms_composer_follow(event: &Event) -> bool {
 
 pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
     match name {
-        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url" => {
+        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "read_url" => {
             crate::phase::ToolVerb::Exploring
         }
         "search_text" => crate::phase::ToolVerb::Searching,
@@ -441,8 +441,6 @@ async fn process_one_event(
     let in_runner_view = app.in_runner_view();
     let in_side_view = app.in_side_view;
     let has_focused_target = app.focused_target.is_some();
-    let has_queued = app.pending_count(viewed_session_id) > 0;
-    let queue_pointer_armed = app.queue_pointer.is_some();
     let history_searching = app.history_search;
     let model_searching = app.model_search;
     let modal_keymap_open = app.modal_keymap_open;
@@ -513,8 +511,6 @@ async fn process_one_event(
                 in_runner_view,
                 in_side_view,
                 has_focused_target,
-                has_queued,
-                queue_pointer_armed,
                 history_searching,
                 model_searching,
                 modal_keymap_open,

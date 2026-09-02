@@ -35,7 +35,6 @@ fn redesigned_components_render_without_panicking() {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         backoff_clause: None,
-                        silent_clause: None,
                         activity: "waiting for model",
                         awaiting_permission: false,
                         spinner_phase: 0,
@@ -86,6 +85,7 @@ fn redesigned_components_render_without_panicking() {
                 draw_completion_menu(
                     f,
                     &mut layout_map,
+                    None,
                     &[
                         crate::completion::Completion {
                             label: "/new".to_string(),
@@ -390,7 +390,7 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
 }
 
 #[test]
-fn web_settings_split_search_and_fetch_into_clear_panels() {
+fn web_settings_split_search_and_reader_into_clear_panels() {
     let theme = Theme::default();
     let custom = muta_contracts::ColorSchemeConfig::default();
     let mut web = muta_contracts::WebSearchConfigView::from(
@@ -408,7 +408,7 @@ fn web_settings_split_search_and_fetch_into_clear_panels() {
         });
 
     let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-    for (category_index, expected_route) in [(3, "Search route"), (4, "Fetch route")] {
+    for (category_index, expected_route) in [(3, "Search route"), (4, "Reader route")] {
         terminal.draw(|frame| {
             draw_settings_view(
                 frame,
@@ -435,7 +435,7 @@ fn web_settings_split_search_and_fetch_into_clear_panels() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(screen.contains("Web Search"));
-        assert!(screen.contains("Web Fetch"));
+        assert!(screen.contains("Web Reader"));
         assert!(screen.contains(expected_route));
         assert!(screen.contains("ROUTING"));
         assert!(screen.contains("REQUEST POLICY"));
@@ -467,7 +467,6 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     backoff_clause,
-                    silent_clause: None,
                     activity,
                     awaiting_permission: false,
                     spinner_phase: 0,
@@ -535,7 +534,6 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -604,7 +602,6 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "idle",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -668,7 +665,6 @@ fn nonempty_session_does_not_render_empty_state() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "idle",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -741,7 +737,6 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "idle",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -848,7 +843,6 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -918,7 +912,6 @@ fn h1_underline_clamps_to_text_extent() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1006,7 +999,6 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1089,7 +1081,6 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                silent_clause: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

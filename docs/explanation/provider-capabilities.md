@@ -58,7 +58,7 @@ The `reasoning_content` (or equivalent) field that some models emit is produced 
 
 However, models differ in **chain disclosure**:
 - **Disclosed reasoning chains (`ThinkingSupport::ReasoningContent`, `AnthropicAdaptive`, etc.)**: The model outputs its complete, authentic chain of thought. muta streams and renders these full reasoning blocks in the TUI.
-- **Undisclosed / Summary-only reasoning (`ThinkingSupport::ReasoningSummary`)**: Some models (such as GPT-5.6 Sol / GPT-5.x) do not disclose their internal chain of thought over the API, returning only progress placeholders or brief summaries. To prevent creating empty or phantom thinking boxes that distort TUI layout, selection, and scroll math, muta gates undisclosed reasoning at message creation.
+- **Milestone / Summary reasoning (`ThinkingSupport::ReasoningSummary`)**: Models like GPT-5.6 Sol / GPT-5.x do not disclose raw token-by-token chains of thought, returning structured phase milestones or summaries. muta streams and renders these as real-time active milestone capsules during streaming (e.g. `Thinking · Planning...`) and settles into step counts upon completion.
 - **Default for unknown models**: Unrecognized/custom models default to disclosed (`chain_disclosed = true`) so local or third-party reasoning models stream freely.
 
 ### Route-Level Capability Overrides

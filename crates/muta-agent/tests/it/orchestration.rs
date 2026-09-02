@@ -126,7 +126,7 @@ fn registry_collects_all_self_registered_tools() {
         "search_text",
         "find_files",
         "ask_user",
-        "fetch_url",
+        "read_url",
         "search_web",
     ] {
         assert!(
