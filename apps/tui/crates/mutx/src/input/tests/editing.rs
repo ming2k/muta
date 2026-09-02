@@ -304,7 +304,10 @@ fn alt_arrows_and_tab_drive_focus() {
         ),
         InputAction::ClearFocusedTarget
     );
-    assert_eq!(key_with_focus(KeyCode::Tab), InputAction::ClearFocusedTarget);
+    assert_eq!(
+        key_with_focus(KeyCode::Tab),
+        InputAction::ClearFocusedTarget
+    );
 }
 
 #[test]
@@ -1581,7 +1584,10 @@ fn alt_s_while_running_emits_steer_immediate() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::SteerImmediate("steer command".to_string()));
+    assert_eq!(
+        action,
+        InputAction::SteerImmediate("steer command".to_string())
+    );
     assert_eq!(input, "");
     assert_eq!(cursor, 0);
 }

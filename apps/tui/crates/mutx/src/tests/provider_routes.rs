@@ -768,7 +768,10 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
     crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
 
     assert_eq!(app.connection_info_scroll, 0);
-    assert_eq!(app.connection_detail.as_ref().map(|d| &d.id), Some(&"google-antigravity".to_string()));
+    assert_eq!(
+        app.connection_detail.as_ref().map(|d| &d.id),
+        Some(&"google-antigravity".to_string())
+    );
 
     // User scrolls down while reading the connection details
     app.connection_info_scroll = 5;
@@ -783,7 +786,10 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
     crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
 
     // Scroll must be preserved and not jump to 0!
-    assert_eq!(app.connection_info_scroll, 5, "quota loading must preserve scroll position");
+    assert_eq!(
+        app.connection_info_scroll, 5,
+        "quota loading must preserve scroll position"
+    );
 }
 
 #[tokio::test]
@@ -829,7 +835,9 @@ async fn connection_detail_refresh_action_queries_active_detail_id() {
         Some(&muta_contracts::ConnectionUsageState::Fetching)
     );
 
-    let req = rx.try_recv().expect("should query connection detail for refresh");
+    let req = rx
+        .try_recv()
+        .expect("should query connection detail for refresh");
     match req {
         muta_contracts::AgentRequest::QueryConnectionDetail { id } => {
             assert_eq!(id, "custom-relay");

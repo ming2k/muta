@@ -79,14 +79,7 @@ pub async fn discover_all_with_trust_state(
                 scope,
                 quarantined,
             } => {
-                discover_local_skills(
-                    &root,
-                    scope,
-                    quarantined,
-                    config,
-                    &mut index,
-                    &mut result,
-                );
+                discover_local_skills(&root, scope, quarantined, config, &mut index, &mut result);
             }
             SkillSource::Remote { roots } => {
                 for root in roots {
@@ -446,14 +439,31 @@ mod tests {
         };
 
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Quarantined).await;
-        let evil = result.skills.iter().find(|s| s.name == "evil").expect("evil should be discovered");
-        assert!(evil.quarantined, "untrusted repo skill must be marked quarantined");
+        let evil = result
+            .skills
+            .iter()
+            .find(|s| s.name == "evil")
+            .expect("evil should be discovered");
+        assert!(
+            evil.quarantined,
+            "untrusted repo skill must be marked quarantined"
+        );
         assert!(!evil.enabled, "quarantined skill must be disabled");
-        assert!(!evil.allows_implicit_invocation(), "quarantined skill must not allow implicit invocation");
+        assert!(
+            !evil.allows_implicit_invocation(),
+            "quarantined skill must not allow implicit invocation"
+        );
 
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
-        let evil_trusted = result.skills.iter().find(|s| s.name == "evil").expect("evil should be discovered");
-        assert!(!evil_trusted.quarantined, "trusted repo skill must not be quarantined");
+        let evil_trusted = result
+            .skills
+            .iter()
+            .find(|s| s.name == "evil")
+            .expect("evil should be discovered");
+        assert!(
+            !evil_trusted.quarantined,
+            "trusted repo skill must not be quarantined"
+        );
         assert!(evil_trusted.enabled, "trusted repo skill must be enabled");
     }
 
@@ -487,8 +497,22 @@ mod tests {
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
         // User scope first (lower priority), then Repo (higher priority).
-        discover_local_skills(&low, SkillScope::User, false, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
+        discover_local_skills(
+            &low,
+            SkillScope::User,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
+        discover_local_skills(
+            &high,
+            SkillScope::Repo,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
 
         assert_eq!(result.skills.len(), 1, "collision should not duplicate");
         let skill = &result.skills[0];
@@ -522,8 +546,22 @@ mod tests {
         };
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&low, SkillScope::User, false, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
+        discover_local_skills(
+            &low,
+            SkillScope::User,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
+        discover_local_skills(
+            &high,
+            SkillScope::Repo,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
 
         assert_eq!(result.skills.len(), 1);
         assert!(
@@ -558,8 +596,22 @@ mod tests {
         let config = SkillsConfig::default();
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&user, SkillScope::User, false, &config, &mut index, &mut result);
-        discover_local_skills(&repo, SkillScope::Repo, false, &config, &mut index, &mut result);
+        discover_local_skills(
+            &user,
+            SkillScope::User,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
+        discover_local_skills(
+            &repo,
+            SkillScope::Repo,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
 
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].scope, SkillScope::Repo);
@@ -591,8 +643,22 @@ mod tests {
         let config = SkillsConfig::default();
         let mut result = DiscoveryResult::default();
         let mut index: HashMap<String, usize> = HashMap::new();
-        discover_local_skills(&low, SkillScope::Repo, false, &config, &mut index, &mut result);
-        discover_local_skills(&high, SkillScope::Repo, false, &config, &mut index, &mut result);
+        discover_local_skills(
+            &low,
+            SkillScope::Repo,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
+        discover_local_skills(
+            &high,
+            SkillScope::Repo,
+            false,
+            &config,
+            &mut index,
+            &mut result,
+        );
         assert_eq!(result.skills.len(), 1);
         assert!(
             result.shadowed.is_empty(),

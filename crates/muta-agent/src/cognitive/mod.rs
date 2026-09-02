@@ -69,21 +69,19 @@ impl CognitivePipeline {
         input: T::Input,
     ) -> Result<T::Output, CognitiveError> {
         let timeout = Duration::from_millis(task.timeout_ms());
-        let instructions = muta_contracts::InstructionBundle::new(vec![
-            muta_contracts::InstructionSlice::new(
+        let instructions =
+            muta_contracts::InstructionBundle::new(vec![muta_contracts::InstructionSlice::new(
                 "harness.cognitive_task",
                 muta_contracts::InstructionTier::Task,
                 task.system_prompt(),
-            ),
-        ]);
-        let messages = vec![
-            Message::new(Role::User, task.render_prompt(&input)),
-        ];
+            )]);
+        let messages = vec![Message::new(Role::User, task.render_prompt(&input))];
         tracing::debug!(task = task.name(), "cognitive pipeline consult");
 
         let response = tokio::time::timeout(
             timeout,
-            self.provider.chat(ModelRequest::ephemeral(messages).with_instructions(instructions)),
+            self.provider
+                .chat(ModelRequest::ephemeral(messages).with_instructions(instructions)),
         )
         .await
         .map_err(|_| CognitiveError::Timeout(timeout))?

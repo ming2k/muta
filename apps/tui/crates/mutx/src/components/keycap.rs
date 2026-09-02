@@ -148,7 +148,10 @@ impl KeyAffordance {
             KeycapTone::Accent => theme.keycap_accent(),
             KeycapTone::Warn => theme.keycap_warn(),
         };
-        let key_style = Style::default().fg(key_fg).bg(bg).add_modifier(Modifier::BOLD);
+        let key_style = Style::default()
+            .fg(key_fg)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD);
         let label_style = theme.keycap_label_style().bg(bg);
         [
             Span::styled(self.key.to_string(), key_style),

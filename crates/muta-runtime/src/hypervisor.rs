@@ -365,9 +365,12 @@ impl Tool for HypervisorCoordinateDebugTool {
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-        let requested_sessions: Option<Vec<String>> = args["target_sessions"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        let requested_sessions: Option<Vec<String>> =
+            args["target_sessions"].as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
         let instruction = args["instruction"].as_str();
 
         let snapshot = self
@@ -420,7 +423,7 @@ mod tests {
     use super::*;
     use crate::registry::HostParams;
     use crate::ui_bridge::{CopyOutcome, UiBridge};
-    use muta_contracts::{MasterPreset, Message, MeshStation, ModelRequest, Provider, Role};
+    use muta_contracts::{MasterPreset, MeshStation, Message, ModelRequest, Provider, Role};
 
     struct DummyUi;
     #[async_trait::async_trait]

@@ -127,7 +127,9 @@ impl Entry {
     }
 
     fn effective_order(&self) -> InstructionOrder {
-        self.order_override.clone().unwrap_or_else(|| self.section.order())
+        self.order_override
+            .clone()
+            .unwrap_or_else(|| self.section.order())
     }
 }
 
@@ -194,7 +196,11 @@ impl SystemPromptRegistry {
     }
 
     /// Override a section's ordering relative to other sections.
-    pub fn set_order(&mut self, id: &str, order: InstructionOrder) -> Result<(), SystemPromptRegistryError> {
+    pub fn set_order(
+        &mut self,
+        id: &str,
+        order: InstructionOrder,
+    ) -> Result<(), SystemPromptRegistryError> {
         let entry = self
             .entries
             .iter_mut()
@@ -338,7 +344,10 @@ fn sort_tier_entries(entries: &[&Entry]) -> Vec<usize> {
     for (item_idx, target_idx) in befores {
         if let Some(target_pos) = result.iter().position(|&x| x == target_idx) {
             result.retain(|&x| x != item_idx);
-            let insert_pos = result.iter().position(|&x| x == target_idx).unwrap_or(target_pos);
+            let insert_pos = result
+                .iter()
+                .position(|&x| x == target_idx)
+                .unwrap_or(target_pos);
             result.insert(insert_pos, item_idx);
         } else if !result.contains(&item_idx) {
             result.push(item_idx);
@@ -348,7 +357,10 @@ fn sort_tier_entries(entries: &[&Entry]) -> Vec<usize> {
     for (item_idx, target_idx) in afters {
         if let Some(target_pos) = result.iter().position(|&x| x == target_idx) {
             result.retain(|&x| x != item_idx);
-            let target_current = result.iter().position(|&x| x == target_idx).unwrap_or(target_pos);
+            let target_current = result
+                .iter()
+                .position(|&x| x == target_idx)
+                .unwrap_or(target_pos);
             result.insert(target_current + 1, item_idx);
         } else if !result.contains(&item_idx) {
             result.push(item_idx);
@@ -403,8 +415,16 @@ mod tests {
         let mut reg = SystemPromptRegistry::new();
         reg.register(sec("tail_item", InstructionOrder::Tail, "Tail"));
         reg.register(sec("head_item", InstructionOrder::Head, "Head"));
-        reg.register(sec("after_head", InstructionOrder::After("head_item"), "AfterHead"));
-        reg.register(sec("before_tail", InstructionOrder::Before("tail_item"), "BeforeTail"));
+        reg.register(sec(
+            "after_head",
+            InstructionOrder::After("head_item"),
+            "AfterHead",
+        ));
+        reg.register(sec(
+            "before_tail",
+            InstructionOrder::Before("tail_item"),
+            "BeforeTail",
+        ));
 
         let bundle = reg.build_bundle(&SystemPromptContext::empty());
         assert_eq!(
@@ -439,7 +459,8 @@ mod tests {
         let mut reg = SystemPromptRegistry::new();
         reg.register(sec("system.a", InstructionOrder::Head, "A"));
         reg.register(sec("system.b", InstructionOrder::Tail, "B"));
-        reg.set_order("system.b", InstructionOrder::Before("system.a")).unwrap();
+        reg.set_order("system.b", InstructionOrder::Before("system.a"))
+            .unwrap();
 
         let bundle = reg.build_bundle(&SystemPromptContext::empty());
         assert_eq!(bundle.render_combined(), "B\nA");

@@ -49,7 +49,12 @@ impl Tool for UseSkillTool {
                     name
                 ));
             };
-            (skill.name.clone(), skill.root.clone(), skill.scope, skill.quarantined)
+            (
+                skill.name.clone(),
+                skill.root.clone(),
+                skill.scope,
+                skill.quarantined,
+            )
         };
 
         if quarantined {

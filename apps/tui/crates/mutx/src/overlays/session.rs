@@ -10,9 +10,8 @@ use super::common::{one_line, relative_time_at, truncate_ellipsis};
 use crate::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, breadcrumb_parts,
-    draw_scrollbar, keyvocab, modal_area, modal_frame,
-    modal_header, modal_header_parts, render_centered_body, render_modal_footer,
-    render_modal_footer_with_more, resolve_scroll,
+    draw_scrollbar, keyvocab, modal_area, modal_frame, modal_header, modal_header_parts,
+    render_centered_body, render_modal_footer, render_modal_footer_with_more, resolve_scroll,
 };
 use crate::view::Theme;
 

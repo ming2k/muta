@@ -288,11 +288,17 @@ mod tests {
 
         let tool = MeshListPeersTool::new(tracker.clone(), Some(m1.clone()));
 
-        let res_str = tool.call(&json!({"scope": "masters"}).to_string()).await.unwrap();
+        let res_str = tool
+            .call(&json!({"scope": "masters"}).to_string())
+            .await
+            .unwrap();
         let res: serde_json::Value = serde_json::from_str(&res_str).unwrap();
         assert_eq!(res["count"], 2);
 
-        let res_sub_str = tool.call(&json!({"scope": "subordinates"}).to_string()).await.unwrap();
+        let res_sub_str = tool
+            .call(&json!({"scope": "subordinates"}).to_string())
+            .await
+            .unwrap();
         let res_sub: serde_json::Value = serde_json::from_str(&res_sub_str).unwrap();
         assert_eq!(res_sub["count"], 1);
         assert_eq!(res_sub["peers"][0]["agent"], "r1");

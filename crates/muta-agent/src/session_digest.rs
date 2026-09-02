@@ -323,8 +323,7 @@ mod tests {
         let instructions = provider.last_instructions.lock().unwrap().clone();
         let system_text = instructions.render_combined();
         assert!(
-            system_text
-                .ends_with(muta_contracts::SessionDigestTask.system_prompt()),
+            system_text.ends_with(muta_contracts::SessionDigestTask.system_prompt()),
             "the task's system prompt frames the consult"
         );
         assert!(

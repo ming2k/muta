@@ -514,7 +514,8 @@ impl ModalHitMap {
     }
 
     pub fn completion_menu_contains(&self, x: u16, y: u16) -> bool {
-        self.completion_menu_rect.is_some_and(|rect| contains(rect, x, y))
+        self.completion_menu_rect
+            .is_some_and(|rect| contains(rect, x, y))
     }
 
     pub fn completion_item_at(&self, x: u16, y: u16) -> Option<usize> {

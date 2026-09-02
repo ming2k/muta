@@ -23,11 +23,7 @@ const SKILLS_PATHS: &[&str] = &[".muta/skills", ".agents/skills", ".claude/skill
 
 const HOOK_PATHS: &[&str] = &[".muta/hooks"];
 
-const INSTRUCTION_PATHS: &[&str] = &[
-    "AGENTS.md",
-    ".cursorrules",
-    ".windsurfrules",
-];
+const INSTRUCTION_PATHS: &[&str] = &["AGENTS.md", ".cursorrules", ".windsurfrules"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WorkspaceRecord {

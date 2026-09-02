@@ -154,7 +154,9 @@ fn domain_label(domain: TrustDomain) -> &'static str {
         TrustDomain::Skills => "Skills (.muta/skills or .agents/skills)",
         TrustDomain::Hooks => "Hooks (project hook config)",
         TrustDomain::Instructions => "Instructions (AGENTS.md / project rules)",
-        TrustDomain::ExWorkspace => "External workspaces (.muta/config.toml [workspace].additional_roots)",
+        TrustDomain::ExWorkspace => {
+            "External workspaces (.muta/config.toml [workspace].additional_roots)"
+        }
     }
 }
 

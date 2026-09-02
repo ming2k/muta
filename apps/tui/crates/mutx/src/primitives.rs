@@ -10,8 +10,8 @@ use mutx_engine::{
 
 use super::Theme;
 pub(crate) use super::components::footer::{
-    FooterHint, FooterHintWithBand, modal_footer_text,
-    render_modal_footer, render_modal_footer_with_more,
+    FooterHint, FooterHintWithBand, modal_footer_text, render_modal_footer,
+    render_modal_footer_with_more,
 };
 #[allow(unused_imports)]
 pub use super::components::path::{

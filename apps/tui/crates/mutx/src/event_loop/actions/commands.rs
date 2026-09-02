@@ -11,11 +11,11 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{AgentRequest, Role};
 
+use crate::App;
 use crate::clipboard;
 use crate::composer_attachments;
 use crate::model::document::TranscriptMessage;
 use crate::model::selection::SelectionState;
-use crate::App;
 
 use super::super::runtime::{UiRuntime, now_epoch_ms};
 use super::super::sync::show_local_toast;

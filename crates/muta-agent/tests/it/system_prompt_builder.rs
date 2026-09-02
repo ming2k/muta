@@ -155,5 +155,8 @@ fn embedding_can_order_sections_semantically() {
     let content = &messages[0].content;
     let pre_pos = content.find("PRE-HOST-GUIDANCE").unwrap();
     let host_pos = content.find("## Host Execution Environment").unwrap();
-    assert!(pre_pos < host_pos, "pre_host section must appear before host environment");
+    assert!(
+        pre_pos < host_pos,
+        "pre_host section must appear before host environment"
+    );
 }

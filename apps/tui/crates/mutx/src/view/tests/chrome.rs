@@ -214,14 +214,7 @@ fn redesigned_components_render_without_panicking() {
             let ctx = crate::keymap::AppContext::default();
             let selection = crate::model::selection::SelectionState::None;
             let mut layout_map = crate::model::layout::LayoutMap::new();
-            draw_help_modal(
-                f,
-                &mut scroll,
-                &ctx,
-                &theme,
-                &selection,
-                &mut layout_map,
-            );
+            draw_help_modal(f, &mut scroll, &ctx, &theme, &selection, &mut layout_map);
         }
         let selection = crate::model::selection::SelectionState::None;
         let mut layout_map = crate::model::layout::LayoutMap::new();
@@ -396,9 +389,8 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
 fn web_settings_split_search_and_reader_into_clear_panels() {
     let theme = Theme::default();
     let custom = muta_contracts::ColorSchemeConfig::default();
-    let mut web = muta_contracts::WebSearchConfigView::from(
-        &muta_contracts::WebSearchConfig::default(),
-    );
+    let mut web =
+        muta_contracts::WebSearchConfigView::from(&muta_contracts::WebSearchConfig::default());
     web.search_connections
         .push(muta_contracts::WebSearchConnection {
             id: "exa-team".to_string(),

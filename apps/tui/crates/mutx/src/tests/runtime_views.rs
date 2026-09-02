@@ -51,9 +51,7 @@ fn todos_modal_renders_empty_state() {
     terminal.draw(|frame| {
         rect = crate::overlays::draw_todos_modal(
             frame,
-            crate::overlays::TodosModalView {
-                todos: None,
-            },
+            crate::overlays::TodosModalView { todos: None },
             &mut scroll,
             &theme,
             &crate::model::selection::SelectionState::None,

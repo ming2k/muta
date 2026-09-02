@@ -288,11 +288,7 @@ mod tests {
             "pub fn load(config: &Config) {\n    hello.world();\n}\n",
         )
         .unwrap();
-        std::fs::write(
-            tmp.path().join("src/other.rs"),
-            "hello_world();\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("src/other.rs"), "hello_world();\n").unwrap();
 
         // Default literal matching: unclosed parenthesis in code works cleanly
         let output = native_search(NativeSearchParams {
@@ -391,11 +387,11 @@ mod tests {
 
         // Code symbols like `(` without regex flag work seamlessly
         std::fs::write(tmp.path().join("src/fn.rs"), "pub fn load(config: &Config)").unwrap();
-        let output_code = tool
-            .call(r#"{"query":"pub fn load("}"#)
-            .await
-            .unwrap();
-        assert!(output_code.contains("src/fn.rs:1:pub fn load("), "{output_code}");
+        let output_code = tool.call(r#"{"query":"pub fn load("}"#).await.unwrap();
+        assert!(
+            output_code.contains("src/fn.rs:1:pub fn load("),
+            "{output_code}"
+        );
 
         let exclude_only = tool
             .call(r#"{"query":"needle","exclude":["*.py"]}"#)

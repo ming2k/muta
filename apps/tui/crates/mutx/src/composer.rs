@@ -670,10 +670,7 @@ fn draw_composer_impl(
 
             if available > needed {
                 let gap = available - needed;
-                spans.push(Span::styled(
-                    " ".repeat(gap),
-                    Style::default().bg(panel_bg),
-                ));
+                spans.push(Span::styled(" ".repeat(gap), Style::default().bg(panel_bg)));
             } else {
                 spans.push(Span::styled("   ", Style::default().bg(panel_bg)));
             }

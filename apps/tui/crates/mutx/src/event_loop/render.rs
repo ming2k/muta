@@ -920,7 +920,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 session_focus: app.session_focus,
                 is_responding: viewed_running,
                 has_input: !app.input.is_empty(),
-                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_selection: !matches!(
+                    app.selection,
+                    crate::model::selection::SelectionState::None
+                ),
                 has_running_task: viewed_running,
                 in_runner_view: app.in_runner_view(),
                 in_side_view: app.in_side_view,
@@ -1157,7 +1160,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 session_focus: app.session_focus,
                 is_responding: viewed_running,
                 has_input: !app.input.is_empty(),
-                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_selection: !matches!(
+                    app.selection,
+                    crate::model::selection::SelectionState::None
+                ),
                 has_running_task: viewed_running,
                 in_runner_view: app.in_runner_view(),
                 in_side_view: app.in_side_view,

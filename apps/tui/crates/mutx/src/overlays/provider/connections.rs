@@ -15,9 +15,8 @@ use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, keyvocab, modal_area,
-    modal_frame, modal_header, modal_header_parts, render_body, render_centered_body,
-    render_modal_footer, render_modal_footer_with_more,
+    breadcrumb_parts, keyvocab, modal_area, modal_frame, modal_header, modal_header_parts,
+    render_body, render_centered_body, render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::RankedProvider;
 use crate::view::Theme;

@@ -46,8 +46,7 @@ pub fn draw_step_focus_bar(frame: &mut Frame, rect: Rect, theme: &Theme) -> Rect
         ]
     };
 
-    let p = Paragraph::new(Line::from(line_spans))
-        .style(Style::default().bg(theme.panel()));
+    let p = Paragraph::new(Line::from(line_spans)).style(Style::default().bg(theme.panel()));
     frame.render_widget(p, rect);
     rect
 }

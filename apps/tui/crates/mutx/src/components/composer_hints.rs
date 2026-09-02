@@ -230,7 +230,13 @@ mod tests {
     #[test]
     fn prompt_hint_shows_tab_transcript_and_enter_send() {
         let theme = Theme::default();
-        let (left, right) = hint_row_parts(false, ActionDensity::Full, ComposeTarget::Prompt, &theme, Color::Reset);
+        let (left, right) = hint_row_parts(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Prompt,
+            &theme,
+            Color::Reset,
+        );
         assert_eq!(text(&left), "Tab transcript");
         assert_eq!(text(&right), "Enter send");
     }
@@ -238,7 +244,13 @@ mod tests {
     #[test]
     fn running_hint_shows_steer_and_queue_follow_up() {
         let theme = Theme::default();
-        let (left, right) = hint_row_parts(false, ActionDensity::Full, ComposeTarget::Running, &theme, Color::Reset);
+        let (left, right) = hint_row_parts(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Running,
+            &theme,
+            Color::Reset,
+        );
         assert_eq!(text(&left), "Tab transcript   Alt+S steer now");
         assert_eq!(text(&right), "Enter queue follow-up");
     }

@@ -126,7 +126,9 @@ impl MeshTracker {
         let mut map = lock(&self.entries);
         let victims: Vec<MeshAddress> = map
             .iter()
-            .filter(|(addr, e)| addr.station == MeshStation::Subtask && e.master.as_ref() == Some(master))
+            .filter(|(addr, e)| {
+                addr.station == MeshStation::Subtask && e.master.as_ref() == Some(master)
+            })
             .map(|(addr, _)| addr.clone())
             .collect();
         for v in &victims {
@@ -217,11 +219,7 @@ impl MeshMailbox {
     /// Spawn a mailbox registered with `tracker`. If `master` is supplied,
     /// this mailbox will be reaped when `tracker.reap_children(master)` is
     /// called.
-    pub fn spawn(
-        tracker: MeshTracker,
-        address: MeshAddress,
-        master: Option<MeshAddress>,
-    ) -> Self {
+    pub fn spawn(tracker: MeshTracker, address: MeshAddress, master: Option<MeshAddress>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let token = CancellationToken::new();
         tracker.register(address.clone(), tx, token.clone(), master);

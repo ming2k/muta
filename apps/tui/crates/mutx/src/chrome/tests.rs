@@ -423,7 +423,8 @@ fn model_bar_orders_context_speed_then_model() {
     // Justified split: the identity cluster pins flush to the row's
     // right edge (mirrored `inner` indent).
     assert!(
-        wide.trim_end().ends_with("kimi-k2.7-code max @kimi-code Ctrl+N"),
+        wide.trim_end()
+            .ends_with("kimi-k2.7-code max @kimi-code Ctrl+N"),
         "identity must end at the right edge: {wide:?}"
     );
 
@@ -558,7 +559,11 @@ fn model_bar_click_rects_follow_context_speed_order() {
     };
     assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
     assert_eq!(slice(perf), "47.8 tok/s Ctrl+O", "rate rect mismatch");
-    assert_eq!(slice(conn), "kimi-k2.7-code Ctrl+N", "connection rect mismatch");
+    assert_eq!(
+        slice(conn),
+        "kimi-k2.7-code Ctrl+N",
+        "connection rect mismatch"
+    );
     // The identity cluster sits right of the gauges, pinned to the row's
     // right edge (one trailing indent cell).
     let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();

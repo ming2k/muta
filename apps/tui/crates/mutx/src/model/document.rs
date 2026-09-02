@@ -2184,7 +2184,9 @@ impl TranscriptMessage {
                 let duration = duration_text(Some(*ms));
                 if milestones > 1 {
                     format!("Thinking · {milestones} steps · {tokens} tokens · {duration}")
-                } else if milestones == 1 && let Some(milestone) = active_milestone {
+                } else if milestones == 1
+                    && let Some(milestone) = active_milestone
+                {
                     format!("Thinking · {milestone} · {duration}")
                 } else {
                     format!("Thinking · {tokens} tokens · {duration}")

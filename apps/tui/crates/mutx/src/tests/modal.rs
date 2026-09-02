@@ -833,12 +833,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     }
 
     // Pure-content modals return a scroll ref but no follow flag.
-    for m in [
-        Modal::Help,
-        Modal::Todos,
-        Modal::Permissions,
-        Modal::Config,
-    ] {
+    for m in [Modal::Help, Modal::Todos, Modal::Permissions, Modal::Config] {
         app.set_active_modal_for_test(m);
         let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
         assert!(f.is_none(), "{m:?} has no selection-follow flag");

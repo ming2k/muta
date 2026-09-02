@@ -193,8 +193,7 @@ pub fn draw_model_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    let keycap_badge =
-        |text: &str| Span::styled(text.to_string(), keycap_style(theme).bg(bg));
+    let keycap_badge = |text: &str| Span::styled(text.to_string(), keycap_style(theme).bg(bg));
     let telemetry_keycap_width = Key::CTRL_O.display().width() + 1;
     let connection_keycap_width = Key::CTRL_N.display().width() + 1;
 

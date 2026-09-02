@@ -13,8 +13,8 @@ use crate::components::options::{ChoiceTone, choice_style};
 use crate::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    keyvocab, modal_area, modal_frame, modal_header,
-    render_body, render_centered_body, render_modal_footer_with_more,
+    keyvocab, modal_area, modal_frame, modal_header, render_body, render_centered_body,
+    render_modal_footer_with_more,
 };
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::view::Theme;

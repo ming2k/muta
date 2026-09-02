@@ -247,12 +247,18 @@ mod tests {
     fn tasks_declare_valid_metadata() {
         let loop_task = StreamLoopReviewerTask;
         assert_eq!(loop_task.name(), "stream_loop_reviewer");
-        assert_eq!(loop_task.model_preference(), CognitiveModelPreference::Flash);
+        assert_eq!(
+            loop_task.model_preference(),
+            CognitiveModelPreference::Flash
+        );
         assert_eq!(loop_task.timeout_ms(), 2000);
 
         let digest_task = SessionDigestTask;
         assert_eq!(digest_task.name(), "session_digest");
-        assert_eq!(digest_task.model_preference(), CognitiveModelPreference::FlashLite);
+        assert_eq!(
+            digest_task.model_preference(),
+            CognitiveModelPreference::FlashLite
+        );
     }
 
     #[test]

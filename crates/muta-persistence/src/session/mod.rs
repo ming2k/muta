@@ -1796,7 +1796,9 @@ pub async fn summarize_with_provider(
     const SUMMARIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
     let response = match tokio::time::timeout(
         SUMMARIZATION_TIMEOUT,
-        provider.chat(muta_contracts::ModelRequest::ephemeral(messages).with_instructions(instructions)),
+        provider.chat(
+            muta_contracts::ModelRequest::ephemeral(messages).with_instructions(instructions),
+        ),
     )
     .await
     {

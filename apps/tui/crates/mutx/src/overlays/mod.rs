@@ -15,6 +15,7 @@
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
 
 pub mod btw;
+pub mod command_palette;
 pub mod common;
 pub mod dashboard;
 pub mod help;
@@ -33,7 +34,6 @@ pub mod todos;
 pub mod tools;
 pub mod tree;
 pub mod usage_stats;
-pub mod command_palette;
 
 #[allow(unused_imports)]
 pub use crate::views::settings::{
@@ -53,6 +53,7 @@ pub use history::draw_history_panel;
 // The old centered `/host` modal (`host.rs`) was superseded by the full-screen
 // `dashboard` surface and removed; `/host` now opens the dashboard.
 pub use btw::{BtwModalView, draw_btw_modal};
+pub(crate) use command_palette::draw_command_palette;
 pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;
@@ -73,4 +74,3 @@ pub use todos::{TodosModalView, draw_todos_modal};
 pub use tools::draw_tools_modal;
 pub use tree::draw_tree_modal;
 pub use usage_stats::draw_usage_stats_modal;
-pub(crate) use command_palette::draw_command_palette;

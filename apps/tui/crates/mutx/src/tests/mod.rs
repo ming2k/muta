@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::sync::mpsc;
 
+use crate::Modal;
 use crate::app::{App, CaretOwner, QueuedDispatch, QueuedDispatchState, RecallQueued};
 use crate::completion::CompletionKind;
 use crate::completion::{completion_anchor_x, mention_range_at, resolved_slash_command_len};
@@ -23,7 +24,6 @@ use crate::transcript::{
 };
 use crate::versioned::{TranscriptPatch, TranscriptUpdate};
 use crate::view::Theme;
-use crate::Modal;
 use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;

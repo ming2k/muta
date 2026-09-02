@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Order determines placement priority when flattening or setting cache breakpoints:
 /// lower numerical value = more static / earlier prefix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum InstructionTier {
@@ -69,7 +71,11 @@ impl InstructionBundle {
         Self { slices }
     }
 
-    pub fn from_single(id: impl Into<String>, tier: InstructionTier, content: impl Into<String>) -> Self {
+    pub fn from_single(
+        id: impl Into<String>,
+        tier: InstructionTier,
+        content: impl Into<String>,
+    ) -> Self {
         let content_str = content.into();
         if content_str.trim().is_empty() {
             Self::default()
@@ -96,21 +102,29 @@ impl InstructionBundle {
 
     /// Iterator over slices in a specific tier.
     pub fn slices_by_tier(&self, tier: InstructionTier) -> impl Iterator<Item = &InstructionSlice> {
-        self.slices.iter().filter(move |s| s.tier == tier && !s.content.trim().is_empty())
+        self.slices
+            .iter()
+            .filter(move |s| s.tier == tier && !s.content.trim().is_empty())
     }
 
     /// Non-ephemeral slices (Base, Session, Task) suitable for top-level instructions.
     pub fn static_slices(&self) -> impl Iterator<Item = &InstructionSlice> {
-        self.slices.iter().filter(|s| s.tier.is_static() && !s.content.trim().is_empty())
+        self.slices
+            .iter()
+            .filter(|s| s.tier.is_static() && !s.content.trim().is_empty())
     }
 
     /// Ephemeral slices (turn-dynamic nudges, delegated mode flags).
     pub fn ephemeral_slices(&self) -> impl Iterator<Item = &InstructionSlice> {
-        self.slices.iter().filter(|s| s.tier == InstructionTier::Ephemeral && !s.content.trim().is_empty())
+        self.slices
+            .iter()
+            .filter(|s| s.tier == InstructionTier::Ephemeral && !s.content.trim().is_empty())
     }
 
     pub fn has_ephemeral(&self) -> bool {
-        self.slices.iter().any(|s| s.tier == InstructionTier::Ephemeral && !s.content.trim().is_empty())
+        self.slices
+            .iter()
+            .any(|s| s.tier == InstructionTier::Ephemeral && !s.content.trim().is_empty())
     }
 
     /// Render all active non-empty slices into a single string.
@@ -163,10 +177,26 @@ mod tests {
     #[test]
     fn instruction_bundle_partitions_tiers_correctly() {
         let mut bundle = InstructionBundle::default();
-        bundle.push(InstructionSlice::new("base.id", InstructionTier::Base, "You are an AI assistant."));
-        bundle.push(InstructionSlice::new("session.rules", InstructionTier::Session, "Follow project rules."));
-        bundle.push(InstructionSlice::new("task.runner", InstructionTier::Task, "Analyze code carefully."));
-        bundle.push(InstructionSlice::new("ephem.delegated", InstructionTier::Ephemeral, "Delegated mode active."));
+        bundle.push(InstructionSlice::new(
+            "base.id",
+            InstructionTier::Base,
+            "You are an AI assistant.",
+        ));
+        bundle.push(InstructionSlice::new(
+            "session.rules",
+            InstructionTier::Session,
+            "Follow project rules.",
+        ));
+        bundle.push(InstructionSlice::new(
+            "task.runner",
+            InstructionTier::Task,
+            "Analyze code carefully.",
+        ));
+        bundle.push(InstructionSlice::new(
+            "ephem.delegated",
+            InstructionTier::Ephemeral,
+            "Delegated mode active.",
+        ));
 
         assert_eq!(bundle.len(), 4);
         assert!(bundle.has_ephemeral());

@@ -57,7 +57,10 @@ fn workspace_trust_notice(
     };
     let changed = [
         ("instructions (AGENTS.md / rules)", snapshot.instructions),
-        ("ex-workspace (external workspace roots)", snapshot.ex_workspace),
+        (
+            "ex-workspace (external workspace roots)",
+            snapshot.ex_workspace,
+        ),
         ("mcp (MCP servers)", snapshot.mcp),
         ("skills (custom skills)", snapshot.skills),
         ("hooks (lifecycle hooks)", snapshot.hooks),

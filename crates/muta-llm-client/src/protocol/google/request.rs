@@ -1062,11 +1062,7 @@ mod tests {
         // Budget → thinkingBudget integer.
         let budget_body = body(
             vec![Message::new(Role::User, "think")],
-            test_body_input(
-                None,
-                false,
-                Some(GoogleThinking::Budget(8192)),
-            ),
+            test_body_input(None, false, Some(GoogleThinking::Budget(8192))),
         );
         assert_eq!(
             budget_body["generationConfig"]["thinkingConfig"]["thinkingBudget"],

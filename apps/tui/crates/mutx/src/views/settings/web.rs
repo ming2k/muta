@@ -422,8 +422,7 @@ fn draw_web_detail(
             }
             for (idx, conn) in ws.search_connections.iter().enumerate() {
                 let item_index = 2 + idx;
-                let active =
-                    connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
+                let active = connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
                 let (state, state_ok) = search_connection_state(ws, conn, active);
                 push_connection_row(
                     &mut lines,
@@ -450,8 +449,7 @@ fn draw_web_detail(
             }
             for (idx, conn) in ws.reader_connections.iter().enumerate() {
                 let item_index = 2 + idx;
-                let active =
-                    connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
+                let active = connection_matches(active_id, &conn.id, conn.preset_id.as_deref());
                 let state = if !conn.enabled {
                     "Disabled"
                 } else if active {
@@ -592,10 +590,7 @@ fn push_connection_row(
                 props.theme.warn()
             }),
         ),
-        Span::styled(
-            name.to_string(),
-            selectable_style(selected, focused, props),
-        ),
+        Span::styled(name.to_string(), selectable_style(selected, focused, props)),
         Span::raw("  "),
         Span::styled(
             state.to_string(),
@@ -762,9 +757,8 @@ mod tests {
 
     #[test]
     fn item_counts_track_real_connections() {
-        let mut ws = muta_contracts::WebSearchConfigView::from(
-            &muta_contracts::WebSearchConfig::default(),
-        );
+        let mut ws =
+            muta_contracts::WebSearchConfigView::from(&muta_contracts::WebSearchConfig::default());
         assert_eq!(search_item_count(Some(&ws)), 3);
         assert_eq!(reader_item_count(Some(&ws)), 3);
 

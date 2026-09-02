@@ -336,10 +336,8 @@ pub(crate) fn draw_view_header_hints(
 
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
-        let affordance = crate::components::keycap::KeyAffordance::from_key(
-            crate::keymap::Key::CTRL_X,
-            "menu",
-        );
+        let affordance =
+            crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::CTRL_X, "menu");
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
@@ -464,9 +462,11 @@ pub(crate) fn draw_runner_footer(
     let bg = theme.raised();
     let fill = Style::default().bg(bg);
 
-    let mut pairs: Vec<crate::components::keycap::KeyAffordance> = vec![
-        crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back"),
-    ];
+    let mut pairs: Vec<crate::components::keycap::KeyAffordance> =
+        vec![crate::components::keycap::KeyAffordance::from_key(
+            crate::keymap::Key::ESC,
+            "back",
+        )];
     if info.total > 1 {
         pairs.push(crate::components::keycap::KeyAffordance::new("[", "prev"));
         pairs.push(crate::components::keycap::KeyAffordance::new("]", "next"));

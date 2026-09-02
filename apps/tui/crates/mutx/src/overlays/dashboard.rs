@@ -35,10 +35,7 @@ use mutx_engine::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::primitives::{
-    LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll,
-    viewport_rect,
-};
+use crate::primitives::{LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll, viewport_rect};
 use crate::view::Theme;
 
 /// Which zone of the dashboard currently owns the keyboard.

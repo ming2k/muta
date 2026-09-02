@@ -165,8 +165,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal() == Modal::None
-        && app.modal_hit_map.completion_menu_contains(x, y)
+    } else if app.active_modal() == Modal::None && app.modal_hit_map.completion_menu_contains(x, y)
     {
         app.selection = SelectionState::None;
         app.focused_target = None;

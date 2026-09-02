@@ -119,7 +119,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Attach { id } => {
             let overlay =
                 mutx::StartupOverlay::resolve_from_env().unwrap_or(mutx::StartupOverlay::None);
-            run_attached(id, false, project_override, delegated_at_start, overlay, None).await
+            run_attached(
+                id,
+                false,
+                project_override,
+                delegated_at_start,
+                overlay,
+                None,
+            )
+            .await
         }
         Mode::Run { prompt } => {
             if interactive {

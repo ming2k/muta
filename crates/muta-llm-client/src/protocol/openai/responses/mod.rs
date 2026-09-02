@@ -46,9 +46,7 @@ fn parse_responses_stream_error(
     error_val: &serde_json::Value,
     label: &'static str,
 ) -> ProviderError {
-    let code = error_val
-        .get("code")
-        .and_then(serde_json::Value::as_str);
+    let code = error_val.get("code").and_then(serde_json::Value::as_str);
     let message = error_val
         .get("message")
         .and_then(serde_json::Value::as_str)
@@ -78,17 +76,14 @@ fn parse_responses_stream_error(
                 .retryable(retry_delay)
         }
         Some("context_length_exceeded" | "context_window_exceeded") => {
-            ProviderError::new(label, ProviderErrorKind::ContextOverflow, message)
-                .with_status(400)
+            ProviderError::new(label, ProviderErrorKind::ContextOverflow, message).with_status(400)
         }
         Some("insufficient_quota" | "usage_not_included") => {
-            ProviderError::new(label, ProviderErrorKind::Unavailable, message)
-                .with_status(402)
+            ProviderError::new(label, ProviderErrorKind::Unavailable, message).with_status(402)
         }
-        Some("cyber_policy" | "misalignment_policy_violation" | "invalid_prompt" | "bio_policy") => {
-            ProviderError::new(label, ProviderErrorKind::InvalidRequest, message)
-                .with_status(400)
-        }
+        Some(
+            "cyber_policy" | "misalignment_policy_violation" | "invalid_prompt" | "bio_policy",
+        ) => ProviderError::new(label, ProviderErrorKind::InvalidRequest, message).with_status(400),
         _ => {
             let lower = message.to_ascii_lowercase();
             if lower.contains("overloaded") || lower.contains("capacity") {
@@ -289,7 +284,10 @@ impl OpenAiResponsesProvider {
             req = req.header("Copilot-Vision-Request", "true");
         }
         if chatgpt {
-            req = req.header("x-codex-routing-hint", format!("model={}", self.endpoint.model));
+            req = req.header(
+                "x-codex-routing-hint",
+                format!("model={}", self.endpoint.model),
+            );
         }
         for (name, value) in self.endpoint.headers() {
             if !copilot

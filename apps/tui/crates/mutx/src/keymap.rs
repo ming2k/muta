@@ -280,7 +280,10 @@ impl Key {
         let mut modifiers = event.modifiers;
 
         if let KeyCode::Char(c) = code {
-            if c.is_ascii_uppercase() && !modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT) {
+            if c.is_ascii_uppercase()
+                && !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT)
+            {
                 modifiers.remove(KeyModifiers::SHIFT);
             } else if modifiers.contains(KeyModifiers::CONTROL) {
                 code = KeyCode::Char(c.to_ascii_lowercase());
@@ -783,7 +786,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Copy selected text to clipboard",
     },
-
     // ── Session & Composer Controls ──
     CommandSpec {
         id: CommandId::SendPrompt,
@@ -902,7 +904,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Scroll transcript viewport downward",
     },
-
     // ── Transcript Focus Region Actions ──
     CommandSpec {
         id: CommandId::TranscriptMoveUp,
@@ -969,7 +970,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Jump to end of transcript",
     },
-
     // ── Surface Navigation ──
     CommandSpec {
         id: CommandId::NavigateSession,
@@ -1179,7 +1179,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Switch between saved project sessions",
     },
-
     // ── Management Actions ──
     CommandSpec {
         id: CommandId::ToggleQueueBlock,
@@ -1370,7 +1369,9 @@ pub fn find_command(id: CommandId) -> Option<&'static CommandSpec> {
 pub fn find_by_slash(slash: &str) -> Option<&'static CommandSpec> {
     let clean = slash.trim().to_ascii_lowercase();
     COMMAND_REGISTRY.iter().find(|cmd| {
-        cmd.slash.map(|s| s.eq_ignore_ascii_case(&clean)).unwrap_or(false)
+        cmd.slash
+            .map(|s| s.eq_ignore_ascii_case(&clean))
+            .unwrap_or(false)
     })
 }
 
@@ -1412,7 +1413,9 @@ pub fn commands_for_help(ctx: &AppContext) -> Vec<&'static CommandSpec> {
             // Include globals, current scope commands, and relevant navigate/settings commands
             match cmd.scope {
                 Scope::Global => true,
-                Scope::Session => ctx.active_view == View::Session && ctx.active_modal == Modal::None,
+                Scope::Session => {
+                    ctx.active_view == View::Session && ctx.active_modal == Modal::None
+                }
                 Scope::Composer => {
                     ctx.active_view == View::Session
                         && ctx.active_modal == Modal::None
@@ -1483,12 +1486,24 @@ mod tests {
     #[test]
     fn global_keys_resolve_correctly() {
         assert_eq!(resolve_global_key(Key::F1), Some(CommandId::Help));
-        assert_eq!(resolve_global_key(Key::CTRL_L), Some(CommandId::CommandPalette));
+        assert_eq!(
+            resolve_global_key(Key::CTRL_L),
+            Some(CommandId::CommandPalette)
+        );
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
-        assert_eq!(resolve_global_key(Key::CTRL_C), Some(CommandId::InterruptTask));
+        assert_eq!(
+            resolve_global_key(Key::CTRL_C),
+            Some(CommandId::InterruptTask)
+        );
         assert_eq!(resolve_global_key(Key::CTRL_Q), Some(CommandId::Quit));
-        assert_eq!(resolve_global_key(Key::CTRL_SHIFT_C), Some(CommandId::CopySelection));
-        assert_eq!(resolve_global_key(Key::CMD_C), Some(CommandId::CopySelection));
+        assert_eq!(
+            resolve_global_key(Key::CTRL_SHIFT_C),
+            Some(CommandId::CopySelection)
+        );
+        assert_eq!(
+            resolve_global_key(Key::CMD_C),
+            Some(CommandId::CopySelection)
+        );
     }
 
     #[test]
@@ -1503,17 +1518,34 @@ mod tests {
     #[test]
     fn all_commands_have_valid_labels_and_descriptions() {
         for cmd in COMMAND_REGISTRY {
-            assert!(!cmd.label.is_empty(), "command {:?} has empty label", cmd.id);
-            assert!(!cmd.description.is_empty(), "command {:?} has empty description", cmd.id);
+            assert!(
+                !cmd.label.is_empty(),
+                "command {:?} has empty label",
+                cmd.id
+            );
+            assert!(
+                !cmd.description.is_empty(),
+                "command {:?} has empty description",
+                cmd.id
+            );
         }
     }
 
     #[test]
     fn find_by_slash_resolves_all_slash_triggers() {
-        assert_eq!(find_by_slash("/models").map(|c| c.id), Some(CommandId::OpenModels));
-        assert_eq!(find_by_slash("/settings").map(|c| c.id), Some(CommandId::NavigateSettings));
+        assert_eq!(
+            find_by_slash("/models").map(|c| c.id),
+            Some(CommandId::OpenModels)
+        );
+        assert_eq!(
+            find_by_slash("/settings").map(|c| c.id),
+            Some(CommandId::NavigateSettings)
+        );
         assert_eq!(find_by_slash("/help").map(|c| c.id), Some(CommandId::Help));
-        assert_eq!(find_by_slash("/commands").map(|c| c.id), Some(CommandId::CommandPalette));
+        assert_eq!(
+            find_by_slash("/commands").map(|c| c.id),
+            Some(CommandId::CommandPalette)
+        );
     }
 
     #[test]

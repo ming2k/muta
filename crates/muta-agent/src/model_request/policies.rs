@@ -309,9 +309,9 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
         InstructionOrder::Tail
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.tool_names.iter().any(|name| {
-            name == "read_url" || name == "search_web"
-        })
+        ctx.tool_names
+            .iter()
+            .any(|name| name == "read_url" || name == "search_web")
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(WEB_UNTRUSTED))

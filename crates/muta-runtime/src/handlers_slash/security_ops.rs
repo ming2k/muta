@@ -34,7 +34,8 @@ pub(crate) async fn reload_trusted_assets(
         effective.merge_project_hooks(Config::load_project_hooks(project_root));
     }
     if snapshot.ex_workspace.is_trusted() {
-        effective.merge_project_additional_roots(Config::load_project_additional_roots(project_root));
+        effective
+            .merge_project_additional_roots(Config::load_project_additional_roots(project_root));
     }
     super::session_ops::apply_additional_roots(shared_additional_roots, &effective, project_root);
 

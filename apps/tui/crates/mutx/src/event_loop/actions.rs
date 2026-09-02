@@ -924,14 +924,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                         } else {
                                             (current + 5).max(5)
                                         };
-                                        let _ = app.tx.send(
-                                            AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                muta_contracts::WebSearchConfigUpdate {
-                                                    timeout_secs: Some(next),
-                                                    ..Default::default()
-                                                },
-                                            )),
-                                        );
+                                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                timeout_secs: Some(next),
+                                                ..Default::default()
+                                            }),
+                                        ));
                                     }
                                     idx if idx < 2 + connection_count => {
                                         let conn_idx = idx - 2;
@@ -941,14 +939,16 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                                 .as_ref()
                                                 .and_then(|ws| ws.search_connections.get(conn_idx))
                                             {
-                                                let _ = app.tx.send(
-                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                        muta_contracts::WebSearchConfigUpdate {
-                                                            provider: Some(conn.id.clone()),
-                                                            ..Default::default()
-                                                        },
-                                                    )),
-                                                );
+                                                let _ =
+                                                    app.tx
+                                                        .send(AgentRequest::UpdateWebSearchConfig(
+                                                        Box::new(
+                                                            muta_contracts::WebSearchConfigUpdate {
+                                                                provider: Some(conn.id.clone()),
+                                                                ..Default::default()
+                                                            },
+                                                        ),
+                                                    ));
                                             }
                                         } else if let Some(conn) = app
                                             .websearch_config
@@ -1698,7 +1698,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 session_focus: app.session_focus,
                 is_responding: is_busy,
                 has_input: !app.input.is_empty(),
-                has_selection: !matches!(app.selection, crate::model::selection::SelectionState::None),
+                has_selection: !matches!(
+                    app.selection,
+                    crate::model::selection::SelectionState::None
+                ),
                 has_running_task: is_busy,
                 in_runner_view: app.in_runner_view(),
                 in_side_view: app.in_side_view,
@@ -1710,7 +1713,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 &app.recent_commands,
                 &app_ctx,
             );
-            if let Some(entry) = entries.get(app.command_palette_selected).or_else(|| entries.first()) {
+            if let Some(entry) = entries
+                .get(app.command_palette_selected)
+                .or_else(|| entries.first())
+            {
                 if matches!(entry.availability, crate::keymap::Availability::Available) {
                     let cmd_id = entry.spec.id;
                     if let Some(pos) = app.recent_commands.iter().position(|&id| id == cmd_id) {
@@ -1722,7 +1728,16 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     }
 
                     app.pop_transient_surface();
-                    return execute_command_by_id(app, runtime, session, viewed_session_id, copy_tx, copy_pending, cmd_id).await;
+                    return execute_command_by_id(
+                        app,
+                        runtime,
+                        session,
+                        viewed_session_id,
+                        copy_tx,
+                        copy_pending,
+                        cmd_id,
+                    )
+                    .await;
                 }
             }
         }
@@ -2194,9 +2209,9 @@ pub(crate) fn open_active_connection_detail(
     app.connection_detail = None;
     app.connection_info_scroll = 0;
     if !target_id.is_empty() {
-        let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
-            id: target_id,
-        });
+        let _ = app
+            .tx
+            .send(AgentRequest::QueryConnectionDetail { id: target_id });
     }
 }
 
@@ -2368,9 +2383,10 @@ pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
             scroll_tick(app, !up);
         }
     } else if app.active_modal() != Modal::None {
-        let inside_modal = app.modal_rect.is_some_and(|r| {
-            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
-        }) || app.modal_hit_map.oauth_modal_contains(x, y);
+        let inside_modal = app
+            .modal_rect
+            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
+            || app.modal_hit_map.oauth_modal_contains(x, y);
 
         if inside_modal {
             scroll_tick(app, !up);
@@ -2462,7 +2478,8 @@ mod transcript_scroll_tests {
     fn wheel_spatial_routing_under_permission_modal() {
         let mut app = scrollable_app();
         app.set_active_modal_for_test(Modal::Permission);
-        app.modal_hit_map.set_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
+        app.modal_hit_map
+            .set_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
         app.permission_show_details = true;
         app.permission_max_scroll = 10;
         app.permission_scroll = 2;
@@ -2506,9 +2523,12 @@ mod transcript_scroll_tests {
         let mut app = scrollable_app();
         app.input = "/m".to_string();
         app.cursor_position = 2;
-        app.modal_hit_map.set_completion_menu_rect(mutx_engine::Rect::new(0, 8, 30, 2));
-        app.modal_hit_map.push_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
-        app.modal_hit_map.push_completion_item(1, mutx_engine::Rect::new(0, 9, 30, 1));
+        app.modal_hit_map
+            .set_completion_menu_rect(mutx_engine::Rect::new(0, 8, 30, 2));
+        app.modal_hit_map
+            .push_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
+        app.modal_hit_map
+            .push_completion_item(1, mutx_engine::Rect::new(0, 9, 30, 1));
 
         let runtime = UiRuntime::minimal_for_test();
 
@@ -2649,7 +2669,12 @@ async fn execute_command_by_id(
     use crate::keymap::CommandId;
     match cmd_id {
         CommandId::Help => {
-            enter_panel(app, crate::surfaces::PanelId::Help, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Help,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::CommandPalette => {}
         CommandId::CancelOrBack => {
@@ -2698,7 +2723,12 @@ async fn execute_command_by_id(
             app.set_cursor_end();
         }
         CommandId::HistorySearch => {
-            enter_panel(app, crate::surfaces::PanelId::HistorySearch, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::HistorySearch,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::FocusTranscript => {
             app.session_focus = crate::app::SessionFocusRegion::Transcript;
@@ -2709,10 +2739,15 @@ async fn execute_command_by_id(
             app.focused_target = None;
         }
         CommandId::ScrollTranscriptUp => {
-            app.scroll = app.scroll.saturating_sub(app.view_height.saturating_sub(2).max(1));
+            app.scroll = app
+                .scroll
+                .saturating_sub(app.view_height.saturating_sub(2).max(1));
         }
         CommandId::ScrollTranscriptDown => {
-            app.scroll = app.scroll.saturating_add(app.view_height.saturating_sub(2).max(1)).min(app.max_scroll);
+            app.scroll = app
+                .scroll
+                .saturating_add(app.view_height.saturating_sub(2).max(1))
+                .min(app.max_scroll);
         }
         CommandId::TranscriptMoveUp => {
             app.focus_interactive_target(-1);
@@ -2724,18 +2759,15 @@ async fn execute_command_by_id(
             if let Some(target) = app.focused_target {
                 if target.kind == InteractiveTargetKind::ToolStep {
                     let mut messages = runtime.messages.write().await;
-                    let enter_id = resolve_focused_mut(
-                        &mut messages,
-                        &app.focus_stack,
-                        target.message_idx,
-                    )
-                    .and_then(|message| {
-                        if message.is_runner_task() {
-                            message.tool_step_call_id().map(String::from)
-                        } else {
-                            None
-                        }
-                    });
+                    let enter_id =
+                        resolve_focused_mut(&mut messages, &app.focus_stack, target.message_idx)
+                            .and_then(|message| {
+                                if message.is_runner_task() {
+                                    message.tool_step_call_id().map(String::from)
+                                } else {
+                                    None
+                                }
+                            });
                     if let Some(id) = enter_id {
                         drop(messages);
                         app.enter_runner(id);
@@ -2764,57 +2796,137 @@ async fn execute_command_by_id(
             enter_view(app, crate::surfaces::View::Settings, runtime);
         }
         CommandId::OpenTodos => {
-            enter_panel(app, crate::surfaces::PanelId::Todos, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Todos,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenQueue => {
-            enter_panel(app, crate::surfaces::PanelId::Queue, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Queue,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenTelemetry => {
-            enter_panel(app, crate::surfaces::PanelId::Telemetry, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Telemetry,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenModels => {
-            enter_panel(app, crate::surfaces::PanelId::Models, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Models,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenConnections => {
-            enter_panel(app, crate::surfaces::PanelId::Connections, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Connections,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenTools => {
-            enter_panel(app, crate::surfaces::PanelId::Tools, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Tools,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenMcp => {
-            enter_panel(app, crate::surfaces::PanelId::Mcp, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Mcp,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenSkills => {
-            enter_panel(app, crate::surfaces::PanelId::Skills, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Skills,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenPermissions => {
-            enter_panel(app, crate::surfaces::PanelId::Permissions, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Permissions,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenUsage => {
-            enter_panel(app, crate::surfaces::PanelId::UsageStats, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::UsageStats,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenTree => {
-            enter_panel(app, crate::surfaces::PanelId::Tree, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Tree,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenBtw => {
-            enter_panel(app, crate::surfaces::PanelId::Btw, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Btw,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::OpenSessions => {
-            enter_panel(app, crate::surfaces::PanelId::Sessions, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Sessions,
+                runtime,
+                viewed_session_id,
+            );
         }
         CommandId::ToggleQueueBlock => {
             let sid = viewed_session_id.to_string();
             if app.is_queue_blocked(&sid) {
                 app.resume_queue(&sid);
-                show_local_toast(app, "Queue resumed", false, std::time::Duration::from_millis(2000));
+                show_local_toast(
+                    app,
+                    "Queue resumed",
+                    false,
+                    std::time::Duration::from_millis(2000),
+                );
             } else {
                 app.block_queue(&sid);
-                show_local_toast(app, "Queue paused", false, std::time::Duration::from_millis(2000));
+                show_local_toast(
+                    app,
+                    "Queue paused",
+                    false,
+                    std::time::Duration::from_millis(2000),
+                );
             }
         }
         CommandId::ClearQueue => {
             app.pending_dispatch.clear();
-            show_local_toast(app, "Queue cleared", false, std::time::Duration::from_millis(2000));
+            show_local_toast(
+                app,
+                "Queue cleared",
+                false,
+                std::time::Duration::from_millis(2000),
+            );
         }
         CommandId::McpReconnectSelected => {}
         CommandId::McpToggleSelected => {}
@@ -2829,7 +2941,12 @@ async fn execute_command_by_id(
                     });
                 }
             }
-            show_local_toast(app, "All permissions revoked", false, std::time::Duration::from_millis(2000));
+            show_local_toast(
+                app,
+                "All permissions revoked",
+                false,
+                std::time::Duration::from_millis(2000),
+            );
         }
         CommandId::SkillsToggleDetail => {}
         CommandId::ProviderAddConnection => {
@@ -2839,7 +2956,12 @@ async fn execute_command_by_id(
         CommandId::ProviderDeleteSelected => {}
         CommandId::ProviderToggleFavorite => {}
         CommandId::RedrawScreen => {
-            show_local_toast(app, "Screen redrawn", false, std::time::Duration::from_millis(1000));
+            show_local_toast(
+                app,
+                "Screen redrawn",
+                false,
+                std::time::Duration::from_millis(1000),
+            );
         }
     }
     ActionFlow::Handled

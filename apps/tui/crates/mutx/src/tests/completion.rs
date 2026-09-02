@@ -611,7 +611,10 @@ fn ctrl_c_while_running_arms_and_interrupts_with_confirmation() {
 
     // First Ctrl+C: arms the interrupt window
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
-    assert!(app.ctrl_c_armed(), "first Ctrl+C arms the interrupt confirmation");
+    assert!(
+        app.ctrl_c_armed(),
+        "first Ctrl+C arms the interrupt confirmation"
+    );
 
     // Second Ctrl+C: sends Interrupt request
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
@@ -629,7 +632,10 @@ fn ctrl_c_while_idle_does_not_clear_composer() {
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
-    assert_eq!(app.input, "keep this text", "Ctrl+C must NEVER clear composer text");
+    assert_eq!(
+        app.input, "keep this text",
+        "Ctrl+C must NEVER clear composer text"
+    );
 }
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a

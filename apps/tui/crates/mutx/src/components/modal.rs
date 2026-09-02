@@ -5,8 +5,8 @@ use mutx_engine::{Frame, Rect};
 use super::super::Theme;
 use super::super::design::MODAL_INNER_H_PADDING;
 use super::super::primitives::{
-    ContentModalSpec, content_modal_area, content_modal_probe,
-    modal_chrome_rows, modal_frame, modal_header, render_modal_footer_with_more,
+    ContentModalSpec, content_modal_area, content_modal_probe, modal_chrome_rows, modal_frame,
+    modal_header, render_modal_footer_with_more,
 };
 use super::footer::{FooterHint, FooterHintWithBand};
 use super::scroll::ScrollBody;

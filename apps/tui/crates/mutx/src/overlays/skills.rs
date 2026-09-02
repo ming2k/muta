@@ -79,11 +79,17 @@ pub fn draw_skills_modal(
                 if skill.quarantined {
                     let warn = Style::default().fg(theme.warn());
                     body.push(Line::from(Span::styled(
-                        format!("{}[Quarantined] Project skill requires authorization.", detail_indent),
+                        format!(
+                            "{}[Quarantined] Project skill requires authorization.",
+                            detail_indent
+                        ),
                         warn,
                     )));
                     body.push(Line::from(Span::styled(
-                        format!("{}Action: Run `/trust skills` or `/trust` to enable.", detail_indent),
+                        format!(
+                            "{}Action: Run `/trust skills` or `/trust` to enable.",
+                            detail_indent
+                        ),
                         warn,
                     )));
                     body.push(Line::from(""));

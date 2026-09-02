@@ -4,20 +4,20 @@
 //! and rare administrative commands into one searchable, keyboard-first modal.
 
 use mutx_engine::{
-    Color, Frame, Modifier, Rect, Style,
-    {Line, Paragraph, Span},
+    Color, Frame, Modifier, Rect, Style, {Line, Paragraph, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
 use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::fuzzy::fuzzy_match;
 use crate::keymap::{
-    AppContext, Availability, COMMAND_REGISTRY, CommandId, CommandSpec,
-    DangerLevel,
+    AppContext, Availability, COMMAND_REGISTRY, CommandId, CommandSpec, DangerLevel,
 };
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
-use crate::primitives::{FixedModalSpec, FooterHint, modal_area, modal_frame, modal_header, render_modal_footer};
+use crate::primitives::{
+    FixedModalSpec, FooterHint, modal_area, modal_frame, modal_header, render_modal_footer,
+};
 use crate::view::Theme;
 
 /// One selectable entry in the Command Palette list.
@@ -76,7 +76,10 @@ pub(crate) fn filter_palette_commands(
         match (a_avail, b_avail) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            _ => b.score.cmp(&a.score).then_with(|| a.spec.label.cmp(b.spec.label)),
+            _ => b
+                .score
+                .cmp(&a.score)
+                .then_with(|| a.spec.label.cmp(b.spec.label)),
         }
     });
 
@@ -124,11 +127,24 @@ pub(crate) fn draw_command_palette(
     };
 
     let query_spans = vec![
-        Span::styled("> ", Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "> ",
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ),
         if query.is_empty() {
-            Span::styled("Type a command, slash trigger, or surface name...", Style::default().fg(theme.muted()))
+            Span::styled(
+                "Type a command, slash trigger, or surface name...",
+                Style::default().fg(theme.muted()),
+            )
         } else {
-            Span::styled(query, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            Span::styled(
+                query,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
         },
     ];
     frame.render_widget(Paragraph::new(Line::from(query_spans)), query_line_rect);
@@ -141,7 +157,13 @@ pub(crate) fn draw_command_palette(
         height: 1,
     };
     let sep_str = "─".repeat(sep_rect.width as usize);
-    frame.render_widget(Paragraph::new(Line::from(vec![Span::styled(sep_str, Style::default().fg(theme.muted()))])), sep_rect);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            sep_str,
+            Style::default().fg(theme.muted()),
+        )])),
+        sep_rect,
+    );
 
     let list_rect = Rect {
         x: f.body.x,
@@ -153,9 +175,10 @@ pub(crate) fn draw_command_palette(
     let mut rows: Vec<SelectableRow> = Vec::new();
 
     if entries.is_empty() {
-        rows.push(SelectableRow::from_line(Line::from(vec![
-            Span::styled("  No matching commands found.", Style::default().fg(theme.muted()))
-        ])));
+        rows.push(SelectableRow::from_line(Line::from(vec![Span::styled(
+            "  No matching commands found.",
+            Style::default().fg(theme.muted()),
+        )])));
     } else {
         let body_w = list_rect.width as usize;
 
@@ -165,7 +188,9 @@ pub(crate) fn draw_command_palette(
 
             let gutter = if is_sel { "▶ " } else { "  " };
             let gutter_style = if is_sel {
-                Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.muted())
             };
@@ -173,7 +198,9 @@ pub(crate) fn draw_command_palette(
             let label_style = if !avail {
                 Style::default().fg(theme.muted())
             } else if is_sel {
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg())
             };
@@ -185,7 +212,12 @@ pub(crate) fn draw_command_palette(
 
             if entry.spec.danger == DangerLevel::Dangerous {
                 left_spans.push(Span::raw(" "));
-                left_spans.push(Span::styled("[DANGER]", Style::default().fg(theme.err()).add_modifier(Modifier::BOLD)));
+                left_spans.push(Span::styled(
+                    "[DANGER]",
+                    Style::default()
+                        .fg(theme.err())
+                        .add_modifier(Modifier::BOLD),
+                ));
             } else if entry.spec.danger == DangerLevel::Cautious {
                 left_spans.push(Span::raw(" "));
                 left_spans.push(Span::styled("[CAUTION]", Style::default().fg(theme.warn())));
@@ -221,7 +253,16 @@ pub(crate) fn draw_command_palette(
         }
     }
 
-    render_selectable_body(frame, list_rect, &rows, scroll, Some(selected_index), theme, selection, layout_map);
+    render_selectable_body(
+        frame,
+        list_rect,
+        &rows,
+        scroll,
+        Some(selected_index),
+        theme,
+        selection,
+        layout_map,
+    );
 
     if let Some(fo) = f.footer {
         let footer_hints = [

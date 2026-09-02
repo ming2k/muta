@@ -1859,10 +1859,7 @@ fn composer_hint_sentence_names_the_delivery_group() {
     let mut terminal = draw_frame_composer("wait", true, hints);
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(row4.contains("queue follow-up"), "follow-up verb: {row4:?}");
-    assert!(
-        row4.contains("steer now"),
-        "steer now affordance: {row4:?}"
-    );
+    assert!(row4.contains("steer now"), "steer now affordance: {row4:?}");
 }
 
 /// Once the draft outgrows the box, the three-part overflow affordance

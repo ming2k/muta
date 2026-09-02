@@ -215,7 +215,8 @@ impl MeshEnvelope {
         let Some(sender) = &self.sender else {
             return true;
         };
-        self.message.lawful_for(sender.station, self.recipient.station)
+        self.message
+            .lawful_for(sender.station, self.recipient.station)
     }
 }
 

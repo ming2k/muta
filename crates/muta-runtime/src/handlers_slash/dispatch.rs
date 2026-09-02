@@ -1276,13 +1276,27 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         let total = list.len();
                         let quarantined = list.iter().filter(|s| s.quarantined).count();
                         let enabled = list.iter().filter(|s| s.enabled && !s.quarantined).count();
-                        let user_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::User).count();
-                        let repo_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Repo).count();
-                        let extra_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Extra).count();
-                        let remote_count = list.iter().filter(|s| s.scope == muta_skills::SkillScope::Remote).count();
+                        let user_count = list
+                            .iter()
+                            .filter(|s| s.scope == muta_skills::SkillScope::User)
+                            .count();
+                        let repo_count = list
+                            .iter()
+                            .filter(|s| s.scope == muta_skills::SkillScope::Repo)
+                            .count();
+                        let extra_count = list
+                            .iter()
+                            .filter(|s| s.scope == muta_skills::SkillScope::Extra)
+                            .count();
+                        let remote_count = list
+                            .iter()
+                            .filter(|s| s.scope == muta_skills::SkillScope::Remote)
+                            .count();
 
                         let mut lines = vec![
-                            format!("Skills Status: {total} total ({enabled} enabled, {quarantined} quarantined)"),
+                            format!(
+                                "Skills Status: {total} total ({enabled} enabled, {quarantined} quarantined)"
+                            ),
                             format!("  • User: {user_count}"),
                             format!("  • Repo: {repo_count}"),
                             format!("  • Extra: {extra_count}"),

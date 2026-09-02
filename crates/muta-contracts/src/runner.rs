@@ -751,7 +751,10 @@ mod tests {
             Some("explore")
         );
         assert_eq!(RunnerPresetPool::find("code").map(|p| p.name), Some("code"));
-        assert_eq!(RunnerPresetPool::find("skill").map(|p| p.name), Some("skill"));
+        assert_eq!(
+            RunnerPresetPool::find("skill").map(|p| p.name),
+            Some("skill")
+        );
         assert_eq!(RunnerPresetPool::find("nonexistent"), None);
 
         let dev_delegation = crate::MASTER_DEVELOPER;

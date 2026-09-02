@@ -746,7 +746,10 @@ impl DatabaseEngine {
         }
 
         if count > 0 {
-            info!(count = count, "Migrated legacy sessions into SQLite muta.db");
+            info!(
+                count = count,
+                "Migrated legacy sessions into SQLite muta.db"
+            );
         }
         count
     }

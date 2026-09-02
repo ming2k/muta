@@ -154,13 +154,14 @@ impl SkillRegistry {
             Err(err) => err.into_inner().config.clone(),
         };
         let roots = discoverable_skill_directories(&config);
-        let mut watcher = match muta_platform::FsWatcher::new(muta_platform::FsWatcher::DEFAULT_DEBOUNCE) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::warn!("failed to initialize reactive skills fs watcher: {e}");
-                return None;
-            }
-        };
+        let mut watcher =
+            match muta_platform::FsWatcher::new(muta_platform::FsWatcher::DEFAULT_DEBOUNCE) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("failed to initialize reactive skills fs watcher: {e}");
+                    return None;
+                }
+            };
 
         for root in roots {
             let _ = watcher.watch_if_exists(&root, true);
@@ -172,7 +173,10 @@ impl SkillRegistry {
         Some(tokio::spawn(async move {
             let _watcher = watcher;
             while let Ok(event) = events_rx.recv().await {
-                tracing::debug!("reactive skill filesystem event: {:?}, reloading...", event.kind);
+                tracing::debug!(
+                    "reactive skill filesystem event: {:?}, reloading...",
+                    event.kind
+                );
                 registry.reload().await;
             }
         }))
@@ -419,6 +423,9 @@ mod tests {
                 }
             }
         }
-        assert!(reloaded, "registry should automatically update via reactive fs watcher");
+        assert!(
+            reloaded,
+            "registry should automatically update via reactive fs watcher"
+        );
     }
 }

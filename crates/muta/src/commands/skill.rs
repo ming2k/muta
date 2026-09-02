@@ -83,7 +83,9 @@ async fn show(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let skill = result.skills.iter().find(|s| s.name == name);
     match skill {
         Some(s) => {
-            let body = s.load_body().map_err(|e| format!("Failed to read skill body: {e}"))?;
+            let body = s
+                .load_body()
+                .map_err(|e| format!("Failed to read skill body: {e}"))?;
             println!("# Skill: {} ({:?})\n", s.name, s.scope);
             if s.quarantined {
                 println!("⚠️  Status: Quarantined (Project Workspace Asset untrusted)\n");
@@ -94,7 +96,9 @@ async fn show(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         None => {
-            eprintln!("Error: Skill '{name}' not found. Run `muta skill ls` to see available skills.");
+            eprintln!(
+                "Error: Skill '{name}' not found. Run `muta skill ls` to see available skills."
+            );
             std::process::exit(1);
         }
     }
@@ -131,7 +135,9 @@ async fn info(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         None => {
-            eprintln!("Error: Skill '{name}' not found. Run `muta skill ls` to see available skills.");
+            eprintln!(
+                "Error: Skill '{name}' not found. Run `muta skill ls` to see available skills."
+            );
             std::process::exit(1);
         }
     }
@@ -186,7 +192,10 @@ async fn init(name: &str, user: bool) -> Result<(), Box<dyn std::error::Error>> 
     println!("   ├── references/");
     println!("   ├── scripts/");
     println!("   └── assets/");
-    println!("\nNext steps: Edit {}/SKILL.md and run `muta skill ls` to verify.", target_dir.display());
+    println!(
+        "\nNext steps: Edit {}/SKILL.md and run `muta skill ls` to verify.",
+        target_dir.display()
+    );
 
     Ok(())
 }

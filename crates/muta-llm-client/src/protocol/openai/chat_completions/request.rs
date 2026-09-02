@@ -358,7 +358,13 @@ mod tests {
     fn request_includes_reasoning_effort_when_configured() {
         let body = super::body(
             vec![Message::new(Role::User, "think")],
-            test_body_input("gpt-5.5", false, None, Some(Effort::Xhigh), &DEFAULT_CACHE_PLAN),
+            test_body_input(
+                "gpt-5.5",
+                false,
+                None,
+                Some(Effort::Xhigh),
+                &DEFAULT_CACHE_PLAN,
+            ),
         );
 
         assert_eq!(body["reasoning_effort"], "xhigh");

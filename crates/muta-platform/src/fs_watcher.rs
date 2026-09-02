@@ -124,7 +124,11 @@ impl FsWatcher {
     }
 
     /// Watch a path only if it currently exists on the filesystem.
-    pub fn watch_if_exists<P: AsRef<Path>>(&mut self, path: P, recursive: bool) -> Result<bool, String> {
+    pub fn watch_if_exists<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        recursive: bool,
+    ) -> Result<bool, String> {
         let path = path.as_ref();
         if path.exists() {
             self.watch(path, recursive)?;

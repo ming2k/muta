@@ -4,9 +4,7 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::chrome::{
-    ActivityBarView, draw_activity_bar, draw_step_focus_bar, draw_todo_bar,
-};
+pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_step_focus_bar, draw_todo_bar};
 pub use crate::chrome::{
     ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar, draw_queue_bar,
 };
@@ -53,8 +51,8 @@ pub use crate::theme::{COLOR_SCHEMES, Theme};
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind,
-    draw_runner_footer, draw_view_header, draw_view_header_hints,
+    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_runner_footer,
+    draw_view_header, draw_view_header_hints,
 };
 #[allow(unused_imports)]
 pub use crate::views::settings::*;

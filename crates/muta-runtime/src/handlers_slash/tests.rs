@@ -298,11 +298,20 @@ mod trust_domain_tests {
         assert_eq!(parse_trust_domain("mcp"), Ok(TrustDomain::Mcp));
         assert_eq!(parse_trust_domain("skills"), Ok(TrustDomain::Skills));
         assert_eq!(parse_trust_domain("hooks"), Ok(TrustDomain::Hooks));
-        assert_eq!(parse_trust_domain("instructions"), Ok(TrustDomain::Instructions));
+        assert_eq!(
+            parse_trust_domain("instructions"),
+            Ok(TrustDomain::Instructions)
+        );
         assert_eq!(parse_trust_domain("agents"), Ok(TrustDomain::Instructions));
         assert_eq!(parse_trust_domain("rules"), Ok(TrustDomain::Instructions));
-        assert_eq!(parse_trust_domain("ex-workspace"), Ok(TrustDomain::ExWorkspace));
-        assert_eq!(parse_trust_domain("externals"), Ok(TrustDomain::ExWorkspace));
+        assert_eq!(
+            parse_trust_domain("ex-workspace"),
+            Ok(TrustDomain::ExWorkspace)
+        );
+        assert_eq!(
+            parse_trust_domain("externals"),
+            Ok(TrustDomain::ExWorkspace)
+        );
         assert_eq!(parse_trust_domain("roots"), Ok(TrustDomain::ExWorkspace));
     }
 
@@ -317,8 +326,8 @@ mod trust_domain_tests {
 
     #[tokio::test]
     async fn reload_trusted_assets_updates_roots_on_trust() {
-        use std::sync::Arc;
         use crate::handlers_slash::security_ops;
+        use std::sync::Arc;
 
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");

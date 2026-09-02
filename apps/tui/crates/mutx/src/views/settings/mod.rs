@@ -78,11 +78,11 @@ impl ConfigCategory {
         match trimmed.as_str() {
             "0" | "appearance" | "theme" | "themes" | "look" => Some(ConfigCategory::Appearance),
             "1" | "transcript" | "chat" | "scroll" | "bands" => Some(ConfigCategory::Transcript),
-            "2" | "behavior" | "interaction" | "mouse" | "dismiss" => Some(ConfigCategory::Behavior),
-            "3" | "search" | "websearch" | "web-search" => Some(ConfigCategory::WebSearch),
-            "4" | "reader" | "webreader" | "web-reader" | "web" => {
-                Some(ConfigCategory::WebReader)
+            "2" | "behavior" | "interaction" | "mouse" | "dismiss" => {
+                Some(ConfigCategory::Behavior)
             }
+            "3" | "search" | "websearch" | "web-search" => Some(ConfigCategory::WebSearch),
+            "4" | "reader" | "webreader" | "web-reader" | "web" => Some(ConfigCategory::WebReader),
             "5" | "system" | "info" | "about" | "paths" | "runtime" => Some(ConfigCategory::System),
             _ => None,
         }
@@ -118,11 +118,19 @@ impl ConfigCategory {
     pub fn description(self) -> &'static str {
         match self {
             ConfigCategory::Appearance => "Theme selection and color palette customization.",
-            ConfigCategory::Transcript => "Message layout, turn boundaries, and auto-scroll behavior.",
+            ConfigCategory::Transcript => {
+                "Message layout, turn boundaries, and auto-scroll behavior."
+            }
             ConfigCategory::Behavior => "Interaction rules, dismiss triggers, and click policies.",
-            ConfigCategory::WebSearch => "Choose how the agent discovers relevant pages and sources.",
-            ConfigCategory::WebReader => "Choose how the agent reads and extracts content from a URL.",
-            ConfigCategory::System => "Configuration file paths, runtime diagnostics, and system info.",
+            ConfigCategory::WebSearch => {
+                "Choose how the agent discovers relevant pages and sources."
+            }
+            ConfigCategory::WebReader => {
+                "Choose how the agent reads and extracts content from a URL."
+            }
+            ConfigCategory::System => {
+                "Configuration file paths, runtime diagnostics, and system info."
+            }
         }
     }
 }
@@ -225,10 +233,7 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
 
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(22),
-            Constraint::Min(20),
-        ])
+        .constraints([Constraint::Length(22), Constraint::Min(20)])
         .split(inner_body);
 
     let category_rect = body_chunks[0];
@@ -365,11 +370,14 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
 
         let marker = if is_selected { "› " } else { "  " };
         lines.push(Line::from(vec![
-            Span::styled(marker, Style::default().fg(if is_selected {
-                props.theme.brand()
-            } else {
-                props.theme.dim()
-            })),
+            Span::styled(
+                marker,
+                Style::default().fg(if is_selected {
+                    props.theme.brand()
+                } else {
+                    props.theme.dim()
+                }),
+            ),
             Span::styled(cat.title(), style),
         ]));
         lines.push(Line::from(""));
@@ -413,7 +421,7 @@ fn draw_footer(frame: &mut Frame, rect: Rect, focus: ConfigFocus, theme: &Theme)
     frame.render_widget(RtBlock::default().style(fill), rect);
 
     use crate::components::keycap::KeyAffordance;
-    use crate::keymap::{keyvocab, Key};
+    use crate::keymap::{Key, keyvocab};
 
     let pairs: Vec<KeyAffordance> = match focus {
         ConfigFocus::Categories => vec![
@@ -490,30 +498,87 @@ mod tests {
 
     #[test]
     fn test_config_category_from_name() {
-        assert_eq!(ConfigCategory::from_name("appearance"), Some(ConfigCategory::Appearance));
-        assert_eq!(ConfigCategory::from_name("THEME"), Some(ConfigCategory::Appearance));
-        assert_eq!(ConfigCategory::from_name("0"), Some(ConfigCategory::Appearance));
+        assert_eq!(
+            ConfigCategory::from_name("appearance"),
+            Some(ConfigCategory::Appearance)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("THEME"),
+            Some(ConfigCategory::Appearance)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("0"),
+            Some(ConfigCategory::Appearance)
+        );
 
-        assert_eq!(ConfigCategory::from_name("transcript"), Some(ConfigCategory::Transcript));
-        assert_eq!(ConfigCategory::from_name("chat"), Some(ConfigCategory::Transcript));
-        assert_eq!(ConfigCategory::from_name("1"), Some(ConfigCategory::Transcript));
+        assert_eq!(
+            ConfigCategory::from_name("transcript"),
+            Some(ConfigCategory::Transcript)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("chat"),
+            Some(ConfigCategory::Transcript)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("1"),
+            Some(ConfigCategory::Transcript)
+        );
 
-        assert_eq!(ConfigCategory::from_name("behavior"), Some(ConfigCategory::Behavior));
-        assert_eq!(ConfigCategory::from_name("mouse"), Some(ConfigCategory::Behavior));
-        assert_eq!(ConfigCategory::from_name("2"), Some(ConfigCategory::Behavior));
+        assert_eq!(
+            ConfigCategory::from_name("behavior"),
+            Some(ConfigCategory::Behavior)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("mouse"),
+            Some(ConfigCategory::Behavior)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("2"),
+            Some(ConfigCategory::Behavior)
+        );
 
-        assert_eq!(ConfigCategory::from_name("search"), Some(ConfigCategory::WebSearch));
-        assert_eq!(ConfigCategory::from_name("websearch"), Some(ConfigCategory::WebSearch));
-        assert_eq!(ConfigCategory::from_name("3"), Some(ConfigCategory::WebSearch));
+        assert_eq!(
+            ConfigCategory::from_name("search"),
+            Some(ConfigCategory::WebSearch)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("websearch"),
+            Some(ConfigCategory::WebSearch)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("3"),
+            Some(ConfigCategory::WebSearch)
+        );
 
-        assert_eq!(ConfigCategory::from_name("web"), Some(ConfigCategory::WebReader));
-        assert_eq!(ConfigCategory::from_name("reader"), Some(ConfigCategory::WebReader));
-        assert_eq!(ConfigCategory::from_name("webreader"), Some(ConfigCategory::WebReader));
-        assert_eq!(ConfigCategory::from_name("4"), Some(ConfigCategory::WebReader));
+        assert_eq!(
+            ConfigCategory::from_name("web"),
+            Some(ConfigCategory::WebReader)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("reader"),
+            Some(ConfigCategory::WebReader)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("webreader"),
+            Some(ConfigCategory::WebReader)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("4"),
+            Some(ConfigCategory::WebReader)
+        );
 
-        assert_eq!(ConfigCategory::from_name("system"), Some(ConfigCategory::System));
-        assert_eq!(ConfigCategory::from_name("info"), Some(ConfigCategory::System));
-        assert_eq!(ConfigCategory::from_name("about"), Some(ConfigCategory::System));
+        assert_eq!(
+            ConfigCategory::from_name("system"),
+            Some(ConfigCategory::System)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("info"),
+            Some(ConfigCategory::System)
+        );
+        assert_eq!(
+            ConfigCategory::from_name("about"),
+            Some(ConfigCategory::System)
+        );
         assert_eq!(ConfigCategory::from_name("5"), Some(ConfigCategory::System));
 
         assert_eq!(ConfigCategory::from_name("invalid"), None);

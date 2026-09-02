@@ -853,12 +853,7 @@ impl RunnerTool {
                     {
                         position = (*round, *turn);
                     }
-                    Self::forward_event(
-                        event,
-                        position,
-                        Some(&origin_label),
-                        &mut on_event,
-                    )
+                    Self::forward_event(event, position, Some(&origin_label), &mut on_event)
                 })
                 .await;
             match run {
@@ -1562,8 +1557,7 @@ mod tests {
             .expect("runner request captured");
         let system_content = request.instructions.render_combined();
         assert!(
-            system_content
-                .starts_with("You are a focused research runner"),
+            system_content.starts_with("You are a focused research runner"),
             "system instructions should open with the RUNNER_EXPLORE persona"
         );
         assert!(

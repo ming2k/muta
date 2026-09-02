@@ -133,10 +133,7 @@ pub fn doom_signature(name: &str, args: &str) -> String {
             "{name}|{query}|{path}|include={}|exclude={}|regex={}",
             normalized_string_array(&value, "include", false),
             normalized_string_array(&value, "exclude", false),
-            value
-                .get("regex")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
+            value.get("regex").and_then(Value::as_bool).unwrap_or(false)
         );
     }
     if name == "read_text" || name == "read" {

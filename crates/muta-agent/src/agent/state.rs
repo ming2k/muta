@@ -357,8 +357,11 @@ impl Agent {
         let mut debug_messages = Vec::new();
         if !req.instructions.is_empty() {
             debug_messages.push(
-                Message::new(Role::System, req.instructions.render_combined())
-                    .with_origin(muta_contracts::InjectionOrigin::new(muta_contracts::InjectionKind::SystemPrompt))
+                Message::new(Role::System, req.instructions.render_combined()).with_origin(
+                    muta_contracts::InjectionOrigin::new(
+                        muta_contracts::InjectionKind::SystemPrompt,
+                    ),
+                ),
             );
         }
         debug_messages.extend(req.messages);

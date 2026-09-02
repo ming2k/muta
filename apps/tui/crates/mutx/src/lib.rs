@@ -2273,9 +2273,9 @@ pub async fn run_tui(
         config_scroll: 0,
         config_focus: crate::overlays::ConfigFocus::Categories,
         config_category: match startup_overlay {
-            StartupOverlay::Settings { category: Some(cat) } => {
-                cat.min(crate::views::ConfigCategory::ALL.len().saturating_sub(1))
-            }
+            StartupOverlay::Settings {
+                category: Some(cat),
+            } => cat.min(crate::views::ConfigCategory::ALL.len().saturating_sub(1)),
             _ => 0,
         },
         config_detail_index: 0,

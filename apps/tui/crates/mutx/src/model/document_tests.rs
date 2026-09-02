@@ -1033,11 +1033,15 @@ fn thinking_summary_handles_structured_milestones() {
     );
     done_multi.set_thinking_duration(4_500);
     let summary = done_multi.thinking_summary().unwrap();
-    assert!(summary.starts_with("Thinking · 3 steps · "), "got: {summary}");
+    assert!(
+        summary.starts_with("Thinking · 3 steps · "),
+        "got: {summary}"
+    );
     assert!(summary.ends_with("4.5s"), "got: {summary}");
 
     // Finished trace with single milestone
-    let mut done_single = TranscriptMessage::thinking("**Planning architectural changes**\n\nDetails\n\n");
+    let mut done_single =
+        TranscriptMessage::thinking("**Planning architectural changes**\n\nDetails\n\n");
     done_single.set_thinking_duration(1_200);
     assert_eq!(
         done_single.thinking_summary().as_deref(),

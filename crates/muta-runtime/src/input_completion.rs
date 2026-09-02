@@ -112,7 +112,13 @@ impl InputCompletionEngine {
             {
                 continue;
             }
-            items.push(skill_item(input, skill, explicit_prefix, at_start, cursor_end));
+            items.push(skill_item(
+                input,
+                skill,
+                explicit_prefix,
+                at_start,
+                cursor_end,
+            ));
         }
 
         items
@@ -1093,17 +1099,23 @@ mod tests {
         .unwrap();
         registry.replace(vec![skill]);
 
-        let engine = InputCompletionEngine::new(catalog(), temp.path().to_path_buf())
-            .with_skills(registry);
+        let engine =
+            InputCompletionEngine::new(catalog(), temp.path().to_path_buf()).with_skills(registry);
 
         // 1. Direct namespace trigger `@skill:`
         let input = "hello @skill:";
-        let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(100, input.into(), input.chars().count()).await
+        let AgentResponse::ComposerCompletions { items, .. } = engine
+            .complete(100, input.into(), input.chars().count())
+            .await
         else {
             panic!("unexpected response")
         };
-        assert!(items.iter().any(|i| i.label == "@skill:skill-creator" && i.insert_text == "@skill:skill-creator "));
+        assert!(
+            items
+                .iter()
+                .any(|i| i.label == "@skill:skill-creator"
+                    && i.insert_text == "@skill:skill-creator ")
+        );
 
         // 2. Multiline cursor anywhere in content
         let input = "First line\nSecond line with @skill:creat and more text";
@@ -1113,16 +1125,24 @@ mod tests {
         else {
             panic!("unexpected response")
         };
-        let match_item = items.iter().find(|i| i.label == "@skill:skill-creator").expect("should find skill-creator");
+        let match_item = items
+            .iter()
+            .find(|i| i.label == "@skill:skill-creator")
+            .expect("should find skill-creator");
         assert_eq!(match_item.insert_text, "@skill:skill-creator");
 
         // 3. Namespace suggestion on `@skill`
         let input = "check @skill";
-        let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(102, input.into(), input.chars().count()).await
+        let AgentResponse::ComposerCompletions { items, .. } = engine
+            .complete(102, input.into(), input.chars().count())
+            .await
         else {
             panic!("unexpected response")
         };
-        assert!(items.iter().any(|i| i.label == "@skill:" && i.insert_text == "@skill:"));
+        assert!(
+            items
+                .iter()
+                .any(|i| i.label == "@skill:" && i.insert_text == "@skill:")
+        );
     }
 }
