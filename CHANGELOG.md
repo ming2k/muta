@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.5] - 2026-09-03
+
+### Added
+
+- Interaction sheets architecture (ADR-0173 §3): AI-initiated permission, question, and input-injection requests are composer-slot components that replace the composer inline, with FIFO queue depth badge (`N queued`).
+
+### Changed
+
+- Unbounded session keyboard (ADR-0173 §1): plane-less key map — `Tab` is completion-only, `PageUp`/`PageDown`/`Home`/`End` unconditionally scroll the transcript, `Alt+↑/↓` walk steps; the dual-mode apparatus (focus regions, step focus bar) is removed.
+- Per-surface keyboard ownership is now declarative: `keyboard_claims()` beside `recess()` drives the input router's text-entry/scroll predicates (ADR-0173 §2).
+- Per-surface keybinding schemes (ADR-0172): hints derive from the owning scheme; global chords and session verbs are user-remappable.
+
 ## [0.38.4] - 2026-09-02
 
 ### Added
