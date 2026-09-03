@@ -1076,6 +1076,7 @@ mod tests {
         // excluded (an agent only consumes the text generateContent surface).
         let google = protocol_model_candidates(WireProtocol::GoogleGenerateContent.as_str());
         for id in [
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
             "gemini-3.5-flash",
             "gemini-3-pro-preview",

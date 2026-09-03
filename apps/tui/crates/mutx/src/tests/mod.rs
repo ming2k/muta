@@ -254,6 +254,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         layout_map: LayoutMap::new(),
         modal_hit_map: crate::model::layout::ModalHitMap::new(),
         hovered_step: None,
+        transcript_focused: false,
         transcript_layout: crate::view::layout::Strategy::default(),
         color_scheme: "zen".to_string(),
         custom_color_scheme: muta_contracts::ColorSchemeConfig::default(),

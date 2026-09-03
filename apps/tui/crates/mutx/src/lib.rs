@@ -2376,6 +2376,7 @@ pub async fn run_tui(
         layout_map: LayoutMap::new(),
         modal_hit_map: crate::model::layout::ModalHitMap::new(),
         hovered_step: None,
+        transcript_focused: false,
         transcript_layout: crate::view::layout::Strategy::from_config(
             &tui_config.transcript_layout,
         ),

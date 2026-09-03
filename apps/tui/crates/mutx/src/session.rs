@@ -343,10 +343,16 @@ fn resolve_steer(
     }
 }
 
-/// ↑ on the chat surface: walk completion suggestions or move the caret up
-/// through a multi-line draft. Transcript step walking is owned by the
+/// ↑ on the chat surface: walk completion suggestions, move the caret up
+/// through a multi-line draft, then — at the top line of the draft (ADR-0174
+/// revision of ADR-0173's arrow table) — hand off to inline history recall
+/// toward older entries. Transcript step walking stays owned by the
 /// remappable `FocusPrevTarget` verb (canonical `Alt+↑`, ADR-0173).
-fn resolve_up(ctx: &InputContext, input: &str, cursor_position: &mut usize) -> Option<InputAction> {
+fn resolve_up(
+    ctx: &InputContext,
+    input: &str,
+    cursor_position: &mut usize,
+) -> Option<InputAction> {
     if ctx.completion_kind != crate::completion::CompletionKind::None
         && ctx.suggestion_count > 0
         && !ctx.has_exact_suggestion
@@ -356,12 +362,13 @@ fn resolve_up(ctx: &InputContext, input: &str, cursor_position: &mut usize) -> O
         // Multi-line draft: ↑ walks the caret to the previous line.
         Some(InputAction::None)
     } else {
-        // On the top line: nothing (history recall is Alt+P / Ctrl+R).
-        None
+        // Top line: readline-style edge hand-off to inline history recall.
+        Some(InputAction::HistoryPrev)
     }
 }
 
-/// ↓ on the chat surface: mirror of [`resolve_up`].
+/// ↓ on the chat surface: mirror of [`resolve_up`], handing off to history
+/// recall toward newer entries at the draft's last line.
 fn resolve_down(
     ctx: &InputContext,
     input: &str,
@@ -375,7 +382,9 @@ fn resolve_down(
     } else if crate::input::cursor_line_down(input, cursor_position) {
         Some(InputAction::None)
     } else {
-        None
+        // Last line: walk history forward (or restore the stashed draft once
+        // the newest entry is passed).
+        Some(InputAction::HistoryNext)
     }
 }
 
@@ -603,7 +612,8 @@ mod tests {
             ),
             None
         );
-        // Bare ↑ with no completion and no multi-line draft is inert too.
+        // Bare ↑ with no completion and a single-line draft hands off to
+        // inline history recall (ADR-0174 edge hand-off revision).
         assert_eq!(
             resolve_chat_surface_key(
                 crate::keymap::Key::UP,
@@ -611,7 +621,7 @@ mod tests {
                 &mut String::new(),
                 &mut 0,
             ),
-            None
+            Some(InputAction::HistoryPrev)
         );
         // Alt+S steers only while running.
         assert!(
@@ -855,6 +865,83 @@ mod tests {
         let action = resolve_view_key(View::Session, Key::ESC, &c, &mut String::new(), &mut 0);
         assert_ne!(action, Some(InputAction::ExitRunner));
         assert_ne!(action, Some(InputAction::ExitSideView));
+    }
+
+    /// ADR-0174: the readline-style edge hand-off. On a single-line draft ↑
+    /// resolves to `HistoryPrev` and ↓ to `HistoryNext` once completion and
+    /// caret motion have had their chance; a multi-line draft only hands off
+    /// from its true first/last line.
+    #[test]
+    fn arrow_edge_hands_off_to_history_recall() {
+        // Single-line draft: both edges hand off immediately.
+        let mut input = String::from("hello");
+        let mut cursor = 5;
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::UP,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::HistoryPrev)
+        );
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::DOWN,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::HistoryNext)
+        );
+
+        // Multi-line draft, caret on the middle line: no hand-off.
+        let mut input = String::from("one\ntwo\nthree");
+        let mut cursor = 5; // on "two"
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::UP,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::None)
+        );
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::DOWN,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::None)
+        );
+
+        // Caret on the first line of a multi-line draft: ↑ hands off without
+        // disturbing the draft; ↓ stays a caret motion.
+        let mut input = String::from("one\ntwo");
+        let mut cursor = 2;
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::UP,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::HistoryPrev)
+        );
+        assert_eq!(input, "one\ntwo", "the hand-off must not mutate the draft");
+        let mut cursor = 0;
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::DOWN,
+                &ctx(Mode::Idle, |_| {}),
+                &mut input,
+                &mut cursor
+            ),
+            Some(InputAction::None)
+        );
+        assert_eq!(cursor, 4, "↓ moved the caret to the next line (column kept)");
     }
 
     #[test]

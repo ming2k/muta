@@ -3,10 +3,11 @@
 use super::*;
 
 /// The transcript content rect must be recorded after rendering so that
-/// clicks on gap rows (which carry no region) still switch keyboard focus
-/// to Browse. It must span the horizontal band inside the outer gutters
-/// (clicks in the gutters are not transcript clicks) and the vertical
-/// extent of drawn content, including the inter-message gap row.
+/// clicks on blank transcript space (gap rows, space below the last message,
+/// the outer gutters) park keyboard attention on the transcript (ADR-0174
+/// browse focus). It must span the **full transcript viewport** — the user's
+/// mental model is that the whole transcript area is the browse surface, so
+/// no part of it is a dead click.
 #[test]
 fn transcript_content_rect_spans_band_and_gap_rows() {
     let theme = Theme::default();
@@ -62,9 +63,9 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
     let rect = layout_map
         .transcript_content_rect()
         .expect("content rect must be recorded when messages are drawn");
-    // Horizontal band excludes the outer `TRANSCRIPT_H_INSET` gutters.
-    assert_eq!(rect.x, TRANSCRIPT_H_INSET);
-    assert_eq!(rect.width, width - 2 * TRANSCRIPT_H_INSET);
+    // Full transcript viewport: gutters included, no dead blank space.
+    assert_eq!(rect.x, 0);
+    assert_eq!(rect.width, width);
 
     // The whole point of the rect: a gap row between the two messages is
     // rendered but carries no region (clicking it does not resolve to a

@@ -5,9 +5,10 @@ use super::*;
 #[test]
 fn bare_arrows_do_not_walk_steps() {
     // ADR-0173: the step walk is verb-owned (Alt+↑/↓). Bare ↑/↓ never move
-    // the step selection, with or without one selected.
-    assert_eq!(key_with_focus(KeyCode::Up), InputAction::None);
-    assert_eq!(key_with_focus(KeyCode::Down), InputAction::None);
+    // the step selection. ADR-0174: an empty draft is all edge, so the bare
+    // arrows hand off to inline history recall instead of being inert.
+    assert_eq!(key_with_focus(KeyCode::Up), InputAction::HistoryPrev);
+    assert_eq!(key_with_focus(KeyCode::Down), InputAction::HistoryNext);
 }
 
 #[test]
@@ -372,27 +373,30 @@ fn arrows_navigate_completion_menu_while_command_is_partial() {
 }
 
 #[test]
-fn arrows_stay_in_composer_once_command_is_fully_typed() {
-    // Once a command is resolved (exact match), completion popup closes
-    // and arrows stay as normal cursor navigation in the composer.
+fn arrows_recall_history_once_command_is_fully_typed() {
+    // Once a command is resolved (exact match), completion popup closes and
+    // arrows hand off at the draft's edges to inline history recall
+    // (ADR-0174): a single-line command draft is all edge.
     let kind = crate::CompletionKind::Slash;
     assert_eq!(
         compose_key_with_completion(KeyCode::Down, kind, 1, true),
-        InputAction::None,
-        "↓ on an exact-match command should stay in composer"
+        InputAction::HistoryNext,
+        "↓ on an exact-match command recalls the next history entry"
     );
     assert_eq!(
         compose_key_with_completion(KeyCode::Up, kind, 1, true),
-        InputAction::None,
-        "↑ on an exact-match command should stay in composer"
+        InputAction::HistoryPrev,
+        "↑ on an exact-match command recalls the previous history entry"
     );
 }
 
 #[test]
-fn up_arrow_in_browse_does_not_recall_queued() {
+fn up_arrow_in_browse_hands_off_to_history() {
     // The queued-message recall only fires from Compose (where the user can
     // actually edit the recalled draft). In Browse (a step selected, no
-    // completion), ↑ is inert — step walking is verb-owned (ADR-0173).
+    // completion), a single-line draft's ↑ still hands off to inline
+    // history recall at the edge (ADR-0174); step walking stays verb-owned
+    // (Alt+↑, ADR-0173).
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -420,37 +424,38 @@ fn up_arrow_in_browse_does_not_recall_queued() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::HistoryPrev);
 }
 
 #[test]
-fn up_arrow_walks_lines_in_multiline_and_stays_at_top_line() {
-    // In a multi-line draft, ↑ moves the caret up a line. At the top line,
-    // it stays on the top line (InputAction::None) without hijacking history.
+fn up_arrow_walks_lines_in_multiline_and_hands_off_at_top_line() {
+    // In a multi-line draft, ↑ moves the caret up a line. From the top
+    // line, it hands off to inline history recall (ADR-0174).
     let seed = "hello\nworld";
     // Caret at end of second line: ↑ should move to the same column on
-    // the first line ("hello", col 5) and return None.
+    // the first line ("hello", col 5) and stay a caret motion.
     let (action, cur) = multiline_arrow(seed, "hello\nworld".chars().count(), KeyCode::Up);
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 5, "up should land at col 5 on the first line");
 
-    // Sitting on the first line: ↑ stays inert (history recall is Alt+P / Ctrl+R).
+    // Sitting on the first line: ↑ hands off to history recall.
     let (action, _) = multiline_arrow(seed, 5, KeyCode::Up);
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::HistoryPrev);
 }
 
 #[test]
-fn down_arrow_walks_lines_in_multiline_and_stays_at_bottom_line() {
+fn down_arrow_walks_lines_in_multiline_and_hands_off_at_bottom_line() {
     let seed = "hello\nworld";
     // Caret at start of first line: ↓ moves to the same column on the
-    // second line and returns None.
+    // second line and stays a caret motion.
     let (action, cur) = multiline_arrow(seed, 0, KeyCode::Down);
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 6, "down should land at col 0 of the second line");
 
-    // Caret at end of the second line: ↓ stays on bottom line (None), history is on PageDown / Alt+N.
+    // Caret at end of the second line: ↓ hands off to history recall
+    // (ADR-0174) — walking forward, or restoring the stashed draft.
     let (action, _) = multiline_arrow(seed, "hello\nworld".chars().count(), KeyCode::Down);
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::HistoryNext);
 }
 
 #[test]

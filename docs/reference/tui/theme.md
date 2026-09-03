@@ -51,7 +51,8 @@ The theme engine adheres to a **3-tier design token architecture**:
 |-------|-------------------|---------|
 | `text` | (213, 213, 205) | Primary text (input box, selected); also assistant prose |
 | `text_muted` | (119, 125, 117) | Sent messages, labels, secondary text |
-| `text_hover` | (175, 180, 172) | Collapsed step header under pointer (between muted and fg) |
+| `text_hover` | (175, 180, 172) | Reserved intermediate hover tone (the step scheme uses `affordance_fg`, ADR-0174) |
+| `affordance_fg` | (150, 163, 150) | Transient affordance hue: collapsed step summary under the pointer or keyboard focus (ADR-0174) |
 | `user_fg` | (165, 177, 164) | User message text |
 | `system_fg` | (111, 116, 110) | System / harness messages |
 | `code_fg` | (166, 178, 163) | Code content |

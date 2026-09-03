@@ -79,7 +79,7 @@ flag on the message that gates automatic transitions:
 
 | State | Marker | Body | Summary weight (no accent) |
 |-------|--------|------|-----------------------------|
-| `Collapsed` | `+` | hidden | `theme.muted()`, or `theme.hover()` under the pointer |
+| `Collapsed` | `+` | hidden | `theme.muted()`, tinted toward `theme.affordance()` under the pointer or keyboard focus (ADR-0174) |
 | `Expanded` | `-` | visible | `theme.fg()` — expansion dominates every interaction |
 
 ### The `user_pinned` invariant
@@ -124,10 +124,12 @@ from the layout-map hit-test. Never persisted.
                   pointer enters summary
 ```
 
-`Interaction::Focused` shares the hover rung. A collapsed focused or hovered
-summary resolves to `theme.hover()`; a collapsed idle summary resolves to
-`theme.muted()`. Expanded summaries resolve to `theme.fg()` regardless of
-interaction, so pointing at or focusing an open body never makes it recede.
+`Interaction::Focused` shares the hover cue. A collapsed focused or hovered
+summary is tinted toward `theme.affordance()` over its muted resting tone; a
+collapsed idle summary rests at plain `theme.muted()`. Expanded summaries
+resolve to `theme.fg()` regardless of interaction, so pointing at or focusing
+an open body never makes it recede (ADR-0174: the cue is a hue channel, not a
+luminance rung).
 
 ## Lifecycle accent
 
@@ -142,10 +144,10 @@ The accent color a renderer passes to `summary_text_color`, by source:
 | Tool | `Ok` | `None` — hands control to the weight channel | `draw_tool_step`, `draw_envoy_bar` |
 | Reasoning | streaming / finished | `None` — lifecycle reads from the summary text (duration omitted while streaming); the marker is always `+`/`-` | `draw_reasoning_trace` |
 
-A `Some(accent)` supplies the dominant hue, then blends toward the
-disclosure/interaction weight. Collapsed idle leaves the accent unchanged;
-collapsed hover/focus blends 35% toward `theme.hover()`; expanded blends 60%
-toward `theme.fg()`. `None` falls through to `summary_weight`.
+A `Some(accent)` supplies the dominant hue while collapsed and idle; expanded
+blends 60% toward `theme.fg()`. `None` falls through to the disclosure
+luminance. Hover/focus then tint the result toward the affordance hue
+(ADR-0174).
 
 ## Color resolution table
 
@@ -154,11 +156,17 @@ The full `summary_text_color(accent, disclosure, interaction)` resolution:
 | Disclosure | Interaction | `accent` | Summary color |
 |------------|-------------|----------|---------------|
 | Collapsed | Idle | `Some(c)` | `c` |
-| Collapsed | Hovered or Focused | `Some(c)` | `c` blended 35% toward `theme.hover()` |
+| Collapsed | Hovered or Focused | `Some(c)` | `c` tinted toward `theme.affordance()` |
 | Expanded | any | `Some(c)` | `c` blended 60% toward `theme.fg()` |
 | Expanded | any | `None` | `theme.fg()` |
-| Collapsed | Hovered or Focused | `None` | `theme.hover()` |
 | Collapsed | Idle | `None` | `theme.muted()` |
+| Collapsed | Hovered or Focused | `None` | `theme.muted()` tinted toward `theme.affordance()` |
+
+The affordance tint (`INTERACTION_HOVER_BLEND`, 65% toward the
+`affordance_fg` theme token) is a **hue channel**, not a luminance rung: it
+composes over whatever the summary already reads as — plain muted, a
+lifecycle accent, or (for expanded steps, where the tint does not apply) the
+full foreground — so "interactive" is visually orthogonal to "open".
 
 ## Invariants worth keeping
 
@@ -169,14 +177,16 @@ one of the historical bugs the state machine was introduced to fix:
   `user_pinned`; user toggles do not mutate Lifecycle. The only thing that
   crosses the seam is the auto-default re-evaluation, and it goes through the
   pinned-gated setter.
-- **Accent owns hue; weight modulates it.** Lifecycle classification remains
-  dominant while hover/focus and disclosure still have visible affordances.
-- **Focus equals hover.** Both lift a collapsed summary to the same rung and
-  introduce no fourth luminance state.
+- **Interaction owns hue; disclosure owns luminance.** Hover/focus never move
+  the luminance rung (the ADR-0174 rule that replaced `muted < hover < fg`):
+  the transient "interactive" cue is a hue tint, so it can never be
+  structurally out-shone by the active state.
+- **Focus equals hover.** Both tint a collapsed summary to the same
+  affordance hue and introduce no extra state.
 - **Expansion dominates interaction.** An open step is always the primary
-  foreground; the pointer state cannot dim it.
+  foreground; the pointer state neither dims nor re-decorates it.
 - **Reasoning never carries a text accent.** Its lifecycle is expressed in
-  summary text, so the weight ladder stays meaningful.
+  summary text, so the disclosure ladder stays meaningful.
 
 ## Source
 

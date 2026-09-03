@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Arrow edge hand-off to inline history recall (ADR-0174).** On the Session
+  chat surface, `↑` at the first line of the draft (or on a single-line draft)
+  now recalls the previous prompt, and `↓` at the last line walks history
+  forward or restores the stashed draft — reusing the exact recall machinery
+  of `Alt+P`/`Alt+N` (which remain, alongside `Ctrl+R`). Completion walking
+  and multi-line caret motion keep priority. This revises ADR-0173's
+  plane-less arrow table toward the universal readline convention.
+- **Transcript browse focus (ADR-0174).** Clicking anywhere in the transcript
+  viewport — message text, inter-message gaps, the blank space below the last
+  message, and the outer gutters — now parks keyboard attention on the
+  transcript: the composer panel dims and the caret hides, exactly as when a
+  step is selected. Clicking the composer, or any editing keystroke, hands
+  attention back. Pointer-derived transient state only; no mode to enter or
+  leave.
+- **Channel-separated interaction color (ADR-0174).** The step summary
+  hover/focus cue is now a dedicated *affordance hue* (new `affordance_fg`
+  theme token) tinted over the resting color, instead of a rung on the
+  disclosure luminance ladder. Expanded steps stay pinned at the primary
+  foreground and collapsed ones at muted; "interactive" (hue) and "open"
+  (luminance) are visually orthogonal, so the transient hover cue can no
+  longer be out-shone by the active state it points at.
+
+### Fixed
+
+- **Google Antigravity live model discovery now actually runs.** The agent
+  discovery scheduler hard-skipped every `AntigravityOAuth` connection even
+  though the preset declares its first-party `/v1internal:fetchAvailableModels`
+  catalog (ADR-0171), so the connection silently served the compiled snapshot
+  and never picked up freshly shipped generations. OAuth connections now
+  discover their declared first-party catalog exactly like keyed presets.
+- **Antigravity is a fitting first-party catalog.** `antigravity-oauth` marks
+  `fitting: true` (the same trust decision ChatGPT Codex / Copilot make), so a
+  generation Google ships (Gemini 3.8 Flash) materializes for the signed-in
+  account with zero client changes instead of being intersected away by a
+  hand-maintained baseline that lags upstream.
+- **Tiered wire aliases are rule-based, not per-version.** Live parsing derives
+  the user-facing alias from any preserved `-tiered` id (`gemini-3.8-flash-tiered`
+  → `gemini-3.8-flash`) and the Antigravity wire envelope maps 3.x Flash aliases
+  back to their canonical `-tiered` id (`gemini-3.8-flash` →
+  `gemini-3.8-flash-tiered`) — replacing the hard-coded Gemini 3.7 special cases
+  in `list_models` / the Google provider, so 3.9+ needs no per-version code.
+- Compiled floors updated for the new generation: `gemini-3.8-flash`
+  (`-tiered` for Antigravity) added to the native Google and Antigravity OAuth
+  baselines so the model resolves with full metadata even before a live fetch.
+
 ## [0.38.5] - 2026-09-03
 
 ### Added

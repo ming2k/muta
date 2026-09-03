@@ -861,6 +861,17 @@ pub struct App {
     /// affordance. `None` whenever the pointer is elsewhere or an overlay
     /// modal is open.
     pub hovered_step: Option<usize>,
+    /// Whether the pointer last acted on the transcript area (ADR-0174): a
+    /// click anywhere in the transcript content — a step summary, message
+    /// text, or the blank space between and around messages — parks the
+    /// keyboard's attention on the transcript ("browse focus") and dims the
+    /// composer panel, while clicking the composer itself or typing any
+    /// printable character (the bounce-to-composer grammar) hands attention
+    /// back. Pure pointer-derived transient state, recomputed from real
+    /// interactions: it is cleared by every keyboard path that touches the
+    /// composer and by view switches, so a mouse-driven user always sees
+    /// which surface the next keypress lands on.
+    pub transcript_focused: bool,
     /// Which layout strategy arranges the transcript message stream. Selected
     /// via `[tui] transcript_layout`; defaults to the turn-banded layout (each
     /// tool-bearing ReAct turn grouped under a labelled header). See

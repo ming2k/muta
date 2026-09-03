@@ -790,7 +790,7 @@ fn parse_antigravity_models_map(
 ) -> Vec<DiscoveredModel> {
     let deprecated_map = root.get("deprecatedModelIds").and_then(Value::as_object);
     let mut out = Vec::new();
-    let mut saw_flash_tiered = false;
+    let mut emitted: HashSet<String> = HashSet::new();
 
     for (model_id, mdata) in models_map {
         // Suppress 3.6 flash models, internal chat/tab helpers, embeddings, image models, deprecated models
@@ -802,10 +802,6 @@ fn parse_antigravity_models_map(
             || deprecated_map.is_some_and(|dep| dep.contains_key(model_id))
         {
             continue;
-        }
-
-        if model_id == "gemini-3.7-flash-tiered" {
-            saw_flash_tiered = true;
         }
 
         let context_window = mdata
@@ -822,7 +818,7 @@ fn parse_antigravity_models_map(
             .or(Some(true));
         let vision = mdata.get("supportsImages").and_then(Value::as_bool);
 
-        out.push(DiscoveredModel {
+        let discovered = DiscoveredModel {
             id: model_id.clone(),
             picker_enabled: Some(true),
             protocol: None,
@@ -834,27 +830,41 @@ fn parse_antigravity_models_map(
             tool_call: Some(true),
             vision,
             effort_levels: None,
-        });
-    }
-
-    // Expose standard user-friendly "gemini-3.7-flash" alias when 3.7 flash tiered is supported
-    if saw_flash_tiered {
-        out.push(DiscoveredModel {
-            id: "gemini-3.7-flash".to_string(),
-            picker_enabled: Some(true),
-            protocol: None,
-            family: Some("google".to_string()),
-            context_window: Some(1_000_000),
-            max_output_tokens: Some(64_000),
-            reasoning: Some(true),
-            thinking: Some(ThinkingSupport::ReasoningContent),
-            tool_call: Some(true),
-            vision: Some(true),
-            effort_levels: None,
-        });
+        };
+        push_antigravity_model(&mut out, &mut emitted, discovered, model_id);
     }
 
     out
+}
+
+/// Push one discovered model, then derive its user-facing alias when the
+/// canonical id is effort-tiered.
+///
+/// Antigravity addresses each tiered generation through a single canonical
+/// `-tiered` wire id (`gemini-3.7-flash-tiered`, `gemini-3.8-flash-tiered`,
+/// …) while every user-facing surface speaks the public name without the
+/// suffix (`gemini-3.8-flash`). Live discovery therefore exposes the alias
+/// alongside the canonical id — rule-based over any preserved `-tiered`
+/// entry, so a new tiered generation (3.9, 4.x, …) surfaces with zero
+/// per-version code, mirroring the reverse mapping the Antigravity wire
+/// envelope applies when sending (`gemini-3.8-flash` → `gemini-3.8-flash-tiered`).
+fn push_antigravity_model(
+    out: &mut Vec<DiscoveredModel>,
+    emitted: &mut HashSet<String>,
+    model: DiscoveredModel,
+    canonical_id: &str,
+) {
+    if emitted.insert(model.id.clone()) {
+        out.push(model.clone());
+    }
+    if let Some(alias) = canonical_id.strip_suffix("-tiered")
+        && emitted.insert(alias.to_string())
+    {
+        out.push(DiscoveredModel {
+            id: alias.to_string(),
+            ..model
+        });
+    }
 }
 
 #[cfg(test)]
@@ -975,6 +985,7 @@ mod tests {
     fn parses_antigravity_models_filtering_3_6_and_deprecated() {
         let json = serde_json::json!({
             "models": {
+                "gemini-3.8-flash-tiered": { "maxTokens": 1048576, "supportsThinking": true },
                 "gemini-3.7-flash-tiered": { "maxTokens": 1000000, "supportsThinking": true },
                 "gemini-3.6-flash-high": { "maxTokens": 1000000, "supportsThinking": true },
                 "gemini-pro-agent": { "maxTokens": 1000000, "supportsThinking": true },
@@ -989,6 +1000,8 @@ mod tests {
             .into_iter()
             .map(|model| model.id)
             .collect();
+        assert!(got.contains(&"gemini-3.8-flash-tiered".to_string()));
+        assert!(got.contains(&"gemini-3.8-flash".to_string()));
         assert!(got.contains(&"gemini-3.7-flash-tiered".to_string()));
         assert!(got.contains(&"gemini-3.7-flash".to_string()));
         assert!(got.contains(&"gemini-pro-agent".to_string()));

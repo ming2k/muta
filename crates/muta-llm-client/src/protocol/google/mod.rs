@@ -33,6 +33,31 @@ pub mod response;
 /// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
 pub const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// Map a user-facing Gemini 3.x Flash alias to Antigravity's canonical
+/// tiered wire identifier.
+///
+/// Antigravity addresses each effort-tiered generation through a single
+/// `-tiered` wire id (`gemini-3.7-flash-tiered`, `gemini-3.8-flash-tiered`,
+/// …) while public surfaces speak the name without the suffix. Live discovery
+/// derives the alias from the canonical id (see `parse_antigravity_models_map`
+/// in `muta-providers`), and this is its exact inverse: `gemini-3.8-flash` →
+/// `gemini-3.8-flash-tiered`. Only 3.x minor Flash aliases match the pattern,
+/// so 2.5-family ids, non-tiered 3.x ids (`gemini-3-flash`), effort-suffixed
+/// ids (`-high`/`-medium`/`-low`), and already-canonical ids pass through
+/// untouched — a future tiered generation needs no per-version case here.
+fn antigravity_wire_model(model: &str) -> std::borrow::Cow<'_, str> {
+    let Some(minor) = model.strip_prefix("gemini-3.") else {
+        return std::borrow::Cow::Borrowed(model);
+    };
+    let Some(minor_version) = minor.strip_suffix("-flash") else {
+        return std::borrow::Cow::Borrowed(model);
+    };
+    if minor_version.is_empty() || !minor_version.bytes().all(|b| b.is_ascii_digit()) {
+        return std::borrow::Cow::Borrowed(model);
+    }
+    std::borrow::Cow::Owned(format!("gemini-3.{minor_version}-flash-tiered"))
+}
+
 fn google_completion(
     response_json: &Value,
 ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
@@ -579,13 +604,15 @@ impl GoogleProvider {
                 );
             }
 
-            // Normalize model names for Antigravity backend: Antigravity routes 3.7 Flash
-            // through its tiered wire identifier `gemini-3.7-flash-tiered`.
-            let wire_model = if self.endpoint.model == "gemini-3.7-flash" {
-                "gemini-3.7-flash-tiered"
-            } else {
-                self.endpoint.model.as_str()
-            };
+            // Normalize user-facing model names to Antigravity's canonical
+            // wire identifiers. Live discovery exposes each effort-tiered
+            // generation under its `-tiered` wire id and derives a
+            // user-facing alias without the suffix; when a caller selects
+            // that alias (or a static seed names the public id), route it
+            // back through the canonical tiered id — `gemini-3.8-flash` →
+            // `gemini-3.8-flash-tiered`. Rule-based over 3.x minor flash
+            // aliases so new tiered generations need no per-version case.
+            let wire_model = antigravity_wire_model(&self.endpoint.model);
 
             let wrapped_body = serde_json::json!({
                 "project": project,
@@ -800,28 +827,39 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_envelope_normalizes_gemini_37_flash_wire_name() {
-        let p = GoogleProvider::with_base_url_and_user_agent(
-            "k".to_string(),
-            "gemini-3.7-flash".to_string(),
-            "https://daily-cloudcode-pa.googleapis.com/v1internal",
-            "ua",
-        )
-        .with_dialect(muta_contracts::GoogleGenerateContentDialect::Antigravity)
-        .with_project_id("proj-1");
-        let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), true, false);
-        assert_eq!(body["model"], "gemini-3.7-flash-tiered");
-        assert!(body["request"].is_object());
+    fn antigravity_envelope_normalizes_tiered_flash_aliases() {
+        // User-facing "gemini-3.<minor>-flash" names route through the tiered
+        // wire identifier — rule-based across generations, not just 3.7.
+        for (id, expected) in [
+            ("gemini-3.7-flash", "gemini-3.7-flash-tiered"),
+            ("gemini-3.8-flash", "gemini-3.8-flash-tiered"),
+            ("gemini-3.9-flash", "gemini-3.9-flash-tiered"),
+        ] {
+            let p = GoogleProvider::with_base_url_and_user_agent(
+                "k".to_string(),
+                id.to_string(),
+                "https://daily-cloudcode-pa.googleapis.com/v1internal",
+                "ua",
+            )
+            .with_dialect(muta_contracts::GoogleGenerateContentDialect::Antigravity)
+            .with_project_id("proj-1");
+            let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), true, false);
+            assert_eq!(body["model"], expected);
+            assert!(body["request"].is_object());
+        }
     }
 
     #[test]
     fn antigravity_envelope_preserves_canonical_antigravity_wire_ids() {
         for (id, expected) in [
+            ("gemini-3.8-flash-tiered", "gemini-3.8-flash-tiered"),
             ("gemini-3.7-flash-tiered", "gemini-3.7-flash-tiered"),
             ("gemini-pro-agent", "gemini-pro-agent"),
             ("gemini-3.1-pro-low", "gemini-3.1-pro-low"),
             ("gemini-3.1-flash-lite", "gemini-3.1-flash-lite"),
             ("gemini-2.5-flash", "gemini-2.5-flash"),
+            ("gemini-3-flash", "gemini-3-flash"),
+            ("gemini-3.6-flash-high", "gemini-3.6-flash-high"),
             ("claude-sonnet-4-6", "claude-sonnet-4-6"),
             ("claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
         ] {

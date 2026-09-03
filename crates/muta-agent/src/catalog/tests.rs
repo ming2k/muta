@@ -9,12 +9,13 @@ use super::{
     refresh_connection_models_for_etag, sync_fitted_model_registry,
 };
 use muta_contracts::catalog::Transport;
-use muta_contracts::{Effort, OpenAiResponsesDialect, ThinkingMode, WireProtocol};
+use muta_contracts::{ConnectionAuth, Effort, OpenAiResponsesDialect, ThinkingMode, WireProtocol};
 use muta_persistence::config::{
     Config, Credentials, DiscoveryCache, FittedModelInfo, ModelListCacheState,
 };
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
+use muta_providers::oauth::store::{AuthStore, TokenSet};
 use muta_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
 
 use std::sync::Mutex;
@@ -424,6 +425,105 @@ async fn live_discovery_writes_the_per_instance_cache() {
     assert!(
         cache.connection_models["deepseek"].contains(&"deepseek-v4-flash-vision-exp".to_string())
     );
+}
+
+#[tokio::test]
+async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
+    // The antigravity-oauth preset declares its first-party catalog
+    // (`fetchAvailableModels`). An OAuth connection must actually run that
+    // discovery — not silently keep the compiled snapshot — so a generation
+    // shipped upstream (gemini-3.8-flash) materializes for the signed-in
+    // account with no client edit. Regression guard: discovery used to skip
+    // every AntigravityOAuth connection, leaving the cache empty forever.
+    let _sandbox = sandboxed_paths();
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/v1internal:fetchAvailableModels")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+                "models": {
+                  "gemini-3.8-flash-tiered": { "maxTokens": 1048576, "maxOutputTokens": 65536, "supportsThinking": true, "supportsImages": true },
+                  "gemini-3.7-flash-tiered": { "maxTokens": 1048576, "maxOutputTokens": 65536, "supportsThinking": true, "supportsImages": true },
+                  "gemini-3.6-flash-high": { "maxTokens": 1048576, "supportsThinking": true },
+                  "gemini-pro-agent": { "maxTokens": 1048576, "supportsThinking": true },
+                  "gemini-3.1-pro-high": { "maxTokens": 1048576, "supportsThinking": true },
+                  "gemini-2.5-flash": { "maxTokens": 1048576 },
+                  "chat_20706": { "maxTokens": 16000 },
+                  "claude-opus-4-6-thinking": { "maxTokens": 1048576, "supportsThinking": true }
+                },
+                "deprecatedModelIds": { "gemini-3.1-pro-high": { "newModelId": "gemini-pro-agent" } }
+            }"#,
+        )
+        .create_async()
+        .await;
+
+    let mut conn = instance("agy-live", Some("antigravity-oauth"));
+    conn.auth = ConnectionAuth::AntigravityOAuth;
+    conn.base_url = Some(format!("{}/v1internal", server.url()));
+    let connections = Connections {
+        connections: vec![conn],
+    };
+    connections.save().unwrap();
+
+    // Seed an unexpired OAuth access token for the connection. The sandboxed
+    // state dir makes the auth-store write test-local.
+    let expires_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_millis() as i64
+        + 3_600_000;
+    {
+        let mut store = AuthStore::lock().await.expect("auth store lock");
+        store.set(
+            "agy-live",
+            TokenSet {
+                access: "ya29.antigravity-test".into(),
+                refresh: "refresh-test".into(),
+                expires_ms,
+                account_id: None,
+                id_token: None,
+                token_type: Some("Bearer".into()),
+                scope: None,
+                project_id: Some("projects/antigravity-test".into()),
+                user_email: None,
+            },
+        );
+        store.save().expect("auth store save");
+    }
+
+    let outcome = discover_connection_models("agy-live", true).await;
+    assert!(
+        outcome.changed,
+        "antigravity live discovery must record a change"
+    );
+    assert!(
+        outcome.failures.is_empty(),
+        "failures: {:?}",
+        outcome.failures
+    );
+
+    let cache = DiscoveryCache::load();
+    let models = cache
+        .connection_models
+        .get("agy-live")
+        .expect("catalog lands in the cache");
+    // The current tiered generation materializes in canonical and alias form.
+    assert!(models.contains(&"gemini-3.8-flash-tiered".to_string()));
+    assert!(
+        models.contains(&"gemini-3.8-flash".to_string()),
+        "user-facing alias for the tiered wire id must be served"
+    );
+    assert!(models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(models.contains(&"gemini-pro-agent".to_string()));
+    // Internal helpers, the legacy 3.6 generation, and deprecated ids stay out.
+    assert!(!models.iter().any(|m| m.starts_with("chat_")));
+    assert!(
+        !models.iter().any(|m| m.starts_with("gemini-3.6-flash")),
+        "legacy 3.6 flash generation must stay suppressed"
+    );
+    assert!(!models.contains(&"gemini-3.1-pro-high".to_string()));
 }
 
 #[tokio::test]

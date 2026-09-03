@@ -712,7 +712,6 @@ pub fn draw_transcript(
     // `transcript_area` (un-inset). The page header is rendered from its own
     // layout-split rect before this point, so it is unaffected.
     let band = transcript_band_rect(transcript_area);
-    let mut current_y = band.y;
     // Account for scroll. Owned by the layout `Stream` once the loop runs; not
     // mutated locally here unless a virtual index selects a later chunk.
     let mut skip_rows = scroll as usize;
@@ -768,7 +767,7 @@ pub fn draw_transcript(
         // accounting, layout map, height cache, theme, hover/focus) and
         // exposes `badge` / `dispatch` / `gap` as the sanctioned mutations, so
         // every layout agrees on scroll semantics. The layout leaves
-        // `content_lines`, `sticky_steps`, and `current_y` populated for the
+        // `content_lines` and `sticky_steps` populated for the
         // post-processing below.
         let mut stream = layout::Stream {
             frame,
@@ -784,40 +783,35 @@ pub fn draw_transcript(
             message_start,
             message_end,
             virtual_total_lines,
-            current_y,
+            current_y: band.y,
             skip_rows,
             content_lines,
             sticky_steps,
         };
         layout.build().run(&mut stream);
         // Recover the loop state the post-processing below needs.
-        // (`skip_rows` is loop-internal and is not read after the layout
-        // returns, so it is not recovered.)
-        current_y = stream.current_y;
+        // (`skip_rows` and `current_y` are loop-internal and are not read
+        // after the layout returns, so they are not recovered.)
         content_lines = stream.content_lines;
         sticky_steps = stream.sticky_steps;
     } // end else (non-empty transcript branch)
 
-    // Record the visible transcript content rect so clicks on gap rows
-    // (which carry no registered region) still switch keyboard focus to
-    // Browse. The rect spans the horizontal band inside the gutters —
-    // matching the user's mental model that the outer gutters are not
-    // transcript clicks — and the rows where content was actually drawn,
-    // clamped to the viewport so empty space below the last message stays
-    // inert. `current_y` already stops advancing once it reaches the
-    // viewport bottom, so this is a faithful bound on visible content.
+    // Record the interactive transcript rect so clicks on any blank
+    // transcript space — gap rows between messages, the empty region below
+    // the last message, and the outer gutters — park keyboard attention on
+    // the transcript (ADR-0174 browse focus). The rect spans the full
+    // transcript viewport: the user's mental model is "the whole transcript
+    // area is the browse surface", so no part of it is a dead click.
     // Skipped for the empty-state hero, which owns its own rect and is not
     // part of the interactive transcript surface.
     if !show_empty_state {
-        let content_bottom = current_y.min(band.y + band.height);
-        if content_bottom > band.y {
-            layout_map.set_transcript_content_rect(Rect::new(
-                band.x,
-                band.y,
-                band.width,
-                content_bottom - band.y,
+        layout_map
+            .set_transcript_content_rect(Rect::new(
+                transcript_area.x,
+                transcript_area.y,
+                transcript_area.width,
+                transcript_area.height,
             ));
-        }
     }
 
     // The footer stacks, from top to bottom: a permanent blank separator,

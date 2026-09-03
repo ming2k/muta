@@ -2,8 +2,8 @@
 //! presentation, and the pure functions that reduce them to color.
 //!
 //! See [`super`] for the full architectural overview; this module owns the
-//! state types and the accent/weight resolution so they can be unit-tested in
-//! isolation from rendering.
+//! state types and the accent/weight/affordance resolution so they can be
+//! unit-tested in isolation from rendering.
 
 use mutx_engine::Color;
 
@@ -32,7 +32,8 @@ impl Disclosure {
 }
 
 /// Transient interaction with a step summary, recomputed every frame from
-/// pointer / keyboard state. Never persisted.
+/// pointer / keyboard state. Never persisted. Resolves to the affordance
+/// **hue** channel (ADR-0174), not a luminance rung.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Interaction {
     /// Not under the pointer and not keyboard-focused.
@@ -40,13 +41,9 @@ pub enum Interaction {
     /// Pointer rests on the summary line — a soft hover affordance.
     Hovered,
     /// Keyboard focus ring is on this step. Resolves identically to
-    /// [`Hovered`](Interaction::Hovered) in [`summary_weight`]: it lifts a
-    /// *collapsed* summary toward the hover tone and is a no-op on an
-    /// *expanded* one (an open summary is already pinned at the foreground).
-    /// Focus takes priority over hover only in
-    /// [`from_hover_focused`](Interaction::from_hover_focused)'s enum
-    /// resolution; both land on the same color, so a focused step never
-    /// silently darkens when the pointer leaves.
+    /// [`Hovered`](Interaction::Hovered): both tint the summary toward the
+    /// theme's affordance hue, so a focused step never silently changes
+    /// color when the pointer leaves.
     Focused,
 }
 
@@ -68,220 +65,212 @@ impl Interaction {
     }
 }
 
-/// Summary-line **weight** (luminance) — a pure function of disclosure ×
-/// interaction. This is the "is it open / focused / under the pointer?"
-/// channel only; it never depends on lifecycle, so it cannot leak run-state
-/// into the brightness.
+/// Summary-line **weight** (luminance) — a pure function of disclosure. This
+/// is the "is it open?" channel only; it never depends on lifecycle or
+/// interaction, so it cannot leak run-state into the brightness.
 ///
-/// **Disclosure-first, monotonic model.** Disclosure picks the base tone and
-/// interaction may only ever *lift* it — hover/focus is never allowed to make a
-/// summary darker than its resting state:
+/// **Disclosure-first luminance, hue-separated interaction (ADR-0174).**
+/// Disclosure picks the base tone; interaction no longer competes on
+/// brightness. The old `muted < hover < fg` ladder made "hover" and "open"
+/// two rungs of the *same* channel — the active (expanded) state was
+/// structurally brighter than the affordance, so the hover cue always lost.
+/// Now the affordance is its own hue channel ([`Interaction::color`], the
+/// theme's affordance token) composed in [`summary_text_color`], and the
+/// luminance ladder is just:
 ///
-/// 1. **Expanded** → `theme.fg()`, **pinned**. An open body is already the
-///    active state at full brightness, so interaction is ignored: hovering or
-///    focusing an open summary leaves it exactly where it is. (Under the old
-///    "hover overrides disclosure" rule, hovering an expanded summary dropped
-///    it from `fg` to the dimmer hover tone — pointing at an open step made it
-///    *recede*. Pinning expanded at `fg` removes that backwards step.)
-/// 2. **Collapsed + hover / focus** → `theme.hover()`. A closed summary lifts
-///    toward the intermediate hover tone under the pointer or keyboard focus —
-///    the affordance that says "this opens". Focus shares hover's color (it is
-///    a transient "look here" cue, not a pin to full brightness).
-/// 3. **Collapsed + idle** → `theme.muted()`. A closed, idle step recedes.
-///
-/// The three tones (`muted` < `hover` < `fg`) stay distinct, and the ladder is
-/// monotonic: collapsing a step *immediately* darkens it to muted, and the only
-/// way to reach `fg` is to open it. Hover/focus is a brightening cue on a
-/// collapsed step and a no-op on an open one.
-pub fn summary_weight(disclosure: Disclosure, interaction: Interaction, theme: &Theme) -> Color {
+/// 1. **Expanded** → `theme.fg()`. An open body is the active state, carried
+///    by the `+`/`-` marker and the body itself — no extra brightness.
+/// 2. **Collapsed** → `theme.muted()`. A closed summary rests at muted.
+pub fn summary_weight(disclosure: Disclosure, theme: &Theme) -> Color {
     match disclosure {
         Disclosure::Expanded => theme.fg(),
-        Disclosure::Collapsed => match interaction {
-            Interaction::Hovered | Interaction::Focused => theme.hover(),
-            Interaction::Idle => theme.muted(),
-        },
+        Disclosure::Collapsed => theme.muted(),
     }
 }
 
-/// Resolve the final summary text color from both channels:
+impl Interaction {
+    /// The transient affordance **hue** (ADR-0174): the second presentation
+    /// channel. Hover/focus resolve to the theme's affordance token — a
+    /// *tint*, not a luminance step — so "this is interactive" is visually
+    /// orthogonal to "this is open" and can never be out-shone by it. Idle
+    /// contributes nothing.
+    pub fn color(self, theme: &Theme) -> Option<Color> {
+        match self {
+            Interaction::Idle => None,
+            Interaction::Hovered | Interaction::Focused => Some(theme.affordance()),
+        }
+    }
+}
+
+/// Resolve the final summary text color from the channels:
 ///
-/// - A **non-completed lifecycle** supplies an accent (hue) which stays in
-///   force so a running / failed / denied step remains visibly accented even
-///   when collapsed and idle. The caller computes the accent from its
-///   kind-specific lifecycle source (e.g. `ToolStatus::color`); per ADR 0008
-///   the accent is a steady hue, never a breathing sweep — the activity bar
-///   owns the only motion in the TUI.
-/// - `None` (completed, or a kind whose lifecycle only affects its marker —
-///   reasoning) hands control fully to [`summary_weight`].
-///
-/// The two channels compose: when an accent is present it supplies the **hue**
-/// while the disclosure × interaction weight channel still modulates the
-/// **brightness**. Without that composition a long-lived accent — like the
-/// `info` hue on a running runner task — would pin the summary to one flat
-/// color for its whole lifetime and the hover/focus affordance would never
-/// show, which is exactly the bug where hovering an `explore` step did
-/// nothing. The accent is nudged toward the weight-ladder color by a per-rung
-/// factor (`ACCENT_IDLE_BLEND`, `ACCENT_HOVER_BLEND`, `ACCENT_EXPANDED_BLEND`)
-/// that mirrors [`summary_weight`]'s monotonic model: an idle collapsed step
-/// leaves the accent essentially intact (the running step stays vivid), a
-/// collapsed step under hover / focus leans a little toward `theme.hover()`,
-/// and an open (expanded) body leans toward the primary foreground — pinned,
-/// so hover/focus on an open accent step is a no-op just like the plain case.
+/// - **Disclosure luminance** via [`summary_weight`]: expanded → `fg`,
+///   collapsed → `muted`.
+/// - **Lifecycle accent** (hue): a non-completed lifecycle supplies an accent
+///   so a running / failed / denied step stays visibly classified even when
+///   collapsed and idle (per ADR 0008, a steady hue — never a breathing
+///   sweep). It leans toward the disclosure luminance when the body is open
+///   (`ACCENT_EXPANDED_BLEND`) and stays intact while collapsed.
+/// - **Interaction affordance hue** (ADR-0174): hover/focus tint the result
+///   toward the theme's affordance token (`INTERACTION_HOVER_BLEND`) — a hue
+///   shift on top of whatever luminance/hue the summary already has, so the
+///   cue reads identically on plain, accented, and open summaries without
+///   ever changing their brightness ordering.
 ///
 /// This is the single entry point renderers use for the summary text color,
-/// keeping the accent/weight separation in one auditable place.
+/// keeping the three-channel separation in one auditable place.
 pub fn summary_text_color(
     accent: Option<Color>,
     disclosure: Disclosure,
     interaction: Interaction,
     theme: &Theme,
 ) -> Color {
-    let Some(accent) = accent else {
-        return summary_weight(disclosure, interaction, theme);
+    let weight = summary_weight(disclosure, theme);
+    // Channel 1 + 2: lifecycle accent over disclosure luminance.
+    let base = match accent {
+        Some(accent) => {
+            let t = match disclosure {
+                Disclosure::Expanded => ACCENT_EXPANDED_BLEND,
+                Disclosure::Collapsed => ACCENT_IDLE_BLEND,
+            };
+            accent.blend(weight, t)
+        }
+        None => weight,
     };
-    // The weight-ladder color for this disclosure × interaction gives the
-    // brightness target. Blend the accent toward it by a rung-specific factor
-    // so the hue dominates but hover / open-body / idle still produce a visible
-    // luminance shift. The factor mirrors the three-tone weight ladder: hover
-    // (and focus) lean toward the hover tone, an expanded body leans toward the
-    // primary foreground, and an idle collapsed step leaves the accent intact.
-    let weight = summary_weight(disclosure, interaction, theme);
-    let t = accent_blend_factor(disclosure, interaction);
-    accent.blend(weight, t)
-}
-
-/// How strongly a lifecycle accent yields to the disclosure × interaction
-/// weight color. Kept small so the hue (running / failed / denied) stays the
-/// dominant signal, but non-zero on the active / transient states so the
-/// accent still visibly shifts toward the matching weight-ladder color. The
-/// rungs mirror [`summary_weight`]'s disclosure-first, monotonic model:
-///
-/// - Expanded → lean toward `theme.fg()` (an open body is active), **pinned**:
-///   hover/focus on an open step do not change the blend, matching the weight
-///   ladder where expanded is pinned at `fg`.
-/// - Collapsed + hover / focus → lean toward `theme.hover()` (the affordance
-///   that says "this opens").
-/// - Collapsed + idle → leave the accent intact (the running step stays vivid
-///   while it recedes).
-fn accent_blend_factor(disclosure: Disclosure, interaction: Interaction) -> f32 {
-    match disclosure {
-        Disclosure::Expanded => ACCENT_EXPANDED_BLEND,
-        Disclosure::Collapsed => match interaction {
-            Interaction::Hovered | Interaction::Focused => ACCENT_HOVER_BLEND,
-            Interaction::Idle => ACCENT_IDLE_BLEND,
-        },
+    // Channel 3: the interaction affordance hue, composed last so the cue
+    // rides on top of idle/accent composition. Scoped to *collapsed* steps:
+    // an open body already announces itself (the `-` marker, the visible
+    // body, the sticky pin when scrolled) — the old model's lesson was that
+    // re-decorating the active state only muddies the disclosure signal.
+    match (disclosure, interaction.color(theme)) {
+        (Disclosure::Collapsed, Some(hue)) => base.blend(hue, INTERACTION_HOVER_BLEND),
+        _ => base,
     }
 }
 
-/// Blend factors used to compose a lifecycle accent with the weight ladder.
-/// Exposed as module consts so the unit tests assert the exact composed color
-/// rather than only "it changed". Collapsed-idle leaves the accent untouched,
-/// collapsed hover/focus share one rung (the "this opens" affordance), and
-/// expanded is its own rung (the active state, pinned regardless of hover).
+/// Blend factors composing the channels. Exposed as module consts so the unit
+/// tests assert the exact composed color rather than only "it changed".
+/// A collapsed idle step leaves the lifecycle accent untouched; an open body
+/// leans toward the disclosure luminance; and the hover/focus affordance is a
+/// strong tint toward the affordance hue (it must clearly read as a hue
+/// change, not a subtle drift).
 const ACCENT_IDLE_BLEND: f32 = 0.0;
-const ACCENT_HOVER_BLEND: f32 = 0.35;
 const ACCENT_EXPANDED_BLEND: f32 = 0.6;
+const INTERACTION_HOVER_BLEND: f32 = 0.65;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The three tones are always distinct, so a step can never ambiguously
-    /// share a color between two causes. This is the core invariant of the
-    /// hover-priority model: hover ≠ fg ≠ muted.
+    /// The disclosure luminance rungs stay distinct, and the affordance hue
+    /// is distinct from both of them — so "interactive" (hue) can never be
+    /// confused with "open" or "idle" (luminance). This is the core invariant
+    /// of the ADR-0174 channel separation.
     #[test]
     fn three_tones_are_distinct() {
         let theme = Theme::default();
-        assert_ne!(theme.hover(), theme.fg());
-        assert_ne!(theme.hover(), theme.muted());
+        assert_ne!(theme.affordance(), theme.fg());
+        assert_ne!(theme.affordance(), theme.muted());
         assert_ne!(theme.fg(), theme.muted());
     }
 
-    /// Monotonic invariant: hover/focus may only *lift* a summary, never darken
-    /// it. An expanded summary is pinned at `fg` (the brightest tone), so
-    /// hovering or focusing it is a no-op — it must not drop to the dimmer hover
-    /// tone the way the old "hover overrides disclosure" rule did.
+    /// Monotonic invariant (retained): interaction may never change a
+    /// summary's disclosure luminance. An expanded summary stays pinned at
+    /// `fg` with no transient cue at all; a collapsed one rests on the muted
+    /// rung — hover/focus only add the affordance tint on top, never a
+    /// brighter rung.
     #[test]
-    fn hover_focus_never_darkens_expanded() {
+    fn hover_focus_never_changes_luminance() {
         let theme = Theme::default();
+        // Expanded: interaction is a complete no-op.
         for interaction in [
             Interaction::Idle,
             Interaction::Hovered,
             Interaction::Focused,
         ] {
             assert_eq!(
-                summary_weight(Disclosure::Expanded, interaction, &theme),
+                summary_text_color(None, Disclosure::Expanded, interaction, &theme),
                 theme.fg(),
                 "an expanded summary stays at fg regardless of interaction",
             );
         }
-    }
-
-    /// On a *collapsed* summary hover/focus is a brightening cue: it lifts the
-    /// muted resting tone to the intermediate hover tone. Focus shares hover's
-    /// color (a transient "look here" cue), so it does not introduce a fourth
-    /// color and a focused step never silently darkens when the pointer leaves.
-    #[test]
-    fn collapsed_hover_focus_lifts_to_hover_tone() {
-        let theme = Theme::default();
+        // Collapsed: the base rung stays muted; hover/focus differentiate
+        // only through the affordance hue tint (asserted in
+        // `collapsed_hover_focus_tints_to_affordance_hue`).
         assert_eq!(
-            summary_weight(Disclosure::Collapsed, Interaction::Hovered, &theme),
-            theme.hover()
-        );
-        assert_eq!(
-            summary_weight(Disclosure::Collapsed, Interaction::Focused, &theme),
-            theme.hover()
-        );
-        // A lift, not a drop: brighter than the muted idle resting tone.
-        assert_ne!(
-            summary_weight(Disclosure::Collapsed, Interaction::Focused, &theme),
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Idle, &theme),
             theme.muted()
         );
     }
 
-    /// Expanded and collapsed are mutually exclusive peers, decided only when
-    /// idle: an open idle step is the primary foreground, a closed idle step is
-    /// muted. This is the regression for the original bug — closing a step must
+    /// On a *collapsed* summary hover/focus is a hue cue: it tints the muted
+    /// resting tone toward the affordance hue. Focus shares hover's result,
+    /// so a focused step never changes color when the pointer leaves.
+    #[test]
+    fn collapsed_hover_focus_tints_to_affordance_hue() {
+        let theme = Theme::default();
+        assert_eq!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
+            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+        );
+        assert_eq!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Focused, &theme),
+            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+        );
+        // A hue shift, not a luminance step: the tinted result must differ
+        // from both plain rungs.
+        assert_ne!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
+            theme.muted()
+        );
+        assert_ne!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
+            theme.fg()
+        );
+    }
+
+    /// Expanded and collapsed are mutually exclusive peers, decided only by
+    /// disclosure: an open idle step is the primary foreground, a closed idle
+    /// step is muted. Regression for the original bug — closing a step must
     /// *immediately* darken it instead of staying bright.
     #[test]
     fn idle_disclosure_decides_fg_vs_muted() {
         let theme = Theme::default();
         assert_eq!(
-            summary_weight(Disclosure::Expanded, Interaction::Idle, &theme),
+            summary_text_color(None, Disclosure::Expanded, Interaction::Idle, &theme),
             theme.fg()
         );
         assert_eq!(
-            summary_weight(Disclosure::Collapsed, Interaction::Idle, &theme),
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Idle, &theme),
             theme.muted()
         );
     }
 
     /// Regression for the reported bug: after clicking a summary to collapse
     /// it, the step must darken to muted. The close click also sets keyboard
-    /// focus, but a collapsed focused summary reads as the hover tone — still
-    /// dimmer than the expanded fg — and once the pointer/focus leaves it reads
-    /// as muted. An expanded step is therefore brighter than a closed one in
-    /// every state.
+    /// focus, but that focus is now a hue tint over the muted rung — still
+    /// dimmer in luminance than the expanded fg — and once the pointer/focus
+    /// leaves it reads as plain muted. An expanded step is therefore never
+    /// dimmer than a closed one in any state.
     #[test]
     fn closing_a_step_darkens_it() {
         let theme = Theme::default();
-        let open = summary_weight(Disclosure::Expanded, Interaction::Idle, &theme);
-        let closed = summary_weight(Disclosure::Collapsed, Interaction::Idle, &theme);
+        let open = summary_text_color(None, Disclosure::Expanded, Interaction::Idle, &theme);
+        let closed = summary_text_color(None, Disclosure::Collapsed, Interaction::Idle, &theme);
         assert_ne!(
             open, closed,
             "an open step must not read the same color as a closed idle one"
         );
-        // fg is brighter than muted in the default theme, so "darkens" holds.
         assert_ne!(open, theme.muted());
         assert_eq!(closed, theme.muted());
     }
 
     /// A lifecycle accent is *not* discarded: idle + accent returns the accent
-    /// untouched (the running / failed step stays vivid), while the weight
-    /// channel still nudges the brightness on hover / focus / open. This is the
-    /// composition contract — the hue dominates, the luminance shifts.
+    /// untouched (the running / failed step stays vivid), while an open body
+    /// leans toward the disclosure luminance. This is the composition
+    /// contract — the hue dominates, the luminance shifts on disclosure.
     #[test]
-    fn accent_idle_is_intact_hover_focus_blend() {
+    fn accent_idle_is_intact_expanded_blends() {
         let theme = Theme::default();
         let accent = Color::Rgb(128, 153, 156); // an arbitrary accent (e.g. info hue)
         // Idle collapsed: the accent is returned unchanged.
@@ -294,28 +283,9 @@ mod tests {
             ),
             accent
         );
-        // Hover (collapsed): the accent leans toward theme.hover() but keeps its
-        // hue, so it is distinct from both the idle accent and the plain hover.
-        let hovered = summary_text_color(
-            Some(accent),
-            Disclosure::Collapsed,
-            Interaction::Hovered,
-            &theme,
-        );
-        assert_ne!(hovered, accent, "hover must visibly shift an accent step");
-        assert_ne!(hovered, theme.hover());
-        assert_eq!(hovered, accent.blend(theme.hover(), ACCENT_HOVER_BLEND));
-        // Focus shares the hover rung.
-        let focused = summary_text_color(
-            Some(accent),
-            Disclosure::Collapsed,
-            Interaction::Focused,
-            &theme,
-        );
-        assert_eq!(focused, accent.blend(theme.hover(), ACCENT_HOVER_BLEND));
         // Expanded leans toward the primary foreground (its own rung) and is
-        // pinned: idle, hover and focus all produce the same composed color, so
-        // pointing at an open accent step is a no-op just like the plain case.
+        // pinned: idle, hover and focus all produce the same composed color,
+        // so pointing at an open accent step is a no-op just like the plain case.
         let expanded = summary_text_color(
             Some(accent),
             Disclosure::Expanded,
@@ -328,15 +298,14 @@ mod tests {
             assert_eq!(
                 summary_text_color(Some(accent), Disclosure::Expanded, interaction, &theme),
                 expanded,
-                "an expanded accent step does not shift under hover/focus",
+                "an open accent step carries no transient cue"
             );
         }
     }
 
-    /// Regression: an accent step must shift on hover. Before the fix a running
-    /// runner (`explore`) pinned the summary to a flat accent for its whole
-    /// lifetime and hovering did nothing. The composed result must differ
-    /// between idle and hover.
+    /// Regression: an accent step must shift on hover. The composed result
+    /// must differ between idle and hover — the affordance tint rides on top
+    /// of the accent instead of being swallowed by it.
     #[test]
     fn accent_step_hover_is_visible() {
         let theme = Theme::default();
@@ -357,9 +326,15 @@ mod tests {
             idle, hover,
             "hovering an accented step must change its color"
         );
+        // The tint preserves the accent's luminance: the hover result is a
+        // blend of the idle result with the affordance hue.
+        assert_eq!(
+            hover,
+            idle.blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+        );
     }
 
-    /// No accent falls through to the weight ladder (the three-tone model).
+    /// No accent falls through to the disclosure rungs.
     #[test]
     fn no_accent_uses_weight() {
         let theme = Theme::default();
@@ -372,26 +347,22 @@ mod tests {
             summary_text_color(None, Disclosure::Collapsed, Interaction::Idle, &theme),
             theme.muted()
         );
-        // Collapsed hover/focus lifts to the hover tone; expanded stays pinned
-        // at fg (hover never darkens an open summary).
+        // Collapsed hover/focus tint toward the affordance hue; expanded
+        // stays pinned at fg (an open body needs no transient cue).
         assert_eq!(
             summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
-            theme.hover()
+            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
         );
         assert_eq!(
             summary_text_color(None, Disclosure::Expanded, Interaction::Hovered, &theme),
             theme.fg()
         );
-        assert_eq!(
-            summary_text_color(None, Disclosure::Collapsed, Interaction::Focused, &theme),
-            theme.hover()
-        );
     }
 
     /// `from_hover_focused` priority: focus > hover > idle. The enum keeps
     /// focus distinct from hover for determinism, even though both resolve to
-    /// the same color in `summary_weight` — so a focused step stays highlighted
-    /// after the pointer leaves.
+    /// the same affordance hue — so a focused step stays highlighted after
+    /// the pointer leaves.
     #[test]
     fn focus_beats_hover_beats_idle() {
         assert_eq!(

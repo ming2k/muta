@@ -463,7 +463,13 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // `caret_visible` reduces to "no step focus, no selection"
             // — exactly the old hand-rolled condition, without the risk
             // of drifting from the hide/show state machine.
-            let step_focused = app.focused_target.is_some();
+            // ADR-0174: browse focus joins step selection as the second
+            // "keys act on the transcript" signal — a click anywhere in
+            // the transcript content parks attention there and dims the
+            // composer panel until a composer click or a keystroke
+            // hands it back.
+            let step_focused =
+                app.focused_target.is_some() || app.transcript_focused;
             let show_caret = app.caret_visible();
             // A fully-typed known `/command` is painted in bold +
             // accent color so it reads as a resolved command

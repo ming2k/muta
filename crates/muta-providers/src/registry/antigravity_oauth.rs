@@ -8,7 +8,15 @@ use muta_contracts::{Model, WireProtocol};
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
+///
+/// This is the **offline floor** (Layer 3 of the three-layer catalog): live
+/// discovery against `/v1internal:fetchAvailableModels` is authoritative for a
+/// signed-in account and may add generations this seed does not list. The seed
+/// stays current enough that a connection with no network still offers the
+/// current tiered generation.
 pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-tiered",
     "gemini-3.7-flash",
     "gemini-3.7-flash-tiered",
     "gemini-pro-agent",
@@ -20,6 +28,28 @@ pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
 
 /// Baseline capability metadata for the models this provider serves.
 pub const MODELS: &[Model] = &[
+    Model {
+        id: "gemini-3.8-flash",
+        family: "google",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        protocol: WireProtocol::GoogleGenerateContent,
+        model_guidance: "",
+        effort_levels: EFFORT_GEMINI_LEVEL,
+    },
+    Model {
+        id: "gemini-3.8-flash-tiered",
+        family: "google",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        protocol: WireProtocol::GoogleGenerateContent,
+        model_guidance: "",
+        effort_levels: EFFORT_GEMINI_LEVEL,
+    },
     Model {
         id: "gemini-3.7-flash",
         family: "google",
@@ -232,7 +262,14 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     live_catalog: Some(LiveCatalog::ProviderEndpoint(
         DiscoveryProtocol::GoogleCloudCode,
     )),
-    fitting: false,
+    // The `/v1internal:fetchAvailableModels` catalog is Google's official
+    // first-party surface, guarded by this account's OAuth subscription, and
+    // every advertised entry carries real capability fields (maxTokens,
+    // supportsThinking, supportsImages). Fitting is therefore safe and is what
+    // lets a freshly shipped generation (3.8, 3.9, …) materialize for the
+    // signed-in account with zero client changes — the same trust decision the
+    // ChatGPT Codex and Copilot catalogs already make.
+    fitting: true,
     wire_overrides: &[],
     models: ANTIGRAVITY_OAUTH_MODELS,
 };

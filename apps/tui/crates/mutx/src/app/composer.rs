@@ -467,9 +467,11 @@ impl App {
             };
         }
         // No modal: the composer owns the caret unless a transcript step has
-        // keyboard focus or we are zoomed into an runner task (which has no
-        // input line at all — its footer collapses to zero height).
-        if self.focused_target.is_some() || self.in_runner_view() {
+        // keyboard focus, the pointer parked attention on the transcript
+        // (ADR-0174 browse focus), or we are zoomed into an runner task
+        // (which has no input line at all — its footer collapses to zero
+        // height).
+        if self.focused_target.is_some() || self.transcript_focused || self.in_runner_view() {
             CaretOwner::None
         } else {
             CaretOwner::Composer

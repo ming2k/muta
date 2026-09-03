@@ -104,6 +104,14 @@ pub struct Theme {
     /// `text_muted` (idle) and `text` (expanded) so hover reads as a softer
     /// affordance than "open".
     pub text_hover: Color,
+    /// The transient **interaction** hue (ADR-0174): the color a collapsed
+    /// step summary takes while the pointer rests on it or keyboard focus is
+    /// on it. This is the *affordance* channel — a hue shift, not a luminance
+    /// step — so "look here, this is interactive" never competes with the
+    /// disclosure channel's brightness ladder for salience. Derived per
+    /// scheme by tinting the muted resting tone toward the accent, keeping
+    /// the hue visibly distinct from both `text_muted` and `text`.
+    pub affordance_fg: Color,
     /// Solid background for panels (modals, sheets).
     pub panel_bg: Color,
     /// Background for the live input box while it owns the keyboard — the
@@ -201,6 +209,7 @@ impl Default for Theme {
             text: Color::Rgb(213, 213, 205),
             text_muted: Color::Rgb(119, 125, 117),
             text_hover: Color::Rgb(175, 180, 172),
+            affordance_fg: Color::Rgb(150, 163, 150),
             panel_bg: Color::Rgb(14, 15, 15),
             input_bg_active: Color::Rgb(26, 28, 27),
             input_bg_inactive: Color::Rgb(16, 17, 17),
@@ -561,6 +570,11 @@ impl Theme {
             text,
             text_muted: muted,
             text_hover: mix(muted, text, 0.55),
+            // The affordance hue tints the muted resting tone toward the
+            // accent: same dimness family as `text_hover`, but visibly
+            // *tinted*, so the hover/focus cue reads as a hue channel that
+            // cannot be confused with the disclosure ladder's luminance rungs.
+            affordance_fg: mix(muted, accent, if light { 0.55 } else { 0.62 }),
             panel_bg: surface,
             // The input pair derives from `panel_bg`, keeping the two states
             // related (same hue family, two distinct luminance steps) while
@@ -670,6 +684,12 @@ impl Theme {
     /// (expanded/active), so hover reads as a softer affordance than "open".
     pub fn hover(&self) -> Color {
         self.text_hover
+    }
+    /// The transient interaction hue (ADR-0174): the collapsed summary's
+    /// color while hovered or keyboard-focused. A tinted affordance channel,
+    /// distinct from every luminance rung of the disclosure ladder.
+    pub fn affordance(&self) -> Color {
+        self.affordance_fg
     }
     pub fn dim(&self) -> Color {
         self.dim_fg

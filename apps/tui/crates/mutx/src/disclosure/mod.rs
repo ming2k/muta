@@ -31,38 +31,29 @@
 //!    ([`Interaction`]). Recomputed from input each draw, never persisted.
 //!    Shared by every kind.
 //!
-//! The presentation contract is two **composable channels**, joined in
+//! The presentation contract is three **composable channels**, joined in
 //! [`state::summary_text_color`]:
 //!
 //! - **accent** (hue) — from Lifecycle. A non-completed lifecycle stays
 //!   visibly accented even when the step is collapsed and idle, because a
 //!   failure/denial must never hide. `Completed` (and reasoning, whose
-//!   lifecycle only affects its marker) yield no accent, handing control to
-//!   the weight channel.
-//! - **weight** (luminance) — from Disclosure × Interaction, via
-//!   [`state::summary_weight`]. A **disclosure-first, monotonic model** decides
-//!   how bright the summary reads — interaction may only ever *lift* a summary,
-//!   never darken it:
-//!   1. Expanded → the primary foreground, **pinned**. An open body is already
-//!      the active state, so hover/focus on it is a no-op (the old rule dropped
-//!      an expanded summary to the dimmer hover tone, making it recede when you
-//!      pointed at it — the bug this model removes).
-//!   2. Collapsed + hover/focus → the intermediate hover tone (the "this opens"
-//!      affordance). Keyboard focus shares this tone.
-//!   3. Collapsed + idle → muted (a closed step recedes).
+//!   lifecycle only affects its marker) yield no accent.
+//! - **weight** (luminance) — from Disclosure alone, via
+//!   [`state::summary_weight`]. Expanded → the primary foreground; collapsed →
+//!   muted. Interaction is deliberately **not** a rung on this ladder
+//!   (ADR-0174): under the old `muted < hover < fg` model the affordance was
+//!   structurally dimmer than the active state, so the hover cue always lost
+//!   the salience contest it existed to win.
+//! - **affordance** (hue) — from Interaction, via [`state::Interaction::color`]
+//!   and the theme's affordance token. Hover/focus tint the summary toward the
+//!   affordance hue — "look here, this is interactive" is a channel orthogonal
+//!   to "this is open", so a transient cue can never be out-shone by the state
+//!   it points at.
 //!
-//!   The three tones stay distinct and ordered (`muted` < `hover` < `fg`):
-//!   closing a step immediately darkens it to muted, and the only way to reach
-//!   `fg` is to open it.
-//!
-//! When an accent is present it supplies the hue and the weight channel
-//! modulates its brightness (see [`state::summary_text_color`]), so an accent
-//! step — e.g. a long-running runner task — still shifts tone on hover (while
-//! collapsed) and leans to the foreground when open, instead of sitting at one
-//! flat color. Keeping the channels composable is what makes the behavior
-//! consistent across step kinds: a collapsed step lifts toward the hover tone
-//! when hovered or focused, an open step pins to the foreground, and each cause
-//! flows through the single [`state::summary_weight`] entry point.
+//! The channels compose in one place: accent (when present) blends toward the
+//! disclosure luminance, then the affordance tint rides on top — so the cue
+//! reads identically on plain, accented, and open summaries without ever
+//! changing their brightness ordering.
 
 use super::Theme;
 

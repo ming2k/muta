@@ -11,7 +11,7 @@
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
 use futures::stream::{self, StreamExt};
-use muta_contracts::{ConnectionAuth, WireProtocol};
+use muta_contracts::WireProtocol;
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
@@ -426,9 +426,11 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
 }
 
 /// Build the [`DiscoverySource::FirstParty`] variant for a connection,
-/// including the optional models.dev fallback. Returns `None` for connections
-/// this preset must not discover first-party (Antigravity OAuth) or whose
-/// route cannot be derived.
+/// including the optional models.dev fallback. Returns `None` only when the
+/// connection's first route cannot be derived (unknown preset or an empty
+/// model seed) — a preset's declared `live_catalog` scheme is authoritative,
+/// so OAuth presets (ChatGPT Codex, Google Antigravity cloudcode) discover
+/// their own first-party catalog exactly like keyed presets do.
 #[allow(clippy::too_many_arguments)]
 fn build_first_party_source(
     connection: &muta_persistence::connections::Connection,
@@ -437,9 +439,6 @@ fn build_first_party_source(
     protocol: DiscoveryProtocol,
     models_dev_fallback: Option<&'static str>,
 ) -> Option<DiscoverySource> {
-    if connection.auth == ConnectionAuth::AntigravityOAuth {
-        return None;
-    }
     let first_model = route_models(connection, cache)
         .into_iter()
         .next()

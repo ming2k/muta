@@ -570,6 +570,14 @@ async fn process_one_event(
         app.input_scroll_follow_cursor = true;
     }
 
+    // ADR-0174: a keypress that expresses composer editing intent (the same
+    // predicate that re-arms caret following) hands keyboard attention back
+    // from the transcript's browse focus — typing always bounces to the
+    // draft, so the composer must light back up.
+    if event_rearms_composer_follow(event) && active_modal == Modal::None {
+        app.transcript_focused = false;
+    }
+
     if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
         *input_redraw_pending = true;
     }
