@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.6] - 2026-09-04
+
 ### Changed
 
 - **Arrow edge hand-off to inline history recall (ADR-0174).** On the Session
@@ -5977,7 +5979,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.6...HEAD
+[0.38.6]: https://github.com/ming2k/muta/compare/v0.38.5...v0.38.6
 [0.38.4]: https://github.com/ming2k/muta/compare/v0.38.3...v0.38.4
 [0.38.3]: https://github.com/ming2k/muta/compare/v0.38.2...v0.38.3
 [0.38.2]: https://github.com/ming2k/muta/compare/v0.38.1...v0.38.2
