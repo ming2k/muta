@@ -210,6 +210,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         });
     });
 
+    // Background refresh of the models.dev third-party catalog cache
+    // (LiveCatalog::ModelsDev — opencode-go). This only keeps the *disk cache*
+    // fresh on an hourly cadence; the per-connection reconciliation runs when
+    // discovery next fires (startup, `/refresh`, per-round ETag) and reads the
+    // refreshed cache. A failure leaves the last good cache in place, so a
+    // transient outage never degrades the catalog.
+    muta_agent::dynamic::spawn_refresh(muta_models_dev::DynamicModelsDev);
+
     // Resolve the project root early: it feeds the per-project lock, the
     // session store, and the embedding index. CLI parsing happened in the
     // caller (showcase/doctor already returned there).

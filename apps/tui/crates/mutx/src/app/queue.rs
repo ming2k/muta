@@ -232,10 +232,6 @@ impl App {
         );
     }
 
-    /// The ids of this session's waiting (next-round) items, front-of-queue
-    /// first. `Dispatching` items are excluded: their round has already
-    /// started, so editing them would be a lie.
-
     /// Clear the remembered draft (text + attachments). Called when the
     /// draft's content is successfully sent: the input has been historicised
     /// (`record_input_history` already recorded it), so it is no longer the

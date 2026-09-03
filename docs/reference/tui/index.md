@@ -32,20 +32,23 @@ the modal overlay mode, chrome hiding, and the full measurements table.
 
 ## Transcript focus
 
-There are no modal "zones" and no zone-toggle key. Keyboard navigation
-rests on a single optional state — the **focused step**
-(`App::focused_target`):
+The keyboard is plane-less (ADR-0173): there are no zones and no zone-toggle
+key. Every chord has one meaning; keyboard navigation rests on a single
+optional state — the **selected step** (`App::focused_target`):
 
 | State | Owns keys | How to enter | How to leave |
 |-------|-----------|--------------|--------------|
-| **Prompt** (default) | Input box — typing inserts into the prompt | (default) | `Ctrl+↑` / `Ctrl+↓` |
-| **Focused step** | One transcript step is reverse-highlighted | `Ctrl+↑` / `Ctrl+↓` (nearest step first) | `Esc`, or any printable character falls through to the prompt |
+| **Prompt** (default) | Input box — typing inserts into the prompt | (default) | `Alt+↑` / `Alt+↓` selects a step |
+| **Selected step** | One transcript step is reverse-highlighted | `Alt+↑` / `Alt+↓` (remappable `session.focus_prev`), or clicking a step | `Esc`, or any printable character falls through to the prompt |
 
-While a step is focused, `↑`/`↓` cycle steps, `Enter` opens it, and the
-composer frame drops to its dimmer stroke and sheds its inlaid meta to signal
-"keys act on the step." Typing still lands in the prompt. `Tab` is
+While a step is selected, `Alt+↑`/`Alt+↓` walk steps and `Enter` opens it;
+the composer frame drops to its dimmer stroke and sheds its inlaid meta to
+signal "keys act on the step." Typing still lands in the prompt. `Tab` is
 completion-only (commits the highlighted slash/path suggestion when a menu is
-open, re-opens one that `Esc` dismissed); it is not a focus toggle.
+open, re-opens one that `Esc` dismissed) — never a focus toggle. Scrolling
+never requires entering a state: `PageUp`/`PageDown` page the transcript and
+`Home`/`End` jump to its edges from anywhere (readline line-start/end lives
+on `Ctrl+A`/`Ctrl+E`).
 
 ## Components
 

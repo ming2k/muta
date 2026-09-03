@@ -56,9 +56,6 @@ pub(crate) enum FooterRowId {
     Queue,
     /// The transient live-status bar (breathing dot + status + elapsed).
     Activity,
-    /// The transient step-focus inspector bar (`◈ STEP FOCUS ...`). Active only
-    /// while a transcript step is keyboard-focused.
-    StepFocus,
     /// The composer (input box). Not click-routed through the registry —
     /// its rect is consumed directly for caret/IME positioning and the
     /// permission sheet's anchor — but kept in the id set so the stack can

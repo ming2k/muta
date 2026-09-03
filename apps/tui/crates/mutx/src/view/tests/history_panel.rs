@@ -9,9 +9,6 @@ use super::*;
 /// only need to prove the renderer consumes each state without exploding.
 #[test]
 fn history_panel_renders_every_query_state() {
-    let selection = crate::model::selection::SelectionState::None;
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-
     let theme = Theme::default();
     let history: Vec<muta_contracts::HistoryEntry> = [
         "git status",
@@ -51,8 +48,6 @@ fn history_panel_renders_every_query_state() {
             expected_matches
         );
         terminal.draw(|f| {
-            let selection = crate::model::selection::SelectionState::None;
-            let mut layout_map = crate::model::layout::LayoutMap::new();
             let _ = draw_history_panel(
                 f,
                 crate::overlays::history::HistoryPanelProps {
@@ -61,13 +56,10 @@ fn history_panel_renders_every_query_state() {
                     modal_index: 0,
                     scroll: &mut 0,
                     follow_selection: true,
-                    preview: false,
                     input_rect,
                     activity_height: 0,
                 },
                 &theme,
-                &selection,
-                &mut layout_map,
             );
         });
     }
@@ -86,26 +78,18 @@ fn history_panel_renders_every_query_state() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 0,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         );
     });
 }
 
 /// A multi-line history entry collapses to its first line in the fuzzy
-/// list (so a long prompt never breaks the single-row grid), and the
-/// preview mode renders the full text verbatim. Both modes must consume a
-/// real buffer without panicking.
+/// list (so a long prompt never breaks the single-row grid).
 #[test]
-fn history_panel_folds_multiline_and_previews_full_text() {
-    let selection = crate::model::selection::SelectionState::None;
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-
+fn history_panel_folds_multiline_entries() {
     let theme = Theme::default();
     let history: Vec<muta_contracts::HistoryEntry> =
         ["first line\nsecond line\nthird line", "single line"]
@@ -121,7 +105,6 @@ fn history_panel_folds_multiline_and_previews_full_text() {
     let ranked = crate::fuzzy::rank(&texts, "");
     let input_rect = mutx_engine::Rect::new(0, 22, 80, 2);
 
-    // List mode: the multi-line entry must render as one row.
     terminal.draw(|f| {
         let _ = draw_history_panel(
             f,
@@ -131,38 +114,15 @@ fn history_panel_folds_multiline_and_previews_full_text() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 0,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         );
     });
     let buf = terminal.buffer();
     let has_marker = buf.content.iter().any(|c| c.symbol() == "↵");
     assert!(has_marker, "multi-line entry should show the ↵ fold marker");
-
-    // Preview mode: the full multi-line text renders without panic.
-    terminal.draw(|f| {
-        let _ = draw_history_panel(
-            f,
-            crate::overlays::history::HistoryPanelProps {
-                history: &history,
-                ranked: &ranked,
-                modal_index: 0,
-                scroll: &mut 0,
-                follow_selection: true,
-                preview: true,
-                input_rect,
-                activity_height: 0,
-            },
-            &theme,
-            &selection,
-            &mut layout_map,
-        );
-    });
 }
 
 /// The dropdown is an extension of the composer, not a fixed-size window:
@@ -171,9 +131,6 @@ fn history_panel_folds_multiline_and_previews_full_text() {
 /// footer), not the old 6-row floor.
 #[test]
 fn history_panel_collapses_to_actual_row_count() {
-    let selection = crate::model::selection::SelectionState::None;
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-
     let theme = Theme::default();
     let history: Vec<muta_contracts::HistoryEntry> = ["one", "two"]
         .into_iter()
@@ -203,13 +160,10 @@ fn history_panel_collapses_to_actual_row_count() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 0,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         )
     });
     let panel = panel.expect("panel should render with ample room above");
@@ -243,8 +197,6 @@ fn history_panel_reserves_activity_bar_rows() {
     let mut terminal = mutx_engine::TestTerminal::new(80, 17);
     let mut panel: Option<mutx_engine::Rect> = None;
     terminal.draw(|f| {
-        let selection = crate::model::selection::SelectionState::None;
-        let mut layout_map = crate::model::layout::LayoutMap::new();
         panel = draw_history_panel(
             f,
             crate::overlays::history::HistoryPanelProps {
@@ -253,13 +205,10 @@ fn history_panel_reserves_activity_bar_rows() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 1,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         )
     });
     let panel = panel.expect("panel should render");

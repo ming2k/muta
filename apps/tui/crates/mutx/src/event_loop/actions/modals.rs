@@ -527,20 +527,6 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.modal_index - 1
             };
             app.history_modal_follow = true;
-            // In preview mode the body shows the focused entry's
-            // full text, so moving to another entry re-anchors it
-            // to the top.
-            if app.history_preview {
-                app.history_scroll = 0;
-            }
-        }
-        Modal::Permission => {
-            let count = if app.permission_confirm_always { 2 } else { 4 };
-            app.modal_index = if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
         }
         Modal::Sessions => {
             let count = app.sessions_overview.len();
@@ -696,12 +682,10 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             app.command_palette_selected = app.command_palette_selected.saturating_sub(1);
         }
         Modal::Help
-        | Modal::Question
         | Modal::ModelEditor
         | Modal::ProviderPreset
         | Modal::OauthPending
         | Modal::CustomProvider
-        | Modal::InputInjection
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills
@@ -725,13 +709,6 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             let count = app.history_rows().len().max(1);
             app.modal_index = (app.modal_index + 1) % count;
             app.history_modal_follow = true;
-            if app.history_preview {
-                app.history_scroll = 0;
-            }
-        }
-        Modal::Permission => {
-            let count = if app.permission_confirm_always { 2 } else { 4 };
-            app.modal_index = (app.modal_index + 1) % count;
         }
         Modal::Sessions => {
             let count = app.sessions_overview.len().max(1);
@@ -864,12 +841,10 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             app.command_palette_selected = app.command_palette_selected.saturating_add(1);
         }
         Modal::Help
-        | Modal::Question
         | Modal::ModelEditor
         | Modal::ProviderPreset
         | Modal::OauthPending
         | Modal::CustomProvider
-        | Modal::InputInjection
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills

@@ -211,7 +211,13 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
 
     // 1. Top Header Row (Settings only)
     let header = ViewHeader::Settings;
-    draw_view_header(frame, header_rect, &header, props.theme);
+    draw_view_header(
+        frame,
+        header_rect,
+        &header,
+        props.theme,
+        &crate::keymap::GlobalOverrides::default(),
+    );
 
     // 2. View Stack Breadcrumbs & Affordance
     let view_hints = ViewHints {

@@ -35,6 +35,11 @@
 //! - **Google native**: `GET {base}/v1beta/models?key=<key>`,
 //!   body `{models: [{name: "models/<id>", supportedGenerationMethods: […]}, …]}`
 //!   — only `generateContent`-capable text models are kept.
+//! - **Google Antigravity (cloudcode)**: `POST {base}/v1internal:fetchAvailableModels`,
+//!   bearer `Authorization` when a key is set — a distinct scheme from the
+//!   Google native surface (see [`DiscoveryProtocol::GoogleCloudCode`]).
+//! - **ChatGPT Codex**: `GET {base}/backend-api/codex/models` with
+//!   `client_version` + `originator` headers.
 //!
 //! ## Endpoint derivation
 //!
@@ -60,33 +65,25 @@ pub enum DiscoveryProtocol {
     Anthropic,
     /// Google native → `GET /v1beta/models?key=`.
     Google,
+    /// Google Antigravity (cloudcode) → `POST …/v1internal:fetchAvailableModels`.
+    GoogleCloudCode,
     /// ChatGPT Subscription Codex backend → `GET /backend-api/codex/models`.
     Codex,
 }
 
 impl DiscoveryProtocol {
     /// Map an inference protocol to its model-catalog discovery surface.
+    ///
+    /// The standard one-to-one mapping for a single-format endpoint. A preset
+    /// whose catalog endpoint deviates (ChatGPT's Codex backend, Google's
+    /// Antigravity cloudcode surface) declares its own scheme explicitly via
+    /// [`crate::registry::LiveCatalog`] rather than being sniffed here.
     pub fn from_wire_protocol(protocol: muta_contracts::WireProtocol) -> Self {
         match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => Self::Anthropic,
             muta_contracts::WireProtocol::GoogleGenerateContent => Self::Google,
             muta_contracts::WireProtocol::OpenAiChatCompletions
             | muta_contracts::WireProtocol::OpenAiResponses => Self::OpenAi,
-        }
-    }
-
-    /// Resolve discovery protocol for a connection from its configuration.
-    pub fn for_connection(
-        preset_id: Option<&str>,
-        auth: muta_contracts::ConnectionAuth,
-        protocol: muta_contracts::WireProtocol,
-    ) -> Self {
-        if auth == muta_contracts::ConnectionAuth::ChatGptOAuth
-            || preset_id == Some("chatgpt-oauth")
-        {
-            Self::Codex
-        } else {
-            Self::from_wire_protocol(protocol)
         }
     }
 }
@@ -293,36 +290,44 @@ pub fn models_endpoint_for(
     // Split into the API root (scheme + host + version path) and drop any
     // method-specific suffix. We look for the known suffixes from the right so
     // a path like `/v1/chat/completions` keeps its `/v1` root.
-    let root = match protocol {
+    let mut root = match protocol {
         DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
             // Accept a `…/chat/completions` or `…/responses` endpoint and a
             // bare `…/v1` root alike.
-            trimmed
-                .strip_suffix("/chat/completions")
-                .or_else(|| trimmed.strip_suffix("/chat/completions/"))
-                .or_else(|| trimmed.strip_suffix("/responses"))
-                .or_else(|| trimmed.strip_suffix("/responses/"))
-                .unwrap_or(trimmed)
+            std::borrow::Cow::Borrowed(
+                trimmed
+                    .strip_suffix("/chat/completions")
+                    .or_else(|| trimmed.strip_suffix("/chat/completions/"))
+                    .or_else(|| trimmed.strip_suffix("/responses"))
+                    .or_else(|| trimmed.strip_suffix("/responses/"))
+                    .unwrap_or(trimmed),
+            )
         }
-        DiscoveryProtocol::Anthropic => trimmed
-            .strip_suffix("/messages")
-            .or_else(|| trimmed.strip_suffix("/messages/"))
-            .unwrap_or(trimmed),
+        DiscoveryProtocol::Anthropic => std::borrow::Cow::Borrowed(
+            trimmed
+                .strip_suffix("/messages")
+                .or_else(|| trimmed.strip_suffix("/messages/"))
+                .unwrap_or(trimmed),
+        ),
         DiscoveryProtocol::Google => {
-            if trimmed.contains("cloudcode-pa.googleapis.com") {
-                let base = trimmed.strip_suffix("/v1internal").unwrap_or(trimmed);
-                let base = base.strip_suffix('/').unwrap_or(base);
-                return Ok(format!("{base}/v1internal:fetchAvailableModels"));
-            }
-            trimmed.strip_suffix('/').unwrap_or(trimmed)
+            std::borrow::Cow::Borrowed(trimmed.strip_suffix('/').unwrap_or(trimmed))
+        }
+        DiscoveryProtocol::GoogleCloudCode => {
+            let base = trimmed.strip_suffix("/v1internal").unwrap_or(trimmed);
+            let base = base.strip_suffix('/').unwrap_or(base);
+            std::borrow::Cow::Owned(base.to_string())
         }
     };
-    let root = root.strip_suffix('/').unwrap_or(root);
+    // A trailing slash on the root is noise for the path join below.
+    while root.ends_with('/') {
+        root.to_mut().pop();
+    }
 
     Ok(match protocol {
         DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => format!("{root}/models"),
         DiscoveryProtocol::Anthropic => format!("{root}/models"),
         DiscoveryProtocol::Google => format!("{root}/models"),
+        DiscoveryProtocol::GoogleCloudCode => format!("{root}/v1internal:fetchAvailableModels"),
     })
 }
 
@@ -418,32 +423,31 @@ pub async fn discover_models(
             }
             builder.send().await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::Google => {
-            if req.base_url.contains("cloudcode-pa.googleapis.com") {
-                let mut builder = client
-                    .post(&endpoint)
-                    .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
-                    .json(&serde_json::json!({ "project": "" }));
-                if !req.api_key.expose_secret().trim().is_empty() {
-                    builder = builder.bearer_auth(req.api_key.expose_secret());
-                }
-                for (name, value) in req.extra_headers {
-                    builder = builder.header(*name, *value);
-                }
-                builder.send().await.map_err(ModelListError::Http)?
-            } else {
-                // Google auth: the key is a query param, never a header. A keyless
-                // request omits it entirely (Google rejects keyless, but a relay
-                // might not require it).
-                let mut builder = client.get(&endpoint);
-                if !req.api_key.expose_secret().trim().is_empty() {
-                    builder = builder.query(&[("key", req.api_key.expose_secret())]);
-                }
-                for (name, value) in req.extra_headers {
-                    builder = builder.header(*name, *value);
-                }
-                builder.send().await.map_err(ModelListError::Http)?
+        DiscoveryProtocol::GoogleCloudCode => {
+            let mut builder = client
+                .post(&endpoint)
+                .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
+                .json(&serde_json::json!({ "project": "" }));
+            if !req.api_key.expose_secret().trim().is_empty() {
+                builder = builder.bearer_auth(req.api_key.expose_secret());
             }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
+            }
+            builder.send().await.map_err(ModelListError::Http)?
+        }
+        DiscoveryProtocol::Google => {
+            // Google auth: the key is a query param, never a header. A keyless
+            // request omits it entirely (Google rejects keyless, but a relay
+            // might not require it).
+            let mut builder = client.get(&endpoint);
+            if !req.api_key.expose_secret().trim().is_empty() {
+                builder = builder.query(&[("key", req.api_key.expose_secret())]);
+            }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
+            }
+            builder.send().await.map_err(ModelListError::Http)?
         }
     };
 
@@ -501,7 +505,7 @@ fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredMode
     match protocol {
         DiscoveryProtocol::OpenAi => parse_data_models(json),
         DiscoveryProtocol::Anthropic => parse_data_models(json),
-        DiscoveryProtocol::Google => parse_google_models(json),
+        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => parse_google_models(json),
         DiscoveryProtocol::Codex => parse_codex_models(json),
     }
 }
@@ -951,7 +955,7 @@ mod tests {
     fn antigravity_endpoint_derives_fetch_available_models_endpoint() {
         assert_eq!(
             models_endpoint_for(
-                DiscoveryProtocol::Google,
+                DiscoveryProtocol::GoogleCloudCode,
                 "https://cloudcode-pa.googleapis.com"
             )
             .unwrap(),
@@ -959,7 +963,7 @@ mod tests {
         );
         assert_eq!(
             models_endpoint_for(
-                DiscoveryProtocol::Google,
+                DiscoveryProtocol::GoogleCloudCode,
                 "https://daily-cloudcode-pa.googleapis.com/v1internal"
             )
             .unwrap(),

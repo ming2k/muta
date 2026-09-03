@@ -8,14 +8,6 @@ expression: film
 
 
 
-           Question
-
-           Which features?
-
-             [ ] a
-             [ ] b
-             [ ] c
-             [ ] Other
 
 
 
@@ -23,7 +15,18 @@ expression: film
 
 
 
-           ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+   Question
+
+   Which features?
+
+     [ ] a                                                            ▼
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
 === 1,2,3 → select all three ===
 
@@ -31,14 +34,6 @@ expression: film
 
 
 
-           Question
-
-           Which features?
-
-             [x] a
-             [x] b
-             [x] c
-             [ ] Other
 
 
 
@@ -46,7 +41,18 @@ expression: film
 
 
 
-           ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+   Question
+
+     [x] a                                                            ▲
+     [x] b
+     [x] c                                                            ▼
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
 === '2' again → deselect 'b' ===
 
@@ -54,14 +60,6 @@ expression: film
 
 
 
-           Question
-
-           Which features?
-
-             [x] a
-             [ ] b
-             [x] c
-             [ ] Other
 
 
 
@@ -69,4 +67,15 @@ expression: film
 
 
 
-           ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+   Question
+
+                                                                      ▲
+     [x] a
+     [ ] b                                                            ▼
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel

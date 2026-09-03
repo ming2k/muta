@@ -420,10 +420,9 @@ async fn process_one_event(
     let active_modal = app.active_modal();
     let is_responding = app.viewed_chrome().responding;
     let completion_kind = app.completion_kind();
-    let suppress_completions = matches!(
-        active_modal,
-        Modal::Help | Modal::Question | Modal::InputInjection | Modal::ViewSwitcher
-    );
+    let active_sheet = app.active_sheet();
+    let suppress_completions =
+        matches!(active_modal, Modal::Help | Modal::ViewSwitcher) || active_sheet.is_some();
     let completions = if suppress_completions {
         Vec::new()
     } else {
@@ -458,7 +457,6 @@ async fn process_one_event(
         .question
         .as_ref()
         .is_some_and(|q| q.is_other_highlighted());
-    let history_clear_confirm = app.history_clear_confirm;
     let host_prompting = app.host_prompting;
     let session_info_detail = app.session_info_detail;
     let connection_info_detail = app.connection_info_detail;
@@ -482,6 +480,7 @@ async fn process_one_event(
     // or cloning a potentially very large draft on every keypress.
     let composer_edit_state_before = (app.input.len(), app.cursor_position);
     let composer_owned_before = app.caret_owner() == crate::CaretOwner::Composer;
+    let current_view = app.current_view();
 
     let action = if let Some(dropdown_action) = probe_config_dropdown(app, event) {
         dropdown_action
@@ -496,6 +495,7 @@ async fn process_one_event(
             &mut app.cursor_position,
             input::InputContext {
                 active_modal,
+                active_sheet,
                 session_info_detail,
                 connection_info_detail,
                 is_responding,
@@ -515,11 +515,12 @@ async fn process_one_event(
                 custom_provider_field,
                 editor_field,
                 question_other_highlighted,
-                history_clear_confirm,
                 host_prompting,
 
                 config_focus: app.config_focus,
-                session_focus: app.session_focus,
+                current_view,
+                key_overrides: app.key_overrides.clone(),
+                surface_overrides: app.surface_overrides.clone(),
             },
             &mut app.drag,
         )

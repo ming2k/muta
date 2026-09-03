@@ -755,7 +755,7 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
     // live composer that IS the filter field, so the composer (not the modal)
     // owns the caret — handled state-dependently in `App::caret_owner`. It
     // appears in `not_owns` below and is exercised by the caret-owner tests.
-    let owns = [Modal::CustomProvider, Modal::InputInjection];
+    let owns = [Modal::CustomProvider];
     for m in owns {
         assert!(m.owns_caret(), "{m:?} must own the caret");
     }
@@ -767,8 +767,6 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         Modal::Mcp,
         Modal::Permissions,
         Modal::Todos,
-        Modal::Question,
-        Modal::Permission,
         Modal::Config,
         Modal::ProviderPreset,
         Modal::HistorySearch,
@@ -849,13 +847,10 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     assert_ne!(app.help_scroll, 9, "each modal has its own field");
 
     // The non-scrolling modals resolve to None so the action falls through to
-    // the transcript / caret handling.
-    for m in [
-        Modal::None,
-        Modal::Permission,
-        Modal::ModelEditor,
-        Modal::InputInjection,
-    ] {
+    // the transcript / caret handling. (The question sheet's body scroll is
+    // routed through `App::modal_scroll_field`'s sheet preamble, and the
+    // permission sheet scrolls the transcript behind it.)
+    for m in [Modal::None, Modal::ModelEditor] {
         app.set_active_modal_for_test(m);
         assert!(
             app.modal_scroll_field().is_none(),
@@ -1362,11 +1357,14 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
 }
 
 #[test]
-fn transient_sheet_returns_to_exact_todos_view() {
+fn sheet_mounting_leaves_the_panel_stack_untouched() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_panel(crate::surfaces::PanelId::Todos);
-    app.push_transient_surface(Modal::Question);
-    assert_eq!(app.pop_transient_surface(), Modal::Todos);
+    // A sheet is slot state, not a router layer: mounting it must leave the
+    // panel stack untouched, and dismissing it hands the slot straight back.
+    app.push_sheet_surface(crate::sheet::SheetKind::Question);
+    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
+    app.dismiss_sheet();
     assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
 }
 

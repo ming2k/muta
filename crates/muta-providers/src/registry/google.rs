@@ -4,7 +4,7 @@ use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// The Gemini model ids the built-in `google` provider serves (native Google
 /// API, one key). Each id exists in the model registry. The set is the
@@ -176,6 +176,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::GoogleGenerateContent,
     models: GOOGLE_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Google)),
     fitting: false,
+    wire_overrides: &[],
 };

@@ -91,18 +91,28 @@ fn caret_owner_none_in_runner_view() {
 #[test]
 fn caret_owner_modal_for_caret_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    for modal in [Modal::CustomProvider, Modal::InputInjection] {
-        app.set_active_modal_for_test(modal);
-        assert_eq!(
-            app.caret_owner(),
-            CaretOwner::Modal,
-            "{modal:?} borrows the input line and renders its own caret",
-        );
-        assert!(
-            app.caret_visible(),
-            "{modal:?} must keep the cursor visible so the IME anchors to its field",
-        );
-    }
+    app.set_active_modal_for_test(Modal::CustomProvider);
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::Modal,
+        "the provider editor borrows the input line and renders its own caret",
+    );
+    assert!(
+        app.caret_visible(),
+        "the provider editor must keep the cursor visible so the IME anchors to its field",
+    );
+    // The input-injection sheet borrows the composer line the same way
+    // (ADR-0173 §3) — but it is a sheet, not a modal.
+    app.set_active_sheet_for_test(crate::sheet::SheetKind::InputInjection);
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::Modal,
+        "the injection sheet renders its own caret",
+    );
+    assert!(
+        app.caret_visible(),
+        "the injection sheet must keep the cursor visible so the IME anchors",
+    );
 }
 
 #[test]
@@ -118,8 +128,6 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         // `Question` is listed here to cover the *default* state — any option
         // but "Other" highlighted (or no question model at all). Its caret
         // ownership is conditional: see `caret_owner_question_owns_caret_only_on_other`.
-        Modal::Question,
-        Modal::Permission,
         Modal::Config,
     ] {
         app.set_active_modal_for_test(modal);
@@ -131,6 +139,19 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         assert!(
             !app.caret_visible(),
             "{modal:?} must hide the terminal cursor",
+        );
+    }
+    // The permission and question sheets cover the same default state: no
+    // caret unless the question's "Other" row is highlighted.
+    for kind in [
+        crate::sheet::SheetKind::Permission,
+        crate::sheet::SheetKind::Question,
+    ] {
+        app.set_active_sheet_for_test(kind);
+        assert_eq!(
+            app.caret_owner(),
+            CaretOwner::None,
+            "{kind:?} renders no caret by default",
         );
     }
 }
@@ -168,7 +189,7 @@ fn caret_owner_question_owns_caret_only_on_other() {
     };
     // Open: highlight on row 0 (a real option) → no caret, cursor hidden.
     let model = QuestionModel::open(req);
-    app.set_active_modal_for_test(Modal::Question);
+    app.set_active_sheet_for_test(crate::sheet::SheetKind::Question);
     app.question = Some(model.clone());
     assert_eq!(
         app.caret_owner(),

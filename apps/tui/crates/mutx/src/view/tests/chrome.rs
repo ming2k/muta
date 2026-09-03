@@ -57,6 +57,7 @@ fn redesigned_components_render_without_panicking() {
                         logo: None,
                         guidance: EmptyStateGuidance::Tour,
                         carousel_index: 0,
+                key_overrides: Default::default(),
                         theme: &theme,
                         layout: crate::layout::Strategy::default(),
                         height_cache: None,
@@ -156,8 +157,6 @@ fn redesigned_components_render_without_panicking() {
             .collect();
         let ranked: Vec<(usize, crate::fuzzy::FuzzyMatch)> = crate::fuzzy::rank(&["a"], "");
         let input_rect = mutx_engine::Rect::new(0, 20, 80, 3);
-        let selection = crate::model::selection::SelectionState::None;
-        let mut layout_map = crate::model::layout::LayoutMap::new();
         let _ = draw_history_panel(
             f,
             crate::overlays::history::HistoryPanelProps {
@@ -166,13 +165,10 @@ fn redesigned_components_render_without_panicking() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 0,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         );
         draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, None, &theme);
         // Preset chooser.
@@ -289,6 +285,8 @@ fn redesigned_components_render_without_panicking() {
             1,
             &mut 0,
             true,
+            0,
+            mutx_engine::Rect::new(0, 0, 60, 10),
             &theme,
         );
     });
@@ -315,6 +313,7 @@ fn redesigned_components_render_without_panicking() {
             0,
             false,
             false,
+            0,
             0,
             rect,
             &theme,
@@ -484,6 +483,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                     logo: None,
                     guidance: EmptyStateGuidance::Tour,
                     carousel_index: 0,
+                    key_overrides: Default::default(),
                     theme: &theme,
                     layout: crate::layout::Strategy::default(),
                     height_cache: None,
@@ -551,6 +551,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -619,6 +620,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -682,6 +684,7 @@ fn nonempty_session_does_not_render_empty_state() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -754,6 +757,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                 logo: Some(&logo),
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -860,6 +864,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 2,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -929,6 +934,7 @@ fn h1_underline_clamps_to_text_extent() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1016,6 +1022,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1098,6 +1105,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,

@@ -427,6 +427,114 @@ async fn live_discovery_writes_the_per_instance_cache() {
 }
 
 #[tokio::test]
+async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
+    // The opencode-go preset's live catalog is the models.dev third-party
+    // directory (not the relay's own /models). Discovery resolves the
+    // embedded snapshot and materializes ids the client baseline does not
+    // know (e.g. glm-5.3) because fitting is enabled for the preset.
+    let _sandbox = sandboxed_paths();
+    let instances = Connections {
+        connections: vec![Connection {
+            id: "opencode-go".to_string(),
+            preset_id: Some("opencode-go".to_string()),
+            base_url: None,
+            ..Default::default()
+        }],
+    };
+    instances.save().unwrap();
+
+    let outcome = discover_provider_models(true).await;
+    assert!(outcome.changed, "models.dev discovery must record a change");
+    assert!(
+        outcome.failures.is_empty(),
+        "failures: {:?}",
+        outcome.failures
+    );
+
+    let cache = DiscoveryCache::load();
+    let models = cache
+        .connection_models
+        .get("opencode-go")
+        .expect("catalog lands in the cache");
+    assert!(
+        models.contains(&"glm-5.3".to_string()),
+        "a relay model unknown to the client baseline must be materialized"
+    );
+    assert!(
+        models.contains(&"kimi-k3".to_string()),
+        "kimi-k3 (models.dev only) must be materialized"
+    );
+    // The wire-override table routes the minimax family to Anthropic /messages
+    // even though the fitted registry would default them to OpenAI chat.
+    let fitted = cache.fitted_models.get("opencode-go").unwrap();
+    assert!(
+        fitted.contains_key("hy3"),
+        "an unknown catalog model must be fitted (e.g. hy3)"
+    );
+    assert!(
+        models.contains(&"minimax-m3".to_string()),
+        "a baseline-known catalog model stays served"
+    );
+    let route = muta_providers::route_for_model("opencode-go", "minimax-m3")
+        .expect("wire override routes minimax");
+    assert_eq!(route.0, muta_contracts::WireProtocol::AnthropicMessages);
+    assert!(route.1.contains("/v1/messages"));
+}
+
+#[tokio::test]
+async fn first_party_failure_falls_back_to_models_dev_catalog() {
+    // zai declares ProviderEndpointWithFallback: first-party GET /models is
+    // primary; when it fails (401 here), the models.dev entry for zai covers
+    // the gap instead of blanking the picker. The result is still intersected
+    // with the compiled baseline (fitting is off).
+    let _sandbox = sandboxed_paths();
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/v1/models")
+        .with_status(401)
+        .with_body("Authentication Fails")
+        .create_async()
+        .await;
+
+    let instances = Connections {
+        connections: vec![Connection {
+            id: "zai".to_string(),
+            preset_id: Some("zai-code".to_string()),
+            base_url: Some(format!(
+                "{}/api/coding/paas/v4/chat/completions",
+                server.url()
+            )),
+            ..Default::default()
+        }],
+    };
+    instances.save().unwrap();
+
+    let outcome = discover_provider_models(true).await;
+    assert!(outcome.changed, "fallback discovery must record a change");
+    assert!(
+        outcome.failures.is_empty(),
+        "a fallback that succeeds must not be reported as a failure: {:?}",
+        outcome.failures
+    );
+
+    let cache = DiscoveryCache::load();
+    let models = cache
+        .connection_models
+        .get("zai")
+        .expect("models.dev fallback lands in the cache");
+    assert!(
+        models.contains(&"glm-5.2".to_string()),
+        "a zai model from models.dev must be served"
+    );
+    // The fallback is intersected against the compiled baseline, so a models.dev
+    // id the client baseline does not know must NOT be materialized (fitting off).
+    assert!(
+        !models.iter().any(|id| id == "glm-5-turbo"),
+        "glm-5-turbo (models.dev-only, no local baseline) must be intersected away"
+    );
+}
+
+#[tokio::test]
 async fn connection_discovery_never_touches_unrelated_connections() {
     let _sandbox = sandboxed_paths();
     let mut selected_server = mockito::Server::new_async().await;

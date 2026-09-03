@@ -83,39 +83,6 @@ fn enter_with_unique_slash_suggestion_auto_commits() {
 }
 
 #[test]
-fn tab_in_composer_focuses_transcript() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext::default(),
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::FocusNextTarget);
-}
-
-#[test]
-fn tab_in_transcript_returns_to_composer() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            has_focused_target: true,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::ClearFocusedTarget);
-}
-
-#[test]
 fn enter_activates_focused_target() {
     assert_eq!(
         key_with_focus(KeyCode::Enter),

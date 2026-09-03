@@ -11,8 +11,8 @@ use muta_contracts::catalog::{Channel, Transport};
 use std::sync::Arc;
 
 use crate::{
-    AnthropicMessagesProvider, GoogleProvider, MUTA_USER_AGENT, OpenAiChatCompletionsProvider,
-    OpenAiResponsesProvider, ThinkingConfig,
+    AnthropicMessagesProvider, DiscoveryProtocol, GoogleProvider, MUTA_USER_AGENT,
+    OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
 };
 
 mod anthropic;
@@ -36,7 +36,7 @@ pub use deepseek::DEEPSEEK_BUILTIN_MODELS;
 pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
 pub use openai::OPENAI_BUILTIN_MODELS;
-pub use opencode_go::{OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS};
+pub use opencode_go::{OPENCODE_GO_MODELS, WIRE_OVERRIDES};
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
 
@@ -45,6 +45,40 @@ use anthropic::anthropic_model_max_tokens;
 // ═════════════════════════════════════════════════════════════════════════════
 // OpenAI-compatible provider wrappers for popular Chinese & global services
 // ═════════════════════════════════════════════════════════════════════════════
+
+/// Whether, and from which source, a preset connection refreshes its live
+/// model catalog over the network.
+///
+/// A preset's compiled-in baseline ([`ProviderPresetSpec::baselines`] /
+/// [`ProviderPresetSpec::models`]) is always the offline floor. When a
+/// `LiveCatalog` is set, the network layer is layered **on top**: the live
+/// source refreshes the id set, and the baseline still supplies the wire /
+/// capability fallback. `None` means no network layer — the connection uses
+/// the compiled baseline directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveCatalog {
+    /// The provider's **own** model-catalog endpoint. The concrete request
+    /// shape is the declared [`DiscoveryProtocol`] — a provider whose catalog
+    /// endpoint deviates from the standard wire-derived shape (ChatGPT's
+    /// Codex backend, Google's Antigravity cloudcode surface) declares its
+    /// own scheme here rather than being sniffed from auth or URL.
+    ProviderEndpoint(DiscoveryProtocol),
+    /// A third-party catalog entry (e.g. the `opencode-go` entry on
+    /// models.dev), keyed by the provider id in that catalog.
+    ModelsDev { provider: &'static str },
+    /// The provider's own endpoint first, falling back to a models.dev entry
+    /// when the first-party catalog fails (unreachable, empty, or unauthable).
+    /// This is the "official upstream first, third-party catalog as the
+    /// resilience net" shape: the first-party list stays authoritative when it
+    /// works, and the models.dev entry (intersected with the compiled baseline
+    /// unless fitting) covers the gap otherwise.
+    ProviderEndpointWithFallback {
+        /// First-party request shape, as in [`Self::ProviderEndpoint`].
+        protocol: DiscoveryProtocol,
+        /// models.dev provider id consulted when the first-party fetch fails.
+        fallback_provider: &'static str,
+    },
+}
 
 /// Specification for an OpenAI-compatible provider.
 ///
@@ -126,17 +160,18 @@ pub struct ProviderPresetSpec {
     /// The model ids the preset initially seeds, in display/activation order.
     /// Fixed connections continue to mirror this list.
     pub models: &'static [&'static str],
-    /// Whether this preset supports **live model-list discovery** — fetching
-    /// the provider's actual `GET /models` list at startup instead of mirroring
-    /// the compiled-in [`models`](Self::models) snapshot.
+    /// Whether this preset layers a **live model-catalog source** on top of
+    /// its compiled baseline ([`LiveCatalog`]).
     ///
-    /// When `true`, a connection created from this preset defaults to
+    /// When `Some`, a connection created from this preset defaults to
     /// `ModelSource::Api` (live availability intersected with the client model
-    /// registry, retaining the last valid subset on error). When `false`, the
-    /// connection always uses the snapshot. A preset is marked `false` when
-    /// its model list is derived at runtime (opencode-go), since that would
-    /// regress under a live overwrite.
-    pub discovery: bool,
+    /// registry, retaining the last valid subset on error). When `None`, the
+    /// connection always uses the compiled baseline snapshot. A preset is
+    /// `None` when its model list is derived at runtime (opencode-go), since a
+    /// live overwrite would regress it. The source is pluggable: the provider's
+    /// own endpoint ([`LiveCatalog::ProviderEndpoint`]) or a third-party
+    /// catalog ([`LiveCatalog::ModelsDev`]).
+    pub live_catalog: Option<LiveCatalog>,
     /// Whether live discovery may **fit capability metadata** for model ids the
     /// client registry does not know — materializing them as channels with
     /// their advertised context window, reasoning, vision, and effort tiers
@@ -150,6 +185,15 @@ pub struct ProviderPresetSpec {
     /// context window or claim vision support the model lacks. When `false`,
     /// discovery keeps only registry-known ids (the historical behavior).
     pub fitting: bool,
+    /// Per-model wire-format overrides for a multi-transport preset. A preset
+    /// whose default route is OpenAI chat-completions but serves some models
+    /// over another wire (opencode-go's `minimax-*` over Anthropic
+    /// `/messages`) declares those exceptions here — data, not a
+    /// `route_for_model` special case. Consulted before the model registry's
+    /// protocol, so a fitted/remote advertisement can never re-route a family
+    /// the preset pins to a non-default wire. Empty for single-protocol
+    /// presets.
+    pub wire_overrides: &'static [(&'static str, muta_contracts::WireProtocol)],
     /// Resolve prompt-cache behavior for one exact preset route and model.
     /// Protocol compatibility and provider identity alone never grant cache
     /// controls; model generations may expose different wire fields.
@@ -203,7 +247,30 @@ pub fn route_for_model(
     Option<&'static str>,
 )> {
     let spec = provider_preset_spec(preset_id)?;
-    if spec.id == "opencode-go" {
+    // A preset may pin some families to a non-default wire (opencode-go's
+    // minimax over Anthropic /messages). Consulted before the model registry,
+    // so a fitted/remote advertisement can never re-route a pinned family.
+    if let Some((_, protocol)) = spec.wire_overrides.iter().find(|(id, _)| *id == model_id) {
+        let base_url = match protocol {
+            muta_contracts::WireProtocol::AnthropicMessages => {
+                "https://opencode.ai/zen/go/v1/messages"
+            }
+            muta_contracts::WireProtocol::GoogleGenerateContent => {
+                "https://opencode.ai/zen/go/v1beta"
+            }
+            muta_contracts::WireProtocol::OpenAiResponses => {
+                "https://opencode.ai/zen/go/v1/responses"
+            }
+            muta_contracts::WireProtocol::OpenAiChatCompletions => {
+                "https://opencode.ai/zen/go/v1/chat/completions"
+            }
+        };
+        return Some((*protocol, base_url, spec.user_agent));
+    }
+    if spec
+        .live_catalog
+        .is_some_and(|live| matches!(live, LiveCatalog::ModelsDev { .. }))
+    {
         let protocol = muta_contracts::model::resolve(model_id).protocol;
         let base_url = match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => {
@@ -515,16 +582,28 @@ mod spec_tests {
     }
 
     #[test]
-    fn opencode_go_served_ids_all_have_local_baselines() {
-        // The go seed derives channels from the preset's local table; every
-        // advertised SERVED id must be present there.
+    fn opencode_go_wire_overrides_cover_pinned_families() {
+        // The wire-override table pins families the relay serves over a
+        // non-default wire. Every override id must resolve (so routing never
+        // depends on an unregistered model) and the pin must be consistent
+        // with route_for_model.
         let spec = provider_preset_spec("opencode-go").expect("opencode-go preset");
-        let baseline_ids: std::collections::HashSet<&str> =
-            spec.baselines.iter().map(|m| m.id).collect();
-        for id in OPENCODE_GO_SERVED_MODELS {
+        assert!(
+            !spec.wire_overrides.is_empty(),
+            "go preset must pin families"
+        );
+        for (id, wire) in spec.wire_overrides {
+            let (route_wire, base_url, _) =
+                route_for_model("opencode-go", id).expect("override id routes");
+            assert_eq!(*wire, route_wire, "{id} wire override must route");
+            assert_eq!(
+                *wire,
+                muta_contracts::WireProtocol::AnthropicMessages,
+                "{id}"
+            );
             assert!(
-                baseline_ids.contains(id),
-                "served id {id} missing from opencode_go's baseline table"
+                base_url.contains("/v1/messages"),
+                "{id} must reach the Anthropic /messages surface"
             );
         }
     }

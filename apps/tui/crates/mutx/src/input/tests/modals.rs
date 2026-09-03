@@ -120,7 +120,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::Modal::Question,
+                active_sheet: Some(crate::sheet::SheetKind::Question),
                 ..Default::default()
             },
             &mut drag,
@@ -160,7 +160,7 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
         &mut input,
         &mut cursor,
         InputContext {
-            active_modal: crate::Modal::Permission,
+            active_sheet: Some(crate::sheet::SheetKind::Permission),
             ..Default::default()
         },
         &mut drag,

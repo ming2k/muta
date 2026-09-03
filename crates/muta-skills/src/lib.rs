@@ -416,11 +416,11 @@ mod tests {
         let mut reloaded = false;
         for _ in 0..40 {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if let Some(skill) = registry.lock().get("demo") {
-                if skill.description == "updated reactively" {
-                    reloaded = true;
-                    break;
-                }
+            if let Some(skill) = registry.lock().get("demo")
+                && skill.description == "updated reactively"
+            {
+                reloaded = true;
+                break;
             }
         }
         assert!(

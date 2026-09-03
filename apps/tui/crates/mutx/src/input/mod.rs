@@ -81,21 +81,29 @@ pub struct InputContext {
     /// field instead of toggling an option. Mirrors
     /// `App::question.is_some_and(|q| q.is_other_highlighted())`.
     pub question_other_highlighted: bool,
-    /// Whether the Ctrl+R history modal is awaiting an explicit clear
-    /// confirmation (`Ctrl+X` armed it). While true, every key either
-    /// confirms (`y` / Enter) or cancels (anything else / Esc) — the modal
-    /// owns the keyboard until the decision is made. Mirrors
-    /// `App::history_clear_confirm`.
-    pub history_clear_confirm: bool,
     /// Whether the `/host` dashboard's inline prompt is open (`p` prompt or
     /// `n` new session). While true, printable keys edit the prompt text and
     /// Enter submits it. Mirrors `App::host_prompting`.
     pub host_prompting: bool,
 
+    /// The AI-initiated sheet occupying the composer slot, if any (ADR-0173
+    /// §3). Mutually exclusive with a non-`None` `active_modal`: a sheet is
+    /// not a modal, and `active_modal` is `None` while one is up.
+    pub active_sheet: Option<crate::sheet::SheetKind>,
     /// Which pane of the Settings View currently owns focus. Mirrors `App::config_focus`.
     pub config_focus: crate::overlays::ConfigFocus,
-    /// Active focus region in Session view. Mirrors `App::session_focus`.
-    pub session_focus: crate::app::SessionFocusRegion,
+    /// The full-screen view the user stands in (ADR-0141). Surface dispatch
+    /// (ADR-0172) keys off this: a key is offered to the current view's
+    /// scheme before the shared/modal layers, and "no modal" never silently
+    /// means "session view" for Dashboard or Settings.
+    pub current_view: crate::surfaces::View,
+    /// User remaps of the global chords (`[keybindings]` config, ADR-0172).
+    /// Global resolution and the keycap hints both consult it.
+    pub key_overrides: crate::keymap::GlobalOverrides,
+    /// User remaps of the full-screen-view surface verbs (`session.*` dotted
+    /// keys, ADR-0172). The view resolvers consult it; the composer hint row
+    /// renders its effective bindings.
+    pub surface_overrides: crate::keymap::SurfaceOverrides,
 }
 
 impl InputContext {
@@ -112,12 +120,52 @@ impl InputContext {
 /// active (`history_searching` / `model_searching`); in browse mode those keys
 /// are inert so `/` can open search and stray letters never mutate a buffer the
 /// user isn't editing.
+/// Whether the permission sheet occupies the composer slot. The one
+/// pass-through surface: transcript navigation and scrolling stay live
+/// behind it (ADR-0173 §2).
+fn permission_sheet_up(context: &InputContext) -> bool {
+    context.active_sheet == Some(crate::sheet::SheetKind::Permission)
+}
+
+/// Whether no overlay is up at all — no modal, no sheet: the chat surface.
+fn bare_chat_surface(context: &InputContext) -> bool {
+    context.active_modal == super::Modal::None && context.active_sheet.is_none()
+}
+
+/// Whether clicks, drags and hover reach the live transcript: on the bare
+/// chat surface, or behind the pass-through permission sheet.
+fn transcript_interactive(context: &InputContext) -> bool {
+    bare_chat_surface(context) || permission_sheet_up(context)
+}
+
+/// Whether the foreground surface (sheet or modal) pages its own body on the
+/// scroll keys — the claims-driven mirror of `App::modal_scroll_field`
+/// (ADR-0173 §2).
+fn foreground_scrolls_own_body(context: &InputContext) -> bool {
+    if let Some(kind) = context.active_sheet {
+        return kind.keyboard_claims().body_scroll;
+    }
+    context.active_modal.keyboard_claims().body_scroll
+}
+
 fn edits_input_field(context: &InputContext) -> bool {
     if context.has_focused_target {
         return false;
     }
+    // Sheet foreground: only the injection sheet borrows the composer line;
+    // the permission and question sheets never edit the shared draft.
+    if let Some(kind) = context.active_sheet {
+        return kind == crate::sheet::SheetKind::InputInjection;
+    }
+    // The static column comes from the modal's declared `text_entry` claim
+    // (modal.rs, ADR-0173 §2); the live gate (which field, which sub-mode)
+    // stays here beside the resolver.
+    if !context.active_modal.keyboard_claims().text_entry {
+        return false;
+    }
     match context.active_modal {
-        super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
+        // No modal: the chat surface's own composer is the text field.
+        super::Modal::None | super::Modal::ModelEditor => true,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
         // The provider editor's four basic string fields borrow the composer;
@@ -127,53 +175,18 @@ fn edits_input_field(context: &InputContext) -> bool {
     }
 }
 
-/// Whether the question modal's "Other" free-text row is the active editing
-/// surface. Unlike the modals covered by [`edits_input_field`], the question
-/// field does NOT borrow `App::input` (it owns `QuestionModel::other_text`),
-/// so it must not be lumped into `edits_input_field` — that would also enable
-/// the readline ops (Ctrl+A/E/W/U/K, Home/End, word-delete Backspace) which
-/// all mutate `App::input` and would corrupt an unrelated buffer. Only the
-/// paste paths (Ctrl+V, bracketed paste) route into this field.
 fn question_other_field(context: &InputContext) -> bool {
-    context.active_modal == super::Modal::Question && context.question_other_highlighted
+    context.active_sheet == Some(crate::sheet::SheetKind::Question)
+        && context.question_other_highlighted
 }
 
-/// Whether the active modal paints its own scrollable body — i.e. whether
-/// `PageUp` / `PageDown` / `Ctrl+Up` / `Ctrl+Down` should scroll the modal
-/// body (true) rather than fall through to transcript / caret handling
-/// (false). This is the key→action mirror of `App::modal_scroll_field`: the
-/// exact set of modals whose body scroll offset the event loop advances on a
-/// `Scroll*` action. Kept in sync with that helper so a page key never routes
-/// to a modal the loop can't scroll.
-///
-/// The inline permission sheet, the caret-owning text editors, and the
-/// no-modal baseline are excluded: `PageUp`/`PageDown` there either scroll the
-/// transcript behind the sheet or move the input caret, never a modal body.
+/// Whether the active modal paints its own scrollable body — derived from the
+/// modal's declared [`Claims::body_scroll`] (modal.rs, ADR-0173 §2): the
+/// scroll keys page a modal body exactly when the modal declares the family,
+/// so the key→action mirror of `App::modal_scroll_field` can never drift from
+/// the declaration.
 fn scrolls_own_body(modal: super::Modal) -> bool {
-    matches!(
-        modal,
-        super::Modal::Help
-            | super::Modal::Todos
-            | super::Modal::Permissions
-            | super::Modal::Config
-            | super::Modal::Telemetry
-            | super::Modal::UsageStats
-            | super::Modal::OauthPending
-            | super::Modal::ProviderPreset
-            | super::Modal::CustomProvider
-            | super::Modal::Tools
-            | super::Modal::Mcp
-            | super::Modal::Skills
-            | super::Modal::Sessions
-            | super::Modal::Queue
-            | super::Modal::Btw
-            | super::Modal::HistorySearch
-            | super::Modal::Connections
-            | super::Modal::Models
-            | super::Modal::Question
-            | super::Modal::Tree
-            | super::Modal::ViewSwitcher
-    )
+    modal.keyboard_claims().body_scroll
 }
 
 /// Which OAuth pending-sheet field to copy: the device verification code (the
@@ -563,20 +576,6 @@ pub enum InputAction {
     /// The message is not sent — the user can edit and press Enter again to ship
     /// it.
     HistoryInsert,
-    /// Toggle the "full prompt" preview of the selected history entry inside
-    /// the Ctrl+R modal. In preview mode the body shows the entry's complete
-    /// (possibly multi-line) text; ↑/↓ re-renders the newly focused entry.
-    HistoryTogglePreview,
-    /// Arm the Ctrl+R modal's "clear all history" confirmation (`Ctrl+X`).
-    /// The next `y` wipes the entire input history; any other key / Esc
-    /// cancels. Kept out of the top level so a stray `Ctrl+X` can never wipe
-    /// history while composing.
-    HistoryClearAll,
-    /// Confirm the armed clear-history action (`y` / Enter while
-    /// `history_clear_confirm` is latched): wipe the entire input history.
-    HistoryClearConfirm,
-    /// Cancel the armed clear-history action (any other key / Esc).
-    HistoryClearCancel,
     /// Enter the model picker's search sub-layer (`/` in browse mode): start
     /// borrowing the composer line as a live fuzzy query and re-rank the list.
     ModelEnterSearch,
@@ -743,7 +742,7 @@ fn insert_newline(input: &mut String, cursor_position: &mut usize, active_modal:
 /// logical model remains a char index for compatibility with selection and
 /// word-navigation code, but every visible edit/motion lands only between
 /// grapheme clusters.
-fn normalized_cursor_byte(input: &str, cursor_position: usize) -> usize {
+pub(crate) fn normalized_cursor_byte(input: &str, cursor_position: usize) -> usize {
     let raw = input
         .char_indices()
         .nth(cursor_position.min(input.chars().count()))
@@ -752,7 +751,7 @@ fn normalized_cursor_byte(input: &str, cursor_position: usize) -> usize {
     mutx_engine::text::floor_grapheme_boundary(input, raw)
 }
 
-fn char_index_at_byte(input: &str, byte: usize) -> usize {
+pub(crate) fn char_index_at_byte(input: &str, byte: usize) -> usize {
     input[..byte.min(input.len())].chars().count()
 }
 
@@ -921,7 +920,7 @@ fn cursor_line_end_char(chars: &[char], cursor_position: usize) -> usize {
 /// This is what lets `↑` walk lines inside a multi-line draft instead of
 /// always jumping to the previous history entry — only at the top line
 /// does it hand off to input history.
-fn cursor_line_up(input: &str, cursor_position: &mut usize) -> bool {
+pub(crate) fn cursor_line_up(input: &str, cursor_position: &mut usize) -> bool {
     let chars: Vec<char> = input.chars().collect();
     let pos = (*cursor_position).min(chars.len());
     let line_start = cursor_line_start_char(&chars, pos);
@@ -945,7 +944,7 @@ fn cursor_line_up(input: &str, cursor_position: &mut usize) -> bool {
 /// Try to move the caret down one logical line, mirroring
 /// [`cursor_line_up`]. Returns `false` (without moving) when the caret is
 /// already on the last line, so `↓` hands off to history navigation there.
-fn cursor_line_down(input: &str, cursor_position: &mut usize) -> bool {
+pub(crate) fn cursor_line_down(input: &str, cursor_position: &mut usize) -> bool {
     let chars: Vec<char> = input.chars().collect();
     let pos = (*cursor_position).min(chars.len());
     let line_end = cursor_line_end_char(&chars, pos);
@@ -1129,13 +1128,10 @@ pub fn process_event(
                     // keyboard-driven) and covers only the composer/hint slot,
                     // which has no registered transcript region, so a press
                     // landing on it resolves to nothing and stays inert.
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None | super::Modal::Permission
-                    ) {
+                    if transcript_interactive(&context) {
                         drag.start(SemanticCursor::new(0, 0, 0));
                         InputAction::SelectionStart { x, y }
-                    } else if context.active_modal == super::Modal::Question
+                    } else if context.active_sheet == Some(crate::sheet::SheetKind::Question)
                         || context.active_modal == super::Modal::OauthPending
                     {
                         InputAction::SelectionStart { x, y }
@@ -1157,12 +1153,8 @@ pub fn process_event(
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if drag.active
-                        && matches!(
-                            context.active_modal,
-                            super::Modal::None
-                                | super::Modal::Permission
-                                | super::Modal::OauthPending
-                        )
+                        && (transcript_interactive(&context)
+                            || context.active_modal == super::Modal::OauthPending)
                     {
                         InputAction::SelectionUpdate { x, y }
                     } else if drag.active {
@@ -1186,10 +1178,7 @@ pub fn process_event(
                 // Triple-click detection would need a timer; for now we map
                 // middle click to "select block" as a quick approximation.
                 MouseEventKind::Down(MouseButton::Middle) => {
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None | super::Modal::Permission
-                    ) {
+                    if transcript_interactive(&context) {
                         InputAction::SelectBlock { x, y }
                     } else {
                         InputAction::None
@@ -1199,10 +1188,7 @@ pub fn process_event(
                     // Right-click opens detail/feedback for interactive
                     // transcript elements. Allowed during a permission prompt
                     // because the transcript stays interactive.
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None | super::Modal::Permission
-                    ) {
+                    if transcript_interactive(&context) {
                         InputAction::RightClick { x, y }
                     } else {
                         InputAction::None
@@ -1213,10 +1199,7 @@ pub fn process_event(
                 // on the still-interactive transcript; blocked behind other
                 // overlay modals.
                 MouseEventKind::Moved => {
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None | super::Modal::Permission
-                    ) {
+                    if transcript_interactive(&context) {
                         InputAction::Hover { x, y }
                     } else {
                         InputAction::None
@@ -1234,29 +1217,47 @@ pub fn process_event(
                 return InputAction::None;
             }
 
-            // While the Ctrl+R clear-history confirmation is armed, the modal
-            // owns EVERY key — `y` / Enter confirm the wipe, anything else —
-            // Esc and even global shortcuts like Ctrl+C included — cancels it.
-            // This must run before the global-binding registry below, whose
-            // `Gate::Always` entries (Ctrl+C → copy/clear) would otherwise
-            // fire and let a stray keystroke escape the question.
-            if context.history_clear_confirm {
-                return match key.code {
-                    KeyCode::Char('y') => InputAction::HistoryClearConfirm,
-                    KeyCode::Enter => InputAction::HistoryClearConfirm,
-                    _ => InputAction::HistoryClearCancel,
-                };
-            }
-
             let physical_key = crate::keymap::Key::from_event(key);
 
             // ── Stage 5: Global Hard-Bound Shortcuts ──────────────────────────
             // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt), Ctrl+Q (Quit), CopySelection
-            if let Some(cmd_id) = crate::keymap::resolve_global_key(physical_key) {
+            if let Some(cmd_id) =
+                crate::keymap::resolve_global_key_with(physical_key, &context.key_overrides)
+            {
                 match cmd_id {
                     crate::keymap::CommandId::Help => return InputAction::OpenHelp,
                     crate::keymap::CommandId::CommandPalette => {
-                        return InputAction::ViewSwitcherToggle;
+                        // Ctrl+P / Ctrl+L toggle the palette: open it at the
+                        // top level, and close it while it is already open.
+                        if context.active_modal == super::Modal::ViewSwitcher
+                            || context.active_modal == super::Modal::None
+                        {
+                            return InputAction::ViewSwitcherToggle;
+                        }
+                        // Inside any other modal the chord is owned by that
+                        // surface — Ctrl+P toggles the queue block in the
+                        // queue panel. Ctrl+L over a modal is a dispatch-side
+                        // no-op (`can_open_view_switcher` is false), and we
+                        // swallow it here so it cannot fall through to the
+                        // printable-char arm.
+                        if physical_key == crate::keymap::Key::CTRL_L {
+                            return InputAction::None;
+                        }
+                    }
+                    crate::keymap::CommandId::OpenTelemetry => {
+                        // Ctrl+O (model-bar telemetry keycap). Top level only:
+                        // the model bar is session chrome, never visible
+                        // behind a modal.
+                        if context.active_modal == super::Modal::None {
+                            return InputAction::OpenTelemetry;
+                        }
+                    }
+                    crate::keymap::CommandId::OpenActiveConnectionDetail => {
+                        // Ctrl+N (model-bar connection keycap). Top level only,
+                        // matching the telemetry binding above.
+                        if context.active_modal == super::Modal::None {
+                            return InputAction::OpenActiveConnectionDetail;
+                        }
                     }
                     crate::keymap::CommandId::InterruptTask => return InputAction::CtrlC,
                     crate::keymap::CommandId::Quit => return InputAction::Quit,
@@ -1310,15 +1311,58 @@ pub fn process_event(
                 }
             }
 
+            // ── Surface Dispatch (ADR-0172) ─────────────────────────────
+            // Each full-screen view owns the keys for its own focus planes
+            // while no modal is up: the Session view's chat scheme (and its
+            // Runner / Side siblings) resolves them here, before the modal /
+            // global arms below. A key the surface does not own falls through
+            // to the shared affordance library and the modal arms.
+            if bare_chat_surface(&context)
+                && let Some(action) = crate::session::resolve_view_key(
+                    context.current_view,
+                    physical_key,
+                    &context,
+                    input,
+                    cursor_position,
+                )
+            {
+                return action;
+            }
+
+            // ── Modal Verb Dispatch (ADR-0172) ──────────────────────────
+            // Each modal owns its single-letter verb keys (space/r in the MCP
+            // manager, d/n/i in the sessions picker, the dashboard console,
+            // …) in its own scheme. A key the modal does not own falls through
+            // to the shared affordance library (list nav, readline, paste,
+            // scrolling) and text insertion.
+            // ── Sheet Verb Dispatch (ADR-0173 §3) ───────────────────────
+            // Each interaction sheet owns its single-key verbs in its own
+            // scheme; a key the sheet does not own falls through to the
+            // modal schemes and the sheet arms below. A mounted sheet takes
+            // priority over a coexisting modal: the sheet blocks the agent
+            // (safety-critical approval flow), the modal is a browsing aid.
+            if let Some(kind) = context.active_sheet
+                && let Some(action) = crate::sheet::resolve_sheet_key(kind, physical_key, &context)
+            {
+                return action;
+            }
+            if context.active_modal != super::Modal::None
+                && let Some(action) = crate::modal_keys::resolve_modal_key(
+                    context.active_modal,
+                    physical_key,
+                    &context,
+                )
+            {
+                return action;
+            }
+
             match key.code {
                 KeyCode::Esc => {
-                    if context.active_modal == super::Modal::None
-                        && context.completion_kind != super::CompletionKind::None
-                        && !context.completion_dismissed
-                    {
-                        return InputAction::CloseCompletion;
-                    }
-                    if context.active_modal == super::Modal::Permission {
+                    // Chat-surface Esc (close completion / exit side or runner
+                    // / clear step focus / interrupt) is resolved by the
+                    // Session view's own scheme (ADR-0172) before this match.
+                    // This arm is modal-only.
+                    if permission_sheet_up(&context) {
                         if context.permission_confirm_always {
                             InputAction::PermissionBack
                         } else if context.has_focused_target {
@@ -1330,7 +1374,7 @@ pub fn process_event(
                         } else {
                             InputAction::PermissionReject
                         }
-                    } else if context.active_modal == super::Modal::Question {
+                    } else if context.active_sheet == Some(crate::sheet::SheetKind::Question) {
                         InputAction::QuestionCancel
                     } else if context.active_modal == super::Modal::ProviderPreset {
                         // Esc cancels the preset chooser back to the provider
@@ -1342,15 +1386,9 @@ pub fn process_event(
                         // Esc cancels the custom-provider editor and returns to the
                         // provider picker it was opened from.
                         InputAction::CancelCustomProvider
-                    } else if context.active_modal == super::Modal::InputInjection {
+                    } else if context.active_sheet == Some(crate::sheet::SheetKind::InputInjection)
+                    {
                         InputAction::InputCancel
-                    } else if context.active_modal == super::Modal::HistorySearch {
-                        // The history panel floats above a live composer that is
-                        // permanently the filter field, so there is no
-                        // browse/search distinction to step out of: a single Esc
-                        // closes the panel and restores the stashed draft (the
-                        // query is discarded, since it was only ever a filter).
-                        InputAction::CloseModal
                     } else if matches!(
                         context.active_modal,
                         super::Modal::Models | super::Modal::Connections
@@ -1368,45 +1406,21 @@ pub fn process_event(
                         // the shared dismiss verb; the dispatcher decides
                         // hide (state saved) vs cancel-to-origin there.
                         InputAction::CloseModal
-                    } else if context.in_side_view {
-                        InputAction::ExitSideView
-                    } else if context.in_runner_view {
-                        // Runner zoom: Esc returns to the parent view.
-                        // Takes priority over focus clearing so one Esc
-                        // always exits the zoom, even if a step inside the
-                        // runner is keyboard-focused.
-                        InputAction::ExitRunner
-                    } else if context.has_focused_target {
-                        // A transcript step is focused: Esc clears the focus
-                        // and hands every key back to the input box.
-                        InputAction::ClearFocusedTarget
-                    } else if context.completion_kind != super::CompletionKind::None
-                        && context.suggestion_count > 0
-                        && !context.completion_dismissed
-                    {
-                        // A completion popup (slash command or `@path`) is
-                        // open: Esc dismisses it without touching the input
-                        // text. The popup stays hidden until the next edit
-                        // clears the dismissal latch, so Esc then ↑/↓ walks
-                        // history instead of suggestions.
-                        InputAction::CloseCompletion
-                    } else if context.is_responding {
-                        InputAction::Interrupt
                     } else {
                         InputAction::None
                     }
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if context.active_modal == super::Modal::None {
-                        InputAction::OpenHistory
-                    } else {
-                        InputAction::None
-                    }
+                    // Ctrl+R (history search) is a chat-surface chord resolved
+                    // by the Session view's scheme (ADR-0172); no other
+                    // surface claims it.
+                    InputAction::None
                 }
-                // Ctrl+P is a declared global binding (registry →
-                // ToggleQueueBlock) at the top level. Inside the Queue modal
-                // it also toggles the block so the user can resume without
-                // closing the list. Inside any other modal it is a no-op.
+                // Ctrl+P toggles the queue block inside the Queue modal so the
+                // user can resume without closing the list. At the top level
+                // Ctrl+P is claimed by the Command Palette (Stage 5 global
+                // resolution), so this arm only ever fires while the Queue
+                // modal is active. Inside any other modal it is a no-op.
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if context.active_modal == super::Modal::Queue {
                         InputAction::QueueToggleBlock
@@ -1460,6 +1474,15 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Enter => {
+                    // Sheet submits (ADR-0173 §3): Enter on a sheet commits
+                    // its pending decision.
+                    if let Some(kind) = context.active_sheet {
+                        return match kind {
+                            crate::sheet::SheetKind::Permission => InputAction::PermissionSubmit,
+                            crate::sheet::SheetKind::Question => InputAction::QuestionSubmit,
+                            crate::sheet::SheetKind::InputInjection => InputAction::InputSubmit,
+                        };
+                    }
                     match context.active_modal {
                         super::Modal::Models => InputAction::ProviderPickerActivate,
                         super::Modal::Connections if context.connection_info_detail => {
@@ -1472,7 +1495,11 @@ pub fn process_event(
                             target: OauthCopyTarget::Selected,
                         },
                         super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
-                        super::Modal::HistorySearch => InputAction::HistoryInsert,
+                        // HistorySearch Enter is owned by the history modal's
+                        // scheme (modal_keys, ADR-0172); this arm is an
+                        // exhaustiveness placeholder until the Enter arm is
+                        // fully retired.
+                        super::Modal::HistorySearch => InputAction::None,
                         super::Modal::Sessions if context.session_info_detail => InputAction::None,
                         super::Modal::Sessions => InputAction::OpenSelectedSession,
                         // With the dashboard's inline prompt open, Enter
@@ -1483,9 +1510,6 @@ pub fn process_event(
                             InputAction::HostPromptSubmit
                         }
                         super::Modal::Host => InputAction::HostPreviewSelected,
-                        super::Modal::Permission => InputAction::PermissionSubmit,
-                        super::Modal::Question => InputAction::QuestionSubmit,
-                        super::Modal::InputInjection => InputAction::InputSubmit,
                         super::Modal::Help => InputAction::CloseModal,
                         super::Modal::Tools => InputAction::CloseModal,
                         super::Modal::Mcp => InputAction::CloseModal,
@@ -1497,103 +1521,29 @@ pub fn process_event(
                         // Quick switcher: Enter switches to the highlighted
                         // view (ADR-0133). Btw's Enter is a *jump*, the
                         // switcher's is a *switch* — both close the panel.
-                        super::Modal::ViewSwitcher => InputAction::ViewSwitchActivate,
+                        super::Modal::ViewSwitcher => InputAction::None,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Todos => InputAction::CloseModal,
                         super::Modal::Telemetry => InputAction::TelemetryActivate,
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
-                            if context.has_focused_target {
-                                return InputAction::ActivateFocusedTarget;
-                            }
-                            // Slash-only: pressing Enter on a unique prefix
-                            // auto-accepts the first suggestion rather than
-                            // sending `/go` as a (rejected) command. Path
-                            // mentions skip this so Enter still sends the message.
-                            if context.completion_kind == super::CompletionKind::Slash
-                                && context.suggestion_count > 0
-                                && context.suggestion_index.is_none()
-                                && !context.has_exact_suggestion
-                            {
-                                return InputAction::CommitSuggestion("0".to_string());
-                            }
-                            // If a completion menu is open and the user has
-                            // highlighted an item (via ↑/↓ or Tab cycling),
-                            // Enter accepts that item rather than sending the
-                            // partial input. Applies to both slash commands and
-                            // `@path` mentions. An explicit highlight is a
-                            // stronger signal than the raw text in the box, so
-                            // this wins over the exact-match slash fast path
-                            // below.
-                            if let Some(i) = context.suggestion_index
-                                && context.completion_kind != super::CompletionKind::None
-                            {
-                                return InputAction::CommitSuggestion(i.to_string());
-                            }
-                            let text = std::mem::take(input);
-                            *cursor_position = 0;
-                            if text.starts_with('/') {
-                                // Match on the trimmed text so a slash command
-                                // typed with a trailing space (e.g. the user
-                                // typed `/models ` themselves) still hits the
-                                // exact-match arm instead of silently no-op'ing.
-                                match text.trim() {
-                                    "/models" => InputAction::OpenModels,
-                                    "/connections" => InputAction::OpenConnections,
-                                    "/permissions" => InputAction::OpenPermissions,
-                                    "/tools" => InputAction::OpenTools,
-                                    "/usage" => InputAction::OpenUsage,
-                                    "/mcp" => InputAction::OpenMcp,
-                                    "/skills" => InputAction::OpenSkills,
-                                    // Bare `/settings` (or `/config`) opens the manager modal
-                                    // locally; `/settings reload` (and any other
-                                    // argument form) is a backend command —
-                                    // it falls through to SendSlash like
-                                    // `/skills reload` does.
-                                    "/settings" | "/config" => InputAction::OpenConfig,
-                                    "/exit" => InputAction::Quit,
-                                    _ => InputAction::SendSlash(text),
-                                }
-                            } else if !text.is_empty() {
-                                if context.is_responding {
-                                    InputAction::QueueFollowUp(text)
-                                } else {
-                                    InputAction::SendChat(text)
-                                }
-                            } else {
-                                InputAction::None
-                            }
+                            // Chat-surface Enter (activate focused step /
+                            // commit completion / send / queue / slash) is
+                            // resolved by the Session view's scheme
+                            // (ADR-0172) before this match. No other view
+                            // sends the draft.
+                            InputAction::None
                         }
                     }
                 }
                 KeyCode::Tab => {
-                    if context.active_modal == super::Modal::None
-                        && context.completion_kind != super::CompletionKind::None
-                        && context.suggestion_count > 0
-                        && !context.has_exact_suggestion
-                        && !context.completion_dismissed
-                    {
-                        let idx = context.suggestion_index.unwrap_or(0);
-                        InputAction::CommitSuggestion(idx.to_string())
-                    } else if context.active_modal == super::Modal::None
-                        && context.completion_kind != super::CompletionKind::None
-                        && context.completion_dismissed
-                        && context.has_trigger_text
-                        && !context.is_responding
-                    {
-                        InputAction::ReopenCompletion
-                    } else if context.active_modal == super::Modal::None {
-                        if context.has_focused_target {
-                            InputAction::ClearFocusedTarget
-                        } else {
-                            InputAction::FocusNextTarget
-                        }
-                    } else if context.active_modal == super::Modal::ModelEditor {
+                    // Chat-surface Tab (commit / reopen a completion) is
+                    // resolved by the Session view's scheme (ADR-0173). This
+                    // arm is modal-only.
+                    if context.active_modal == super::Modal::ModelEditor {
                         InputAction::ModelEditorNextField
                     } else if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderNextField
-                    } else if context.active_modal == super::Modal::HistorySearch {
-                        InputAction::HistoryInsert
                     } else if context.active_modal == super::Modal::Host {
                         InputAction::HostFocusToggle
                     } else if context.active_modal == super::Modal::Telemetry {
@@ -1601,20 +1551,19 @@ pub fn process_event(
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
                     } else {
+                        // HistorySearch Tab is owned by the history modal's
+                        // scheme (modal_keys, ADR-0172).
                         InputAction::None
                     }
                 }
                 KeyCode::BackTab => {
-                    if context.active_modal == super::Modal::None {
-                        if context.has_focused_target {
-                            InputAction::ClearFocusedTarget
-                        } else {
-                            InputAction::None
-                        }
+                    // Chat-surface BackTab (return focus from a step) is
+                    // resolved by the Session view's scheme (ADR-0172). This
+                    // arm is modal-only.
+                    if context.active_sheet == Some(crate::sheet::SheetKind::Question) {
+                        InputAction::QuestionPrevious
                     } else if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
-                    } else if context.active_modal == super::Modal::Question {
-                        InputAction::QuestionPrevious
                     } else if context.active_modal == super::Modal::Telemetry {
                         InputAction::TelemetryPrevTab
                     } else if context.active_modal == super::Modal::OauthPending {
@@ -1802,336 +1751,17 @@ pub fn process_event(
                     }
                     InputAction::None
                 }
-                // Alt+S: steer immediately while running.
-                KeyCode::Char('s') | KeyCode::Char('S')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && context.active_modal == super::Modal::None =>
-                {
-                    if context.is_responding {
-                        let text = std::mem::take(input);
-                        *cursor_position = 0;
-                        return InputAction::SteerImmediate(text);
-                    }
-                    InputAction::None
-                }
-                // Alt+P: previous prompt history.
-                KeyCode::Char('p') | KeyCode::Char('P')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && context.active_modal == super::Modal::None =>
-                {
-                    InputAction::HistoryPrev
-                }
-                // Alt+N: next prompt history.
-                KeyCode::Char('n') | KeyCode::Char('N')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && context.active_modal == super::Modal::None =>
-                {
-                    InputAction::HistoryNext
-                }
+                // Alt+S / Alt+P / Alt+N are chat-surface chords (steer now /
+                // previous / next prompt history), resolved by the Session
+                // view's scheme (ADR-0172) before this match.
                 KeyCode::Char(c) => {
-                    // The command palette filter owns every printable key while it is up
-                    if context.active_modal == super::Modal::ViewSwitcher {
-                        return InputAction::ViewSwitcherFilter { ch: c };
-                    }
-                    // Auto-bounce back to Composer if typing in Transcript:
-                    if context.active_modal == super::Modal::None && context.has_focused_target {
-                        let byte_pos = normalized_cursor_byte(input, *cursor_position);
-                        *cursor_position = char_index_at_byte(input, byte_pos);
-                        input.insert(byte_pos, c);
-                        *cursor_position += 1;
-                        return InputAction::ClearFocusedTarget;
-                    }
-                    // Sibling runner navigation works in both zones (it is a
-                    // runner view feature, not a typing-navigation thing)
-                    // but only when no text is being composed.
-                    if context.active_modal == super::Modal::None
-                        && context.in_runner_view
-                        && input.is_empty()
-                    {
-                        match c {
-                            '[' => return InputAction::PrevSibling,
-                            ']' => return InputAction::NextSibling,
-                            _ => {}
-                        }
-                    }
-                    if context.active_modal == super::Modal::Question
-                        && c == ' '
-                        && !context.question_other_highlighted
-                    {
-                        return InputAction::QuestionToggle;
-                    }
-                    // Space inside the tools manager toggles the selected
-                    // tool's enabled flag.
-                    if context.active_modal == super::Modal::Tools && c == ' ' {
-                        return InputAction::SessionActivate;
-                    }
-                    // Space toggles the selected server in the MCP manager;
-                    // `r` reconnects it.
-                    if context.active_modal == super::Modal::Mcp && c == ' ' {
-                        return InputAction::McpToggle;
-                    }
-                    if context.active_modal == super::Modal::Mcp && c == 'r' {
-                        return InputAction::McpReconnect;
-                    }
-                    // The OAuth pending sheet copies its primary content: `c`
-                    // copies the device code (the value to paste at
-                    // github.com/login/device), `u` copies the verification URL.
-                    // Mouse drag-select does not reach modal body text (muta
-                    // captures mouse events), so these keys are the copy path.
-                    if context.active_modal == super::Modal::OauthPending && c == 'c' {
-                        return InputAction::CopyOauthContent {
-                            target: OauthCopyTarget::UserCode,
-                        };
-                    }
-                    if context.active_modal == super::Modal::OauthPending && c == 'u' {
-                        return InputAction::CopyOauthContent {
-                            target: OauthCopyTarget::Url,
-                        };
-                    }
-                    if context.active_modal == super::Modal::OauthPending && (c == ' ' || c == 'y')
-                    {
-                        return InputAction::CopyOauthContent {
-                            target: OauthCopyTarget::Selected,
-                        };
-                    }
-                    if context.active_modal == super::Modal::ProviderPreset && c == 'b' {
-                        return InputAction::SelectPresetWithOauthMethod {
-                            method: muta_contracts::LoginMethod::Browser,
-                        };
-                    }
-                    if context.active_modal == super::Modal::ProviderPreset && c == 'd' {
-                        return InputAction::SelectPresetWithOauthMethod {
-                            method: muta_contracts::LoginMethod::Device,
-                        };
-                    }
-                    // Space inside the permissions manager revokes the
-                    // selected rule.
-                    if context.active_modal == super::Modal::Permissions && c == ' ' {
-                        return InputAction::PermissionsActivate;
-                    }
-                    if context.active_modal == super::Modal::Telemetry {
-                        match c {
-                            '1' => {
-                                return InputAction::TelemetrySetTab(
-                                    crate::modal::TelemetryTab::Overview,
-                                );
-                            }
-                            '2' => {
-                                return InputAction::TelemetrySetTab(
-                                    crate::modal::TelemetryTab::Activity,
-                                );
-                            }
-                            '[' | 'h' => return InputAction::TelemetryPrevTab,
-                            ']' | 'l' => return InputAction::TelemetryNextTab,
-                            _ => {}
-                        }
-                    }
-                    if context.active_modal == super::Modal::Config {
-                        if c == ' ' {
-                            return InputAction::ConfigActivate;
-                        }
-                        if context.config_focus == crate::overlays::ConfigFocus::Detail {
-                            if c == '1' || c == 'h' {
-                                return InputAction::ConfigSegmentPrev;
-                            }
-                            if c == '2' || c == 'l' {
-                                return InputAction::ConfigSegmentNext;
-                            }
-                        }
-                    }
-                    if context.active_modal == super::Modal::Question
-                        && let Some(d) = c.to_digit(10)
-                        && (1..=9).contains(&d)
-                    {
-                        return InputAction::QuestionSelect(d as usize);
-                    }
-                    // A focused transcript step does not capture typing: with
-                    // no separate browse mode, printable characters always fall
-                    // through to the input box below (the focus highlight stays
-                    // until Esc / Enter). `Enter` activates the focused step;
-                    // `Space` just inserts a space.
-                    if (context.active_modal == super::Modal::Models
-                        || (context.active_modal == super::Modal::Connections
-                            && !context.connection_info_detail))
-                        && !context.model_searching
-                        && c == '/'
-                    {
-                        // Browse mode: `/` opens the search sub-layer rather than
-                        // inserting a literal slash — mirrors the history modal.
-                        InputAction::ModelEnterSearch
-                    } else if context.active_modal == super::Modal::Models
-                        && !context.model_searching
-                        && c == '*'
-                    {
-                        // Models browse mode only: star the highlighted MODEL as
-                        // a favorite (favorite is model-level, ADR-0046). In the
-                        // search sub-layer `*` is a query char; the Connections
-                        // list has no favorite concept.
-                        InputAction::ProviderPickerToggleFavorite
-                    } else if context.active_modal == super::Modal::Connections
-                        && !context.connection_info_detail
-                        && !context.model_searching
-                        && c == 'a'
-                    {
-                        // Connections browse mode: `a` opens the curated
-                        // preset branch. In the search sub-layer `a` is a
-                        // query character.
-                        InputAction::OpenPresetChooser
-                    } else if context.active_modal == super::Modal::Connections
-                        && !context.connection_info_detail
-                        && !context.model_searching
-                        && c == 'c'
-                    {
-                        // Custom connections are a sibling of the preset
-                        // branch, not an item inside the preset chooser.
-                        InputAction::OpenCustomConnection
-                    } else if matches!(
-                        context.active_modal,
-                        super::Modal::Models | super::Modal::Connections
-                    ) && !context.model_searching
-                        && c == 'e'
-                    {
-                        // Connections: edit the highlighted provider. Models:
-                        // edit the highlighted model's per-model settings.
-                        InputAction::OpenModelEditor
-                    } else if matches!(
-                        context.active_modal,
-                        super::Modal::Models | super::Modal::Connections
-                    ) && !context.model_searching
-                        && (c == 'r' || c == 'R')
-                    {
-                        // Refresh / rediscover models from upstream.
-                        InputAction::RefreshProviderModels
-                    } else if context.active_modal == super::Modal::Connections
-                        && !context.connection_info_detail
-                        && !context.model_searching
-                        && c == 'D'
-                    {
-                        // Connections browse mode: `Shift+D` deletes the entire
-                        // highlighted custom provider (ignored for built-ins by
-                        // the handler).
-                        InputAction::DeleteProvider
-                    } else if context.active_modal == super::Modal::Sessions
-                        && !context.session_info_detail
-                        && c == 'd'
-                    {
-                        InputAction::DeleteSelectedSession
-                    } else if context.active_modal == super::Modal::Sessions
-                        && !context.session_info_detail
-                        && (c == 'n' || c == 'N')
-                    {
-                        InputAction::CreateNewSession
-                    } else if context.active_modal == super::Modal::Sessions
-                        && !context.session_info_detail
-                        && c == 'i'
-                    {
-                        InputAction::OpenSessionInfo
-                    } else if context.active_modal == super::Modal::Host && c == 'a' {
-                        // Dashboard: attach to the selected session (detach +
-                        // re-attach). Enter only previews; `a` is the attach.
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostSwitchSelected;
-                    } else if context.active_modal == super::Modal::Host && c == 'i' {
-                        // Dashboard: interrupt the selected session's round.
-                        // Early `return` so this keypress is never re-inserted
-                        // as prompt text by the arms below (the dashboard keys
-                        // are actions, never literal input).
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostInterruptSelected;
-                    } else if context.active_modal == super::Modal::Host
-                        && c == 'k'
-                        && !context.host_prompting
-                    {
-                        // Dashboard dock: kill the selection. Two-press
-                        // confirm — the first press arms, the second fires.
-                        // Inert while the inline prompt is open (`k` is then
-                        // literal text; `/kill` is the prompt's spelling).
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostKillSelected;
-                    } else if context.active_modal == super::Modal::Host
-                        && c == 's'
-                        && !context.host_prompting
-                    {
-                        // Dashboard dock: suspend the selection (park it in
-                        // memory; the next attach resumes it). Same
-                        // prompt-open exclusion as `k`.
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostSuspendSelected;
-                    } else if context.active_modal == super::Modal::Host && c == 'p' {
-                        // Dashboard: open the inline prompt-to-session field.
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostPromptOpen;
-                    } else if context.active_modal == super::Modal::Host && c == 'n' {
-                        // Dashboard: open the inline new-session field.
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostNewSession;
-                    } else if context.active_modal == super::Modal::Host && !context.host_prompting
-                    {
-                        // Dashboard: any other printable key opens the console
-                        // composer seeded with that char — the surface is a
-                        // command line, so typing `@3 …` or `/help` begins
-                        // directly without a `p` first. (`p`/`n` seeds
-                        // nothing: they are the explicit openers above, and
-                        // their role defaults differ.)
-                        #[allow(clippy::needless_return)]
-                        return InputAction::HostPromptSeed(c);
-                    } else if context.active_modal == super::Modal::Queue && c == 'D' {
-                        // Queue modal: `Shift+D` deletes the highlighted item
-                        // outright (the queue is auto-blocked on open, so a
-                        // mid-delete auto-drain can't race the user). No
-                        // confirm step — recall from history recovers the
-                        // text, and the queue is a staging surface, not
-                        // permanent storage.
-                        InputAction::QueueDelete
-                    } else if context.active_modal == super::Modal::Btw && c == 'D' {
-                        // Asides modal (ADR-0103 §5): `Shift+D` closes and
-                        // discards the highlighted aside — cancels its round,
-                        // drops it from the list, and deletes its session
-                        // files. Deliberate destruction stays a two-surface
-                        // gesture (uppercase, like the queue's delete) so a
-                        // stray keypress never loses a background aside.
-                        InputAction::BtwCloseSelected
-                    } else if context.active_modal == super::Modal::Queue && c == 'K' {
-                        // Queue modal: `K` moves the highlighted item toward
-                        // the front (next to pop). Vim convention.
-                        InputAction::QueueMoveItem { delta: -1 }
-                    } else if context.active_modal == super::Modal::Queue && c == 'J' {
-                        // Queue modal: `J` moves the highlighted item toward
-                        // the tail. Vim convention.
-                        InputAction::QueueMoveItem { delta: 1 }
-                    } else if context.active_modal == super::Modal::Permissions && c == 'c' {
-                        InputAction::PermissionsClearAll
-                    } else if context.active_modal == super::Modal::Config && (c == 'd' || c == 'D')
-                    {
-                        InputAction::ConfigDeleteConnection
-                    } else if c == ' '
-                        && context.active_modal == super::Modal::ModelEditor
-                        && matches!(context.editor_field, Some(2..=4))
-                    {
-                        // Space on the key editor's non-text fields instead
-                        // of inserting a space. Field 2 (thinking) is a binary
-                        // toggle; fields 3/4 (capability overrides, ADR-0149)
-                        // are tri-state: inherit → force on → force off.
-                        match context.editor_field {
-                            Some(3) => InputAction::ModelEditorVisionCycle,
-                            Some(4) => InputAction::ModelEditorToolCycle,
-                            _ => InputAction::ModelEditorThinkingToggle,
-                        }
-                    } else if c.is_ascii_digit()
-                        && c != '0'
-                        && context.active_modal == super::Modal::ModelEditor
-                        && context.editor_field == Some(1)
-                    {
-                        // A digit on the effort field jumps straight to that
-                        // ladder rung (`1` = shallowest … `7` = deepest) instead
-                        // of inserting into the borrowed input line — the flat
-                        // segmented selector makes direct selection the natural
-                        // gesture. `0` is not a tier.
-                        let index = c as usize - '1' as usize;
-                        InputAction::ModelEditorEffortJump { index }
-                    } else if context.active_modal == super::Modal::Question {
-                        InputAction::QuestionInsertChar(c)
-                    } else if edits_input_field(&context)
+                    // The command palette's filter is owned by its scheme
+                    // (modal_keys::resolve_view_switcher_key, ADR-0172);
+                    // the modal verb keys too. Only shared text insertion
+                    // remains here: editing surfaces (chat composer, borrowed
+                    // one-line modal filters, the key editor's API-key field)
+                    // insert the character, everything else is inert.
+                    if edits_input_field(&context)
                         && !(context.active_modal == super::Modal::ModelEditor
                             && matches!(context.editor_field, Some(2..=4)))
                     {
@@ -2153,11 +1783,9 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Backspace => {
-                    if context.active_modal == super::Modal::ViewSwitcher {
-                        // The switcher's own filter query (phase 5) — never
-                        // the composer.
-                        InputAction::ViewSwitcherBackspace
-                    } else if context.active_modal == super::Modal::Question {
+                    // The palette's query backspace is owned by its scheme
+                    // (modal_keys, ADR-0172).
+                    if context.active_sheet == Some(crate::sheet::SheetKind::Question) {
                         InputAction::QuestionBackspace
                     } else if edits_input_field(&context) && *cursor_position > 0 {
                         // Alt+Backspace / Ctrl+Backspace delete the previous
@@ -2228,11 +1856,9 @@ pub fn process_event(
                 // keystroke, mirroring the chip-aware Backspace. The caret
                 // does not move (forward delete only shortens the text).
                 KeyCode::Delete => {
-                    if context.active_modal == super::Modal::ViewSwitcher {
-                        return InputAction::ViewCloseSelected;
-                    } else if edits_input_field(&context)
-                        && *cursor_position < input.chars().count()
-                    {
+                    // The palette's delete-selected is owned by its scheme
+                    // (modal_keys, ADR-0172).
+                    if edits_input_field(&context) && *cursor_position < input.chars().count() {
                         let byte_cursor = input
                             .char_indices()
                             .map(|(i, _)| i)
@@ -2251,7 +1877,7 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Left => {
-                    if context.active_modal == super::Modal::Permission {
+                    if permission_sheet_up(&context) {
                         return InputAction::ModalUp;
                     }
                     if context.active_modal == super::Modal::Telemetry {
@@ -2296,7 +1922,7 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Right => {
-                    if context.active_modal == super::Modal::Permission {
+                    if permission_sheet_up(&context) {
                         return InputAction::ModalDown;
                     }
                     if context.active_modal == super::Modal::Telemetry {
@@ -2334,27 +1960,9 @@ pub fn process_event(
                     }
                     InputAction::None
                 }
-                // Alt+↑ / Alt+↓: the gesture that drives transcript item
-                // focus switching. From the composer, Alt+↑ enters transcript
-                // focus at the step closest to the prompt (or walks steps
-                // up if already focused). Alt+↓ clears focus back to the
-                // composer.
-                KeyCode::Up
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && context.active_modal == super::Modal::None =>
-                {
-                    InputAction::FocusPrevTarget
-                }
-                KeyCode::Down
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && context.active_modal == super::Modal::None =>
-                {
-                    if context.has_focused_target {
-                        InputAction::ClearFocusedTarget
-                    } else {
-                        InputAction::None
-                    }
-                }
+                // Alt+↑ / Alt+↓ (transcript step focus switching) are
+                // chat-surface chords, resolved by the Session view's scheme
+                // (ADR-0172) before this match.
                 // Ctrl+↑ / Ctrl+↓ inside a modal scroll the modal body by one
                 // page — the same gesture a pager or editor binds to a
                 // half-page jump. Mirrors PageUp / PageDown so users have both
@@ -2373,25 +1981,32 @@ pub fn process_event(
                     InputAction::ScrollPageDown
                 }
                 KeyCode::Up => {
+                    // Sheet ↑ (ADR-0173 §3): the permission sheet passes
+                    // transcript navigation through (claims), the question
+                    // sheet walks its own option cursor.
+                    if let Some(kind) = context.active_sheet {
+                        return match kind {
+                            crate::sheet::SheetKind::Permission => {
+                                if context.has_focused_target {
+                                    InputAction::FocusPrevTarget
+                                } else if context.permission_show_details {
+                                    InputAction::PermissionDetailsUp
+                                } else {
+                                    InputAction::ScrollUp
+                                }
+                            }
+                            crate::sheet::SheetKind::Question => InputAction::QuestionUp,
+                            crate::sheet::SheetKind::InputInjection => InputAction::None,
+                        };
+                    }
                     match context.active_modal {
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalUp,
-                        super::Modal::HistorySearch => InputAction::ModalUp,
+                        // HistorySearch ↑/↓ are owned by the history modal's
+                        // scheme (modal_keys, ADR-0172); placeholders keep the
+                        // arrow arm exhaustive until it is fully retired.
+                        super::Modal::HistorySearch => InputAction::None,
                         super::Modal::Sessions => InputAction::ModalUp,
                         super::Modal::Host => InputAction::ModalUp,
-                        super::Modal::Question => InputAction::QuestionUp,
-                        super::Modal::Permission => {
-                            // Browse zone: walk transcript targets. Compose zone:
-                            // scroll the expanded details, otherwise fall through
-                            // to a transcript scroll so the history stays readable
-                            // even while a prompt is pending.
-                            if context.has_focused_target {
-                                InputAction::FocusPrevTarget
-                            } else if context.permission_show_details {
-                                InputAction::PermissionDetailsUp
-                            } else {
-                                InputAction::ScrollUp
-                            }
-                        }
                         super::Modal::Todos => InputAction::ScrollUp,
                         super::Modal::Tools => InputAction::SessionSelect { forward: false },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: false },
@@ -2410,48 +2025,43 @@ pub fn process_event(
                         super::Modal::CustomProvider => {
                             InputAction::ScrollCustomProvider { forward: false }
                         }
-                        super::Modal::ModelEditor | super::Modal::InputInjection => {
-                            InputAction::None
-                        }
+                        super::Modal::ModelEditor => InputAction::None,
                         super::Modal::Help => InputAction::ScrollUp,
                         super::Modal::Telemetry => InputAction::ModalUp,
                         super::Modal::UsageStats => InputAction::ScrollUp,
                         super::Modal::None => {
-                            if context.has_focused_target {
-                                InputAction::FocusPrevTarget
-                            } else if context.completion_kind != super::CompletionKind::None
-                                && context.suggestion_count > 0
-                                && !context.has_exact_suggestion
-                            {
-                                InputAction::SuggestPrev
-                            } else if cursor_line_up(input, cursor_position) {
-                                // Multi-line draft: ↑ walks the caret to the
-                                // previous line (preserving the column).
-                                InputAction::None
-                            } else {
-                                // Sitting on top line: stays on top line
-                                // (prompt history navigation is on PageUp / Alt+P).
-                                InputAction::None
-                            }
+                            // Chat-surface ↑ (walk focused steps / completion
+                            // suggestions / multi-line caret) is resolved by
+                            // the Session view's scheme (ADR-0172).
+                            InputAction::None
                         }
                     }
                 }
                 KeyCode::Down => {
+                    // Sheet ↓: mirror of the ↑ arm.
+                    if let Some(kind) = context.active_sheet {
+                        return match kind {
+                            crate::sheet::SheetKind::Permission => {
+                                if context.has_focused_target {
+                                    InputAction::FocusNextTarget
+                                } else if context.permission_show_details {
+                                    InputAction::PermissionDetailsDown
+                                } else {
+                                    InputAction::ScrollDown
+                                }
+                            }
+                            crate::sheet::SheetKind::Question => InputAction::QuestionDown,
+                            crate::sheet::SheetKind::InputInjection => InputAction::None,
+                        };
+                    }
                     match context.active_modal {
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalDown,
-                        super::Modal::HistorySearch => InputAction::ModalDown,
+                        // HistorySearch ↑/↓ are owned by the history modal's
+                        // scheme (modal_keys, ADR-0172); placeholder for
+                        // exhaustiveness until the arrow arm is retired.
+                        super::Modal::HistorySearch => InputAction::None,
                         super::Modal::Sessions => InputAction::ModalDown,
                         super::Modal::Host => InputAction::ModalDown,
-                        super::Modal::Question => InputAction::QuestionDown,
-                        super::Modal::Permission => {
-                            if context.has_focused_target {
-                                InputAction::FocusNextTarget
-                            } else if context.permission_show_details {
-                                InputAction::PermissionDetailsDown
-                            } else {
-                                InputAction::ScrollDown
-                            }
-                        }
                         super::Modal::Todos => InputAction::ScrollDown,
                         super::Modal::Tools => InputAction::SessionSelect { forward: true },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: true },
@@ -2470,37 +2080,25 @@ pub fn process_event(
                         super::Modal::CustomProvider => {
                             InputAction::ScrollCustomProvider { forward: true }
                         }
-                        super::Modal::ModelEditor | super::Modal::InputInjection => {
-                            InputAction::None
-                        }
+                        super::Modal::ModelEditor => InputAction::None,
                         super::Modal::Help => InputAction::ScrollDown,
                         super::Modal::Telemetry => InputAction::ModalDown,
                         super::Modal::UsageStats => InputAction::ScrollDown,
                         super::Modal::None => {
-                            if context.has_focused_target {
-                                InputAction::FocusNextTarget
-                            } else if context.completion_kind != super::CompletionKind::None
-                                && context.suggestion_count > 0
-                                && !context.has_exact_suggestion
-                            {
-                                InputAction::SuggestNext
-                            } else if cursor_line_down(input, cursor_position) {
-                                // Multi-line draft: ↓ walks the caret to the
-                                // next line (preserving the column).
-                                InputAction::None
-                            } else {
-                                // Sitting on bottom line: stays on bottom line
-                                // (prompt history navigation is on PageDown / Alt+N).
-                                InputAction::None
-                            }
+                            // Chat-surface ↓ is resolved by the Session view's
+                            // scheme (ADR-0172).
+                            InputAction::None
                         }
                     }
                 }
                 // PageUp / PageDown: Scroll transcript or modal body by one viewport page.
                 KeyCode::PageUp => {
-                    if context.active_modal == super::Modal::None
-                        || context.active_modal == super::Modal::Permission
-                        || scrolls_own_body(context.active_modal)
+                    // Transcript paging on the bare chat surface and behind
+                    // the pass-through permission sheet; a body-scrolling
+                    // sheet or modal pages itself (claims, ADR-0173 §2).
+                    if bare_chat_surface(&context)
+                        || permission_sheet_up(&context)
+                        || foreground_scrolls_own_body(&context)
                     {
                         InputAction::ScrollPageUp
                     } else {
@@ -2508,9 +2106,12 @@ pub fn process_event(
                     }
                 }
                 KeyCode::PageDown => {
-                    if context.active_modal == super::Modal::None
-                        || context.active_modal == super::Modal::Permission
-                        || scrolls_own_body(context.active_modal)
+                    // Transcript paging on the bare chat surface and behind
+                    // the pass-through permission sheet; a body-scrolling
+                    // sheet or modal pages itself (claims, ADR-0173 §2).
+                    if bare_chat_surface(&context)
+                        || permission_sheet_up(&context)
+                        || foreground_scrolls_own_body(&context)
                     {
                         InputAction::ScrollPageDown
                     } else {
@@ -2519,30 +2120,27 @@ pub fn process_event(
                 }
                 KeyCode::Home
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && (context.active_modal == super::Modal::None
-                            || context.active_modal == super::Modal::Permission
-                            || scrolls_own_body(context.active_modal)) =>
+                        && (bare_chat_surface(&context)
+                            || permission_sheet_up(&context)
+                            || foreground_scrolls_own_body(&context)) =>
                 {
                     InputAction::ScrollTop
                 }
                 KeyCode::End
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && (context.active_modal == super::Modal::None
-                            || context.active_modal == super::Modal::Permission
-                            || scrolls_own_body(context.active_modal)) =>
+                        && (bare_chat_surface(&context)
+                            || permission_sheet_up(&context)
+                            || foreground_scrolls_own_body(&context)) =>
                 {
                     InputAction::ScrollBottom
                 }
+                // Bare Home / End: the chat surface claims them
+                // unconditionally for transcript scrolling (ADR-0173, resolved
+                // by the Session view's scheme before this arm). What remains
+                // here is the Permission sheet and caret motion inside modal
+                // text fields (readline line-start/end lives on Ctrl+A/E).
                 KeyCode::Home => {
-                    // A focused step disambiguates Home from caret motion, so it
-                    // no longer clashes with conversation scrolling:
-                    //   - Permission modal / a step is focused: scroll to top.
-                    //   - Otherwise (free text): move the input caret to the
-                    //     start of the current line.
-                    if context.active_modal == super::Modal::Permission
-                        || (context.active_modal == super::Modal::None
-                            && context.has_focused_target)
-                    {
+                    if permission_sheet_up(&context) || context.active_modal == super::Modal::None {
                         InputAction::ScrollTop
                     } else if edits_input_field(&context) {
                         cursor_line_start(input, cursor_position);
@@ -2552,10 +2150,7 @@ pub fn process_event(
                     }
                 }
                 KeyCode::End => {
-                    if context.active_modal == super::Modal::Permission
-                        || (context.active_modal == super::Modal::None
-                            && context.has_focused_target)
-                    {
+                    if permission_sheet_up(&context) || context.active_modal == super::Modal::None {
                         InputAction::ScrollBottom
                     } else if edits_input_field(&context) {
                         cursor_line_end(input, cursor_position);

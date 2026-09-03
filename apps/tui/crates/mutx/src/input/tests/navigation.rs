@@ -3,17 +3,18 @@
 use super::*;
 
 #[test]
-fn arrows_cycle_steps_while_focused() {
-    // With a step focused, bare ↑/↓ cycle the focus instead of walking
-    // history (history resumes once Esc clears the focus).
-    assert_eq!(key_with_focus(KeyCode::Up), InputAction::FocusPrevTarget);
-    assert_eq!(key_with_focus(KeyCode::Down), InputAction::FocusNextTarget);
+fn bare_arrows_do_not_walk_steps() {
+    // ADR-0173: the step walk is verb-owned (Alt+↑/↓). Bare ↑/↓ never move
+    // the step selection, with or without one selected.
+    assert_eq!(key_with_focus(KeyCode::Up), InputAction::None);
+    assert_eq!(key_with_focus(KeyCode::Down), InputAction::None);
 }
 
 #[test]
-fn home_and_end_move_caret_in_compose_zone() {
-    // Caret starts mid-string; Home jumps to line start, End to line end.
-    // The buffer contents are never modified by these keys.
+fn home_and_end_scroll_the_transcript_in_compose_zone() {
+    // ADR-0173: Home/End unconditionally scroll the transcript — reading
+    // never requires entering a state, even from the compose zone. Caret
+    // line-start/end moved to Ctrl+A/E.
     let mut input = "hello".to_string();
     let mut cursor = 3;
 
@@ -25,9 +26,9 @@ fn home_and_end_move_caret_in_compose_zone() {
         crate::Modal::None,
         false,
     );
-    assert_eq!(action, InputAction::None);
-    assert_eq!(input, "hello");
-    assert_eq!(cursor, 0);
+    assert_eq!(action, InputAction::ScrollTop);
+    assert_eq!(input, "hello", "the draft is untouched");
+    assert_eq!(cursor, 3, "the caret is untouched");
 
     let action = run_key(
         &mut input,
@@ -37,9 +38,12 @@ fn home_and_end_move_caret_in_compose_zone() {
         crate::Modal::None,
         false,
     );
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::ScrollBottom);
     assert_eq!(input, "hello");
-    assert_eq!(cursor, 5);
+    assert_eq!(
+        cursor, 3,
+        "Home/End never touch the caret (Ctrl+A/E own it)"
+    );
 }
 
 #[test]
@@ -79,23 +83,23 @@ fn home_and_end_scroll_in_permission_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
-        run_key(
+        run_sheet_key(
             &mut input,
             &mut cursor,
             KeyCode::Home,
             KeyModifiers::NONE,
-            crate::Modal::Permission,
+            crate::sheet::SheetKind::Permission,
             false
         ),
         InputAction::ScrollTop
     );
     assert_eq!(
-        run_key(
+        run_sheet_key(
             &mut input,
             &mut cursor,
             KeyCode::End,
             KeyModifiers::NONE,
-            crate::Modal::Permission,
+            crate::sheet::SheetKind::Permission,
             false
         ),
         InputAction::ScrollBottom
@@ -137,23 +141,23 @@ fn page_keys_scroll_question_modal_body() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
-        run_key(
+        run_sheet_key(
             &mut input,
             &mut cursor,
             KeyCode::PageUp,
             KeyModifiers::NONE,
-            crate::Modal::Question,
+            crate::sheet::SheetKind::Question,
             false
         ),
         InputAction::ScrollPageUp
     );
     assert_eq!(
-        run_key(
+        run_sheet_key(
             &mut input,
             &mut cursor,
             KeyCode::PageDown,
             KeyModifiers::NONE,
-            crate::Modal::Question,
+            crate::sheet::SheetKind::Question,
             false
         ),
         InputAction::ScrollPageDown
@@ -183,7 +187,6 @@ fn page_keys_scroll_every_scrollable_modal_body() {
         crate::Modal::HistorySearch,
         crate::Modal::Connections,
         crate::Modal::Models,
-        crate::Modal::Question,
     ];
     for modal in scrollable {
         let mut input = String::new();
@@ -220,7 +223,7 @@ fn page_keys_scroll_every_scrollable_modal_body() {
 /// (no-op), not a stray page-scroll or transcript focus gesture.
 #[test]
 fn page_keys_are_inert_in_caret_editors() {
-    for modal in [crate::Modal::ModelEditor, crate::Modal::InputInjection] {
+    {
         let mut input = String::new();
         let mut cursor = 0;
         assert_eq!(
@@ -229,11 +232,11 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::PageUp,
                 KeyModifiers::NONE,
-                modal,
+                crate::Modal::ModelEditor,
                 false
             ),
             InputAction::None,
-            "PageUp should be a no-op in {modal:?}"
+            "PageUp should be a no-op in ModelEditor"
         );
         assert_eq!(
             run_key(
@@ -241,11 +244,11 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::PageDown,
                 KeyModifiers::NONE,
-                modal,
+                crate::Modal::ModelEditor,
                 false
             ),
             InputAction::None,
-            "PageDown should be a no-op in {modal:?}"
+            "PageDown should be a no-op in ModelEditor"
         );
         assert_eq!(
             run_key(
@@ -253,11 +256,11 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::Up,
                 KeyModifiers::CONTROL,
-                modal,
+                crate::Modal::ModelEditor,
                 false
             ),
             InputAction::None,
-            "Ctrl+Up should be a no-op in {modal:?}"
+            "Ctrl+Up should be a no-op in ModelEditor"
         );
     }
 }
@@ -302,29 +305,29 @@ fn line_aware_movement_respects_newlines() {
     // "line1\n" = 6 chars, then 2 more into "line2" -> char index 8.
     let mut cursor = 8;
 
-    // Home -> start of "line2" (char index 6, just past the first '\n').
+    // Ctrl+A -> start of "line2" (char index 6, just past the first '\n').
     run_key(
         &mut input,
         &mut cursor,
-        KeyCode::Home,
-        KeyModifiers::NONE,
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
         crate::Modal::None,
         false,
     );
-    assert_eq!(cursor, 6, "Home should land at start of current line");
+    assert_eq!(cursor, 6, "Ctrl+A should land at start of current line");
 
-    // End -> end of "line2" (char index 11, just before the second '\n').
+    // Ctrl+E -> end of "line2" (char index 11, just before the second '\n').
     run_key(
         &mut input,
         &mut cursor,
-        KeyCode::End,
-        KeyModifiers::NONE,
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
         crate::Modal::None,
         false,
     );
-    assert_eq!(cursor, 11, "End should land at end of current line");
+    assert_eq!(cursor, 11, "Ctrl+E should land at end of current line");
 
-    // Ctrl+A from the end of line2 should also snap to line start.
+    // Ctrl+A snaps back to the line start.
     run_key(
         &mut input,
         &mut cursor,
@@ -387,9 +390,9 @@ fn arrows_stay_in_composer_once_command_is_fully_typed() {
 
 #[test]
 fn up_arrow_in_browse_does_not_recall_queued() {
-    // Browse zone owns ↑ for step navigation; the queued-message recall
-    // only fires from Compose (where the user can actually edit the
-    // recalled draft). In Browse, ↑ keeps walking activatable targets.
+    // The queued-message recall only fires from Compose (where the user can
+    // actually edit the recalled draft). In Browse (a step selected, no
+    // completion), ↑ is inert — step walking is verb-owned (ADR-0173).
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -417,7 +420,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::FocusPrevTarget);
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]
@@ -431,7 +434,7 @@ fn up_arrow_walks_lines_in_multiline_and_stays_at_top_line() {
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 5, "up should land at col 5 on the first line");
 
-    // Sitting on the first line: ↑ stays in composer (None), history is on PageUp / Alt+P.
+    // Sitting on the first line: ↑ stays inert (history recall is Alt+P / Ctrl+R).
     let (action, _) = multiline_arrow(seed, 5, KeyCode::Up);
     assert_eq!(action, InputAction::None);
 }

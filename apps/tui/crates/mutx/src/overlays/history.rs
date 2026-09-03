@@ -11,9 +11,8 @@
 //! Each row is a single line (multi-line prompts collapse to the first line
 //! with a `↵` marker); the row numbers + prompt text are enough to navigate,
 //! so there is no origin status strip — the `~/project · #session… · time`
-//! line was redundant noise and was removed. `Ctrl+X` clears the whole
-//! history (with an explicit `y` confirm), `Enter` inserts the focused entry
-//! into the composer, `Tab` previews the full multi-line text.
+//! line was redundant noise and was removed. `Enter` inserts the focused entry
+//! into the composer.
 
 use muta_contracts::HistoryEntry;
 use mutx_engine::{
@@ -41,11 +40,9 @@ const HISTORY_PANEL_MAX_ROWS: u16 = 10;
 /// produced by `App::history_rows` — passing it in avoids a second fuzzy pass
 /// per frame. `modal_index` selects into `ranked`. `scroll` is read AND
 /// written back so the caller's offset stays consistent with the clamped body
-/// height; `follow_selection` gates whether the body auto-scrolls to keep
+/// height; /// `follow_selection` gates whether the body auto-scrolls to keep
 /// `modal_index` in view (true after navigation, false once the user scrolls
-/// manually). `preview` switches the body from the one-line fuzzy list to a
-/// full-text view of the selected entry (toggled by Tab); `scroll` is reused
-/// as that entry's per-line scroll. `keymap_open` replaces the body with the
+/// manually). `keymap_open` replaces the body with the
 /// in-panel keybindings list (the `?` expand).
 ///
 /// The panel floats with `Recess::None` (no dimming), and the composer below
@@ -69,7 +66,6 @@ pub struct HistoryPanelProps<'a> {
     pub modal_index: usize,
     pub scroll: &'a mut usize,
     pub follow_selection: bool,
-    pub preview: bool,
     pub input_rect: Rect,
     pub activity_height: u16,
 }
@@ -79,8 +75,6 @@ pub fn draw_history_panel(
     frame: &mut Frame,
     props: HistoryPanelProps<'_>,
     theme: &Theme,
-    selection: &crate::model::selection::SelectionState,
-    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> Option<Rect> {
     let HistoryPanelProps {
         history,
@@ -88,7 +82,6 @@ pub fn draw_history_panel(
         modal_index,
         scroll,
         follow_selection,
-        preview,
         input_rect,
         activity_height,
     } = props;
@@ -161,18 +154,7 @@ pub fn draw_history_panel(
 
     draw_header(frame, header_rect, history.len(), ranked.len(), theme);
 
-    if preview {
-        // Selectable document: the full text of the focused history entry is
-        // exactly what a user would want to copy (e.g. to re-use elsewhere).
-        let body = preview_body(history, ranked, modal_index, theme);
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
-            frame, body_rect, &rows, scroll, None, theme, selection, layout_map,
-        );
-    } else {
+    {
         let body = list_body(
             history,
             ranked,
@@ -237,7 +219,7 @@ fn draw_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
 
 /// Build the one-line-per-entry fuzzy list body. Multi-line entries are
 /// collapsed to their first line with a trailing ` ↵` marker so a long prompt
-/// never breaks the single-row grid; the full text is one Tab away.
+/// never breaks the single-row grid.
 fn list_body<'a>(
     history: &'a [HistoryEntry],
     ranked: &'a [(usize, FuzzyMatch)],
@@ -336,50 +318,4 @@ fn list_body<'a>(
         body.push(Line::from(spans));
     }
     body
-}
-
-/// Build the full-text preview body for the focused entry. The entry is laid
-/// out verbatim (one `Line` per physical line) with the fuzzy-match positions
-/// highlighted on whichever lines they fall; ↑/↓ move to the next entry and
-/// the renderer re-anchors its own scroll to the top.
-fn preview_body(
-    history: &[HistoryEntry],
-    ranked: &[(usize, FuzzyMatch)],
-    modal_index: usize,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    let Some((orig_idx, m)) = ranked.get(modal_index) else {
-        return vec![Line::from(Span::styled(
-            " (no entry selected)",
-            Style::default().fg(theme.muted()),
-        ))];
-    };
-    let raw = history
-        .get(*orig_idx)
-        .map(|e| e.text.as_str())
-        .unwrap_or("");
-    let matched: std::collections::HashSet<usize> = m.positions.iter().copied().collect();
-
-    let body_style = Style::default().fg(theme.fg());
-    let matched_style = Style::default()
-        .fg(theme.brand())
-        .add_modifier(Modifier::BOLD);
-
-    let mut lines: Vec<Line> = Vec::new();
-    let mut char_idx = 0usize;
-    for line in raw.split('\n') {
-        let mut spans: Vec<Span> = Vec::with_capacity(line.chars().count());
-        for c in line.chars() {
-            let style = if matched.contains(&char_idx) {
-                matched_style
-            } else {
-                body_style
-            };
-            spans.push(Span::styled(c.to_string(), style));
-            char_idx += 1;
-        }
-        lines.push(Line::from(spans));
-        char_idx += 1; // the consumed `\n`
-    }
-    lines
 }

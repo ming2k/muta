@@ -389,6 +389,7 @@ fn model_bar_orders_context_speed_then_model() {
                     ..Default::default()
                 },
                 &Theme::default(),
+                &crate::keymap::GlobalOverrides::default(),
             );
         });
         let buf = terminal.buffer();
@@ -481,6 +482,7 @@ fn model_bar_renders_model_and_context() {
                 ..Default::default()
             },
             &theme,
+            &crate::keymap::GlobalOverrides::default(),
         );
     });
     let buf = terminal.buffer();
@@ -508,6 +510,7 @@ fn model_bar_renders_unavailable_model_indicator() {
                 ..Default::default()
             },
             &theme,
+            &crate::keymap::GlobalOverrides::default(),
         );
     });
     let buf = terminal.buffer();
@@ -537,6 +540,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
                 ..Default::default()
             },
             &theme,
+            &crate::keymap::GlobalOverrides::default(),
         );
     });
     let ctx = captured.context.expect("context rect present");
@@ -597,6 +601,7 @@ fn model_bar_reasoning_tag_shows_effort_when_set() {
                     ..Default::default()
                 },
                 &Theme::default(),
+                &crate::keymap::GlobalOverrides::default(),
             );
         });
         let buf = terminal.buffer();
@@ -638,6 +643,7 @@ fn model_bar_shows_the_instance_suffix_after_the_model_name() {
                     ..Default::default()
                 },
                 &Theme::default(),
+                &crate::keymap::GlobalOverrides::default(),
             );
         });
         let buf = terminal.buffer();
@@ -681,6 +687,7 @@ fn model_bar_full_cluster_orders_model_effort_instance() {
                 ..Default::default()
             },
             &Theme::default(),
+            &crate::keymap::GlobalOverrides::default(),
         );
     });
     let buf = terminal.buffer();
@@ -720,6 +727,7 @@ fn model_bar_ignition_label_takes_over_the_identity_cluster() {
                     ..Default::default()
                 },
                 &Theme::default(),
+                &crate::keymap::GlobalOverrides::default(),
             );
         });
         let buf = terminal.buffer();
@@ -1219,12 +1227,17 @@ fn queue_bar_previews_next_item_with_count_and_text() {
     // Identity + count reflects the one item; no time label anymore.
     assert!(text.contains("FOLLOW-UPS 1"), "row was {text:?}");
     assert!(!text.contains(":"), "time label leaked: {text:?}");
-    // Legend: the keycap units are same-rank peers (R2) — joined by
-    // plain whitespace, never a `·` (which would imply one modifies the
-    // other).
+    // Legend: the keycap unit is same-rank peers (R2) — joined by plain
+    // whitespace, never a `·`. `Ctrl+P` no longer rides the top-level bar
+    // (it now opens the Command Palette); the only bar affordance is
+    // `Ctrl+Q expand`, since the block toggle lives inside the queue panel.
     assert!(
-        text.contains("Ctrl+P block  Ctrl+Q expand"),
-        "peer keycaps must use R2 whitespace: {text:?}"
+        text.contains("Ctrl+Q expand"),
+        "expand affordance missing: {text:?}"
+    );
+    assert!(
+        !text.contains("Ctrl+P"),
+        "top-level block toggle moved into the queue panel: {text:?}"
     );
     assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");
     // A live insert is transcript-owned (ADR-0126) and never rides the

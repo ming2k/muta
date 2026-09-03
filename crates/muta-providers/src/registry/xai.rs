@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// xAI Grok models over OpenAI-compatible chat completions (SuperGrok OAuth or
 /// `XAI_API_KEY`).
@@ -71,6 +71,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
     models: XAI_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
     fitting: false,
+    wire_overrides: &[],
 };

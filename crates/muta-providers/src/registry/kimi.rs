@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{OpenAiProviderSpec, ProviderPresetSpec};
+use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSpec};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
@@ -119,13 +119,14 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     protocol: WireProtocol::OpenAiChatCompletions,
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this preset track the platform's actual model list.
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
     // It is also a trusted first-party endpoint whose /models advertises
     // real capability fields: platform-native ids the static registry does
     // not know (e.g. `kimi-for-coding`, and every future model) are fitted
     // with their advertised metadata instead of being intersected away —
     // new platform models become usable with zero client changes.
     fitting: true,
+    wire_overrides: &[],
     models: KIMI_CODE_MODELS,
 };
 

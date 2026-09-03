@@ -236,7 +236,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Suppress the hover affordance whenever a full-overlay modal is
     // open so no stale highlight bleeds through. The permission sheet
     // keeps the transcript interactive, so it is exempted.
-    let chrome_interactive = matches!(app.active_modal(), Modal::None | Modal::Permission);
+    let chrome_interactive = app.active_modal() == Modal::None
+        && app
+            .active_sheet()
+            .is_none_or(|kind| kind == crate::sheet::SheetKind::Permission);
 
     // Project the viewed session's outbox into the small view the
     // persistent queue bar renders. Dispatch order (front pops
@@ -270,6 +273,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             cell_selection: app.drag.cell_info.as_ref(),
             activity: &status,
             backoff_clause: backoff_clause.as_deref(),
+            key_overrides: app.key_overrides.clone(),
             // A pending permission request forces the activity bar on (and
             // tints it warning) so it stays the visible anchor above the
             // permission sheet even if the loop has gone idle.
@@ -327,7 +331,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // mutable borrow of `app.input_scroll`.
     // The permission sheet takes over the hint line as well as the
     // input box, so suppress the hint bar while it is open.
-    if !chrome_hidden && hint_rect.height > 0 && app.active_modal() != Modal::Permission {
+    if !chrome_hidden
+        && hint_rect.height > 0
+        && app.active_sheet() != Some(crate::sheet::SheetKind::Permission)
+    {
         // Resolve the active model's effective reasoning effort for
         // the hint bar's `◆ {effort}` tag. Reads the same per-model
         // channel info the `/models` picker uses
@@ -375,6 +382,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     .map(|epoch| epoch.elapsed().as_millis()),
             },
             &app.theme,
+            &app.key_overrides,
         );
         app.hint_performance_rect = model_bar_rects.performance;
         app.hint_context_rect = model_bar_rects.context;
@@ -392,7 +400,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // surface the next keypress will land on. A pending permission
     // request replaces the composer with the inline permission sheet.
     if !chrome_hidden {
-        if app.active_modal() == Modal::Permission {
+        if app.active_sheet() == Some(crate::sheet::SheetKind::Permission) {
             if let Some(request) = app.pending_permission.as_ref() {
                 // Extend the slot down by the composer/hint gap plus
                 // the hint-line height so the sheet also covers
@@ -411,6 +419,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     app.permission_confirm_always,
                     app.permission_show_details,
                     app.permission_scroll,
+                    app.pending_permission_depth,
                     permission_rect,
                     &app.theme,
                     &app.selection,
@@ -502,6 +511,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         is_history_search,
                     ),
                     can_retry: !busy && viewed_chrome.can_retry,
+                    steer_key: app
+                        .surface_overrides
+                        .effective_binding(crate::keymap::SurfaceVerb::Steer),
                 }
             };
             let composer_options = view::ComposerDrawOptions {
@@ -630,6 +642,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // to offer, and ↑/↓ keep walking history instead of cycling a
     // single pinned row.
     if app.active_modal() == Modal::None
+        && app.active_sheet().is_none()
         && !app.completion_dismissed
         && app.completion_kind() != CompletionKind::None
     {
@@ -678,8 +691,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // backgrounds are blended (codex's text-safe `Canvas::tint`).
     if !chrome_hidden && let Some(epoch) = app.effort_ignition_epoch {
         let elapsed_ms = epoch.elapsed().as_millis();
-        let hint_row = (hint_rect.height > 0 && app.active_modal() != Modal::Permission)
-            .then_some(hint_rect.y);
+        let hint_row = (hint_rect.height > 0
+            && app.active_sheet() != Some(crate::sheet::SheetKind::Permission))
+        .then_some(hint_rect.y);
         crate::effort_ignition::paint_ignition_bands(f, input_rect, hint_row, elapsed_ms);
     }
 
@@ -760,48 +774,13 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     modal_index: app.modal_index,
                     scroll: &mut app.history_scroll,
                     follow_selection: app.history_modal_follow,
-                    preview: app.history_preview,
                     input_rect,
                     activity_height,
                 },
                 &app.theme,
-                &app.selection,
-                &mut layout_map,
             )
         }
-        Modal::Permission => None,
-        Modal::InputInjection => {
-            if let Some(ref req) = app.pending_input {
-                Some(view::draw_input_injection(
-                    f,
-                    req,
-                    &app.input,
-                    app.cursor_position,
-                    input_rect,
-                    &app.theme,
-                ))
-            } else {
-                None
-            }
-        }
-        Modal::Question => {
-            if let Some(ref qmodel) = app.question {
-                Some(view::draw_question_modal(
-                    f,
-                    &mut app.modal_hit_map,
-                    qmodel.request(),
-                    qmodel.current(),
-                    qmodel.selected(),
-                    qmodel.other_text(),
-                    qmodel.highlight(),
-                    &mut app.question_scroll,
-                    app.question_modal_follow,
-                    &app.theme,
-                ))
-            } else {
-                None
-            }
-        }
+        Modal::None => None,
         Modal::ModelEditor => {
             let title = if app.editor_model_settings_only {
                 app.editor_model.clone()
@@ -917,7 +896,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let app_ctx = crate::keymap::AppContext {
                 active_view: app.current_view(),
                 active_modal: app.active_modal(),
-                session_focus: app.session_focus,
                 is_responding: viewed_running,
                 has_input: !app.input.is_empty(),
                 has_selection: !matches!(
@@ -1157,7 +1135,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let app_ctx = crate::keymap::AppContext {
                 active_view: app.current_view(),
                 active_modal: app.active_modal(),
-                session_focus: app.session_focus,
                 is_responding: viewed_running,
                 has_input: !app.input.is_empty(),
                 has_selection: !matches!(
@@ -1188,7 +1165,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &mut layout_map,
             ))
         }
-        Modal::None => None,
     };
 
     // Provider-delete confirm overlay: a sub-layer painted *on top
@@ -1217,6 +1193,55 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         ));
     } else {
         app.provider_delete_rect = None;
+    }
+
+    // Interaction sheets (ADR-0173 §3): the AI-initiated sheets occupy the
+    // composer slot — the same bottom edge, extended over the hint bar —
+    // while the transcript behind them stays live. The question and
+    // input-injection sheets paint their own panel over the composer's
+    // slot; the permission sheet replaced the slot entirely above.
+    if !chrome_hidden {
+        match app.active_sheet() {
+            Some(crate::sheet::SheetKind::Question) => {
+                if let Some(ref qmodel) = app.question {
+                    let question_rect = mutx_engine::Rect::new(
+                        input_rect.x,
+                        input_rect.y,
+                        input_rect.width,
+                        input_rect.height
+                            + crate::design::COMPOSER_HINT_GAP_ROWS
+                            + hint_rect.height,
+                    );
+                    view::draw_question_modal(
+                        f,
+                        &mut app.modal_hit_map,
+                        qmodel.request(),
+                        qmodel.current(),
+                        qmodel.selected(),
+                        qmodel.other_text(),
+                        qmodel.highlight(),
+                        &mut app.question_scroll,
+                        app.question_modal_follow,
+                        app.pending_question_depth,
+                        question_rect,
+                        &app.theme,
+                    );
+                }
+            }
+            Some(crate::sheet::SheetKind::InputInjection) => {
+                if let Some(ref req) = app.pending_input {
+                    view::draw_input_injection(
+                        f,
+                        req,
+                        &app.input,
+                        app.cursor_position,
+                        input_rect,
+                        &app.theme,
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     // Copy toast

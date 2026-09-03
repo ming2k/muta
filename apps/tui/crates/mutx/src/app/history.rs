@@ -357,30 +357,6 @@ impl App {
         }
     }
 
-    /// Wipe the entire input history — the Ctrl+R picker's "clear" action.
-    /// Clears the in-memory list, the attachment cache, and truncates the
-    /// on-disk history file so the change survives an unclean exit. The caller
-    /// is responsible for confirming first (see [`Self::history_clear_confirm`]).
-    pub fn clear_input_history(&mut self) {
-        self.input_history.clear();
-        self.history_attachments.clear();
-        self.history_attachments_order.clear();
-        self.history_index = None;
-        self.history_clear_confirm = false;
-        // The modal stays open after a clear; reset its selection/preview so
-        // it re-anchors to the (now empty) list instead of a stale index.
-        self.modal_index = 0;
-        self.history_scroll = 0;
-        self.history_preview = false;
-        // Only truncate the real file when disk persistence is enabled — a
-        // test invoking the clear action must never wipe the user's history.
-        if self.input_history_persist {
-            tokio::task::spawn_blocking(|| {
-                let _ = crate::config::clear_history();
-            });
-        }
-    }
-
     /// Drop the oldest cached attachment entries (FIFO) once the cache
     /// exceeds [`Self::HISTORY_ATTACHMENTS_CAP`]. `history_attachments_order`
     /// records first-seen order; a re-sent identity keeps its original slot.
@@ -520,8 +496,8 @@ impl App {
     }
 
     /// Tear down the history modal's borrowed state: hand the parked composer
-    /// draft back, drop any filter query, and clear the search/preview
-    /// sub-flags. Shared by the Esc (`CloseModal`) and click-outside dismiss
+    /// draft back, drop any filter query, and clear the search sub-flag.
+    /// Shared by the Esc (`CloseModal`) and click-outside dismiss
     /// paths so the two can never drift. Does **not** touch `active_modal` —
     /// the caller owns that transition.
     pub fn restore_history_draft(&mut self) {
@@ -531,7 +507,6 @@ impl App {
         self.suggestion_index = None;
         self.modal_index = 0;
         self.history_search = false;
-        self.history_preview = false;
     }
 
     /// Tear down the model picker's borrowed state: hand the parked composer

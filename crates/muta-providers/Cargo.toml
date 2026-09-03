@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
 muta-llm-client = { path = "../muta-llm-client" }
+muta-models-dev = { path = "../muta-models-dev" }
 muta-persistence = { path = "../muta-persistence" }
 futures = { workspace = true }
 # Live model-list discovery (`GET /v1/models` &c.) and its JSON parsing.

@@ -129,10 +129,10 @@ fn decode_stream_payload(
             Err(parse_responses_stream_error(err_val, label))
         }
         _ => {
-            if let Some(err_val) = value.get("error") {
-                if !err_val.is_null() {
-                    return Err(parse_responses_stream_error(err_val, label));
-                }
+            if let Some(err_val) = value.get("error")
+                && !err_val.is_null()
+            {
+                return Err(parse_responses_stream_error(err_val, label));
             }
             Ok(value)
         }

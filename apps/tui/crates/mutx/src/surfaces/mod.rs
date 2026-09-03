@@ -758,7 +758,7 @@ mod tests {
     fn transient_stack_restores_exact_panel() {
         let mut router = SurfaceRouter::with_panel(PanelId::Todos);
         router.push_transient(Modal::ViewSwitcher);
-        router.push_transient(Modal::Question);
+        router.push_transient(Modal::OauthPending);
         assert_eq!(router.pop_transient().modal(), Modal::ViewSwitcher);
         assert_eq!(router.pop_transient().panel(), Some(PanelId::Todos));
         // The panel is restored as the active surface.
@@ -814,7 +814,7 @@ mod tests {
         let mut router = SurfaceRouter::new();
         router.show_view(View::Side);
         router.show_view(View::Dashboard);
-        router.push_transient(Modal::Question);
+        router.push_transient(Modal::OauthPending);
         router.show_session_view();
         assert_eq!(router.active(), Surface::View(View::Session));
         assert_eq!(router.back_view(), View::Session, "no return frames remain");

@@ -81,6 +81,7 @@ fn input_box_grows_with_wrapped_content() {
                     guidance: EmptyStateGuidance::Tour,
                     carousel_index: 0,
                     theme,
+                    key_overrides: Default::default(),
                     layout: crate::layout::Strategy::default(),
                     height_cache: None,
                 },
@@ -157,7 +158,7 @@ fn draw_composer_records_region_for_empty_input() {
 fn draw_composer_wraps_and_positions_caret() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(20, 12);
-    // "aaaa bbbb cccc" wraps within the ~17-wide inner area; cursor at the
+    // "aaaa bbbb cccc dddd eeee" wraps within the ~17-wide inner area; cursor at the
     // very end should be on a later line, not off the box.
     let input = "aaaa bbbb cccc dddd eeee";
     terminal.draw(|f| {
@@ -182,6 +183,17 @@ fn draw_composer_wraps_and_positions_caret() {
             crate::components::composer_hints::ComposerHints::default(),
         );
     });
+    let cursor = match terminal.cursor() {
+        mutx_engine::CursorState::Visible(x, y) => (x, y),
+        other => panic!("caret should be visible, got {other:?}"),
+    };
+    // The tail of a 24-char input cannot fit the first wrapped line, so the
+    // caret must rest on the second one (text row 0 + one wrap).
+    assert_eq!(
+        cursor.1,
+        crate::design::COMPOSER_TEXT_ROW_OFFSET + 1,
+        "caret must sit on the second wrapped line, got {cursor:?}"
+    );
 }
 
 /// The caret must land flush against the final glyph at the end of the
@@ -1201,6 +1213,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1462,6 +1475,7 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1553,6 +1567,7 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1597,9 +1612,6 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
 /// be brand-colored.
 #[test]
 fn history_panel_uses_composer_padding_not_brand_column() {
-    let selection = crate::model::selection::SelectionState::None;
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-
     let theme = Theme::default();
     let history: Vec<muta_contracts::HistoryEntry> = ["one", "two", "three"]
         .into_iter()
@@ -1627,13 +1639,10 @@ fn history_panel_uses_composer_padding_not_brand_column() {
                 modal_index: 0,
                 scroll: &mut 0,
                 follow_selection: true,
-                preview: false,
                 input_rect,
                 activity_height: 0,
             },
             &theme,
-            &selection,
-            &mut layout_map,
         )
     });
     let panel = panel.expect("panel should render");
@@ -1723,6 +1732,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -1826,23 +1836,8 @@ fn composer_panel_carries_the_hint_row() {
         "hint row carries the Enter sentence: {row4:?}"
     );
     assert!(
-        row4.contains("Tab transcript"),
-        "hint row carries the navigation affordance: {row4:?}"
-    );
-    assert!(
         !row4.contains("lines") && !row4.contains("chars"),
         "a fully visible draft carries no right-side readout: {row4:?}"
-    );
-    // The navigation clause begins at the text column (the `›` prefix width).
-    let prefix_x = row4
-        .char_indices()
-        .find(|(_, c)| *c == 'T')
-        .map(|(i, _)| row4[..i].chars().count())
-        .expect("Tab clause");
-    assert_eq!(
-        prefix_x,
-        crate::design::COMPOSER_PROMPT_PREFIX_COLS,
-        "hint navigation aligns with the text column"
     );
 }
 

@@ -70,7 +70,7 @@ pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<Stri
         let Some(spec) = provider_preset_spec(pid) else {
             return Vec::new();
         };
-        if spec.discovery {
+        if spec.live_catalog.is_some() {
             // Prefer the last successful live list (already intersected /
             // fitted by discovery); fall back to the preset snapshot.
             if let Some(discovered) = cache.connection_models.get(&connection.id)

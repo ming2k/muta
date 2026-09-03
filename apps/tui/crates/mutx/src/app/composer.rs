@@ -403,7 +403,7 @@ impl App {
     /// cursor state represent both an inactive surface and a hidden selection
     /// caret without a second physical-cursor writer.
     pub fn caret_owner(&self) -> CaretOwner {
-        if self.active_modal() != Modal::None {
+        if self.active_modal() != Modal::None || self.active_sheet().is_some() {
             // The provider-delete confirm overlay is a keyboard-only sub-layer
             // (no text input): suppress the caret while it is open so the host
             // IME does not anchor to the provider-search input behind the
@@ -442,9 +442,12 @@ impl App {
                     CaretOwner::None
                 };
             }
+            if self.active_sheet() == Some(crate::sheet::SheetKind::InputInjection) {
+                return CaretOwner::Modal;
+            }
             return if self.active_modal().owns_caret() {
                 CaretOwner::Modal
-            } else if self.active_modal() == Modal::Question
+            } else if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && self
                     .question
                     .as_ref()

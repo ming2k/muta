@@ -332,7 +332,7 @@ mod trust_domain_tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         let external = tmp.path().join("extra");
-        std::fs::create_dir_all(&root.join(".muta")).unwrap();
+        std::fs::create_dir_all(root.join(".muta")).unwrap();
         std::fs::create_dir_all(&external).unwrap();
         std::fs::write(
             root.join(".muta/config.toml"),

@@ -1,16 +1,18 @@
 //! Composer-native meta row: the single hint line painted inside the composer panel.
 //!
-//! Under the Composer-first architecture:
-//! - Idle: `Tab transcript` (left) / `Enter send` (right)
-//! - Running: `Tab transcript   Alt+S steer now` (left) / `Enter queue follow-up` (right)
+//! Under the plane-less chat surface (ADR-0173):
+//! - Idle: `Enter send` (right)
+//! - Running: `Alt+S steer now` (left) / `Enter queue follow-up` (right)
 //! - Completion: `Esc dismiss` (left) / `Tab / Enter select` (right)
 //! - History: `Esc close` (left) / `Tab / Enter insert` (right)
 
 use mutx_engine::{Color, Modifier, Span, Style};
 
 use super::super::Theme;
-use super::super::keymap::Key;
+use super::super::keymap::{HintSide, LiveHint};
 use super::keycap::keycap_style;
+use crate::modal_keys::live_history_hints;
+use crate::session::{HintState, live_chat_hints};
 
 // Width ladder
 
@@ -82,121 +84,147 @@ pub(crate) fn compose_target(
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ComposerHints {
     pub compose_target: ComposeTarget,
     pub can_retry: bool,
+    /// The effective chord for the Session view's `steer` verb (ADR-0172):
+    /// the hint row advertises exactly the binding that fires. Defaults to the
+    /// canonical `Alt+S` when unremapped.
+    pub steer_key: crate::keymap::Key,
+}
+
+impl Default for ComposerHints {
+    fn default() -> Self {
+        Self {
+            compose_target: ComposeTarget::Prompt,
+            can_retry: false,
+            steer_key: crate::keymap::Key::ALT_S,
+        }
+    }
 }
 
 /// Build the composer's hint row separated into left and right spans.
+///
+/// The chord set (and its labels) come from the Session view's own scheme
+/// (`session::live_chat_hints`, ADR-0172): what the row advertises is exactly
+/// what `resolve_chat_surface_key` handles, so a hint can never drift from a
+/// dead shortcut. Only the *presentation* — which side a chord lands on, the
+/// 3-col gap between nav chords, the `Tab / Enter` action pairing, per-state
+/// label styling, and the `command`/`retry` branding — lives here.
 pub(crate) fn hint_row_parts(
     can_retry: bool,
     density: ActionDensity,
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
+    steer_key: crate::keymap::Key,
 ) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
     let key_style = keycap_style(theme).bg(bg);
     let hint_style = theme.keycap_label_style().bg(bg);
     let verb_style = Style::default().bg(bg);
     let compact = density.compact();
+    let tiny = matches!(density, ActionDensity::Tiny);
 
-    match target {
-        ComposeTarget::HistorySearch => {
-            let left = vec![
-                Span::styled(Key::ESC.display(), key_style),
-                Span::styled(" close", hint_style),
-            ];
-            let right = vec![
-                Span::styled(Key::TAB.display(), key_style),
-                Span::styled(" / ", hint_style),
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(
-                    " insert",
-                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-                ),
-            ];
-            (left, right)
-        }
-        ComposeTarget::Completion { .. } => {
-            let left = vec![
-                Span::styled(Key::ESC.display(), key_style),
-                Span::styled(" dismiss", hint_style),
-            ];
-            let right = vec![
-                Span::styled(Key::TAB.display(), key_style),
-                Span::styled(" / ", hint_style),
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(
-                    " select",
-                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-                ),
-            ];
-            (left, right)
-        }
-        ComposeTarget::Running => {
-            let left = if compact {
-                vec![
-                    Span::styled(Key::TAB.display(), key_style),
-                    Span::styled(" transcript", hint_style),
-                ]
-            } else {
-                vec![
-                    Span::styled(Key::TAB.display(), key_style),
-                    Span::styled(" transcript", hint_style),
-                    Span::styled("   ", hint_style),
-                    Span::styled(Key::ALT_S.display(), key_style),
-                    Span::styled(" steer now", hint_style),
-                ]
-            };
-            let right = vec![
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(" queue follow-up", verb_style.fg(theme.info())),
-            ];
-            (left, right)
-        }
-        ComposeTarget::Command => {
-            let left = if matches!(density, ActionDensity::Tiny) {
-                Vec::new()
-            } else {
-                vec![
-                    Span::styled(Key::TAB.display(), key_style),
-                    Span::styled(" transcript", hint_style),
-                ]
-            };
-            let right = vec![
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(" send ", hint_style),
-                Span::styled(
-                    "command",
-                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-                ),
-            ];
-            (left, right)
-        }
-        ComposeTarget::Prompt => {
-            let left = if matches!(density, ActionDensity::Tiny) {
-                Vec::new()
-            } else {
-                vec![
-                    Span::styled(Key::TAB.display(), key_style),
-                    Span::styled(" transcript", hint_style),
-                ]
-            };
-            let mut right = vec![
-                Span::styled(Key::ENTER.display(), key_style),
-                Span::styled(" send", hint_style),
-            ];
-            if can_retry {
-                right.push(Span::styled("   ", hint_style));
-                right.push(Span::styled("/retry", key_style));
-                if !compact {
-                    right.push(Span::styled(" retry", hint_style));
-                }
+    // HistorySearch is a modal whose keys are owned by its own scheme
+    // (`modal_keys::live_history_hints`, ADR-0172); this row renders exactly
+    // those chords.
+    if target == ComposeTarget::HistorySearch {
+        let hints = live_history_hints();
+        let mut left: Vec<Span<'static>> = Vec::new();
+        for h in hints {
+            if h.side != HintSide::Nav {
+                continue;
             }
-            (left, right)
+            left.push(Span::styled(h.key.display(), key_style));
+            left.push(Span::styled(format!(" {}", h.label), hint_style));
+        }
+        let actions: Vec<&LiveHint> = hints
+            .iter()
+            .filter(|h| h.side == HintSide::Action)
+            .collect();
+        let mut right: Vec<Span<'static>> = Vec::new();
+        for (i, h) in actions.iter().enumerate() {
+            if i > 0 {
+                right.push(Span::styled(" / ", hint_style));
+            }
+            right.push(Span::styled(h.key.display(), key_style));
+        }
+        if let Some(last) = actions.last() {
+            right.push(Span::styled(
+                format!(" {}", last.label),
+                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+            ));
+        }
+        return (left, right);
+    }
+
+    let (state, action_label_style) = match target {
+        ComposeTarget::Prompt => (HintState::Idle, hint_style),
+        ComposeTarget::Command => (HintState::Command, hint_style),
+        ComposeTarget::Running => (HintState::Running, verb_style.fg(theme.info())),
+        ComposeTarget::Completion { .. } => (
+            HintState::Completion,
+            verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+        ),
+        ComposeTarget::HistorySearch => unreachable!(),
+    };
+    let hints = live_chat_hints(state, steer_key);
+
+    // Left: navigation affordances, joined by a 3-col gap. Hidden on Tiny
+    // terminals for the plain prompt / command rows; the steer verb's hint
+    // (canonical Alt+S, remapped per ADR-0172) drops when compact so a running
+    // row stays tight.
+    let mut left: Vec<Span<'static>> = Vec::new();
+    let hide_nav = tiny && matches!(state, HintState::Idle | HintState::Command);
+    if !hide_nav {
+        for h in &hints {
+            if h.side != HintSide::Nav {
+                continue;
+            }
+            if h.key == steer_key && compact {
+                continue;
+            }
+            if !left.is_empty() {
+                left.push(Span::styled("   ", hint_style));
+            }
+            left.push(Span::styled(h.key.display(), key_style));
+            left.push(Span::styled(format!(" {}", h.label), hint_style));
         }
     }
+
+    // Right: action affordances. Multiple keys pair as `Tab / Enter`, with the
+    // verb label styled per state; the `command` and `retry` suffixes are
+    // presentation branding on top of the scheme's `send` chord.
+    let mut right: Vec<Span<'static>> = Vec::new();
+    let actions: Vec<&crate::keymap::LiveHint> = hints
+        .iter()
+        .filter(|h| h.side == HintSide::Action)
+        .collect();
+    for (i, h) in actions.iter().enumerate() {
+        if i > 0 {
+            right.push(Span::styled(" / ", hint_style));
+        }
+        right.push(Span::styled(h.key.display(), key_style));
+    }
+    if let Some(last) = actions.last() {
+        right.push(Span::styled(format!(" {}", last.label), action_label_style));
+    }
+    if target == ComposeTarget::Command {
+        right.push(Span::styled(
+            " command",
+            verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if can_retry && target == ComposeTarget::Prompt {
+        right.push(Span::styled("   ", hint_style));
+        right.push(Span::styled("/retry", key_style));
+        if !compact {
+            right.push(Span::styled(" retry", hint_style));
+        }
+    }
+
+    (left, right)
 }
 
 /// Build the composer's combined hint row.
@@ -207,8 +235,9 @@ pub(crate) fn hint_row_spans(
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
+    steer_key: crate::keymap::Key,
 ) -> Vec<Span<'static>> {
-    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg);
+    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg, steer_key);
     if left.is_empty() {
         right
     } else {
@@ -228,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_hint_shows_tab_transcript_and_enter_send() {
+    fn prompt_hint_shows_only_enter_send() {
         let theme = Theme::default();
         let (left, right) = hint_row_parts(
             false,
@@ -236,8 +265,9 @@ mod tests {
             ComposeTarget::Prompt,
             &theme,
             Color::Reset,
+            crate::keymap::Key::ALT_S,
         );
-        assert_eq!(text(&left), "Tab transcript");
+        assert_eq!(text(&left), "", "idle row carries no nav chords (ADR-0173)");
         assert_eq!(text(&right), "Enter send");
     }
 
@@ -250,8 +280,27 @@ mod tests {
             ComposeTarget::Running,
             &theme,
             Color::Reset,
+            crate::keymap::Key::ALT_S,
         );
-        assert_eq!(text(&left), "Tab transcript   Alt+S steer now");
+        assert_eq!(text(&left), "Alt+S steer now");
         assert_eq!(text(&right), "Enter queue follow-up");
+    }
+
+    #[test]
+    fn running_hint_advertises_remapped_steer_chord() {
+        let theme = Theme::default();
+        let (left, _) = hint_row_parts(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Running,
+            &theme,
+            Color::Reset,
+            crate::keymap::Key::ALT_ENTER,
+        );
+        assert_eq!(
+            text(&left),
+            "Alt+Enter steer now",
+            "the hint must advertise the effective steer binding, not the canonical"
+        );
     }
 }

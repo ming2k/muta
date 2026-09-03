@@ -427,7 +427,6 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     app.input = "git".to_string(); // the live fuzzy query
     app.cursor_position = 3;
     app.history_search = true;
-    app.history_preview = true;
     app.modal_index = 4;
 
     assert!(app.dismiss_surface());
@@ -441,7 +440,6 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
         "slot emptied"
     );
     assert!(!app.history_search);
-    assert!(!app.history_preview);
     assert_eq!(app.active_modal(), crate::Modal::None);
 }
 
@@ -853,36 +851,12 @@ async fn record_input_history_skips_slash_commands_by_default() {
     assert_eq!(app.input_history[0].text, "/model");
 }
 
-/// The clear-history action wipes the in-memory list and the attachment cache
-/// so a fresh recall starts empty.
-#[tokio::test]
-async fn clear_input_history_wipes_list_and_cache() {
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.current_session_id = "session-a".to_string();
-    app.record_input_history(
-        "one".to_string(),
-        vec![muta_contracts::ImagePart {
-            mime: "image/png".to_string(),
-            data: "img".to_string(),
-        }],
-        Vec::new(),
-    );
-    app.record_input_history("two".to_string(), Vec::new(), Vec::new());
-    assert_eq!(app.input_history.len(), 2);
-    assert_eq!(app.history_attachments.len(), 1);
-
-    app.clear_input_history();
-    assert!(app.input_history.is_empty());
-    assert!(app.history_attachments.is_empty());
-    assert!(!app.history_clear_confirm);
-}
-
 /// `App`'s test constructor keeps disk persistence off, so exercising the
-/// record/clear paths must never touch the *real* `history.json` under
+/// record path must never touch the *real* `history.json` under
 /// `$XDG_STATE_HOME` (regression: `record_input_history` used to merge
-/// synthetic `prompt N` rows straight into the user's file, and the clear
-/// action truncated it outright). The write/clear happens on a
-/// `spawn_blocking` thread, so poll briefly for a stray write to land.
+/// synthetic `prompt N` rows straight into the user's file). The write
+/// happens on a `spawn_blocking` thread, so poll briefly for a stray write
+/// to land.
 #[tokio::test]
 async fn test_app_does_not_touch_disk_history() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -897,7 +871,6 @@ async fn test_app_does_not_touch_disk_history() {
     for i in 0..5 {
         app.record_input_history(format!("prompt {i}"), Vec::new(), Vec::new());
     }
-    app.clear_input_history();
 
     // Give any (buggy) spawned writer a moment, then assert the real history
     // file is byte-for-byte unchanged (and not newly created).

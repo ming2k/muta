@@ -4,7 +4,7 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_step_focus_bar, draw_todo_bar};
+pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_todo_bar};
 pub use crate::chrome::{
     ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar, draw_queue_bar,
 };
@@ -230,6 +230,11 @@ pub struct TranscriptView<'a> {
     /// non-empty or the guidance variant does not rotate.
     pub carousel_index: usize,
     pub theme: &'a Theme,
+    /// Effective global chords (`[keybindings]` config, ADR-0172). Persistent
+    /// keycaps (the head's palette affordance, the model bar's telemetry /
+    /// connection keycaps) render the effective binding so a remapped chord
+    /// advertises exactly what fires.
+    pub key_overrides: crate::keymap::GlobalOverrides,
     /// Which layout strategy to arrange messages with. Selectable via
     /// `[tui] transcript_layout`; defaults to [`layout::Strategy::TurnBand`].
     pub layout: layout::Strategy,
@@ -440,6 +445,7 @@ pub fn draw_transcript(
         guidance,
         carousel_index,
         theme,
+        key_overrides,
         layout,
         height_cache,
     } = view;
@@ -625,11 +631,6 @@ pub fn draw_transcript(
     } else {
         MODEL_BAR_ROWS
     };
-    let step_focus_height: u16 = if chrome_hidden || in_runner || focused_target.is_none() {
-        0
-    } else {
-        1
-    };
     // The composer/hint gap is 0 and the activity/composer gap is 0: the
     // hint bar sits flush against the composer's bottom edge and the activity
     // bar flush against the composer's top edge (each side's panel-bg padding
@@ -663,10 +664,6 @@ pub fn draw_transcript(
                 height: activity_height,
             },
             FooterRow {
-                id: FooterRowId::StepFocus,
-                height: step_focus_height,
-            },
-            FooterRow {
                 id: FooterRowId::Composer,
                 height: input_box_height,
             },
@@ -690,7 +687,7 @@ pub fn draw_transcript(
     // it, so it was already split from `full` above; just paint it here.
     // Row 1 carries identity/status; row 2 the view-affordance legend.
     if let (Some(header), Some(rect)) = (view_header.as_ref(), head_rect) {
-        draw_view_header(frame, rect, header, theme);
+        draw_view_header(frame, rect, header, theme, &key_overrides);
     }
     if let (Some(hints), Some(rect)) = (page_hints_view.as_ref(), hints_rect) {
         draw_view_header_hints(frame, rect, hints, theme);
@@ -881,13 +878,7 @@ pub fn draw_transcript(
             )
         });
 
-    // The transient step focus bar sits directly above the composer whenever
-    // a transcript step is keyboard-focused.
-    footer_stack::rect_of(&placed_footer, FooterRowId::StepFocus)
-        .filter(|_| focused_target.is_some())
-        .map(|rect| draw_step_focus_bar(frame, rect, theme));
-
-    // The input box sits flush directly below the activity bar / step focus bar — the
+    // The input box sits flush directly below the activity bar — the
     // composer's top panel-bg padding row already separates its text from
     // the live status line, so no `surface` gap row is reserved between them.
     let input_rect = footer_stack::rect_of(&placed_footer, FooterRowId::Composer)

@@ -72,6 +72,12 @@ jobs:
       - name: Wire protocol bump policy
         working-directory: .
         run: bash scripts/check-wire-compat.sh
+      # models.dev snapshot freshness (ADR-0171): the embedded offline
+      # fallback must not drift from the live third-party catalog. Network is
+      # required, so it lives in this job (not the offline Rust jobs).
+      - name: models.dev snapshot freshness
+        working-directory: .
+        run: bash scripts/check-models-dev-snapshot.sh
       # Wire-type drift guard: the web client's protocol types
       # (apps/web/src/lib/generated/wire.gen.ts) are generated from
       # muta-contracts by ts-rs; regenerate them and fail on any diff.

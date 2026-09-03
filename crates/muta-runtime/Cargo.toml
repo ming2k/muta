@@ -12,6 +12,7 @@ muta-platform = { path = "../muta-platform" }
 muta-providers = { path = "../muta-providers" }
 muta-skills = { path = "../muta-skills" }
 muta-agent = { path = "../muta-agent" }
+muta-models-dev = { path = "../muta-models-dev" }
 ignore = { workspace = true }
 muta-mcp = { path = "../muta-mcp" }
 reqwest = { workspace = true }

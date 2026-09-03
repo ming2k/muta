@@ -493,17 +493,19 @@ selected) so the user sees why each entry surfaced. The modal is
 click-outside-to-dismissable: clicking outside the panel closes it and
 restores the stashed draft, exactly like a second `Esc`.
 
-## Question modal
+## Question sheet
 
-Centered modal for `UserQuestionRequest`. Presents one question at a time
-with options (single- or multi-select), plus a built-in **Other** option
-that exposes a free-text input.
+An **interaction sheet** (ADR-0173 §3 — not a modal at all) for
+`UserQuestionRequest`. Presents one question at a time with options
+(single- or multi-select), plus a built-in **Other** option that exposes a
+free-text input.
 
-Unlike other centered modals, the question modal uses the **None** recess
-policy — the surface is not dimmed or occluded and the footer is not
-collapsed, so the transcript, activity bar, input box, and model bar all stay
-fully visible at full brightness. The modal panel simply floats on top with
-its own solid background.
+Like the permission sheet, the question sheet is anchored to the **composer
+slot**: it replaces the input box (extended over the hint bar) instead of
+floating over the surface. The recess policy is **None** — nothing is dimmed
+or occluded — and the transcript behind it stays live and scrollable while a
+decision is pending. When several questions or permissions queue, the front
+sheet occupies the slot and the header carries an `N queued` badge.
 
 Long text wraps automatically: the question text, option labels, and option
 descriptions all word-wrap to fit the modal body width.

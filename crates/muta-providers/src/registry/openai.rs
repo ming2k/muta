@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -277,6 +277,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
     models: OPENAI_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
     fitting: false,
+    wire_overrides: &[],
 };

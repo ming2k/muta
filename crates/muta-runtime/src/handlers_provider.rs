@@ -1479,26 +1479,22 @@ pub(crate) async fn query_connection_detail(
         let mut usage =
             muta_providers::fetch_provider_usage(preset_id.as_deref(), &base_url, &api_key).await;
 
-        if is_oauth {
-            if let muta_contracts::ConnectionUsageState::Error(ref err) = usage {
-                if is_auth_error(err) {
-                    let source =
-                        muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
-                    let rejected = SecretString::from(api_key.as_str());
-                    if let Ok(refreshed) =
-                        muta_contracts::CredentialSource::force_refresh_after_rejection(
-                            &source, &rejected,
-                        )
-                        .await
-                    {
-                        usage = muta_providers::fetch_provider_usage(
-                            preset_id.as_deref(),
-                            &base_url,
-                            refreshed.token.expose_secret(),
-                        )
-                        .await;
-                    }
-                }
+        if is_oauth
+            && let muta_contracts::ConnectionUsageState::Error(ref err) = usage
+            && is_auth_error(err)
+        {
+            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
+            let rejected = SecretString::from(api_key.as_str());
+            if let Ok(refreshed) =
+                muta_contracts::CredentialSource::force_refresh_after_rejection(&source, &rejected)
+                    .await
+            {
+                usage = muta_providers::fetch_provider_usage(
+                    preset_id.as_deref(),
+                    &base_url,
+                    refreshed.token.expose_secret(),
+                )
+                .await;
             }
         }
 

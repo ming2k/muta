@@ -55,7 +55,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.drag.cancel();
         app.focused_target = None;
-    } else if app.active_modal() == Modal::Question {
+    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Question) {
         if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
             && let Some(qm) = app.question.take()
         {
@@ -70,7 +70,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal() == Modal::Permission
+    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
         && let Some(hit) = app.modal_hit_map.permission_action_at(x, y)
     {
         app.modal_index = hit.action_index;
@@ -78,7 +78,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal() == Modal::Permission
+    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
         && let Some(cursor) = app
             .layout_map
             .cursor_at(x, y)
@@ -89,7 +89,7 @@ pub(super) async fn handle_selection_start(
         // payload can be copied while deciding. Buttons above stay
         // keyboard-driven; presses on the sheet's chrome are inert as before.
         app.drag.begin_range(&mut app.selection, cursor);
-    } else if app.active_modal() == Modal::Permission
+    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
         && app.modal_hit_map.permission_sheet_contains(x, y)
     {
         app.selection = SelectionState::None;

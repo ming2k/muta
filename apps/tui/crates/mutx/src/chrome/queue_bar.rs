@@ -26,11 +26,11 @@ pub struct QueueBarView<'a> {
 /// How much of the queue bar's keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `Ctrl+P block  Ctrl+Q expand`.
+    /// Keys + label: `Ctrl+Q expand`.
     Full,
-    /// Bare keycaps: `Ctrl+P  Ctrl+Q`.
+    /// Bare keycap: `Ctrl+Q`.
     Compact,
-    /// Only the block/resume toggle: `Ctrl+P`.
+    /// Nothing — the legend is dropped entirely.
     Tiny,
 }
 
@@ -85,22 +85,12 @@ pub fn draw_queue_bar(
 
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
-        let sep = |spans: &mut Vec<Span<'static>>| {
-            spans.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
-        };
-        spans.push(keycap_span(theme, Key::CTRL_P.display()));
-        if matches!(density, LegendDensity::Full) {
-            spans.push(Span::styled(
-                if blocked { " resume" } else { " block" },
-                theme.keycap_label_style(),
-            ));
+        if matches!(density, LegendDensity::Tiny) {
+            return spans;
         }
-        if !matches!(density, LegendDensity::Tiny) {
-            sep(&mut spans);
-            spans.push(keycap_span(theme, Key::CTRL_Q.display()));
-            if matches!(density, LegendDensity::Full) {
-                spans.push(Span::styled(" expand", theme.keycap_label_style()));
-            }
+        spans.push(keycap_span(theme, Key::CTRL_Q.display()));
+        if matches!(density, LegendDensity::Full) {
+            spans.push(Span::styled(" expand", theme.keycap_label_style()));
         }
         spans
     };

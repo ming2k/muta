@@ -53,7 +53,7 @@ impl SystemPromptContext {
 }
 
 /// Relative or semantic ordering placement of an instruction section within its tier.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum InstructionOrder {
     /// Placed at the very front of its tier.
     Head,
@@ -64,13 +64,8 @@ pub enum InstructionOrder {
     /// Explicit rank/order within its tier (lower values sort earlier).
     Index(u32),
     /// Placed at the end of its tier (default).
+    #[default]
     Tail,
-}
-
-impl Default for InstructionOrder {
-    fn default() -> Self {
-        Self::Tail
-    }
 }
 
 /// A self-contained, declaratively registered instruction section.
@@ -279,10 +274,10 @@ impl SystemPromptRegistry {
             let ordered_indices = sort_tier_entries(&tier_entries);
             for idx in ordered_indices {
                 let entry = tier_entries[idx];
-                if let Some(content) = entry.section.render(ctx) {
-                    if !content.trim().is_empty() {
-                        slices.push(InstructionSlice::new(entry.id(), tier, content));
-                    }
+                if let Some(content) = entry.section.render(ctx)
+                    && !content.trim().is_empty()
+                {
+                    slices.push(InstructionSlice::new(entry.id(), tier, content));
                 }
             }
         }

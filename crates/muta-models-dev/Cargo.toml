@@ -1,0 +1,29 @@
+[package]
+name = "muta-models-dev"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# A removable feature module: pulls the models.dev central catalog
+# (https://models.dev/api.json) into the client as a *third-party* network
+# source for a provider's model list (see `muta-providers::LiveCatalog::ModelsDev`).
+# Dropping this crate simply removes the third-party source; presets fall back
+# to their compiled baselines.
+
+[dependencies]
+muta-contracts = { path = "../muta-contracts" }
+muta-persistence = { path = "../muta-persistence" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+mockito = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

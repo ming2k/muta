@@ -175,7 +175,6 @@ impl FixedModalSpec {
 
     // The preset chooser shares the provider list's footprint.
     pub const PROVIDER: Self = Self::new(76, 80);
-    pub const QUESTION: Self = Self::new(78, 70);
     #[allow(dead_code)]
     pub const OAUTH_PENDING: Self = Self::new(76, 75);
     #[allow(dead_code)]

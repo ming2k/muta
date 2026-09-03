@@ -279,7 +279,7 @@ fn ctrl_b_moves_caret_back_one_char() {
 }
 
 #[test]
-fn alt_arrows_and_tab_drive_focus() {
+fn alt_arrows_drive_step_selection() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
@@ -302,10 +302,6 @@ fn alt_arrows_and_tab_drive_focus() {
             crate::Modal::None,
             true,
         ),
-        InputAction::ClearFocusedTarget
-    );
-    assert_eq!(
-        key_with_focus(KeyCode::Tab),
         InputAction::ClearFocusedTarget
     );
 }
@@ -332,7 +328,6 @@ fn ctrl_arrows_page_scroll_modal_body() {
         crate::Modal::HistorySearch,
         crate::Modal::Models,
         crate::Modal::Connections,
-        crate::Modal::Question,
         crate::Modal::Skills,
     ];
     for modal in scrollable {
@@ -365,8 +360,8 @@ fn ctrl_arrows_page_scroll_modal_body() {
     }
 }
 
-/// On the no-modal baseline, Alt+↑ / Alt+↓ drive transcript item focus
-/// switching, while PageUp / PageDown walk prompt history.
+/// On the no-modal baseline, Alt+↑ / Alt+↓ drive transcript step selection
+/// (ADR-0173: the step walk is verb-owned; PgUp/PgDn page the transcript).
 #[test]
 fn alt_arrows_drive_transcript_focus_on_no_modal() {
     let mut input = String::new();
@@ -545,12 +540,12 @@ fn ctrl_w_is_noop_in_question_modal() {
     // question modal; it should be a silent no-op there.
     let mut input = "abc".to_string();
     let mut cursor = 3;
-    let action = run_key(
+    let action = run_sheet_key(
         &mut input,
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::Question,
+        crate::sheet::SheetKind::Question,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -1004,12 +999,7 @@ fn ctrl_v_returns_paste_in_free_text_modals() {
         assert!(input.is_empty(), "Ctrl+V must not mutate the buffer itself");
     }
 
-    for modal in [
-        crate::Modal::Permission,
-        crate::Modal::Question,
-        crate::Modal::Help,
-        crate::Modal::Sessions,
-    ] {
+    for modal in [crate::Modal::Help, crate::Modal::Sessions] {
         let mut input = String::new();
         let mut cursor = 0;
         let action = run_key(
@@ -1254,44 +1244,6 @@ fn ctrl_l_opens_command_palette() {
 }
 
 #[test]
-fn armed_clear_confirm_resolves_on_y_or_enter() {
-    let mut input = "filter".to_string();
-    let mut cursor = 6;
-    assert_eq!(
-        run_history_clear_key(
-            &mut input,
-            &mut cursor,
-            KeyCode::Char('y'),
-            KeyModifiers::NONE
-        ),
-        InputAction::HistoryClearConfirm,
-        "y confirms the wipe"
-    );
-    assert_eq!(
-        run_history_clear_key(&mut input, &mut cursor, KeyCode::Enter, KeyModifiers::NONE),
-        InputAction::HistoryClearConfirm,
-        "Enter confirms the wipe"
-    );
-    assert_eq!(input, "filter", "armed confirm must not edit the filter");
-}
-
-#[test]
-fn armed_clear_confirm_cancels_on_any_other_key() {
-    let mut input = "filter".to_string();
-    let mut cursor = 6;
-    // Esc, `n`, and a plain filter letter all cancel — and none of them may
-    // type into the (soon-to-be-wiped) history.
-    for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('g')] {
-        assert_eq!(
-            run_history_clear_key(&mut input, &mut cursor, code, KeyModifiers::NONE),
-            InputAction::HistoryClearCancel,
-            "{code:?} cancels the armed clear"
-        );
-    }
-    assert_eq!(input, "filter", "cancelling must not edit the filter");
-}
-
-#[test]
 fn sessions_modal_n_key_triggers_create_new_session() {
     let mut input = String::new();
     let mut cursor = 0;
@@ -1531,41 +1483,26 @@ fn host_prompt_delete_key_removes_forward_char() {
 }
 
 #[test]
-fn tab_in_composer_focuses_transcript() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            has_focused_target: false,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::FocusNextTarget);
-}
-
-#[test]
-fn tab_in_transcript_returns_to_composer() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            has_focused_target: true,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::ClearFocusedTarget);
+fn tab_is_inert_without_a_completion() {
+    // ADR-0173: Tab belongs to completion only — no plane switching. With no
+    // completion up it is inert in both compose and "browse" (the focused
+    // step is a transient selection, not a mode).
+    for focused in [false, true] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                has_focused_target: focused,
+                ..Default::default()
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::None);
+    }
 }
 
 #[test]

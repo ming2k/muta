@@ -704,48 +704,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.modal_index = 0;
             app.show_chat_surface();
         }
-        input::InputAction::HistoryTogglePreview => {
-            // Tab inside the Ctrl+R modal: flip between the fuzzy list
-            // and a full-text view of the selected entry. Reusing
-            // `history_scroll` as the per-entry scroll means entering
-            // preview or moving to another entry starts from the top.
-            app.history_preview = !app.history_preview;
-            app.history_scroll = 0;
-            app.history_modal_follow = true;
-        }
-        input::InputAction::HistoryClearAll => {
-            // Ctrl+X inside the Ctrl+R modal: arm the clear-history
-            // confirmation. Nothing is deleted yet — the next `y`
-            // (or Enter) wipes, any other key cancels.
-            app.history_clear_confirm = true;
-            let n = app.input_history.len();
-            show_local_toast(
-                app,
-                format!(
-                    "Press y to clear all {n} history entr{} (any other key cancels)",
-                    if n == 1 { "y" } else { "ies" }
-                ),
-                false,
-                std::time::Duration::from_millis(2600),
-            );
-        }
-        input::InputAction::HistoryClearConfirm => {
-            let n = app.input_history.len();
-            app.clear_input_history();
-            show_local_toast(
-                app,
-                if n == 0 {
-                    "Input history is already empty."
-                } else {
-                    "Input history cleared."
-                },
-                false,
-                std::time::Duration::from_millis(2600),
-            );
-        }
-        input::InputAction::HistoryClearCancel => {
-            app.history_clear_confirm = false;
-        }
         input::InputAction::OpenHelp => {
             enter_panel(
                 app,
@@ -1513,15 +1471,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             );
         }
         input::InputAction::FocusNextTarget => {
-            app.session_focus = crate::app::SessionFocusRegion::Transcript;
             app.focus_interactive_target(1);
         }
         input::InputAction::FocusPrevTarget => {
-            app.session_focus = crate::app::SessionFocusRegion::Transcript;
             app.focus_interactive_target(-1);
         }
         input::InputAction::ClearFocusedTarget => {
-            app.session_focus = crate::app::SessionFocusRegion::Composer;
             app.focused_target = None;
         }
         input::InputAction::ActivateFocusedTarget => {
@@ -1676,9 +1631,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if app.active_modal() == Modal::ViewSwitcher {
                 app.dismiss_surface();
             } else if app.can_open_view_switcher() {
-                if app.saved_focus.is_none() {
-                    app.saved_focus = Some(app.session_focus);
-                }
                 app.push_transient_surface(Modal::ViewSwitcher);
                 app.command_palette_query.clear();
                 app.command_palette_selected = 0;
@@ -1695,7 +1647,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             let app_ctx = crate::keymap::AppContext {
                 active_view: app.current_view(),
                 active_modal: app.active_modal(),
-                session_focus: app.session_focus,
                 is_responding: is_busy,
                 has_input: !app.input.is_empty(),
                 has_selection: !matches!(
@@ -1716,29 +1667,28 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if let Some(entry) = entries
                 .get(app.command_palette_selected)
                 .or_else(|| entries.first())
+                && matches!(entry.availability, crate::keymap::Availability::Available)
             {
-                if matches!(entry.availability, crate::keymap::Availability::Available) {
-                    let cmd_id = entry.spec.id;
-                    if let Some(pos) = app.recent_commands.iter().position(|&id| id == cmd_id) {
-                        app.recent_commands.remove(pos);
-                    }
-                    app.recent_commands.insert(0, cmd_id);
-                    if app.recent_commands.len() > 10 {
-                        app.recent_commands.truncate(10);
-                    }
-
-                    app.pop_transient_surface();
-                    return execute_command_by_id(
-                        app,
-                        runtime,
-                        session,
-                        viewed_session_id,
-                        copy_tx,
-                        copy_pending,
-                        cmd_id,
-                    )
-                    .await;
+                let cmd_id = entry.spec.id;
+                if let Some(pos) = app.recent_commands.iter().position(|&id| id == cmd_id) {
+                    app.recent_commands.remove(pos);
                 }
+                app.recent_commands.insert(0, cmd_id);
+                if app.recent_commands.len() > 10 {
+                    app.recent_commands.truncate(10);
+                }
+
+                app.pop_transient_surface();
+                return execute_command_by_id(
+                    app,
+                    runtime,
+                    session,
+                    viewed_session_id,
+                    copy_tx,
+                    copy_pending,
+                    cmd_id,
+                )
+                .await;
             }
         }
         input::InputAction::ViewCloseSelected => {
@@ -1975,7 +1925,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             modals::handle_modal_down(app, viewed_session_id);
         }
         input::InputAction::QuestionUp => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Up).0);
@@ -1985,7 +1935,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionDown => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Down).0);
@@ -1993,14 +1943,14 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionToggle => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Toggle).0);
             }
         }
         input::InputAction::QuestionSelect(n) => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -2012,7 +1962,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionSubmit => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 let (qm, effects) = qm.update(crate::question_model::QuestionAction::Submit);
@@ -2025,7 +1975,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionPrevious => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Previous).0);
@@ -2034,7 +1984,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionCancel => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 let (_qm, effects) = qm.update(crate::question_model::QuestionAction::Cancel);
@@ -2044,7 +1994,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::InputSubmit => {
-            if app.active_modal() == Modal::InputInjection {
+            if app.active_sheet() == Some(crate::sheet::SheetKind::InputInjection) {
                 let text = std::mem::take(&mut app.input);
                 if let Some(req) = app.pending_input.take() {
                     // Drain the matching front so the per-frame sync
@@ -2065,12 +2015,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     app.set_cursor(0);
                 } else {
                     app.restore_input_draft();
-                    app.pop_transient_surface();
+                    app.dismiss_sheet();
                 }
             }
         }
         input::InputAction::InputCancel => {
-            if app.active_modal() == Modal::InputInjection
+            if app.active_sheet() == Some(crate::sheet::SheetKind::InputInjection)
                 && let Some(req) = app.pending_input.take()
             {
                 // Empty reply = cancel → the command runs with closed
@@ -2092,12 +2042,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     app.set_cursor(0);
                 } else {
                     app.restore_input_draft();
-                    app.pop_transient_surface();
+                    app.dismiss_sheet();
                 }
             }
         }
         input::InputAction::QuestionInsertChar(c) => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -2112,7 +2062,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::QuestionBackspace => {
-            if app.active_modal() == Modal::Question
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -2133,7 +2083,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             let queued: Vec<PermissionRequest> =
                 runtime.pending_permission.lock().await.drain(..).collect();
             app.pending_permission = None;
-            app.pop_transient_surface();
+            app.dismiss_sheet();
             app.modal_index = 0;
             app.permission_confirm_always = false;
             app.permission_show_details = false;
@@ -2258,11 +2208,9 @@ pub(super) fn enter_panel(
                 app.suggestion_index = None;
             }
             PanelId::HistorySearch => {
-                app.history_clear_confirm = false;
                 app.modal_index = 0;
                 app.history_scroll = 0;
                 app.history_modal_follow = true;
-                app.history_preview = false;
             }
             _ => {}
         }
@@ -2367,7 +2315,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
 }
 
 pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
-    if app.active_modal() == Modal::Permission {
+    if app.active_sheet() == Some(crate::sheet::SheetKind::Permission) {
         if app.modal_hit_map.permission_sheet_contains(x, y) {
             if app.permission_show_details {
                 if up {
@@ -2477,7 +2425,7 @@ mod transcript_scroll_tests {
     #[test]
     fn wheel_spatial_routing_under_permission_modal() {
         let mut app = scrollable_app();
-        app.set_active_modal_for_test(Modal::Permission);
+        app.set_active_sheet_for_test(crate::sheet::SheetKind::Permission);
         app.modal_hit_map
             .set_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
         app.permission_show_details = true;
@@ -2681,7 +2629,6 @@ async fn execute_command_by_id(
             if app.active_modal() != Modal::None {
                 modals::handle_close_modal(app, viewed_session_id);
             } else if app.focused_target.is_some() {
-                app.session_focus = crate::app::SessionFocusRegion::Composer;
                 app.focused_target = None;
             }
         }
@@ -2730,14 +2677,6 @@ async fn execute_command_by_id(
                 viewed_session_id,
             );
         }
-        CommandId::FocusTranscript => {
-            app.session_focus = crate::app::SessionFocusRegion::Transcript;
-            app.focus_interactive_target(1);
-        }
-        CommandId::FocusComposer => {
-            app.session_focus = crate::app::SessionFocusRegion::Composer;
-            app.focused_target = None;
-        }
         CommandId::ScrollTranscriptUp => {
             app.scroll = app
                 .scroll
@@ -2756,25 +2695,25 @@ async fn execute_command_by_id(
             app.focus_interactive_target(1);
         }
         CommandId::TranscriptOpenOrToggle => {
-            if let Some(target) = app.focused_target {
-                if target.kind == InteractiveTargetKind::ToolStep {
-                    let mut messages = runtime.messages.write().await;
-                    let enter_id =
-                        resolve_focused_mut(&mut messages, &app.focus_stack, target.message_idx)
-                            .and_then(|message| {
-                                if message.is_runner_task() {
-                                    message.tool_step_call_id().map(String::from)
-                                } else {
-                                    None
-                                }
-                            });
-                    if let Some(id) = enter_id {
-                        drop(messages);
-                        app.enter_runner(id);
-                    } else {
-                        app.toggle_step_pinned(&mut messages, target.message_idx);
-                        drop(messages);
-                    }
+            if let Some(target) = app.focused_target
+                && target.kind == InteractiveTargetKind::ToolStep
+            {
+                let mut messages = runtime.messages.write().await;
+                let enter_id =
+                    resolve_focused_mut(&mut messages, &app.focus_stack, target.message_idx)
+                        .and_then(|message| {
+                            if message.is_runner_task() {
+                                message.tool_step_call_id().map(String::from)
+                            } else {
+                                None
+                            }
+                        });
+                if let Some(id) = enter_id {
+                    drop(messages);
+                    app.enter_runner(id);
+                } else {
+                    app.toggle_step_pinned(&mut messages, target.message_idx);
+                    drop(messages);
                 }
             }
         }
@@ -2834,6 +2773,9 @@ async fn execute_command_by_id(
                 runtime,
                 viewed_session_id,
             );
+        }
+        CommandId::OpenActiveConnectionDetail => {
+            open_active_connection_detail(app, runtime, viewed_session_id);
         }
         CommandId::OpenTools => {
             enter_panel(

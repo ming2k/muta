@@ -49,6 +49,26 @@ pub struct TuiConfig {
     pub custom_color_scheme: ColorSchemeConfig,
     #[serde(default)]
     pub input_history: InputHistoryConfig,
+    /// User remaps of the chords (ADR-0172): bare `command-id → chord spec`
+    /// entries for the global layer (e.g. `interrupt = "ctrl+x"`), plus a
+    /// `[keybindings.session]` sub-table for the full-screen-view verbs. See
+    /// [`crate::keymap::parse_key`] for the chord syntax.
+    #[serde(default)]
+    pub keybindings: KeybindingsConfig,
+}
+
+/// The `[keybindings]` table (ADR-0172). Unknown top-level keys are the
+/// global command remaps; the nested `session` table holds the surface verbs
+/// of the full-screen views.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeybindingsConfig {
+    /// Global chords: `command-id → chord spec`.
+    #[serde(flatten)]
+    pub commands: HashMap<String, String>,
+    /// Surface verbs: `verb → chord spec` (step 9). Keys are the unqualified
+    /// [`crate::keymap::SurfaceVerb`] names (`open_history`, `steer`, …).
+    pub session: HashMap<String, String>,
 }
 
 pub type MutxConfig = TuiConfig;
@@ -63,11 +83,23 @@ impl Default for TuiConfig {
             default_expanded: HashMap::new(),
             custom_color_scheme: ColorSchemeConfig::default(),
             input_history: InputHistoryConfig::default(),
+            keybindings: KeybindingsConfig::default(),
         }
     }
 }
 
 impl TuiConfig {
+    /// The effective global-chord overrides declared in `[keybindings]`
+    /// (ADR-0172). Empty when the user has not customized any global chord.
+    pub fn global_key_overrides(&self) -> crate::keymap::GlobalOverrides {
+        crate::keymap::GlobalOverrides::from_config(&self.keybindings.commands)
+    }
+    /// The effective surface-verb overrides declared in `[keybindings.session]`
+    /// (ADR-0172 step 9). Empty when the user has not customized any
+    /// full-screen-view chord.
+    pub fn surface_key_overrides(&self) -> crate::keymap::SurfaceOverrides {
+        crate::keymap::SurfaceOverrides::from_config(&self.keybindings.session)
+    }
     /// Load configuration from `$XDG_CONFIG_HOME/mutx/config.toml`.
     /// If not present, automatically migrates any legacy `[tui]` table from `$XDG_CONFIG_HOME/muta/config.toml`.
     pub fn load() -> Self {
@@ -179,19 +211,6 @@ pub fn save_history(
         .unwrap_or_default();
     let merged = muta_contracts::merge_history(&existing, history, dedup);
     muta_persistence::fsutil::atomic_write_json(&path, &merged)
-        .map_err(Box::<dyn std::error::Error>::from)?;
-    Ok(())
-}
-
-/// Clear prompt input history in `$XDG_STATE_HOME/mutx/history.json`.
-pub fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
-    let path = crate::paths::get().history_file();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let _lock = muta_persistence::fsutil::FileLock::acquire(&path)
-        .map_err(|e| format!("could not lock history file: {e}"))?;
-    muta_persistence::fsutil::atomic_write_json(&path, &Vec::<muta_contracts::HistoryEntry>::new())
         .map_err(Box::<dyn std::error::Error>::from)?;
     Ok(())
 }
@@ -386,6 +405,78 @@ thinking = true
     fn legacy_bash_expand_key_applies_to_execute_command() {
         let cfg = config(&[("bash", false)]);
         assert!(!tool_default_expanded(&cfg, "execute_command"));
+    }
+
+    #[test]
+    fn parses_keybindings_table_and_builds_overrides() {
+        let toml = r##"
+[keybindings]
+interrupt = "ctrl+x"
+quit = "ctrl+shift+q"
+"##;
+        let cfg: TuiConfig = toml::from_str(toml).expect("parses");
+        assert_eq!(cfg.keybindings.commands.len(), 2);
+        assert!(cfg.keybindings.session.is_empty());
+        let o = cfg.global_key_overrides();
+        assert_eq!(
+            o.effective_binding(crate::keymap::CommandId::InterruptTask),
+            crate::keymap::Key::ctrl('x')
+        );
+        assert_eq!(
+            o.effective_binding(crate::keymap::CommandId::Quit),
+            crate::keymap::Key {
+                modifiers: crossterm::event::KeyModifiers::CONTROL
+                    .union(crossterm::event::KeyModifiers::SHIFT),
+                code: crossterm::event::KeyCode::Char('q')
+            }
+        );
+        // Unconfigured commands keep their canonical binding.
+        assert_eq!(
+            o.effective_binding(crate::keymap::CommandId::CommandPalette),
+            crate::keymap::Key::CTRL_P
+        );
+    }
+
+    #[test]
+    fn parses_session_verb_table_into_surface_overrides() {
+        let toml = r##"
+[keybindings]
+interrupt = "ctrl+x"
+
+[keybindings.session]
+open_history = "ctrl+shift+r"
+steer = "alt+enter"
+bogus = "ctrl+z"
+"##;
+        let cfg: TuiConfig = toml::from_str(toml).expect("parses");
+        // Global parsing ignores the nested session table and unknown verbs.
+        let g = cfg.global_key_overrides();
+        assert_eq!(
+            g.effective_binding(crate::keymap::CommandId::InterruptTask),
+            crate::keymap::Key::ctrl('x')
+        );
+        assert_eq!(
+            g.effective_binding(crate::keymap::CommandId::Quit),
+            crate::keymap::Key::CTRL_Q
+        );
+        // Surface parsing picks only the session-table verb names.
+        let s = cfg.surface_key_overrides();
+        assert_eq!(
+            s.effective_binding(crate::keymap::SurfaceVerb::OpenHistory),
+            crate::keymap::Key::CTRL_SHIFT_R
+        );
+        assert_eq!(
+            s.effective_binding(crate::keymap::SurfaceVerb::Steer),
+            crate::keymap::Key {
+                modifiers: crossterm::event::KeyModifiers::ALT,
+                code: crossterm::event::KeyCode::Enter
+            }
+        );
+        // Unconfigured verbs keep canonical; unknown verb names are skipped.
+        assert_eq!(
+            s.effective_binding(crate::keymap::SurfaceVerb::HistoryPrev),
+            crate::keymap::Key::ALT_P
+        );
     }
 
     #[test]

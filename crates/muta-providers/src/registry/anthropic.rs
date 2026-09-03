@@ -6,7 +6,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// Per-model `max_tokens` for the Anthropic `/messages` surface. The Messages
 /// API requires `max_tokens`; capping the response at the model's registered
@@ -171,8 +171,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::AnthropicMessages,
     models: ANTHROPIC_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Anthropic)),
     fitting: false,
+    wire_overrides: &[],
 };
 
 #[cfg(test)]

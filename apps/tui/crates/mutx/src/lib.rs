@@ -49,6 +49,12 @@ mod versioned;
 // Semantic data model.
 pub(crate) mod model;
 
+// The Session view's self-owned keyboard scheme (ADR-0172).
+pub(crate) mod session;
+// Per-modal keybinding schemes (ADR-0172).
+pub(crate) mod modal_keys;
+pub(crate) mod sheet;
+
 // Drawing tree.
 pub(crate) mod components;
 pub(crate) mod disclosure;
@@ -194,9 +200,7 @@ impl StartupOverlay {
                 || lower.starts_with("config:")
                 || lower.starts_with("config/")
             {
-                let suffix_cat = lower
-                    .split_once(|c| c == ':' || c == '/' || c == '.')
-                    .map(|(_, s)| s);
+                let suffix_cat = lower.split_once([':', '/', '.']).map(|(_, s)| s);
                 let cat = suffix_cat
                     .or(nav_val.as_deref())
                     .and_then(crate::views::ConfigCategory::from_name)
@@ -2196,8 +2200,6 @@ pub async fn run_tui(
         command_palette_selected: 0,
         command_palette_scroll: 0,
         recent_commands: Vec::new(),
-        session_focus: crate::app::SessionFocusRegion::Composer,
-        saved_focus: None,
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
@@ -2286,7 +2288,6 @@ pub async fn run_tui(
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
-        history_preview: false,
         history_search: false,
         current_provider: initial_provider,
         current_model: initial_model,
@@ -2309,6 +2310,9 @@ pub async fn run_tui(
         queue_modal_follow: true,
         help_scroll: 0,
         pending_permission: None,
+        active_sheet: None,
+        pending_permission_depth: 0,
+        pending_question_depth: 0,
         pending_input: None,
         question: None,
         question_scroll: 0,
@@ -2352,7 +2356,6 @@ pub async fn run_tui(
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),
         session_history_backfill_cursor: 0,
-        history_clear_confirm: false,
         input_history_dedup: input_history_config.dedup,
         input_history_record_commands: input_history_config.record_commands,
         // This is the production TUI path (see `main` → `run_tui`): the
@@ -2381,6 +2384,8 @@ pub async fn run_tui(
 
         click_outside_dismiss: tui_config.click_outside_dismiss,
         expand_auto_scroll: tui_config.expand_auto_scroll,
+        key_overrides: tui_config.global_key_overrides(),
+        surface_overrides: tui_config.surface_key_overrides(),
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),

@@ -549,8 +549,11 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
-    } else if app.active_modal() != Modal::None && app.active_modal() != Modal::Permission {
+    } else if app.active_modal() != Modal::None && app.active_sheet().is_none() {
         app.set_active_modal_for_test(Modal::None);
+        false
+    } else if app.active_sheet().is_some() {
+        app.dismiss_sheet();
         false
     } else {
         false

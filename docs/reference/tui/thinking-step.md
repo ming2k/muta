@@ -70,7 +70,7 @@ See [expandable step](expandable-step.md#behavior) for the shared toggle,
 sticky-pin, and narrow-fallback behavior.
 
 Thinking steps participate in the same keyboard focus order as tool steps.
-Use `Ctrl+↑` / `Ctrl+↓` to focus a step, then `↑` / `↓` to walk focused
+Use `Alt+↑` / `Alt+↓` to select a step, then `Alt+↑` / `Alt+↓` to walk
 steps. `Enter` / `Space` opens or closes the focused thinking step.
 
 ## Source

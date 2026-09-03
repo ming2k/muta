@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// Entitlement-neutral seed for the ChatGPT Subscription backend. Live Codex
 /// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
@@ -111,8 +111,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // for each account and its capability metadata is trusted.
     protocol: WireProtocol::OpenAiResponses,
     models: CHATGPT_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Codex)),
     fitting: true,
+    wire_overrides: &[],
 };
 
 #[cfg(test)]

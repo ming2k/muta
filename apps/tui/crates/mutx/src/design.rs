@@ -148,7 +148,7 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Minimum gap between a footer bar's left content and its right-pinned
 /// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
-/// `Ctrl+P block  Ctrl+Q expand`). Deliberately wider than the
+/// `Ctrl+Q expand`). Deliberately wider than the
 /// 2-col inter-cluster
 /// gap used by the hint bar: a legend is a keyboard affordance, not
 /// prose, so it needs real visual distance from the content — especially when

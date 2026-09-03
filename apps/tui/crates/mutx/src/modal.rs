@@ -47,8 +47,6 @@ pub enum Modal {
     /// the composer for editing (never sends). The first Esc in search returns to
     /// browse, the second (or an outside click) closes and restores the draft.
     HistorySearch,
-    Permission,
-    Question,
     /// Unified provider editor: edit the API key and model-id
     /// of a catalog entry in one place. Reached via `e` in the Connections or
     /// Models pickers or `Enter` on a no-key model. Replaces the sequential
@@ -148,14 +146,6 @@ pub enum Modal {
     /// picker: no text entry, scrolls its body, refreshes in place when the
     /// harness pushes a new list.
     Btw,
-    /// Interactive-input injection panel (L3.5 β): shown when a `bash` command
-    /// is classified interactive and the agent cannot supply its own input.
-    /// Borrows the composer input line (like `Models`/`ModelEditor`) for
-    /// free-text entry; masks the typed text when the request is `secret`
-    /// (password/passphrase). `Enter` submits (→ `AgentRequest::InputReply`),
-    /// `Esc` cancels (→ empty reply → command runs with closed stdin and fails
-    /// fast with a non-interactive remedy hint).
-    InputInjection,
     /// Session DAG tree viewer (`/tree`).
     Tree,
     /// Global quick switcher (ADR-0139/0141, `Ctrl+L`): a centered picker
@@ -176,7 +166,7 @@ pub enum Modal {
 /// (`App`/event loop) and the per-frame recess pass (`paint::recess_backdrop`)
 /// consult, so layout and paint can never disagree about what a modal does to
 /// the surface beneath it.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Recess {
     /// The modal floats on the fully-live surface. No dimming, no occlusion —
     /// used by lightweight overlays that never take over (Question, Permission).
@@ -192,6 +182,95 @@ pub enum Recess {
     Takeover,
 }
 
+/// Keyboard-ownership declaration for a surface — the key-side sibling of
+/// [`Recess`] (ADR-0173 §2). Visual stacking predicts ownership by default;
+/// a deviation is this declaration, never a scattered gate in the router.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Claims {
+    /// The surface resolves text entry for borrowed fields itself.
+    pub text_entry: bool,
+    /// The surface resolves its own selection cursor.
+    pub list_nav: bool,
+    /// The surface pages its own body on the scroll keys.
+    pub body_scroll: bool,
+    /// The surface's own scheme resolves single-key decisions.
+    pub decide: bool,
+    /// Keys outside the owned families are consumed inertly (`true`) rather
+    /// than passed down the surface stack (`false`). Full-screen takeovers
+    /// are always opaque: nothing beneath them may react.
+    pub opaque: bool,
+}
+
+impl Modal {
+    /// The keyboard-ownership declaration for this modal — the single source
+    /// of truth the input router's family predicates (text entry, body
+    /// scroll, decision keys) and the visual-ownership reconciliation test
+    /// all consult, exactly as [`Modal::recess`] is the single source of
+    /// truth for the visual recedence.
+    pub fn keyboard_claims(self) -> Claims {
+        match self {
+            // No modal: the chat surface beneath owns the composer — text
+            // entry is exactly its bread and butter.
+            Modal::None => Claims {
+                text_entry: true,
+                list_nav: false,
+                body_scroll: false,
+                decide: false,
+                opaque: false,
+            },
+            // Caret-owning form: everything is consumed inertly outside the
+            // owned families, and it does not page a scrollable body.
+            Modal::ModelEditor => Claims {
+                text_entry: true,
+                list_nav: false,
+                body_scroll: false,
+                decide: true,
+                opaque: true,
+            },
+            Modal::Models | Modal::Connections | Modal::HistorySearch => Claims {
+                text_entry: true,
+                list_nav: true,
+                body_scroll: true,
+                decide: true,
+                opaque: true,
+            },
+            Modal::CustomProvider => Claims {
+                text_entry: true,
+                list_nav: false,
+                body_scroll: true,
+                decide: true,
+                opaque: true,
+            },
+            Modal::Sessions
+            | Modal::Host
+            | Modal::Config
+            | Modal::Tools
+            | Modal::Mcp
+            | Modal::Skills
+            | Modal::Queue
+            | Modal::Btw
+            | Modal::Permissions
+            | Modal::Telemetry
+            | Modal::ProviderPreset
+            | Modal::OauthPending
+            | Modal::ViewSwitcher => Claims {
+                text_entry: false,
+                list_nav: true,
+                body_scroll: true,
+                decide: true,
+                opaque: true,
+            },
+            Modal::Help | Modal::Todos | Modal::UsageStats | Modal::Tree => Claims {
+                text_entry: false,
+                list_nav: false,
+                body_scroll: true,
+                decide: false,
+                opaque: true,
+            },
+        }
+    }
+}
+
 impl Modal {
     /// The recess policy for this modal — the single source of truth that the
     /// footer-collapse flag and the per-frame recess pass both key off.
@@ -201,9 +280,7 @@ impl Modal {
             // HistorySearch floats too — its dropdown panel sits above a fully
             // live composer (the composer IS the filter field), so dimming the
             // surface would only darken the very input the user is typing into.
-            Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => {
-                Recess::None
-            }
+            Modal::None | Modal::HistorySearch => Recess::None,
             // Context switch: the surfaces that fully own the screen. The
             // two full-screen views (Host = dashboard, Config = settings —
             // ADR-0141) plus the sessions picker, a context-switch surface.
@@ -221,9 +298,9 @@ impl Modal {
     /// their per-view state, so an outside click closes them and restores the
     /// parked draft (ADR-0139) — exactly like
     /// Esc. Entry modals that
-    /// hold precious in-progress input (ModelEditor, Question) and the
-    /// permission sheet stay open so an accidental click never discards an API
-    /// key or a pending decision.
+    /// hold precious in-progress input (ModelEditor) stay open so an
+    /// accidental click never discards an API key, and the AI-initiated
+    /// interaction sheets (`crate::sheet`) are not modals to dismiss.
     ///
     /// This is the single source of truth for *which* modals are
     /// click-dismissable; the event loop records the renderer's actual panel
@@ -254,9 +331,10 @@ impl Modal {
     /// Whether this modal unconditionally renders its own text caret. Pickers
     /// with browse/search modes are intentionally excluded because their
     /// ownership depends on live state and is resolved by `App::caret_owner`.
-    /// Read-only overlays and decision sheets do not own a caret.
+    /// Read-only overlays do not own a caret, and the AI-initiated
+    /// interaction sheets (`crate::sheet`) are not modals at all.
     pub fn owns_caret(self) -> bool {
-        matches!(self, Modal::CustomProvider | Modal::InputInjection)
+        matches!(self, Modal::CustomProvider)
     }
 }
 
@@ -275,5 +353,79 @@ impl TelemetryTab {
             TelemetryTab::Overview => "Overview",
             TelemetryTab::Activity => "Activity",
         }
+    }
+}
+
+#[cfg(test)]
+mod claims_tests {
+    use super::*;
+
+    /// ADR-0173 §2 reconciliation: the visual declaration (`recess`) and the
+    /// keyboard declaration (`keyboard_claims`) may never disagree about who
+    /// owns the surface.
+    #[test]
+    fn takeover_surfaces_are_opaque() {
+        // Full-screen takeovers occlude the surface beneath them, so no key
+        // may fall through either.
+        for modal in [Modal::Sessions, Modal::Host, Modal::Config] {
+            assert!(
+                modal.keyboard_claims().opaque,
+                "{modal:?} takes over the screen and must be keyboard-opaque"
+            );
+        }
+    }
+
+    #[test]
+    fn the_permission_sheet_is_the_only_pass_through_surface() {
+        // The one deliberate deviation: the inline permission sheet floats
+        // (`Recess::None`) and lets transcript navigation/scrolling pass
+        // through so the history stays readable while a prompt is pending.
+        // Every other non-None modal consumes the keyboard. (The
+        // AI-initiated sheets are not modals — their pass-through policy
+        // lives in `crate::sheet`.)
+        for modal in [
+            Modal::Models,
+            Modal::Connections,
+            Modal::HistorySearch,
+            Modal::ModelEditor,
+            Modal::CustomProvider,
+            Modal::Help,
+            Modal::Sessions,
+            Modal::Host,
+            Modal::Config,
+            Modal::Tools,
+            Modal::Mcp,
+            Modal::Skills,
+            Modal::Permissions,
+            Modal::Todos,
+            Modal::Queue,
+            Modal::Telemetry,
+            Modal::UsageStats,
+            Modal::Btw,
+            Modal::Tree,
+            Modal::ViewSwitcher,
+            Modal::ProviderPreset,
+            Modal::OauthPending,
+        ] {
+            assert!(
+                modal.keyboard_claims().opaque,
+                "{modal:?} must not pass keys through the stack"
+            );
+        }
+        assert!(!crate::sheet::SheetKind::Permission.keyboard_claims().opaque);
+    }
+
+    #[test]
+    fn caret_ownership_implies_text_entry_claim() {
+        // A modal that unconditionally renders a text caret must have
+        // declared the text-entry family (the state-dependent pickers are
+        // resolved live in `App::caret_owner` and are excluded here).
+        assert!(Modal::CustomProvider.keyboard_claims().text_entry);
+        assert!(
+            crate::sheet::SheetKind::InputInjection
+                .keyboard_claims()
+                .text_entry,
+            "the injection sheet owns a caret but never declared text entry"
+        );
     }
 }

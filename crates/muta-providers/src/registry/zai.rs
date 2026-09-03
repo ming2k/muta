@@ -5,7 +5,7 @@ use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{OpenAiProviderSpec, ProviderPresetSpec};
+use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSpec};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
@@ -141,11 +141,17 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     protocol: WireProtocol::OpenAiChatCompletions,
     // Live-verified (2026-08): the coding endpoint serves GET /models and
     // returns the plan's current model ids (OpenAI list shape, ids only — no
-    // capability metadata). Discovery intersects that live list against the
-    // baseline table below, so models appear in the picker as Zhipu adds
-    // them, while the baselines stay the single source of capability truth.
-    discovery: true,
+    // capability metadata). The first-party list stays authoritative for what
+    // the account's plan actually offers; if it is ever unreachable/empty, the
+    // models.dev entry for zai covers the gap so a plan refresh does not blank
+    // the picker. Baselines stay the single source of capability truth either
+    // way (fitting is off).
+    live_catalog: Some(LiveCatalog::ProviderEndpointWithFallback {
+        protocol: DiscoveryProtocol::OpenAi,
+        fallback_provider: "zai",
+    }),
     fitting: false,
+    wire_overrides: &[],
     models: ZAI_CODE_MODELS,
 };
 

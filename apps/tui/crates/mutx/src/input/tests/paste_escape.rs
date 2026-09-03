@@ -89,7 +89,7 @@ fn escape_returns_from_always_confirmation() {
         &mut input,
         &mut cursor,
         InputContext {
-            active_modal: crate::Modal::Permission,
+            active_sheet: Some(crate::sheet::SheetKind::Permission),
             is_responding: true,
             permission_confirm_always: true,
             ..Default::default()

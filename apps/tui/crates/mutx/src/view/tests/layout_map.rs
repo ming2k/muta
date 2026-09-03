@@ -51,6 +51,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
+                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,

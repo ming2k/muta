@@ -10,6 +10,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod list_models;
+pub mod models_dev;
 pub mod oauth;
 mod registry;
 pub mod usage;
@@ -18,6 +19,7 @@ pub use list_models::{
     DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
     ModelDiscoveryUpdate, ModelListError, discover_models, list_models, models_endpoint_for,
 };
+pub use models_dev::{ModelsDevError, models_dev_models};
 pub use muta_llm_client::{
     AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ClientIdentity, Effort, Endpoint,
     GOOGLE_DEFAULT_BASE_URL, GoogleProvider, MUTA_USER_AGENT, OPENCODE_USER_AGENT,
@@ -28,10 +30,10 @@ pub use oauth::OAuthCredentialSource;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_OAUTH_MODELS, CHATGPT_BUILTIN_MODELS,
     COPILOT_SEED_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS,
-    OpenAiProviderSpec, PROVIDER_PRESET_SPECS, ProviderPresetSpec, XAI_BUILTIN_MODELS,
-    ZAI_CODE_MODELS, build_provider_for_channel, openai_provider_spec, provider_preset_spec,
-    route_for_model,
+    LiveCatalog, OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OPENCODE_GO_MODELS,
+    OpenAiProviderSpec, PROVIDER_PRESET_SPECS, ProviderPresetSpec, WIRE_OVERRIDES,
+    XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel, openai_provider_spec,
+    provider_preset_spec, route_for_model,
 };
 pub use usage::{
     AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,

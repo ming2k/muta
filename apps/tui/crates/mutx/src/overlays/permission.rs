@@ -9,8 +9,8 @@ use muta_contracts::{PermissionRequest, UserQuestionRequest};
 use crate::components::options::{ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled};
 use crate::model::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::primitives::{
-    FixedModalSpec, FooterHint, contrast_fg, keyvocab, modal_area, modal_footer_text, modal_frame,
-    panel_block, render_body, render_modal_footer,
+    FooterHint, contrast_fg, keyvocab, modal_footer_text, modal_frame, panel_block, render_body,
+    render_modal_footer,
 };
 use crate::text_layout::wrap_text;
 use crate::view::Theme;
@@ -47,20 +47,28 @@ pub fn draw_question_modal(
     highlighted: usize,
     scroll: &mut usize,
     follow_highlight: bool,
+    queue_depth: usize,
+    slot: Rect,
     theme: &Theme,
 ) -> mutx_engine::Rect {
-    let area = modal_area(frame, FixedModalSpec::QUESTION);
+    // ADR-0173 §3: the question sheet is anchored to the composer slot —
+    // the same bottom edge, extended over the hint bar — not centered over
+    // the surface. The body scrolls within whatever height the slot leaves.
+    let area = slot;
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let question = request.questions.get(current_question);
     let total = request.questions.len();
 
     if let Some(h) = f.header {
-        let title = if total > 1 {
+        let mut title = if total > 1 {
             format!("Question {}/{}", current_question + 1, total)
         } else {
             "Question".to_string()
         };
+        if queue_depth > 0 {
+            title.push_str(&format!(" · +{queue_depth} queued"));
+        }
         let mut spans = Vec::new();
         if let Some(origin) = &request.origin {
             spans.push(Span::styled(
@@ -355,6 +363,7 @@ pub fn draw_permission_sheet(
     confirm_always: bool,
     show_details: bool,
     scroll: usize,
+    queue_depth: usize,
     input_rect: Rect,
     theme: &Theme,
     selection: &crate::model::selection::SelectionState,
@@ -422,6 +431,15 @@ pub fn draw_permission_sheet(
         header.push(Span::styled(
             request.scope.clone(),
             Style::default().fg(theme.info()),
+        ));
+    }
+    if queue_depth > 1 {
+        header.push(Span::styled("  ", Style::default()));
+        header.push(Span::styled(
+            format!("{queue_depth} queued"),
+            Style::default()
+                .fg(theme.muted())
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -753,6 +771,8 @@ mod tests {
                 0,
                 &mut scroll,
                 true,
+                0,
+                Rect::new(0, 0, 78, 16),
                 &Theme::default(),
             );
         });
@@ -788,6 +808,7 @@ mod tests {
                 false,
                 false,
                 0,
+                0,
                 rect,
                 &Theme::default(),
                 &crate::model::selection::SelectionState::None,
@@ -801,6 +822,55 @@ mod tests {
                 "missing permission action {action_index}"
             );
         }
+    }
+
+    #[test]
+    fn permission_sheet_shows_queue_depth_badge() {
+        // ADR-0173 §3: concurrent AI interactions queue FIFO behind the front
+        // sheet; the badge tells the user more decisions are pending.
+        let request = PermissionRequest {
+            id: "p".into(),
+            tool: "execute_command".into(),
+            label: "execute_command".into(),
+            description: "Run a command".into(),
+            arguments: r#"{"command":"ls"}"#.into(),
+            scope: "*".into(),
+            elevation: false,
+            one_off: false,
+            origin: None,
+            ..Default::default()
+        };
+        let render = |depth: usize| {
+            let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+            let mut hit_map = ModalHitMap::new();
+            terminal.draw(|frame| {
+                let rect = Rect::new(0, 16, 80, 8);
+                let _ = draw_permission_sheet(
+                    frame,
+                    &mut hit_map,
+                    &request,
+                    0,
+                    false,
+                    false,
+                    0,
+                    depth,
+                    rect,
+                    &Theme::default(),
+                    &crate::model::selection::SelectionState::None,
+                    &mut crate::model::layout::LayoutMap::new(),
+                );
+            });
+            sheet_text(&terminal)
+        };
+
+        assert!(
+            !render(1).contains("queued"),
+            "a lone request carries no badge"
+        );
+        assert!(
+            render(3).contains("3 queued"),
+            "the badge names how many requests are queued"
+        );
     }
 
     fn find_question_hit(map: &ModalHitMap, width: u16, height: u16, option_index: usize) -> bool {
@@ -878,6 +948,7 @@ mod tests {
                 false,
                 false,
                 0,
+                0,
                 rect,
                 &Theme::default(),
                 &crate::model::selection::SelectionState::None,
@@ -921,6 +992,7 @@ mod tests {
                 0,
                 false,
                 false,
+                0,
                 0,
                 rect,
                 &Theme::default(),

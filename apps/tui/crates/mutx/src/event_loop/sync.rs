@@ -32,26 +32,27 @@ pub(crate) async fn sync_runtime_state_to_app(
     app.round_count = *runtime.round_count.lock().await;
     app.current_turn = *runtime.current_turn.lock().await;
     app.round_started_at = *runtime.round_started_at.lock().await;
-    app.pending_permission = runtime.pending_permission.lock().await.front().cloned();
+    {
+        let pending = runtime.pending_permission.lock().await;
+        app.pending_permission = pending.front().cloned();
+        app.pending_permission_depth = pending.len();
+    }
     app.key_status = runtime.key_status.lock().await.clone();
     app.websearch_config = runtime.websearch_config.lock().await.clone();
     app.provider_picker = runtime.provider_picker.lock().await.clone();
 
-    let request_sheet_open = |modal: Modal| {
-        matches!(
-            modal,
-            Modal::Permission | Modal::Question | Modal::InputInjection
-        )
-    };
+    let request_sheet_open = app.active_sheet().is_some();
 
-    if app.pending_permission.is_some() && !request_sheet_open(app.active_modal()) {
-        app.push_transient_surface(Modal::Permission);
+    if app.pending_permission.is_some() && !request_sheet_open {
+        app.push_sheet_surface(crate::sheet::Permission);
         app.modal_index = 0;
         app.permission_scroll = 0;
         app.permission_show_details = false;
         app.focused_target = None;
-    } else if app.pending_permission.is_none() && app.active_modal() == Modal::Permission {
-        app.pop_transient_surface();
+    } else if app.pending_permission.is_none()
+        && app.active_sheet() == Some(crate::sheet::Permission)
+    {
+        app.dismiss_sheet();
         app.modal_index = 0;
         app.permission_confirm_always = false;
         app.permission_scroll = 0;
@@ -61,7 +62,10 @@ pub(crate) async fn sync_runtime_state_to_app(
 
     // Question modal sync
     {
-        let front = runtime.pending_question.lock().await.front().cloned();
+        let pending = runtime.pending_question.lock().await;
+        let front = pending.front().cloned();
+        app.pending_question_depth = pending.len();
+        drop(pending);
         let model_matches_front = match (&app.question, &front) {
             (Some(m), Some(req)) => m.request().id == req.id,
             (None, None) => true,
@@ -76,14 +80,14 @@ pub(crate) async fn sync_runtime_state_to_app(
                 app.focused_target = None;
             } else {
                 app.question = None;
-                if app.active_modal() == Modal::Question {
-                    app.pop_transient_surface();
+                if app.active_sheet() == Some(crate::sheet::Question) {
+                    app.dismiss_sheet();
                     app.modal_index = 0;
                 }
             }
         }
-        if app.question.is_some() && !request_sheet_open(app.active_modal()) {
-            app.push_transient_surface(Modal::Question);
+        if app.question.is_some() && !request_sheet_open {
+            app.push_sheet_surface(crate::sheet::Question);
             app.modal_index = 0;
             app.focused_target = None;
         }
@@ -104,16 +108,16 @@ pub(crate) async fn sync_runtime_state_to_app(
                 app.focused_target = None;
             } else {
                 app.pending_input = None;
-                if app.active_modal() == Modal::InputInjection {
+                if app.active_sheet() == Some(crate::sheet::InputInjection) {
                     app.restore_input_draft();
-                    app.pop_transient_surface();
+                    app.dismiss_sheet();
                     app.modal_index = 0;
                 }
             }
         }
-        if app.pending_input.is_some() && !request_sheet_open(app.active_modal()) {
+        if app.pending_input.is_some() && !request_sheet_open {
             app.park_input_draft();
-            app.push_transient_surface(Modal::InputInjection);
+            app.push_sheet_surface(crate::sheet::InputInjection);
             app.modal_index = 0;
             app.focused_target = None;
         }

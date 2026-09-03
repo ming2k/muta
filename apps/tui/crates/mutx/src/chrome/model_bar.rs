@@ -7,7 +7,6 @@ use crate::components::keycap::keycap_style;
 use crate::design::{
     MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP, MODEL_BAR_SEGMENT_GAP,
 };
-use crate::keymap::Key;
 use crate::view::Theme;
 
 pub const CONTEXT_USAGE_WARN_THRESHOLD: f64 = 0.70;
@@ -99,6 +98,7 @@ pub fn draw_model_bar(
     rect: Rect,
     view: ModelBarView<'_>,
     theme: &Theme,
+    key_overrides: &crate::keymap::GlobalOverrides,
 ) -> ModelBarRects {
     let ModelBarView {
         current_model,
@@ -194,8 +194,11 @@ pub fn draw_model_bar(
         .sum::<usize>();
 
     let keycap_badge = |text: &str| Span::styled(text.to_string(), keycap_style(theme).bg(bg));
-    let telemetry_keycap_width = Key::CTRL_O.display().width() + 1;
-    let connection_keycap_width = Key::CTRL_N.display().width() + 1;
+    let telemetry_key = key_overrides.effective_binding(crate::keymap::CommandId::OpenTelemetry);
+    let connection_key =
+        key_overrides.effective_binding(crate::keymap::CommandId::OpenActiveConnectionDetail);
+    let telemetry_keycap_width = telemetry_key.display().width() + 1;
+    let connection_keycap_width = connection_key.display().width() + 1;
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
@@ -316,7 +319,7 @@ pub fn draw_model_bar(
     }
     if (show_context || show_performance) && show_telemetry_keycap {
         left_spans.push(Span::styled(" ", Style::default().bg(bg)));
-        left_spans.push(keycap_badge(Key::CTRL_O.display()));
+        left_spans.push(keycap_badge(telemetry_key.display()));
     }
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
@@ -342,7 +345,7 @@ pub fn draw_model_bar(
         }
         if (show_model || show_instance) && show_connection_keycap {
             right_spans.push(Span::styled(" ", Style::default().bg(bg)));
-            right_spans.push(keycap_badge(Key::CTRL_N.display()));
+            right_spans.push(keycap_badge(connection_key.display()));
         }
     }
 

@@ -778,9 +778,7 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
 
     // Phase 2 quotas arrive for the same connection
     let mut detail_phase2 = detail_phase1.clone();
-    detail_phase2.usage = muta_contracts::ConnectionUsageState::Available(Box::new(
-        muta_contracts::ProviderUsage::default(),
-    ));
+    detail_phase2.usage = muta_contracts::ConnectionUsageState::Available(Box::default());
 
     *runtime.connection_detail.lock().await = Some(detail_phase2);
     crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;

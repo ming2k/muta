@@ -16,9 +16,10 @@
 //! 9. **Terminal independence**: core workflows work without Kitty enhanced keyboard protocol.
 //! 10. **Zero legacy baggage**: breaking clean from leader chords and modal keymaps.
 
+use std::collections::{HashMap, HashSet};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::SessionFocusRegion;
 use crate::modal::Modal;
 use crate::surfaces::View;
 
@@ -193,6 +194,22 @@ impl Key {
         modifiers: KeyModifiers::SHIFT,
         code: KeyCode::BackTab,
     };
+    pub const BRACKET_LEFT: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Char('['),
+    };
+    pub const BRACKET_RIGHT: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Char(']'),
+    };
+    pub const ALT_BRACKET_LEFT: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Char('['),
+    };
+    pub const ALT_BRACKET_RIGHT: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Char(']'),
+    };
     pub const UP: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Up,
@@ -247,6 +264,16 @@ impl Key {
     pub const CTRL_V: Key = Key::ctrl('v');
 
     pub const ALT_S: Key = Key::alt('s');
+    pub const ALT_P: Key = Key::alt('p');
+    pub const ALT_N: Key = Key::alt('n');
+    pub const ALT_UP: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Up,
+    };
+    pub const ALT_DOWN: Key = Key {
+        modifiers: KeyModifiers::ALT,
+        code: KeyCode::Down,
+    };
     pub const ALT_ENTER: Key = Key {
         modifiers: KeyModifiers::ALT,
         code: KeyCode::Enter,
@@ -255,6 +282,14 @@ impl Key {
     pub const CTRL_SHIFT_C: Key = Key {
         modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
         code: KeyCode::Char('c'),
+    };
+    pub const CTRL_SHIFT_P: Key = Key {
+        modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+        code: KeyCode::Char('p'),
+    };
+    pub const CTRL_SHIFT_R: Key = Key {
+        modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+        code: KeyCode::Char('r'),
     };
     pub const CMD_C: Key = Key {
         modifiers: KeyModifiers::SUPER,
@@ -513,8 +548,6 @@ pub enum CommandId {
     SteerImmediate,
     InsertNewline,
     HistorySearch,
-    FocusTranscript,
-    FocusComposer,
     ScrollTranscriptUp,
     ScrollTranscriptDown,
 
@@ -534,6 +567,7 @@ pub enum CommandId {
     OpenTelemetry,
     OpenModels,
     OpenConnections,
+    OpenActiveConnectionDetail,
     OpenTools,
     OpenMcp,
     OpenSkills,
@@ -607,7 +641,7 @@ pub enum DisclosurePriority {
     L0Footer,
     /// L1: Local action displayed in a focused region bar.
     L1FocusRegion,
-    /// L2: Searchable through the `Ctrl+L` Command Palette.
+    /// L2: Searchable through the `Ctrl+P` Command Palette.
     L2Palette,
     /// L3: Full contextual reference visible only in F1 Help.
     L3HelpOnly,
@@ -625,7 +659,6 @@ pub enum Availability {
 pub struct AppContext {
     pub active_view: View,
     pub active_modal: Modal,
-    pub session_focus: SessionFocusRegion,
     pub is_responding: bool,
     pub has_input: bool,
     pub has_selection: bool,
@@ -724,10 +757,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::CommandPalette,
         label: "Command Palette",
-        hint: "Ctrl+L",
+        hint: "Ctrl+P",
         category: CommandCategory::Global,
         scope: Scope::Global,
-        bindings: &[Key::CTRL_L],
+        bindings: &[Key::CTRL_P, Key::CTRL_L],
         slash: Some("/commands"),
         availability: avail_always,
         disclosure: DisclosurePriority::L0Footer,
@@ -851,32 +884,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
         description: "Search and recall past prompt history",
-    },
-    CommandSpec {
-        id: CommandId::FocusTranscript,
-        label: "Focus Transcript",
-        hint: "Tab",
-        category: CommandCategory::Session,
-        scope: Scope::Composer,
-        bindings: &[Key::TAB],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L0Footer,
-        danger: DangerLevel::Safe,
-        description: "Switch focus from Composer to Transcript region",
-    },
-    CommandSpec {
-        id: CommandId::FocusComposer,
-        label: "Focus Composer",
-        hint: "Tab / Esc",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::TAB, Key::BACKTAB, Key::ESC],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Switch focus from Transcript to Composer region",
     },
     CommandSpec {
         id: CommandId::ScrollTranscriptUp,
@@ -1039,10 +1046,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::OpenTelemetry,
         label: "Session Telemetry",
-        hint: "/telemetry",
+        hint: "Ctrl+O",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
-        bindings: &[],
+        bindings: &[Key::CTRL_O],
         slash: Some("/telemetry"),
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
@@ -1074,6 +1081,19 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
         description: "Manage LLM provider endpoints and API credentials",
+    },
+    CommandSpec {
+        id: CommandId::OpenActiveConnectionDetail,
+        label: "Active Connection Detail",
+        hint: "Ctrl+N",
+        category: CommandCategory::Navigate,
+        scope: Scope::Global,
+        bindings: &[Key::CTRL_N],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L2Palette,
+        danger: DangerLevel::Safe,
+        description: "Open the active provider connection detail sheet",
     },
     CommandSpec {
         id: CommandId::OpenTools,
@@ -1375,14 +1395,51 @@ pub fn find_by_slash(slash: &str) -> Option<&'static CommandSpec> {
     })
 }
 
-/// Resolve one of the 6 canonical global bindings.
-///
-/// Returns `Some(CommandId)` only when the key matches a designated global binding.
-pub fn resolve_global_key(key: Key) -> Option<CommandId> {
+/// Which side of a hint row a chord is advertised on: navigation (left) or the
+/// primary action (right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HintSide {
+    Nav,
+    Action,
+}
+
+/// A chord a surface advertises in a run state, with the label a hint row
+/// shows. The discovery side of a keybinding scheme (ADR-0172): a hint renders
+/// exactly the chords a scheme's `live_*_hints` returns, and the tests pin
+/// them to the resolver so a hint can never advertise a dead shortcut.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LiveHint {
+    pub key: Key,
+    pub label: &'static str,
+    pub side: HintSide,
+}
+
+/// The canonical global chords a user may remap via the `[keybindings]`
+/// config (ADR-0172 §"user-overridable schemes").
+fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
+    match cmd {
+        CommandId::Help => Some(Key::F1),
+        CommandId::CommandPalette => Some(Key::CTRL_P),
+        CommandId::InterruptTask => Some(Key::CTRL_C),
+        CommandId::Quit => Some(Key::CTRL_Q),
+        CommandId::CopySelection => Some(Key::CTRL_SHIFT_C),
+        CommandId::OpenTelemetry => Some(Key::CTRL_O),
+        CommandId::OpenActiveConnectionDetail => Some(Key::CTRL_N),
+        _ => None,
+    }
+}
+
+/// The canonical resolution table (the 6 hard-bound globals + the model-bar
+/// chords), ignoring user overrides.
+fn canonical_global_key(key: Key) -> Option<CommandId> {
     if key == Key::F1 {
         Some(CommandId::Help)
-    } else if key == Key::CTRL_L {
+    } else if key == Key::CTRL_P || key == Key::CTRL_L {
         Some(CommandId::CommandPalette)
+    } else if key == Key::CTRL_O {
+        Some(CommandId::OpenTelemetry)
+    } else if key == Key::CTRL_N {
+        Some(CommandId::OpenActiveConnectionDetail)
     } else if key == Key::ESC {
         Some(CommandId::CancelOrBack)
     } else if key == Key::CTRL_C {
@@ -1396,6 +1453,295 @@ pub fn resolve_global_key(key: Key) -> Option<CommandId> {
     }
 }
 
+/// Map a config table key (snake_case command name) to its [`CommandId`].
+pub fn command_id_from_name(name: &str) -> Option<CommandId> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "help" => CommandId::Help,
+        "command_palette" | "command-palette" | "palette" => CommandId::CommandPalette,
+        "interrupt" | "interrupt_task" | "interrupt-task" => CommandId::InterruptTask,
+        "quit" | "quit_muta" | "quit-muta" => CommandId::Quit,
+        "copy" | "copy_selection" | "copy-selection" => CommandId::CopySelection,
+        "telemetry" | "open_telemetry" | "open-telemetry" => CommandId::OpenTelemetry,
+        "connection"
+        | "connection_detail"
+        | "active_connection_detail"
+        | "active-connection-detail" => CommandId::OpenActiveConnectionDetail,
+        _ => return None,
+    })
+}
+
+/// Parse a `[keybindings]` chord spec like `"ctrl+shift+p"`, `"f1"`, or
+/// `"alt+enter"` into the exact [`Key`] the input layer produces for that
+/// keystroke (normalized through [`Key::from_event`]), so a config chord and a
+/// pressed key compare equal.
+pub fn parse_key(spec: &str) -> Option<Key> {
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut cmd = false;
+    let mut code = None;
+
+    for part in spec.split('+') {
+        let p = part.trim().to_ascii_lowercase();
+        match p.as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "alt" | "option" => alt = true,
+            "shift" => shift = true,
+            "super" | "cmd" | "meta" | "command" => cmd = true,
+            "esc" | "escape" => code = Some(KeyCode::Esc),
+            "enter" | "return" => code = Some(KeyCode::Enter),
+            "tab" => code = Some(KeyCode::Tab),
+            "space" => code = Some(KeyCode::Char(' ')),
+            "backspace" => code = Some(KeyCode::Backspace),
+            "delete" | "del" => code = Some(KeyCode::Delete),
+            "home" => code = Some(KeyCode::Home),
+            "end" => code = Some(KeyCode::End),
+            "pageup" | "pgup" => code = Some(KeyCode::PageUp),
+            "pagedown" | "pgdn" => code = Some(KeyCode::PageDown),
+            "up" => code = Some(KeyCode::Up),
+            "down" => code = Some(KeyCode::Down),
+            "left" => code = Some(KeyCode::Left),
+            "right" => code = Some(KeyCode::Right),
+            _ => {
+                if let Some(n) = p.strip_prefix('f').and_then(|s| s.parse::<u8>().ok())
+                    && (1..=12).contains(&n)
+                {
+                    code = Some(KeyCode::F(n));
+                } else if let Some(ch) = p.chars().next()
+                    && p.chars().count() == 1
+                {
+                    code = Some(KeyCode::Char(ch));
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+
+    let mut modifiers = KeyModifiers::NONE;
+    if ctrl {
+        modifiers |= KeyModifiers::CONTROL;
+    }
+    if alt {
+        modifiers |= KeyModifiers::ALT;
+    }
+    if shift {
+        modifiers |= KeyModifiers::SHIFT;
+    }
+    if cmd {
+        modifiers |= KeyModifiers::SUPER;
+    }
+    // crossterm reports Shift+Tab as the dedicated BackTab code, not
+    // Tab-with-Shift; mirror that so comparisons with real keystrokes hold.
+    let code = if code == Some(KeyCode::Tab) && shift {
+        Some(KeyCode::BackTab)
+    } else {
+        code
+    };
+    Some(Key::from_event(KeyEvent::new(code?, modifiers)))
+}
+
+/// User remaps of the global chords (ADR-0172, `[keybindings]` config).
+///
+/// A remapped command's canonical chord becomes inactive; the assigned chord
+/// triggers the command. Resolution is override-first, then canonical
+/// (minus the remapped commands), so the two never double-fire.
+#[derive(Debug, Clone, Default)]
+pub struct GlobalOverrides {
+    assigned: HashMap<Key, CommandId>,
+    remapped: HashSet<CommandId>,
+}
+
+impl GlobalOverrides {
+    /// Build from a `[keybindings]` table (`command-id → chord spec`).
+    /// Unknown command ids and unparseable chords are skipped; `Esc`/Back is
+    /// deliberately not remappable (it is the universal escape hatch).
+    pub fn from_config(map: &HashMap<String, String>) -> Self {
+        let mut o = Self::default();
+        for (id, spec) in map {
+            if let (Some(cmd), Some(key)) = (command_id_from_name(id), parse_key(spec))
+                && cmd != CommandId::CancelOrBack
+            {
+                o.assigned.insert(key, cmd);
+                o.remapped.insert(cmd);
+            }
+        }
+        o
+    }
+
+    /// Whether any global chord is remapped.
+    pub fn is_empty(&self) -> bool {
+        self.assigned.is_empty()
+    }
+
+    /// The chord that should *display* for a command (override, else
+    /// canonical), so hints keep showing the binding that actually fires.
+    pub fn effective_binding(&self, cmd: CommandId) -> Key {
+        if let Some((key, _)) = self.assigned.iter().find(|(_, c)| **c == cmd) {
+            return *key;
+        }
+        canonical_global_chord(cmd).unwrap_or(Key::ESC)
+    }
+}
+
+/// Resolve a key against the canonical global chords plus any user overrides.
+pub fn resolve_global_key_with(key: Key, overrides: &GlobalOverrides) -> Option<CommandId> {
+    if let Some(cmd) = overrides.assigned.get(&key) {
+        return Some(*cmd);
+    }
+    canonical_global_key(key).filter(|cmd| !overrides.remapped.contains(cmd))
+}
+
+/// A user-remappable **surface verb** — a single-purpose chord the full-screen
+/// views own (ADR-0172 step 9). Verbs are the *shortcut* layer of a surface's
+/// scheme: each maps one chord to one semantic action, possibly gated by the
+/// surface's run state. The multi-mode interaction grammar (Enter send/queue/
+/// activate/commit, Tab commit/focus, Esc dismiss/focus/interrupt, ↑/↓ walk,
+/// printable text) is deliberately **not** remappable — it is the surface's
+/// language, not a shortcut, mirroring how `Esc`/Back are never remappable in
+/// the global layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SurfaceVerb {
+    /// Open the Ctrl+R history recall modal.
+    OpenHistory,
+    /// Take the draft and steer it into the running round (`Alt+S`).
+    Steer,
+    /// Previous / next prompt-history recall (`Alt+P` / `Alt+N`).
+    HistoryPrev,
+    HistoryNext,
+    /// Enter transcript step focus at the nearest step (`Alt+↑`).
+    FocusPrevTarget,
+    /// Clear step focus back to the composer (`Alt+↓`, needs focus).
+    ClearFocusedTarget,
+    /// Jump the focused step's scroll to the conversation edges (`Home`/`End`).
+    ScrollTop,
+    ScrollBottom,
+    /// Runner-zoom sibling navigation (`[` / `]`).
+    PrevSibling,
+    NextSibling,
+}
+
+impl SurfaceVerb {
+    /// The canonical chord, used for dispatch when unremapped and for hints
+    /// when the user has not overridden it.
+    pub(crate) fn canonical(self) -> Key {
+        match self {
+            SurfaceVerb::OpenHistory => Key::CTRL_R,
+            SurfaceVerb::Steer => Key::ALT_S,
+            SurfaceVerb::HistoryPrev => Key::ALT_P,
+            SurfaceVerb::HistoryNext => Key::ALT_N,
+            SurfaceVerb::FocusPrevTarget => Key::ALT_UP,
+            SurfaceVerb::ClearFocusedTarget => Key::ALT_DOWN,
+            SurfaceVerb::ScrollTop => Key::HOME,
+            SurfaceVerb::ScrollBottom => Key::END,
+            SurfaceVerb::PrevSibling => Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('['),
+            },
+            SurfaceVerb::NextSibling => Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char(']'),
+            },
+        }
+    }
+
+    /// The `[keybindings.session]` config name (a `[keybindings]` top-level
+    /// name would collide with a global command id, so surface verbs live in
+    /// the nested `session` table).
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            SurfaceVerb::OpenHistory => "open_history",
+            SurfaceVerb::Steer => "steer",
+            SurfaceVerb::HistoryPrev => "history_prev",
+            SurfaceVerb::HistoryNext => "history_next",
+            SurfaceVerb::FocusPrevTarget => "focus_prev",
+            SurfaceVerb::ClearFocusedTarget => "clear_focus",
+            SurfaceVerb::ScrollTop => "scroll_top",
+            SurfaceVerb::ScrollBottom => "scroll_bottom",
+            SurfaceVerb::PrevSibling => "prev_sibling",
+            SurfaceVerb::NextSibling => "next_sibling",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<SurfaceVerb> {
+        SurfaceVerb::ALL.into_iter().find(|v| v.name() == name)
+    }
+
+    /// All verbs — `from_name` and the consistency test iterate this so a new
+    /// verb must ship a config name, a canonical chord, and a resolvable
+    /// handling path.
+    pub const ALL: [SurfaceVerb; 10] = [
+        SurfaceVerb::OpenHistory,
+        SurfaceVerb::Steer,
+        SurfaceVerb::HistoryPrev,
+        SurfaceVerb::HistoryNext,
+        SurfaceVerb::FocusPrevTarget,
+        SurfaceVerb::ClearFocusedTarget,
+        SurfaceVerb::ScrollTop,
+        SurfaceVerb::ScrollBottom,
+        SurfaceVerb::PrevSibling,
+        SurfaceVerb::NextSibling,
+    ];
+}
+
+/// User remaps of the surface verbs (`[keybindings.session]` config table —
+/// ADR-0172 step 9).
+///
+/// Mirrors [`GlobalOverrides`]: a remapped verb's canonical chord goes inactive
+/// and the assigned chord triggers the verb. Resolution is override-first.
+#[derive(Debug, Clone, Default)]
+pub struct SurfaceOverrides {
+    assigned: HashMap<Key, SurfaceVerb>,
+    remapped: HashSet<SurfaceVerb>,
+}
+
+impl SurfaceOverrides {
+    /// Build from the `[keybindings.session]` table (verb → chord spec).
+    /// Unknown verbs and unparseable chords are skipped; `Esc` / `BackTab`
+    /// are deliberately not assignable (the universal escape hatch, mirroring
+    /// the global layer).
+    pub fn from_config(map: &HashMap<String, String>) -> Self {
+        let mut o = Self::default();
+        for (id, spec) in map {
+            if let (Some(verb), Some(key)) = (SurfaceVerb::from_name(id), parse_key(spec))
+                && !matches!(key.code, KeyCode::Esc | KeyCode::BackTab)
+            {
+                o.assigned.insert(key, verb);
+                o.remapped.insert(verb);
+            }
+        }
+        o
+    }
+
+    /// Whether any surface verb is remapped.
+    pub fn is_empty(&self) -> bool {
+        self.assigned.is_empty()
+    }
+
+    /// The chord that should *display* and *dispatch* for a verb (override,
+    /// else canonical), so hints keep showing the binding that actually fires.
+    pub fn effective_binding(&self, verb: SurfaceVerb) -> Key {
+        if let Some((key, _)) = self.assigned.iter().find(|(_, v)| **v == verb) {
+            return *key;
+        }
+        verb.canonical()
+    }
+
+    /// Whether `key` is a verb's effective chord. Resolvers gate on this so
+    /// remapping just re-points the chord; the verb's run-state guard runs
+    /// unchanged.
+    pub fn matches(&self, key: Key, verb: SurfaceVerb) -> bool {
+        key == self.effective_binding(verb)
+    }
+}
+
+/// Resolve one of the canonical global bindings.
+///
+/// Returns `Some(CommandId)` only when the key matches a designated global binding.
+pub fn resolve_global_key(key: Key) -> Option<CommandId> {
+    resolve_global_key_with(key, &GlobalOverrides::default())
+}
+
 /// Derive command palette entries with current availability flags.
 pub fn commands_for_palette(ctx: &AppContext) -> Vec<(&'static CommandSpec, Availability)> {
     COMMAND_REGISTRY
@@ -1403,76 +1749,6 @@ pub fn commands_for_palette(ctx: &AppContext) -> Vec<(&'static CommandSpec, Avai
         .filter(|cmd| cmd.disclosure >= DisclosurePriority::L2Palette || cmd.scope == Scope::Global)
         .map(|cmd| (cmd, (cmd.availability)(ctx)))
         .collect()
-}
-
-/// Derive contextual commands for the dynamic F1 Help modal.
-pub fn commands_for_help(ctx: &AppContext) -> Vec<&'static CommandSpec> {
-    COMMAND_REGISTRY
-        .iter()
-        .filter(|cmd| {
-            // Include globals, current scope commands, and relevant navigate/settings commands
-            match cmd.scope {
-                Scope::Global => true,
-                Scope::Session => {
-                    ctx.active_view == View::Session && ctx.active_modal == Modal::None
-                }
-                Scope::Composer => {
-                    ctx.active_view == View::Session
-                        && ctx.active_modal == Modal::None
-                        && ctx.session_focus == SessionFocusRegion::Composer
-                }
-                Scope::Transcript => {
-                    ctx.active_view == View::Session
-                        && ctx.active_modal == Modal::None
-                        && ctx.session_focus == SessionFocusRegion::Transcript
-                }
-                Scope::BrowsePanel => ctx.active_modal != Modal::None,
-                Scope::BlockingDialog => ctx.active_modal != Modal::None,
-            }
-        })
-        .collect()
-}
-
-/// Derive L0 footer hints for the current context (maximum of 3 items).
-pub fn footer_hints_for_context(ctx: &AppContext) -> Vec<(&'static str, &'static str)> {
-    if ctx.active_modal != Modal::None {
-        // Browse Panel or Dialog footer
-        vec![
-            (keyvocab::ARROWS_UD, "select"),
-            (Key::ENTER.display(), "confirm"),
-            (Key::ESC.display(), "close"),
-        ]
-    } else if ctx.active_view == View::Session {
-        match ctx.session_focus {
-            SessionFocusRegion::Composer => {
-                if ctx.is_responding {
-                    vec![
-                        (Key::TAB.display(), "transcript"),
-                        (Key::ALT_S.display(), "steer now"),
-                        (Key::ENTER.display(), "queue follow-up"),
-                    ]
-                } else {
-                    vec![
-                        (Key::TAB.display(), "transcript"),
-                        (Key::ENTER.display(), "send"),
-                    ]
-                }
-            }
-            SessionFocusRegion::Transcript => {
-                vec![
-                    (keyvocab::ARROWS_UD, "move"),
-                    (Key::ENTER.display(), "open"),
-                    (Key::ESC.display(), "compose"),
-                ]
-            }
-        }
-    } else {
-        vec![
-            (Key::F1.display(), "help"),
-            (Key::CTRL_L.display(), "commands"),
-            (Key::ESC.display(), "back"),
-        ]
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1487,8 +1763,20 @@ mod tests {
     fn global_keys_resolve_correctly() {
         assert_eq!(resolve_global_key(Key::F1), Some(CommandId::Help));
         assert_eq!(
+            resolve_global_key(Key::CTRL_P),
+            Some(CommandId::CommandPalette)
+        );
+        assert_eq!(
             resolve_global_key(Key::CTRL_L),
             Some(CommandId::CommandPalette)
+        );
+        assert_eq!(
+            resolve_global_key(Key::CTRL_O),
+            Some(CommandId::OpenTelemetry)
+        );
+        assert_eq!(
+            resolve_global_key(Key::CTRL_N),
+            Some(CommandId::OpenActiveConnectionDetail)
         );
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
         assert_eq!(
@@ -1507,12 +1795,188 @@ mod tests {
     }
 
     #[test]
+    fn every_global_binding_has_a_resolver_handler() {
+        // Any Global-scope command that declares a key binding must be
+        // resolvable by resolve_global_key. This is the guard against the
+        // "hint advertised but no handler" desync — e.g. the former dead
+        // Ctrl+O / Ctrl+N / top-level Ctrl+P.
+        for cmd in COMMAND_REGISTRY {
+            if cmd.scope == Scope::Global && !cmd.bindings.is_empty() {
+                assert!(
+                    cmd.bindings
+                        .iter()
+                        .any(|&k| resolve_global_key(k) == Some(cmd.id)),
+                    "global command {:?} binding(s) are not resolvable: {:?}",
+                    cmd.id,
+                    cmd.bindings
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_global_binding_is_shared_between_two_commands() {
+        // Within the Global layer a single chord must never mean two different
+        // commands, or a global hint could resolve to the wrong action.
+        // (Contextual commands may deliberately reuse a chord — e.g. `Enter`
+        // is both SendPrompt and QueueFollowUp depending on run state — so
+        // the invariant is enforced for Global scope only.)
+        let mut seen: Vec<(Key, CommandId)> = Vec::new();
+        for cmd in COMMAND_REGISTRY {
+            if cmd.scope != Scope::Global {
+                continue;
+            }
+            for &k in cmd.bindings {
+                if let Some((_, prev)) = seen.iter().find(|(sk, _)| *sk == k) {
+                    panic!("global binding {k:?} shared by {:?} and {:?}", prev, cmd.id);
+                }
+                seen.push((k, cmd.id));
+            }
+        }
+    }
+
+    #[test]
     fn non_global_keys_do_not_resolve_as_global() {
         assert_eq!(resolve_global_key(Key::ENTER), None);
         assert_eq!(resolve_global_key(Key::TAB), None);
         assert_eq!(resolve_global_key(Key::CTRL_R), None);
         assert_eq!(resolve_global_key(Key::ctrl('x')), None);
         assert_eq!(resolve_global_key(Key::alt('x')), None);
+    }
+
+    #[test]
+    fn parse_key_round_trips_chord_specs() {
+        // Each spec parses to the exact Key the input layer produces for that
+        // keystroke (via Key::from_event), so comparisons hold.
+        assert_eq!(parse_key("ctrl+p"), Some(Key::CTRL_P));
+        assert_eq!(parse_key("ctrl+shift+c"), Some(Key::CTRL_SHIFT_C));
+        assert_eq!(parse_key("f1"), Some(Key::F1));
+        assert_eq!(parse_key("esc"), Some(Key::ESC));
+        assert_eq!(
+            parse_key("space"),
+            Some(Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char(' ')
+            })
+        );
+        assert_eq!(parse_key("shift+tab"), Some(Key::BACKTAB));
+        assert_eq!(parse_key("alt+s"), Some(Key::ALT_S));
+        assert_eq!(parse_key("ctrl+x"), Some(Key::ctrl('x')));
+        assert_eq!(parse_key("nonsense"), None);
+        assert_eq!(parse_key(""), None);
+    }
+
+    #[test]
+    fn global_overrides_remap_resolution_and_effective_binding() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("interrupt".to_string(), "ctrl+x".to_string());
+        map.insert("quit".to_string(), "ctrl+shift+q".to_string());
+        map.insert("not_a_command".to_string(), "ctrl+z".to_string());
+        let o = GlobalOverrides::from_config(&map);
+
+        // The remapped chord fires; the canonical chord is dead.
+        assert_eq!(
+            resolve_global_key_with(Key::ctrl('x'), &o),
+            Some(CommandId::InterruptTask)
+        );
+        assert_eq!(resolve_global_key_with(Key::CTRL_C, &o), None);
+        // The remapped quit fires; canonical Ctrl+Q is dead.
+        let ctrl_shift_q = Key {
+            modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+            code: KeyCode::Char('q'),
+        };
+        assert_eq!(
+            resolve_global_key_with(ctrl_shift_q, &o),
+            Some(CommandId::Quit)
+        );
+        assert_eq!(resolve_global_key_with(Key::CTRL_Q, &o), None);
+        // Unremapped commands keep their canonical behavior.
+        assert_eq!(
+            resolve_global_key_with(Key::CTRL_P, &o),
+            Some(CommandId::CommandPalette)
+        );
+        // Effective binding follows the override for remapped commands.
+        assert_eq!(
+            o.effective_binding(CommandId::InterruptTask),
+            Key::ctrl('x')
+        );
+        assert_eq!(o.effective_binding(CommandId::CommandPalette), Key::CTRL_P);
+        // Esc / Back is never remappable.
+        let mut esc_map = std::collections::HashMap::new();
+        esc_map.insert("cancel".to_string(), "ctrl+k".to_string());
+        let o2 = GlobalOverrides::from_config(&esc_map);
+        assert_eq!(o2.effective_binding(CommandId::CancelOrBack), Key::ESC);
+        assert!(o2.is_empty());
+    }
+
+    #[test]
+    fn command_id_from_name_accepts_snake_and_kebab() {
+        assert_eq!(
+            command_id_from_name("interrupt"),
+            Some(CommandId::InterruptTask)
+        );
+        assert_eq!(
+            command_id_from_name("command-palette"),
+            Some(CommandId::CommandPalette)
+        );
+        assert_eq!(
+            command_id_from_name("telemetry"),
+            Some(CommandId::OpenTelemetry)
+        );
+        assert_eq!(command_id_from_name("nope"), None);
+    }
+
+    #[test]
+    fn surface_overrides_remap_effective_binding_and_matches() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("open_history".to_string(), "ctrl+shift+r".to_string());
+        map.insert("steer".to_string(), "alt+enter".to_string());
+        map.insert("not_a_verb".to_string(), "ctrl+z".to_string());
+        map.insert("interrupt".to_string(), "ctrl+x".to_string()); // global, ignored here
+        map.insert("history_prev".to_string(), "bogus!!".to_string()); // bad chord, skipped
+        let o = SurfaceOverrides::from_config(&map);
+
+        assert_eq!(
+            o.effective_binding(SurfaceVerb::OpenHistory),
+            Key::CTRL_SHIFT_R
+        );
+        assert_eq!(
+            o.effective_binding(SurfaceVerb::Steer),
+            Key {
+                modifiers: KeyModifiers::ALT,
+                code: KeyCode::Enter,
+            }
+        );
+        // Unremapped verbs keep their canonical chord.
+        assert_eq!(o.effective_binding(SurfaceVerb::HistoryNext), Key::ALT_N);
+        assert_eq!(o.effective_binding(SurfaceVerb::ScrollTop), Key::HOME);
+        // matches() follows the effective binding; the canonical chord is dead.
+        assert!(o.matches(Key::CTRL_SHIFT_R, SurfaceVerb::OpenHistory));
+        assert!(!o.matches(Key::CTRL_R, SurfaceVerb::OpenHistory));
+        assert!(o.matches(Key::ALT_ENTER, SurfaceVerb::Steer));
+        assert!(!o.matches(Key::ALT_S, SurfaceVerb::Steer));
+        assert!(o.matches(Key::ALT_N, SurfaceVerb::HistoryNext));
+        assert!(!o.is_empty());
+    }
+
+    #[test]
+    fn every_surface_verb_has_a_name_and_a_canonical_chord() {
+        for verb in SurfaceVerb::ALL {
+            assert!(!verb.name().is_empty(), "{verb:?} has no config name");
+            assert!(
+                SurfaceVerb::from_name(verb.name()) == Some(verb),
+                "{verb:?} name does not round-trip"
+            );
+            let _ = verb.canonical();
+            // A remapped verb must keep resolving through its own chord.
+            let mut map = std::collections::HashMap::new();
+            map.insert(verb.name().to_string(), "ctrl+shift+p".to_string());
+            let o = SurfaceOverrides::from_config(&map);
+            assert!(
+                o.matches(Key::CTRL_SHIFT_P, verb),
+                "{verb:?} override did not land on its effective chord"
+            );
+        }
     }
 
     #[test]
@@ -1546,24 +2010,5 @@ mod tests {
             find_by_slash("/commands").map(|c| c.id),
             Some(CommandId::CommandPalette)
         );
-    }
-
-    #[test]
-    fn footer_hints_respect_max_three_items() {
-        let mut ctx = AppContext::default();
-        ctx.active_view = View::Session;
-        ctx.session_focus = SessionFocusRegion::Composer;
-        ctx.is_responding = false;
-
-        let hints = footer_hints_for_context(&ctx);
-        assert!(hints.len() <= 3);
-
-        ctx.is_responding = true;
-        let hints_running = footer_hints_for_context(&ctx);
-        assert!(hints_running.len() <= 3);
-
-        ctx.session_focus = SessionFocusRegion::Transcript;
-        let hints_transcript = footer_hints_for_context(&ctx);
-        assert!(hints_transcript.len() <= 3);
     }
 }

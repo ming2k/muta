@@ -5,7 +5,7 @@ use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
@@ -229,7 +229,10 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     base_url: "https://daily-cloudcode-pa.googleapis.com",
     user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
     protocol: WireProtocol::GoogleGenerateContent,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(
+        DiscoveryProtocol::GoogleCloudCode,
+    )),
     fitting: false,
+    wire_overrides: &[],
     models: ANTIGRAVITY_OAUTH_MODELS,
 };

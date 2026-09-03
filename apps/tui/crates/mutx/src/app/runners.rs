@@ -199,7 +199,7 @@ impl App {
     }
 
     pub(crate) fn retain_visible_focused_target(&mut self) {
-        if self.active_modal() != Modal::None {
+        if self.active_modal() != Modal::None || self.active_sheet().is_some() {
             self.focused_target = None;
             return;
         }

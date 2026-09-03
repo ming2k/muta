@@ -7,6 +7,26 @@ impl App {
         self.surfaces.modal()
     }
 
+    /// Which interaction sheet currently occupies the composer slot, if any
+    /// (ADR-0173 §3). The slot mounts either the draft editor or one sheet —
+    /// sibling components, the sheet replacing the composer wholesale. This
+    /// is App-level slot state, *not* router foreground identity: a sheet is
+    /// not a surface, and `active_modal()` is `None` while one is up.
+    pub(crate) fn active_sheet(&self) -> Option<crate::sheet::SheetKind> {
+        self.active_sheet
+    }
+
+    /// Mount an interaction sheet into the composer slot, replacing the
+    /// draft editor (ADR-0173 §3). The draft stash was parked by the caller.
+    pub(crate) fn push_sheet_surface(&mut self, kind: crate::sheet::SheetKind) {
+        self.active_sheet = Some(kind);
+    }
+
+    /// Unmount the current sheet, handing the slot back to the draft editor.
+    pub(crate) fn dismiss_sheet(&mut self) {
+        self.active_sheet = None;
+    }
+
     /// Exact identity of the focused retained panel (ADR-0141: a retained
     /// modal). This deliberately cannot be reconstructed from
     /// [`Self::active_modal`] because Activity and Todos share the same
@@ -99,6 +119,13 @@ impl App {
                     || self.config_focus == crate::overlays::ConfigFocus::Detail))
     }
 
+    /// Test-only: put an interaction sheet in the composer slot without
+    /// going through the runtime sync that normally opens one.
+    #[cfg(test)]
+    pub(crate) fn set_active_sheet_for_test(&mut self, kind: crate::sheet::SheetKind) {
+        self.active_sheet = Some(kind);
+    }
+
     #[cfg(test)]
     pub(crate) fn set_active_modal_for_test(&mut self, modal: Modal) {
         use crate::surfaces::{PanelId, View};
@@ -154,6 +181,14 @@ impl App {
     /// own body (the inline permission sheet drives `permission_scroll` via a
     /// separate action, and the caret-owning text editors have no body scroll).
     pub(crate) fn modal_scroll_field(&mut self) -> Option<(&mut usize, Option<&mut bool>)> {
+        // The question sheet (ADR-0173 §3) is not a modal, but its body
+        // scrolls through the same shared action path.
+        if self.active_sheet() == Some(crate::sheet::SheetKind::Question) {
+            return Some((
+                &mut self.question_scroll,
+                Some(&mut self.question_modal_follow),
+            ));
+        }
         let modal = self.active_modal();
         match modal {
             Modal::Help => Some((&mut self.help_scroll, None)),
@@ -201,16 +236,14 @@ impl App {
             Modal::Connections | Modal::Models => {
                 Some((&mut self.model_scroll, Some(&mut self.model_modal_follow)))
             }
-            Modal::Question => Some((
-                &mut self.question_scroll,
-                Some(&mut self.question_modal_follow),
-            )),
             Modal::Tree => Some((&mut self.tree_scroll, Some(&mut self.tree_modal_follow))),
             // Permission drives its own body via PermissionDetailsUp/Down (and
             // the transcript behind it scrolls when no step is focused); the
             // caret-owning text editors have no body scroll. None => the
-            // Scroll* action falls through to the transcript fallback.
-            Modal::None | Modal::Permission | Modal::ModelEditor | Modal::InputInjection => None,
+            // Scroll* action falls through to the transcript fallback. (The
+            // interaction sheets are not modals: the question sheet's scroll
+            // field is handled by the sheet preamble above the match.)
+            Modal::None | Modal::ModelEditor => None,
             // The quick switcher scrolls its own list through the shared
             // session slot, like the other compact list modals.
             Modal::ViewSwitcher => Some((
@@ -391,8 +424,6 @@ impl App {
             self.restore_draft_from(id);
             if id == crate::surfaces::PanelId::HistorySearch {
                 self.history_search = false;
-                self.history_preview = false;
-                self.history_clear_confirm = false;
             } else {
                 self.model_search = false;
             }
@@ -510,8 +541,6 @@ impl App {
             }
             PanelId::HistorySearch => {
                 self.history_search = false;
-                self.history_preview = false;
-                self.history_clear_confirm = false;
             }
             PanelId::Queue => {
                 self.queue_scroll = 0;

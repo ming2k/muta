@@ -1,47 +1,28 @@
 //! The `opencode-go` provider preset: the opencode.ai/zen/go relay's
-//! curated OpenAI-compatible catalogue.
+//! OpenAI-compatible catalogue, served via the models.dev third-party catalog
+//! (`LiveCatalog::ModelsDev`).
 
 use muta_contracts::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{LiveCatalog, ProviderPresetSpec};
 
-/// Curated OpenAI-compatible models offered by the OpenCode Go preset.
+/// Curated seed models offered by the OpenCode Go preset. A fresh connection
+/// activates from this list before the first models.dev fetch completes; the
+/// live catalog then refreshes the served set (including relay models this
+/// client has never heard of).
 pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
 
-/// The full catalogue the opencode-go relay (opencode.ai/zen/go) actually
-/// serves — mirrors the opencode-go entries on models.dev, the same source
-/// `ANTHROPIC_MODEL_MAX_TOKENS` follows. The legacy-config migration seeds
-/// one channel per entry it knows (intersected with the client model
-/// registry, which supplies each model's wire format and metadata).
-///
-/// Keeping this as an explicit allowlist — rather than deriving the seed from
-/// registry families — is deliberate: a newly registered model must NOT
-/// appear on the relay until the relay advertises it, otherwise users get a
-/// channel that only ever answers "model not found". (Kimi `k3` and `glm-4.7`
-/// are registered for other providers but unserved by go, for example.)
-pub const OPENCODE_GO_SERVED_MODELS: &[&str] = &[
-    "deepseek-v4-flash",
-    "deepseek-v4-flash-0731",
-    "deepseek-v4-pro",
-    "glm-5",
-    "glm-5.1",
-    "glm-5.2",
-    "kimi-k2.5",
-    "kimi-k2.6",
-    "kimi-k2.7-code",
-    "mimo-v2-omni",
-    "mimo-v2-pro",
-    "mimo-v2.5",
-    "mimo-v2.5-pro",
-    "minimax-m2.5",
-    "minimax-m2.7",
-    "minimax-m3",
-    "qwen3.5-plus",
-    "qwen3.6-plus",
-    "qwen3.7-max",
-    "qwen3.7-plus",
+/// Wire-format exceptions for the opencode-go relay. The relay's default route
+/// is OpenAI chat-completions, but the `minimax-*` family is served over
+/// Anthropic `/messages`. Declared here as data so `route_for_model` can route
+/// them correctly even when the model is fitted from models.dev (whose `npm`
+/// field only says the SDK family, never the relay route).
+pub const WIRE_OVERRIDES: &[(&str, WireProtocol)] = &[
+    ("minimax-m2.5", WireProtocol::AnthropicMessages),
+    ("minimax-m2.7", WireProtocol::AnthropicMessages),
+    ("minimax-m3", WireProtocol::AnthropicMessages),
 ];
 
 /// Baseline capability metadata for the models this provider serves,
@@ -289,9 +270,15 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     base_url: "https://opencode.ai/zen/go/v1/chat/completions",
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
-    // opencode-go's model list is derived at runtime from the baseline
-    // registry and spans multiple transports; a live overwrite would regress it.
-    discovery: false,
-    fitting: false,
+    // The served set comes from the models.dev third-party catalog (the relay
+    // publishes there; its own `/models` is not authoritative). Fitting is
+    // enabled because models.dev is the relay's own directory — every
+    // advertised id is materialized with its catalog metadata, so a newly
+    // shipped relay model appears with zero client changes.
+    live_catalog: Some(LiveCatalog::ModelsDev {
+        provider: "opencode-go",
+    }),
+    fitting: true,
+    wire_overrides: WIRE_OVERRIDES,
     models: OPENCODE_GO_MODELS,
 };

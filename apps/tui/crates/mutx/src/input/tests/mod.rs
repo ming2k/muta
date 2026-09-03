@@ -76,6 +76,13 @@ fn key_in_view(code: KeyCode, in_runner_view: bool, input: &mut String) -> Input
     key_in_side_view_with(code, input, move |ctx| {
         ctx.in_runner_view = in_runner_view;
         ctx.in_side_view = false;
+        // Surface dispatch keys off the explicit view (ADR-0172), not the
+        // legacy flags.
+        ctx.current_view = if in_runner_view {
+            crate::surfaces::View::Runner
+        } else {
+            crate::surfaces::View::Session
+        };
     })
 }
 
@@ -88,6 +95,7 @@ fn key_in_side_view_with(
     let mut drag = SelectionDrag::default();
     let mut context = InputContext {
         in_side_view: true,
+        current_view: crate::surfaces::View::Side,
         ..Default::default()
     };
     tune(&mut context);
@@ -149,6 +157,34 @@ fn run_key(
     )
 }
 
+fn run_sheet_key(
+    input: &mut String,
+    cursor: &mut usize,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    kind: crate::sheet::SheetKind,
+    has_focus: bool,
+) -> InputAction {
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        input,
+        cursor,
+        InputContext {
+            active_modal: crate::Modal::None,
+            active_sheet: Some(kind),
+            has_focused_target: has_focus,
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
 fn run_history_key(
     input: &mut String,
     cursor: &mut usize,
@@ -168,31 +204,6 @@ fn run_history_key(
         InputContext {
             active_modal: crate::Modal::HistorySearch,
             history_searching: true,
-            ..Default::default()
-        },
-        &mut drag,
-    )
-}
-
-fn run_history_clear_key(
-    input: &mut String,
-    cursor: &mut usize,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-) -> InputAction {
-    let mut drag = SelectionDrag::default();
-    process_event(
-        Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        }),
-        input,
-        cursor,
-        InputContext {
-            active_modal: crate::Modal::HistorySearch,
-            history_clear_confirm: true,
             ..Default::default()
         },
         &mut drag,

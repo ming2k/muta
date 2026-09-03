@@ -96,8 +96,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         command_palette_selected: 0,
         command_palette_scroll: 0,
         recent_commands: Vec::new(),
-        session_focus: crate::app::SessionFocusRegion::Composer,
-        saved_focus: None,
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
@@ -180,7 +178,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
-        history_preview: false,
         history_search: false,
         current_provider: "mock".to_string(),
         current_model: "mock".to_string(),
@@ -203,6 +200,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         queue_modal_follow: true,
         help_scroll: 0,
         pending_permission: None,
+        active_sheet: None,
+        pending_permission_depth: 0,
+        pending_question_depth: 0,
         pending_input: None,
         question: None,
         question_scroll: 0,
@@ -235,13 +235,11 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),
         session_history_backfill_cursor: 0,
-        history_clear_confirm: false,
         input_history_dedup: true,
         input_history_record_commands: false,
         // Tests must not touch the developer's real `history.json`: with the
-        // guard off, `record_input_history` writes (and the clear action
-        // truncates) `$XDG_STATE_HOME/muta/history.json` — a leak that
-        // polluted the file with synthetic `prompt N` rows.
+        // guard off, `record_input_history` writes `$XDG_STATE_HOME/muta/history.json`
+        // — a leak that polluted the file with synthetic `prompt N` rows.
         input_history_persist: false,
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
@@ -262,6 +260,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
 
         click_outside_dismiss: false,
         expand_auto_scroll: false,
+        key_overrides: crate::keymap::GlobalOverrides::default(),
+        surface_overrides: crate::keymap::SurfaceOverrides::default(),
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),

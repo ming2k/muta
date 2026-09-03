@@ -100,17 +100,6 @@ mod tests {
         assert!(reloaded.jina_api_key.is_none());
     }
 
-    #[test]
-    fn write_and_edit_tools_allow_plan_paths_in_plan_mode() {
-        // Plan-mode path exemption was removed (ADR-0027/0028): scoped writes
-        // are now expressed per-agent via `WriteScope`, not via an
-        // `allowed_in_plan_mode` override on the write tools. This test is
-        // kept as a placeholder guard that the write tools still build; the
-        // scoping behavior is covered by muta-contracts's WriteScope tests.
-        let _write = WriteFileTool::new(None);
-        let _edit = EditFileTool::new(None);
-    }
-
     #[tokio::test]
     async fn read_text_carries_offset_as_start_line() {
         // The structured `Code::start_line` is the contract the renderer relies

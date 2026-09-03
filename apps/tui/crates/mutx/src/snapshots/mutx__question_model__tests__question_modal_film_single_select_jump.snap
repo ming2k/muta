@@ -6,40 +6,49 @@ expression: film
 
 
 
-          Question
 
-          Style
-          Which error handling crate?
 
-             anyhow
-               Simple                                  ▼
 
-          ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+   Question
+
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
 === down → highlight 'thiserror' (selected, no marker) ===
 
 
 
-          Question
 
-          Which error handling crate?                  ▲
 
-             anyhow
-               Simple
-             thiserror                                 ▼
 
-          ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+   Question
+
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
 === '3' → jump to 'Other' (now the live selection) ===
 
 
 
-          Question
 
-             anyhow                                    ▲
-               Simple
-             thiserror
-               Structured
-             Other
 
-          ↑↓ navigate  Enter submit  Esc cancel
+
+
+
+
+
+
+   Question
+
+
+   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel

@@ -1617,6 +1617,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "muta-models-dev"
+version = "0.38.4"
+dependencies = [
+ "chrono",
+ "mockito",
+ "muta-contracts",
+ "muta-persistence",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "muta-persistence"
 version = "0.38.4"
 dependencies = [
@@ -1669,6 +1684,7 @@ dependencies = [
  "mockito",
  "muta-contracts",
  "muta-llm-client",
+ "muta-models-dev",
  "muta-persistence",
  "reqwest",
  "serde",
@@ -1694,6 +1710,7 @@ dependencies = [
  "muta-agent",
  "muta-contracts",
  "muta-mcp",
+ "muta-models-dev",
  "muta-persistence",
  "muta-platform",
  "muta-providers",

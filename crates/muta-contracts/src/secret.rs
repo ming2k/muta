@@ -135,10 +135,4 @@ mod tests {
             Some("sk-toml")
         );
     }
-
-    #[test]
-    fn from_string_and_str() {
-        let _ = SecretString::from("hello");
-        let _ = SecretString::from(String::from("hello"));
-    }
 }

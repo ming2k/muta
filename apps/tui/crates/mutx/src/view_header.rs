@@ -164,6 +164,7 @@ pub(crate) fn draw_view_header(
     rect: Rect,
     header: &ViewHeader<'_>,
     theme: &Theme,
+    key_overrides: &crate::keymap::GlobalOverrides,
 ) {
     let full_width = rect.width as usize;
     if full_width < STEP_MIN_WIDTH {
@@ -280,12 +281,25 @@ pub(crate) fn draw_view_header(
         content.badge.width() + 1
     };
     let action_width = content.action.width();
+    // A persistent, right-aligned `Ctrl+P palette` affordance on the main
+    // session head. `Ctrl+P` is the Command Palette chord (the model bar and
+    // footer hints advertise it), so surfacing it in the head's right-side
+    // space keeps the shortcut discoverable on every session view.
+    let palette = matches!(header, ViewHeader::Session(_)).then(|| {
+        crate::components::keycap::KeyAffordance::from_key(
+            key_overrides.effective_binding(crate::keymap::CommandId::CommandPalette),
+            "palette",
+        )
+    });
+    let palette_width = palette.map(|a| a.width()).unwrap_or(0);
+    let right_separator = usize::from(action_width > 0 && palette_width > 0);
+    let right_reserved = action_width + palette_width + right_separator;
     let left_budget =
-        text_width.saturating_sub(title_width + tag_width + badge_width + action_width + 1);
+        text_width.saturating_sub(title_width + tag_width + badge_width + right_reserved + 1);
     let left = fit_context(&content.primary, &content.meta, left_budget);
     let left_width: usize = left.iter().map(|(text, _)| text.width()).sum();
     let gap = text_width
-        .saturating_sub(title_width + tag_width + badge_width + left_width + action_width);
+        .saturating_sub(title_width + tag_width + badge_width + left_width + right_reserved);
 
     let mut spans = vec![Span::styled(" ".repeat(pad), fill)];
     spans.push(Span::styled(content.title, title_style));
@@ -306,9 +320,17 @@ pub(crate) fn draw_view_header(
     if !content.action.is_empty() {
         spans.push(Span::styled(content.action, action_style));
     }
+    if let Some(palette) = palette {
+        if right_separator > 0 {
+            spans.push(Span::styled(" ", fill));
+        }
+        let [key_span, label_span] = palette.render_spans(theme, bg);
+        spans.push(key_span);
+        spans.push(label_span);
+    }
     // Trailing pad (plus any shortfall after the right-aligned action) so the
     // band's background owns the row out to the terminal's right edge.
-    let used = pad + title_width + tag_width + badge_width + left_width + gap + action_width;
+    let used = pad + title_width + tag_width + badge_width + left_width + gap + right_reserved;
     spans.push(Span::styled(
         " ".repeat(full_width.saturating_sub(used)),
         fill,
@@ -596,12 +618,19 @@ fn parent_status_label(parent: muta_contracts::ParentStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap::GlobalOverrides;
 
     fn rendered_row(width: u16, header: ViewHeader<'_>) -> String {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(width, 1);
         terminal.draw(|frame| {
-            draw_view_header(frame, frame.area(), &header, &theme);
+            draw_view_header(
+                frame,
+                frame.area(),
+                &header,
+                &theme,
+                &GlobalOverrides::default(),
+            );
         });
         terminal
             .buffer()
@@ -793,7 +822,12 @@ mod tests {
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
-        assert!(row.trim_end().ends_with("DELEGATED"));
+        let pos = row.find("DELEGATED").expect("mode flag on the right");
+        assert!(
+            row[pos..].contains("Ctrl+P palette"),
+            "palette affordance after the mode flag: {row}"
+        );
+        assert!(row.trim_end().ends_with("palette"));
     }
 
     #[test]
@@ -805,9 +839,15 @@ mod tests {
             delegated: true,
             unconfined: false,
         };
-        let mut terminal = mutx_engine::TestTerminal::new(40, 1);
+        let mut terminal = mutx_engine::TestTerminal::new(60, 1);
         terminal.draw(|frame| {
-            draw_view_header(frame, frame.area(), &ViewHeader::Session(&head), &theme);
+            draw_view_header(
+                frame,
+                frame.area(),
+                &ViewHeader::Session(&head),
+                &theme,
+                &GlobalOverrides::default(),
+            );
         });
         for cell in &terminal.buffer().content {
             assert_eq!(cell.bg, theme.raised());

@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 
 /// The minimal model seed for a fresh GitHub Copilot instance, before its
 /// first live discovery completes. A Copilot instance uses `discovery: true`
@@ -39,15 +39,16 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     base_url: "https://api.githubcopilot.com/chat/completions",
     user_agent: None,
     // Copilot speaks the OpenAI chat-completions wire family against
-    // api.githubcopilot.com. Discovery + fitting are enabled so the
+    // api.githubcopilot.com. Live catalog + fitting are enabled so the
     // instance tracks the user's actual plan-unlocked model set (which
     // varies by plan: Free/Student get only the GPT-4o chat family, Pro+
     // unlocks GPT-5) without a hardcoded model list — every advertised id
     // the client registry does not know is fitted with its advertised
     // capability metadata, mirroring the kimi-code flow.
     protocol: WireProtocol::OpenAiChatCompletions,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
     fitting: true,
+    wire_overrides: &[],
     // Minimal seed: the id a fresh Copilot instance activates before the
     // first live discovery completes. `gpt-4o-mini` is universally
     // available across every Copilot plan, so the seed never 400s.

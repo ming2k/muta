@@ -55,16 +55,6 @@ pub enum ComposerSendMode {
     FollowUp,
 }
 
-/// Focus region within the composite Session View.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SessionFocusRegion {
-    /// Default focus in Session View: typing directly edits prompt buffer.
-    #[default]
-    Composer,
-    /// Transcript inspection focus: arrow keys walk steps, Enter opens/expands.
-    Transcript,
-}
-
 /// A user message owned by the compact outbox (the **next-round** queue).
 ///
 /// Follow-up content and a busy-Enter steer whose round ended before admission
@@ -464,10 +454,6 @@ pub struct App {
     /// following; wheel browsing and drag-selection edge autoscroll suspend
     /// it so a render cannot immediately undo the user's scroll gesture.
     pub input_scroll_follow_cursor: bool,
-    /// Active focus region in Session view (Composer vs Transcript).
-    pub session_focus: SessionFocusRegion,
-    /// Saved focus region prior to opening an overlay/modal, restored on close.
-    pub saved_focus: Option<SessionFocusRegion>,
     /// Screen rect of the composer panel in the last drawn frame (the whole
     /// tinted box, chrome rows included), or `None` while no composer is
     /// shown (overlay modal open, runner view). The spatial mouse router
@@ -583,17 +569,12 @@ pub struct App {
     /// and [`Self::session_scroll`] for its body scroll.
     pub skills_expanded: Option<usize>,
     /// Body scroll offset of the history modal (Ctrl+R). Reset to 0 each time
-    /// the modal opens (and when toggling browse/search/preview); clamped and
+    /// the modal opens (and when toggling browse/search); clamped and
     /// auto-followed to the selection by the renderer each frame.
     pub history_scroll: usize,
     /// When true, the history modal's body scroll follows the ↑/↓ selection
     /// cursor. Cleared on manual scroll (free browse), re-set on navigation.
     pub history_modal_follow: bool,
-    /// When true, the history modal shows the full (multi-line) text of the
-    /// selected entry instead of the one-line-per-row fuzzy list. Toggled by
-    /// Tab; ↑/↓ re-shows the focused entry's complete prompt. `history_scroll`
-    /// is reused as the per-entry scroll inside preview mode.
-    pub history_preview: bool,
     /// Whether the history modal's **search sub-layer** is active. The modal
     /// opens in browse mode (`false`): a plain reverse-chronological list with
     /// no query field. Pressing `/` enters search (`true`), which borrows the
@@ -671,6 +652,19 @@ pub struct App {
     /// modal unscrollable.
     pub help_scroll: usize,
     pub pending_permission: Option<PermissionRequest>,
+    /// The interaction sheet currently mounted in the composer slot, if any
+    /// (ADR-0173 §3). The slot's two sibling components — the draft editor
+    /// and an AI-initiated sheet — are mutually exclusive: `Some(kind)` means
+    /// the sheet has replaced the composer. App-level slot state, *not*
+    /// router foreground identity.
+    pub active_sheet: Option<crate::sheet::SheetKind>,
+    /// How many permission requests are queued in the runtime (front
+    /// mirrored into `pending_permission`). `> 1` renders the `N queued`
+    /// sheet badge (ADR-0173 §3).
+    pub pending_permission_depth: usize,
+    /// How many user questions are queued in the runtime behind the one
+    /// mirrored into `App::question`. `> 0` renders the `+N` sheet badge.
+    pub pending_question_depth: usize,
     /// The pending interactive-input request (L3.5 β) from an interactive
     /// `bash` command, or `None`. Set when a `RoundEvent::InputRequest` arrives;
     /// the input-injection modal reads it for its prompt/command/secret.
@@ -770,7 +764,7 @@ pub struct App {
     /// Whether `/slash` command invocations are recorded into the input
     /// history (`[input_history] record_commands`, default `false`).
     pub input_history_record_commands: bool,
-    /// Whether `record_input_history` / `clear_input_history` actually touch
+    /// Whether `record_input_history` actually touches
     /// the on-disk `history.json`. Production keeps this `true` (set from
     /// `main`'s TUI entry point); tests construct `App` directly and default
     /// it to `false`, so a unit test can never write (or truncate!) the
@@ -779,10 +773,6 @@ pub struct App {
     /// In-memory history still behaves identically; only the disk write is
     /// suppressed.
     pub input_history_persist: bool,
-    /// When true, the Ctrl+R history modal is awaiting an explicit clear
-    /// confirmation (`y` confirms, any other key / Esc cancels). Armed by the
-    /// `Ctrl+X` clear shortcut so a stray keystroke can never wipe history.
-    pub history_clear_confirm: bool,
     /// The inline ↑/↓ history **pointer**. Together with [`Self::history_draft`]
     /// this forms the input-history pointer model:
     ///
@@ -825,17 +815,6 @@ pub struct App {
     /// FIFO insertion order of [`Self::history_attachments`] keys, so the
     /// cache can be pruned oldest-first when it outgrows its cap.
     pub history_attachments_order: VecDeque<(String, Option<String>)>,
-    /// The inline ↑/↓ **queue pointer** — the id of the outbox item
-    /// ([`Self::pending_dispatch`]) the composer is currently editing. Forms
-    /// a pointer model over the queue that mirrors the history pointer:
-    ///
-    /// - `None` — the composer is the **draft** (or a history row): queue
-    ///   navigation is not active.
-    /// - `Some(id)` — the composer shows the queue item's content as an
-    ///   **editable projection**: ↑/↓ move the pointer across the queue
-    ///   (newest → oldest and back) without removing anything, and Enter
-    ///   writes the edited content back **into that item in place** (the
-    ///   queue's length and order are untouched).
     /// Images pasted (Ctrl+V) and waiting to be sent with the next message.
     /// Each entry is paired 1-to-1 with an `[Image #N]` chip inside
     /// [`App::input`]; the chip's `#N` is `index + 1` after
@@ -912,6 +891,14 @@ pub struct App {
     /// through the staged measure-then-paint path (`scroll_settle_pending`),
     /// so the auto-scroll itself never flickers.
     pub expand_auto_scroll: bool,
+    /// User remaps of the global chords (`[keybindings]` config, ADR-0172).
+    /// Resolution and the visible keycaps both consult it, so a remapped
+    /// binding fires and advertises consistently.
+    pub key_overrides: crate::keymap::GlobalOverrides,
+    /// User remaps of the full-screen-view surface verbs (`session.*` dotted
+    /// keys, ADR-0172). The Session/Runner/Side resolvers and the composer
+    /// hint row consult it.
+    pub surface_overrides: crate::keymap::SurfaceOverrides,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means
     /// every key has its ordinary input-box meaning (typing flows into the

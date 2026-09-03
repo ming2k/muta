@@ -60,7 +60,7 @@ the header text column 4 onward.
 | Narrow terminal (`< 8` cols) | Falls back to plain block rendering via `draw_message_body` |
 
 Keyboard focus is the single optional **focused step** (`App::focused_target`).
-Press `Ctrl+↑` / `Ctrl+↓` in the input box to focus the nearest step, then
+Press `Alt+↑` / `Alt+↓` to select the nearest step, then
 `↑` / `↓` to walk steps and `Enter` to open it. Press `Esc` (or type any
 printable key, which falls through to the prompt) to clear the focus. Mouse
 clicks use the same semantic target model and also focus the clicked step.
