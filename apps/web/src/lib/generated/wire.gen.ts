@@ -18,7 +18,7 @@ export type AgentNotice = { id: string, kind: NoticeKind, severity: NoticeSeveri
  */
 surface: NoticeSurface, title: string, body?: string, source: NoticeSource, };
 
-export type AgentRequest = { "Prompt": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "Steer": { session_id: string, message: QueuedMessage, } } | { "CancelSteer": { session_id: string, input_id: string, } } | { "FollowUp": { session_id: string, message: QueuedMessage, } } | { "SlashCommand": string } | { "CompleteComposer": { request_id: number, text: string, cursor: number, } } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
+export type AgentRequest = { "Prompt": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "Steer": { session_id: string, message: QueuedMessage, } } | { "CancelSteer": { session_id: string, input_id: string, } } | { "FollowUp": { session_id: string, message: QueuedMessage, } } | { "SlashCommand": string } | { "TrustWorkspace": { domains: Array<TrustDomain>, } } | { "CompleteComposer": { request_id: number, text: string, cursor: number, } } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
 /**
  * Full-duplex (ADR-0029): when the reply targets a permission
  * request surfaced by a *runner* (carried up as a
@@ -852,7 +852,7 @@ parent_id: string | null,
  */
 fork_kind: SessionForkKind, 
 /**
- * The Chronicler's structured digest (intent + history checklist), if
+ * Structured digest (intent + history checklist), if
  * the session has generated one.
  */
 digest: SessionDigest | null, };
@@ -1507,9 +1507,7 @@ export type SecretString = string;
 
 /**
  * The resume-time "working memory" projection of a session: a headline, the
- * user's intent, and a running checklist of what has happened. Written by
- * the Chronicler, read by the session picker's detail view so a resumed (or
- * merely revisited) session can be understood at a glance.
+ * user's intent, and a running checklist of what has happened.
  */
 export type SessionDigest = { 
 /**
@@ -1522,8 +1520,6 @@ title: string,
 intent: string, 
 /**
  * Running checklist of what has been done and decided, oldest first.
- * Each entry is one terse factual line; the Chronicler merges older
- * entries instead of dropping them when the list grows past its cap.
  */
 history: Array<string>, };
 
@@ -1558,7 +1554,7 @@ parent_id: string | null,
  */
 fork_kind: SessionForkKind, 
 /**
- * The Chronicler's structured digest (intent + history checklist), if
+ * Structured digest (intent + history checklist), if
  * the session has generated one.
  */
 digest: SessionDigest | null, };

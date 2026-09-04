@@ -252,10 +252,9 @@ fn read_day_file(path: &Path) -> DayFile {
 fn persist_day_file(path: &Path, day_file: &DayFile) -> Result<(), String> {
     let _lock = FileLock::acquire(path).map_err(|e| e.to_string())?;
     atomic_write_json(path, &day_file)?;
-    if let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
-        && let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
-    {
-        let _ = engine.set_json(&format!("usage:day:{file_name}"), day_file);
+    if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
+        let _ = crate::db::get_persistence_handle()
+            .set_json_blocking(&format!("usage:day:{file_name}"), day_file);
     }
     Ok(())
 }

@@ -123,10 +123,11 @@ impl RouteSettingsStore {
 
     /// Persist atomically into SQLite (SSOT), with fallback to legacy file when DB unavailable.
     pub fn save(&self) -> Result<(), String> {
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
-            engine
-                .set_json("state:route_settings", &self.file)
-                .map_err(|e| e.to_string())
+        if crate::db::get_persistence_handle()
+            .set_json_blocking("state:route_settings", &self.file)
+            .is_ok()
+        {
+            Ok(())
         } else {
             let path = paths::get().route_settings_file();
             fsutil::atomic_write_json(&path, &self.file).map_err(|e| e.to_string())

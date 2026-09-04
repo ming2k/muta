@@ -280,7 +280,11 @@ pub fn draw_message_body(
                 // (`Queued`), and one whose round ended first and now
                 // waits to ship as the next round's prompt
                 // (`HeldNextRound`).
-                let is_queued = is_user && msg.delivery != DeliveryStatus::Delivered;
+                let is_queued = is_user
+                    && (msg.delivery == DeliveryStatus::Queued
+                        || msg.delivery == DeliveryStatus::HeldNextRound);
+                let is_sending = is_user && msg.delivery == DeliveryStatus::Sending;
+                let is_cancelled = is_user && msg.delivery == DeliveryStatus::Cancelled;
                 // A `Role::Tool` body reaching here is a command result
                 // (ADR-0111): a harness artifact, not model prose, so it
                 // reads one step quieter than assistant text. Tool *steps*
@@ -319,7 +323,7 @@ pub fn draw_message_body(
                 // `user_panel_bg` so the message reads as a solid panel.
                 // Queued messages swap in the dimmer `user_surface_queued` so a
                 // pending send reads as more "pending" than delivered.
-                let user_bg = if is_queued {
+                let user_bg = if is_cancelled || is_queued {
                     theme.user_surface_queued()
                 } else {
                     theme.user_surface()
@@ -356,12 +360,21 @@ pub fn draw_message_body(
                                     ))
                                 )
                             };
+                            let gutter_tone = if is_cancelled {
+                                MetaTone::Warn
+                            } else {
+                                MetaTone::Accent
+                            };
                             let mut strip = MetaStrip::new()
                                 .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
-                                .lead(round_gutter, MetaTone::Accent)
+                                .lead(round_gutter, gutter_tone)
                                 .anchor(sent_header_anchor(msg))
                                 .fill_tail(theme.surface());
-                            if is_queued {
+                            if is_cancelled {
+                                strip = strip.status_toned("cancelled", MetaTone::Warn);
+                            } else if is_sending {
+                                strip = strip.status("sending");
+                            } else if is_queued {
                                 let label = match msg.delivery {
                                     DeliveryStatus::HeldNextRound => "held for next round",
                                     _ => "queued",
@@ -439,7 +452,7 @@ pub fn draw_message_body(
                         // band. Selection is character-level, not line-level,
                         // so the user can highlight arbitrary substrings.
                         let bg = user_bg;
-                        let text_style = Style::default().bg(bg).fg(if is_queued {
+                        let text_style = Style::default().bg(bg).fg(if is_cancelled || is_queued {
                             theme.muted()
                         } else {
                             theme.user_text()

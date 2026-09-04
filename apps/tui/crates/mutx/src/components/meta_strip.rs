@@ -23,6 +23,8 @@ pub(crate) enum MetaTone {
     Muted,
     /// Status tone for pending or highlight states (upright text).
     Status,
+    /// Warning tone for cancelled or interrupted states.
+    Warn,
 }
 
 impl MetaTone {
@@ -33,6 +35,7 @@ impl MetaTone {
                 .add_modifier(Modifier::BOLD),
             Self::Muted => Style::default().fg(theme.muted()),
             Self::Status => Style::default().fg(theme.info()),
+            Self::Warn => Style::default().fg(theme.warn()),
         }
     }
 }
@@ -127,6 +130,15 @@ impl<'a> MetaStrip<'a> {
         let text = text.into();
         if !text.as_ref().is_empty() {
             self.chips.push(MetaChip::new(text, MetaTone::Status, true));
+        }
+        self
+    }
+
+    /// Add an upright status chip with a specific tone (e.g. `Warn` for cancelled).
+    pub(crate) fn status_toned(mut self, text: impl Into<Cow<'a, str>>, tone: MetaTone) -> Self {
+        let text = text.into();
+        if !text.as_ref().is_empty() {
+            self.chips.push(MetaChip::new(text, tone, true));
         }
         self
     }

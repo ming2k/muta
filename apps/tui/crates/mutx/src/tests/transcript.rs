@@ -496,3 +496,172 @@ fn render_frame_computes_max_scroll_for_overflowing_transcript() {
         "max_scroll must equal content_lines - view_height"
     );
 }
+
+#[tokio::test]
+async fn auto_dispatch_sends_followup_and_pops_queue_on_natural_completion() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.tx = tx;
+    app.current_session_id = "session-a".to_string();
+
+    // Stage a follow-up item in the outbox
+    app.pending_dispatch
+        .push_back(queued_dispatch("fu-1", "session-a", "do the follow up task"));
+    assert_eq!(app.pending_count("session-a"), 1);
+
+    // If session is NOT idle or NOT naturally completed, auto-dispatch does nothing
+    crate::event_loop::auto_dispatch_ready_round(&mut app, "session-a");
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.pending_count("session-a"), 1);
+
+    // Simulate natural completion: round completed + harness became idle
+    app.naturally_completed_sessions.insert("session-a".to_string());
+    app.idle_sessions.insert("session-a".to_string());
+
+    // Now auto-dispatch runs:
+    crate::event_loop::auto_dispatch_ready_round(&mut app, "session-a");
+
+    // It MUST send AgentRequest::FollowUp (NOT AgentRequest::Prompt!)
+    let req = rx.try_recv().expect("must send follow-up request");
+    match req {
+        muta_contracts::AgentRequest::FollowUp { session_id, message } => {
+            assert_eq!(session_id, "session-a");
+            assert_eq!(message.id, "fu-1");
+            assert_eq!(message.text, "do the follow up task");
+            assert_eq!(message.display_text.as_deref(), Some("do the follow up task"));
+        }
+        other => panic!("expected FollowUp request, got {:?}", other),
+    }
+
+    // While in flight, the item is in Dispatching state (still in pending_dispatch until FollowUpStarted)
+    assert_eq!(
+        app.pending_dispatch[0].state,
+        crate::app::QueuedDispatchState::Dispatching
+    );
+
+    // Simulate FollowUpStarted arrival: remove_dispatch is called
+    let removed = app.remove_dispatch("session-a", "fu-1").expect("must remove dispatch");
+    assert_eq!(removed.id, "fu-1");
+    assert_eq!(app.pending_count("session-a"), 0);
+}
+
+#[tokio::test]
+async fn user_interrupt_blocks_queue_and_prevents_auto_dispatch() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.tx = tx;
+    app.current_session_id = "session-a".to_string();
+
+    // Stage a follow-up item in the outbox
+    app.pending_dispatch
+        .push_back(queued_dispatch("fu-1", "session-a", "do next step"));
+
+    // User interrupts (Esc Esc)
+    app.esc_armed_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+    crate::event_loop::handle_esc_interrupt(&mut app, false);
+
+    // Interrupt MUST block the queue for the session!
+    assert!(app.is_queue_blocked("session-a"));
+
+    // Verify interrupt request was sent
+    let req = rx.try_recv().expect("must send interrupt request");
+    assert!(matches!(req, muta_contracts::AgentRequest::Interrupt));
+
+    // When round unwinds and harness becomes idle after interrupt:
+    // (Note: naturally_completed_sessions is NOT inserted because it was interrupted!)
+    app.idle_sessions.insert("session-a".to_string());
+
+    // auto_dispatch runs
+    crate::event_loop::auto_dispatch_ready_round(&mut app, "session-a");
+
+    // Queue MUST NOT dispatch! It is blocked and not naturally completed.
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.pending_count("session-a"), 1);
+    assert_eq!(
+        app.pending_dispatch[0].state,
+        crate::app::QueuedDispatchState::Waiting
+    );
+
+    // Now user explicitly resumes the queue with Ctrl+P
+    let blocked = app.toggle_queue_block("session-a");
+    assert!(!blocked, "must toggle off to unblocked");
+    assert!(!app.is_queue_blocked("session-a"));
+
+    // Since the session is idle, toggling off unblocks and allows auto-dispatch
+    crate::event_loop::auto_dispatch_ready_round(&mut app, "session-a");
+    let req = rx.try_recv().expect("must dispatch after explicit resume");
+    assert!(matches!(req, muta_contracts::AgentRequest::FollowUp { .. }));
+}
+
+#[tokio::test]
+async fn drain_outbox_signal_round_interrupted_blocks_queue_and_resets_dispatching() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.naturally_completed_sessions.insert("session-a".to_string());
+
+    let mut dispatch = queued_dispatch("fu-1", "session-a", "next task");
+    dispatch.state = crate::app::QueuedDispatchState::Dispatching;
+    app.pending_dispatch.push_back(dispatch);
+
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    runtime.outbox_signals.lock().await.push_back(
+        crate::event_loop::OutboxSignal::RoundInterrupted {
+            session_id: "session-a".to_string(),
+        },
+    );
+
+    crate::event_loop::sync::drain_outbox_signals(&mut app, &runtime).await;
+
+    // Must remove from naturally_completed_sessions
+    assert!(!app.naturally_completed_sessions.contains("session-a"));
+    // Must block the queue
+    assert!(app.is_queue_blocked("session-a"));
+    // Must reset Dispatching item back to Waiting
+    assert_eq!(
+        app.pending_dispatch[0].state,
+        crate::app::QueuedDispatchState::Waiting
+    );
+}
+
+#[tokio::test]
+async fn interrupt_marks_in_flight_prompt_cancelled_without_retracting() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.tx = tx;
+    app.current_session_id = "session-a".to_string();
+    app.running_sessions.insert("session-a".to_string());
+    app.phase = Some(crate::phase::Phase::Queued);
+    app.round_started_at = Some(std::time::Instant::now());
+
+    // User prompt is sending in transcript
+    let prompt = crate::model::document::TranscriptMessage::new(
+        muta_contracts::Role::User,
+        "write a fibonacci function",
+    )
+    .sending();
+    app.messages.push(prompt);
+
+    // Press Esc Esc to interrupt
+    app.esc_armed_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+    crate::event_loop::handle_esc_interrupt(&mut app, false);
+
+    // Verify interrupt request was sent to agent
+    let req = rx.try_recv().expect("must send interrupt request");
+    assert!(matches!(req, muta_contracts::AgentRequest::Interrupt));
+
+    // UI state is immediately cleared (not blocked)
+    assert!(!app.running_sessions.contains("session-a"));
+    assert!(app.idle_sessions.contains("session-a"));
+    assert!(!app.viewed_chrome().responding);
+
+    // The prompt is NOT popped/retracted — it stays in the transcript!
+    assert_eq!(app.messages.len(), 1);
+    assert_eq!(
+        app.messages[0].delivery,
+        crate::model::document::DeliveryStatus::Cancelled,
+        "prompt status must transition to Cancelled"
+    );
+
+    // Composer input is NOT clobbered with the cancelled prompt
+    assert!(app.input.is_empty());
+}

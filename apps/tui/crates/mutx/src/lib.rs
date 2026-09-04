@@ -120,7 +120,7 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::model::document::{
-    CommandPhase, MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin,
+    CommandPhase, DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin,
     notice_severity_from_core,
 };
 use crate::model::layout::LayoutMap;
@@ -555,10 +555,6 @@ pub async fn run_tui(
     // the listener to scope on-demand queries (e.g. `TokenUsageReport`).
     let viewed_session_id = Arc::new(Mutex::new(None::<String>));
     let viewed_session_id_clone = viewed_session_id.clone();
-    // Phase-1 unsend signal: set by the listener when the harness reports an
-    // `UnsentInput`, drained by the event loop to restore the composer.
-    let unsent_input_signal = Arc::new(Mutex::new(None::<event_loop::UnsentInput>));
-    let unsent_input_signal_clone = unsent_input_signal.clone();
     // Toast-surfaced notices (command acknowledgments such as `/delegate on`)
     // are forwarded by the listener and drained by the loop into a transient
     // bubble, never entering the transcript.
@@ -788,6 +784,7 @@ pub async fn run_tui(
                                     .unwrap_or(false);
                                 if !settled {
                                     let mut message = TranscriptMessage::new(Role::User, visible);
+                                    message.insert_id = Some(input_id.clone());
                                     message.sent_at_ms = input.sent_at_ms;
                                     message.origin = UserMessageOrigin::FollowUp;
                                     msgs.push(message);
@@ -826,8 +823,19 @@ pub async fn run_tui(
                             let at_ms = record.at_ms;
                             let mut msgs = buf.write().await;
                             msgs.retain(|m| !m.is_provider_retry());
+                            if let Some(user_msg) = msgs.iter_mut().rev().find(|m| {
+                                m.role == Role::User
+                                    && (m.is_sending()
+                                        || (record.round.is_some() && m.round == record.round)
+                                        || (record.round.is_none() && m.round.is_none()))
+                            }) {
+                                user_msg.cancel_prompt();
+                            }
                             msgs.push(
                                 TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms),
+                            );
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::RoundInterrupted { session_id },
                             );
                         }
                         RoundEvent::Notice(notice) => {
@@ -978,10 +986,12 @@ pub async fn run_tui(
                                 let mut msgs = buf.write().await;
                                 if let Some(prompt) = msgs.iter_mut().rev().find(|message| {
                                     message.role == Role::User
-                                        && message.origin == UserMessageOrigin::Chat
-                                        && message.round.is_none()
+                                        && (message.origin == UserMessageOrigin::Chat
+                                            || message.origin == UserMessageOrigin::FollowUp)
+                                        && (message.round.is_none() || message.is_sending())
                                 }) {
                                     prompt.round = Some(round);
+                                    prompt.settle_delivered();
                                 }
                             }
                             if !routes_to_side {
@@ -1152,32 +1162,15 @@ pub async fn run_tui(
                                 msgs.pop();
                             }
                         }
-                        RoundEvent::UnsentInput { prompt, images } => {
-                            // Phase-1 unsend: the harness cancelled the turn
-                            // before any model output arrived and reverted the
-                            // conversation context. Pop the user message we
-                            // pushed into the transcript at send time and hand
-                            // the prompt back to the loop via the unsend signal
-                            // so it can restore the composer for re-editing.
-                            {
-                                *provider_retry_clone.lock().await = None;
-                                let mut msgs = buf.write().await;
-                                if msgs.last().is_some_and(|m| m.role == Role::User) {
-                                    msgs.pop();
-                                }
+                        RoundEvent::UnsentInput { .. } => {
+                            // Retraction is removed: transcript entries only grow and update in-place.
+                            // The prompt remains in the transcript and is marked Cancelled.
+                            *provider_retry_clone.lock().await = None;
+                            let mut msgs = buf.write().await;
+                            if let Some(user_msg) = msgs.iter_mut().rev().find(|m| m.role == Role::User) {
+                                user_msg.cancel_prompt();
                             }
                             if !routes_to_side {
-                                // The round counter was bumped optimistically at
-                                // send time (and again on the "running"
-                                // HarnessState). Since nothing committed to the
-                                // transcript, roll the counter back so the
-                                // re-send reuses the same round number instead of
-                                // skipping ahead. Matches the harness, which only
-                                // `bump_round`s a number that actually ran.
-                                let mut rc = round_count_clone.lock().await;
-                                *rc = rc.saturating_sub(1);
-                                *unsent_input_signal_clone.lock().await =
-                                    Some(event_loop::UnsentInput { prompt, images });
                                 ir_clone.store(false, Ordering::SeqCst);
                                 *activity_clone.lock().await = None;
                             }
@@ -2544,7 +2537,6 @@ pub async fn run_tui(
             round_count,
             current_turn,
             round_started_at,
-            unsent_input_signal,
             notice_toast_signal,
             outbox_signals,
         },
@@ -2590,9 +2582,14 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contrac
 }
 
 /// Apply the visible transcript effect of a stream-start signal. Retires any
-/// transient provider-retry notice entry when streaming commences.
+/// transient provider-retry notice entry when streaming commences, and settles
+/// any in-flight sending prompt to delivered.
 fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
     messages.retain(|m| !m.is_provider_retry());
+    if let Some(m) = messages.iter_mut().rev().find(|m| m.role == Role::User && m.delivery == DeliveryStatus::Sending) {
+        m.delivery = DeliveryStatus::Delivered;
+        m.rev += 1;
+    }
 }
 
 /// Append a disclosed reasoning delta to the current turn's Thinking entry,

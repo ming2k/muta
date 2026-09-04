@@ -630,6 +630,7 @@ pub(crate) fn apply_events(data: &mut SessionData, envelopes: &[crate::events::E
 
 /// Convert a snapshot into a seed event sequence so legacy files can be
 /// imported into the event log without losing information.
+#[cfg(test)]
 fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
     let mut events = vec![crate::events::EventEnvelope {
         seq: 0,
@@ -830,6 +831,7 @@ pub struct SessionStore {
     sessions_dir: PathBuf,
     pub(crate) db_path: PathBuf,
     blob_store: BlobStore,
+    pub(crate) writer: crate::db::PersistenceHandle,
     state: Mutex<SessionState>,
     /// FIFO commit gate for snapshot writes.
     persist_gate: Mutex<()>,
@@ -844,21 +846,30 @@ fn persist_to(db_path: &Path, data: &SessionData, blob_store: &BlobStore) -> Res
     offload_session_blobs(&mut data, blob_store)?;
     data.checksum = Some(compute_checksum(&data)?);
 
-    let engine = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone()))
-        .map_err(|e| format!("failed to open sqlite db {}: {e}", db_path.display()))?;
-    engine
-        .save_session_full(&data)
-        .map_err(|e| format!("failed to save session to sqlite: {e}"))?;
-    Ok(())
+    let dirs = paths::get();
+    if db_path == dirs.db_file() {
+        crate::db::get_persistence_handle()
+            .save_session_full_blocking(data)
+            .map_err(|e| format!("failed to save session to sqlite: {e}"))
+    } else {
+        let engine = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone()))
+            .map_err(|e| format!("failed to open sqlite db {}: {e}", db_path.display()))?;
+        engine
+            .save_session_full(&data)
+            .map_err(|e| format!("failed to save session to sqlite: {e}"))?;
+        Ok(())
+    }
 }
 
 /// Once the append-only event log holds more than this many events it is
 /// rewritten to a single seed derived from the session's current full
 /// snapshot. A no-op when the log is small or does not exist.
+#[cfg(test)]
 const LOG_COMPACTION_THRESHOLD: usize = 1024;
 
 /// Compact the event log at `log_path` to a single seed when it has grown past
 /// [`LOG_COMPACTION_THRESHOLD`]. A no-op when the file does not exist or is small.
+#[cfg(test)]
 fn compact_log_if_needed(log_path: &Path, data: &SessionData) -> Result<(), String> {
     if !log_path.exists() {
         return Ok(());

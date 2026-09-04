@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
 muta-platform = { path = "../muta-platform" }
-tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "rt-multi-thread", "sync", "time"] }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }

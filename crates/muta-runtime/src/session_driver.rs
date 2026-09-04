@@ -809,6 +809,74 @@ impl SessionDriver {
                     )
                     .await;
                 }
+                AgentRequest::TrustWorkspace { domains } => {
+                    let domains_to_trust = if domains.is_empty() {
+                        muta_contracts::TrustDomain::ALL.to_vec()
+                    } else {
+                        domains
+                    };
+                    if let Err(error) = workspace_security
+                        .trust_domains(&project_root_for_side, &domains_to_trust)
+                    {
+                        tracing::error!(?error, "failed to persist workspace trust");
+                    }
+                    let snapshot = workspace_security.snapshot(&project_root_for_side);
+                    agent.set_workspace_security(snapshot.clone());
+
+                    // Fast path: load in-memory configs, rules, hooks, roots immediately
+                    let mut effective = muta_persistence::config::Config::load();
+                    if snapshot.mcp.is_trusted() {
+                        effective.merge_project_mcp(
+                            muta_persistence::config::Config::load_project_mcp(
+                                &project_root_for_side,
+                            ),
+                        );
+                    }
+                    if snapshot.hooks.is_trusted() {
+                        effective.merge_project_hooks(
+                            muta_persistence::config::Config::load_project_hooks(
+                                &project_root_for_side,
+                            ),
+                        );
+                    }
+                    if snapshot.ex_workspace.is_trusted() {
+                        effective.merge_project_additional_roots(
+                            muta_persistence::config::Config::load_project_additional_roots(
+                                &project_root_for_side,
+                            ),
+                        );
+                    }
+                    crate::handlers_slash::session_ops::apply_additional_roots(
+                        &shared_additional_roots,
+                        &effective,
+                        &project_root_for_side,
+                    );
+                    let rules = if snapshot.instructions.is_trusted() {
+                        crate::project::load_project_rules(&project_root_for_side).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    agent.set_project_rules(rules);
+                    agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, &agent));
+
+                    // Immediately broadcast Trusted HarnessState so the client unblocks instantly
+                    send_harness_state_for_session(
+                        &resp_tx,
+                        &session.id().await,
+                        &agent,
+                        &session,
+                        LoopStatus::Idle,
+                    )
+                    .await;
+
+                    // Asynchronously background heavy reconfigure/reload (MCP connections & skills scanner)
+                    let mcp_clone = mcp_runtime.clone();
+                    let skills_clone = skills_registry.clone();
+                    tokio::spawn(async move {
+                        let _ = mcp_clone.reconfigure(effective.mcp).await;
+                        skills_clone.reload().await;
+                    });
+                }
                 AgentRequest::CompleteComposer {
                     request_id,
                     text,
@@ -1183,6 +1251,9 @@ mod tests {
         assert!(!round_owned_request(&AgentRequest::SlashCommand(
             "/delegate on".to_string()
         )));
+        assert!(!round_owned_request(&AgentRequest::TrustWorkspace {
+            domains: Vec::new()
+        }));
         assert!(!round_owned_request(&AgentRequest::Interrupt));
         assert!(!round_owned_request(&AgentRequest::SwitchProvider {
             provider_type: "openai".to_string(),

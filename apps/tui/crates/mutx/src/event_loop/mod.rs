@@ -15,7 +15,7 @@ pub(crate) use probes::probe_input_selection_relay;
 pub(crate) use render::render_frame;
 pub(crate) use runtime::{
     CompletionSignal, NoticeToastSignal, OauthAddSignal, OutboxSignal, SideViewSignal, UiRuntime,
-    UnsentInput, now_epoch_ms,
+    now_epoch_ms,
 };
 #[cfg(test)]
 pub(crate) use transcript::focused_messages_mut;
@@ -39,7 +39,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use mutx_engine::Terminal;
 use tokio::sync::{Mutex, mpsc};
 
-use muta_contracts::{AgentRequest, LoopStatus, ProviderPickerSnapshot};
+use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use crate::App;
 use crate::clipboard;
@@ -146,24 +146,52 @@ pub(crate) async fn picker_effort(
         })
 }
 
-async fn drain_unsent_input(app: &mut App, runtime: &UiRuntime) {
-    if let Some(unsent) = runtime.unsent_input_signal.lock().await.take() {
-        app.input = unsent.prompt;
-        app.pending_images = unsent.images;
-        app.cursor_position = app.input.chars().count();
-    }
-}
+pub(crate) fn auto_dispatch_ready_round(app: &mut App, viewed_session_id: &str) {
+    let ready_session = if app.naturally_completed_sessions.contains(viewed_session_id)
+        && app.idle_sessions.contains(viewed_session_id)
+        && !app.is_queue_blocked(viewed_session_id)
+        && app.pending_dispatch.iter().any(|item| {
+            item.session_id == viewed_session_id
+                && item.state == crate::app::QueuedDispatchState::Waiting
+        })
+    {
+        Some(viewed_session_id.to_string())
+    } else {
+        app.naturally_completed_sessions
+            .iter()
+            .find(|session_id| {
+                app.idle_sessions.contains(*session_id)
+                    && !app.is_queue_blocked(session_id)
+                    && app.pending_dispatch.iter().any(|item| {
+                        item.session_id == session_id.as_str()
+                            && item.state == crate::app::QueuedDispatchState::Waiting
+                    })
+            })
+            .cloned()
+    };
 
-fn auto_dispatch_ready_round(app: &mut App, session_id: &str) {
-    if app.loop_status != LoopStatus::Idle {
+    let Some(session_id) = ready_session else {
         return;
-    }
-    if let Some(dispatch) = app.begin_next_round_dispatch(session_id) {
+    };
+
+    if let Some(dispatch) = app.begin_next_round_dispatch(&session_id) {
         let sent_at_ms = now_epoch_ms();
-        let _ = app.tx.send(AgentRequest::Prompt {
-            text: dispatch.text,
-            images: dispatch.images,
-            sent_at_ms: Some(sent_at_ms),
+        let expanded_text =
+            crate::composer_attachments::expand_paste_chips(&dispatch.text, &dispatch.text_pastes);
+        let expanded_text =
+            crate::composer_attachments::strip_orphan_image_chips(&expanded_text, dispatch.images.len());
+        app.naturally_completed_sessions.remove(&session_id);
+        app.idle_sessions.remove(&session_id);
+        app.running_sessions.insert(session_id.clone());
+        let _ = app.tx.send(AgentRequest::FollowUp {
+            session_id,
+            message: muta_contracts::QueuedMessage {
+                id: dispatch.id,
+                text: expanded_text,
+                display_text: Some(dispatch.text),
+                images: dispatch.images,
+                sent_at_ms: Some(sent_at_ms),
+            },
         });
     }
 }
@@ -229,7 +257,6 @@ pub async fn run_app_loop(
             sync_transcripts_and_session(app, &runtime).await;
 
         drain_outbox_signals(app, &runtime).await;
-        drain_unsent_input(app, &runtime).await;
         auto_dispatch_ready_round(app, &viewed_session_id);
 
         if let Some(signal) = runtime.completion_signal.lock().await.take() {

@@ -578,6 +578,10 @@ pub enum DeliveryStatus {
     /// same pending treatment as [`DeliveryStatus::Queued`] and flips to
     /// delivered when that round starts.
     HeldNextRound,
+    /// The prompt was sent and is waiting for a response from the agent.
+    Sending,
+    /// The prompt was cancelled / interrupted before the model responded.
+    Cancelled,
 }
 
 /// A structured transcript message.
@@ -736,6 +740,47 @@ impl TranscriptMessage {
     pub fn queued(mut self) -> Self {
         self.delivery = DeliveryStatus::Queued;
         self
+    }
+
+    /// Whether this message is currently sending / waiting for response.
+    pub fn is_sending(&self) -> bool {
+        self.delivery == DeliveryStatus::Sending
+    }
+
+    /// Whether this message was cancelled / interrupted.
+    pub fn is_cancelled(&self) -> bool {
+        self.delivery == DeliveryStatus::Cancelled
+    }
+
+    /// Mark this message as sending (in-flight prompt waiting for response).
+    pub fn sending(mut self) -> Self {
+        self.delivery = DeliveryStatus::Sending;
+        self
+    }
+
+    /// Mark this message as cancelled / interrupted.
+    pub fn cancelled(mut self) -> Self {
+        self.delivery = DeliveryStatus::Cancelled;
+        self
+    }
+
+    /// Cancel this prompt in place if it is sending, queued, or an unpositioned user prompt.
+    pub fn cancel_prompt(&mut self) {
+        if self.delivery == DeliveryStatus::Sending
+            || self.delivery == DeliveryStatus::Queued
+            || (self.role == Role::User && self.round.is_none())
+        {
+            self.delivery = DeliveryStatus::Cancelled;
+            self.rev += 1;
+        }
+    }
+
+    /// Settle an in-flight sending prompt to delivered when model starts responding.
+    pub fn settle_delivered(&mut self) {
+        if self.delivery == DeliveryStatus::Sending {
+            self.delivery = DeliveryStatus::Delivered;
+            self.rev += 1;
+        }
     }
 
     /// Correlate this message with a busy-Enter steer by its

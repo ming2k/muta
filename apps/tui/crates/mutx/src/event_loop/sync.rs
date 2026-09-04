@@ -498,6 +498,17 @@ pub(crate) async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
             OutboxSignal::RoundCompleted { session_id } => {
                 app.naturally_completed_sessions.insert(session_id);
             }
+            OutboxSignal::RoundInterrupted { session_id } => {
+                app.naturally_completed_sessions.remove(&session_id);
+                app.block_queue(&session_id);
+                for item in app.pending_dispatch.iter_mut() {
+                    if item.session_id == session_id
+                        && item.state == crate::app::QueuedDispatchState::Dispatching
+                    {
+                        item.state = crate::app::QueuedDispatchState::Waiting;
+                    }
+                }
+            }
             OutboxSignal::HarnessState { session_id, idle } => {
                 if idle {
                     app.running_sessions.remove(&session_id);

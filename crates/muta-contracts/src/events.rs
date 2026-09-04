@@ -2,7 +2,7 @@
 //! responses ([`AgentResponse`]), live agent events ([`AgentEvent`]), and the
 //! small data records they carry.
 
-use crate::{ImagePart, Message, ToolOutput, ToolStream};
+use crate::{ImagePart, Message, ToolOutput, ToolStream, TrustDomain};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -42,6 +42,13 @@ pub enum AgentRequest {
         message: QueuedMessage,
     },
     SlashCommand(String),
+    /// Trust project-authored asset domains for the active workspace.
+    /// Direct control-plane admission action — does not emit `/trust` into the
+    /// transcript or record command history.
+    TrustWorkspace {
+        #[serde(default)]
+        domains: Vec<TrustDomain>,
+    },
     /// Ask the daemon to complete the composer input at `cursor`. Cursor and
     /// response edit offsets are Unicode-scalar indices so native and browser
     /// clients share one indexing contract. `request_id` lets clients discard

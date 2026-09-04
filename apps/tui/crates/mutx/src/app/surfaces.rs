@@ -778,4 +778,23 @@ impl App {
         self.round_count = chrome.round_count;
         self.current_turn = chrome.current_turn;
     }
+
+    /// Clear responding / running state immediately for the viewed session.
+    pub fn clear_responding(&mut self) {
+        self.phase = None;
+        self.round_started_at = None;
+        if self.in_side_view {
+            if let Some(side_id) = self.side_session_id.as_deref() {
+                if let Some(chrome) = self.session_chrome.get_mut(side_id) {
+                    chrome.responding = false;
+                    chrome.phase = None;
+                    chrome.round_started_at = None;
+                }
+            }
+        } else if let Some(chrome) = self.session_chrome.get_mut(&self.current_session_id) {
+            chrome.responding = false;
+            chrome.phase = None;
+            chrome.round_started_at = None;
+        }
+    }
 }

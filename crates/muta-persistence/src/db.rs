@@ -47,6 +47,9 @@ fn configure_connection(conn: &mut Connection) -> Result<()> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
+    conn.pragma_update(None, "journal_size_limit", 16777216)?; // 16MB WAL recycling
+    conn.pragma_update(None, "wal_autocheckpoint", 1000)?;     // 1000 pages (~4MB)
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
     Ok(())
 }
 
@@ -1182,6 +1185,12 @@ pub enum PersistenceCommand {
         session_id: String,
         ack: oneshot::Sender<Result<bool>>,
     },
+    RenameSession {
+        session_id: String,
+        title: Option<String>,
+        manual: bool,
+        ack: oneshot::Sender<Result<bool>>,
+    },
     AppendEvent {
         event: SessionEventRecord,
         ack: oneshot::Sender<Result<()>>,
@@ -1260,6 +1269,15 @@ impl PersistenceHandle {
                             let res = engine.delete_session(&session_id);
                             let _ = ack.send(res);
                         }
+                        PersistenceCommand::RenameSession {
+                            session_id,
+                            title,
+                            manual,
+                            ack,
+                        } => {
+                            let res = engine.rename_session(&session_id, title.as_deref(), manual);
+                            let _ = ack.send(res);
+                        }
                         PersistenceCommand::AppendEvent { event, ack } => {
                             let res = engine.append_event(&event);
                             let _ = ack.send(res);
@@ -1312,15 +1330,23 @@ impl PersistenceHandle {
     #[allow(dead_code)]
     pub(crate) fn save_session_full_blocking(&self, data: crate::session::SessionData) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
-            .blocking_send(PersistenceCommand::SaveSessionFull {
+        let tx = self.tx.clone();
+        let run_blocking = move || {
+            tx.blocking_send(PersistenceCommand::SaveSessionFull {
                 data: Box::new(data),
                 ack: ack_tx,
             })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            ack_rx
+                .blocking_recv()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        };
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(run_blocking)
+        } else {
+            run_blocking()
+        }
     }
 
     /// The database file path.
@@ -1372,6 +1398,28 @@ impl PersistenceHandle {
         self.tx
             .send(PersistenceCommand::DeleteSession {
                 session_id,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Asynchronously rename a session.
+    pub async fn rename_session(
+        &self,
+        session_id: String,
+        title: Option<String>,
+        manual: bool,
+    ) -> Result<bool> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::RenameSession {
+                session_id,
+                title,
+                manual,
                 ack: ack_tx,
             })
             .await
@@ -1434,6 +1482,43 @@ impl PersistenceHandle {
         ack_rx
             .await
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Synchronously set a key-value entry on a blocking thread.
+    pub fn set_kv_blocking(&self, key: String, value: String) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let tx = self.tx.clone();
+        let run_blocking = move || {
+            tx.blocking_send(PersistenceCommand::SetKV {
+                key,
+                value,
+                ack: ack_tx,
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            ack_rx
+                .blocking_recv()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        };
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(run_blocking)
+        } else {
+            run_blocking()
+        }
+    }
+
+    /// Asynchronously set a JSON-serializable value in the key-value store.
+    pub async fn set_json<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        let serialized = serde_json::to_string(value)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.set_kv(key.to_string(), serialized).await
+    }
+
+    /// Synchronously set a JSON-serializable value in the key-value store.
+    pub fn set_json_blocking<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        let serialized = serde_json::to_string(value)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.set_kv_blocking(key.to_string(), serialized)
     }
 
     /// Asynchronously delete a key-value entry.

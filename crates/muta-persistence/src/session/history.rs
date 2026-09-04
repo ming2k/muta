@@ -584,6 +584,7 @@ impl SessionStore {
             sessions_dir: self.sessions_dir.clone(),
             db_path,
             blob_store,
+            writer: self.writer.clone(),
             state: Mutex::new(SessionState {
                 path: side_path,
                 event_log,

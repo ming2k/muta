@@ -1354,11 +1354,15 @@ async fn real_interrupt_of_a_live_round_still_records() {
         records[0].reason,
         muta_contracts::RoundInterruptReason::User
     );
-    // The HangingProvider round produced no observable content, so the stop
-    // unwound through the phase-1 unsend path (`Ok(RoundCompletion::Unsent)`),
-    // which records no round number — the label renders as "Interrupted ·
-    // Esc Esc" without a round band. That is the pre-existing contract.
-    assert_eq!(records[0].round, None);
+    // The HangingProvider round was interrupted before model output.
+    // The prompt is preserved in session history (never retracted) and records
+    // its admitted round number.
+    assert_eq!(records[0].round, Some(0));
+    let messages = session.model_window().await;
+    assert!(
+        messages.iter().any(|m| m.role == muta_contracts::Role::User),
+        "sent prompt is preserved in transcript"
+    );
     let _ = std::fs::remove_dir_all(directory);
 }
 

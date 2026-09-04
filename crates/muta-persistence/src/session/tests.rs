@@ -2620,3 +2620,70 @@ async fn run_compaction_falls_back_when_provider_errors() {
     // Fallback excerpt summary references the old question.
     assert!(result.model_window[0].content.contains("old question"));
 }
+
+#[tokio::test]
+async fn concurrent_multi_session_turn_commits_succeed_without_database_locked() {
+    // ADR-0178: multiple sessions committing mid-round turns concurrently
+    // must succeed via the persistent single-writer actor without any
+    // "database is locked" (SQLITE_BUSY) errors.
+    let directory = std::env::temp_dir().join(format!(
+        "muta-concurrent-sessions-{}",
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    let db_path = directory.join("muta.db");
+    let blob_store = BlobStore::new(directory.join("blobs"));
+    let writer = crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()));
+
+    let mut handles = Vec::new();
+    for session_idx in 0..10 {
+        let path = directory.join(format!("session_{session_idx}.json"));
+        let event_log = EventLog::new(path.with_extension("jsonl"));
+        let data = SessionData {
+            id: format!("session_{session_idx}"),
+            project_root: directory.clone(),
+            ..Default::default()
+        };
+        let store = Arc::new(SessionStore {
+            project_root: directory.clone(),
+            sessions_dir: directory.clone(),
+            db_path: db_path.clone(),
+            blob_store: blob_store.clone(),
+            writer: writer.clone(),
+            state: Mutex::new(SessionState {
+                path,
+                event_log,
+                data,
+                defer_persist: false,
+            }),
+            persist_gate: Mutex::new(()),
+        });
+
+        handles.push(tokio::spawn(async move {
+            for turn in 1..=5 {
+                let msgs = vec![
+                    Message::new(Role::User, format!("Question {turn} from session")),
+                    Message::new(Role::Assistant, format!("Answer {turn} from session")),
+                ];
+                store.append_turn(&msgs).await.unwrap();
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.await.expect("task panicked");
+    }
+
+    // Verify all 10 sessions exist in the database with their messages
+    let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store)).unwrap();
+    for session_idx in 0..10 {
+        let session_id = format!("session_{session_idx}");
+        let session = engine.get_session(&session_id).unwrap();
+        assert!(session.is_some(), "session_{session_idx} must exist");
+        let msgs = engine.get_messages(&session_id).unwrap();
+        assert_eq!(msgs.len(), 2, "session_{session_idx} must have 2 latest messages");
+    }
+
+    let _ = fs::remove_dir_all(directory);
+}
+

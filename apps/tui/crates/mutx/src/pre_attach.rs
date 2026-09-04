@@ -65,6 +65,12 @@ pub struct PreAttachState {
     /// quarantined workspace). The surface renders an extra banner
     /// naming the env var so operators know why they are seeing it.
     acceptance: bool,
+    /// `true` once the user has submitted a decision to trust, providing
+    /// immediate visual feedback and swallowing further keystrokes while the
+    /// trusted snapshot round-trips.
+    submitting: bool,
+    /// The quarantined domains present in this workspace.
+    domains: Vec<muta_contracts::TrustDomain>,
 }
 
 /// The signal the listener task raises when a freshly-arrived
@@ -87,14 +93,11 @@ pub struct PreAttachSignal {
 /// `QuestionEffect`-to-side-effect boundary the Question sheet uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreAttachDecision {
-    /// User chose to trust some/all domains. Routes through the
-    /// canonical `/trust` slash command — the same path the existing
-    /// reply interceptor used — so persistence AND the atomic live
-    /// reload stay owned by the one code path that already handles
-    /// them. The PreAttach surface itself will be cleared by the
-    /// per-frame sync once a subsequent `HarnessState` snapshot
-    /// reports `aggregate() == Trusted`.
-    TrustCommand(String),
+    /// User chose to trust the workspace. Direct control-plane admission
+    /// request — does not route through slash commands or pollute the transcript.
+    Trust {
+        domains: Vec<muta_contracts::TrustDomain>,
+    },
     /// User chose to keep the workspace untrusted (`Keep quarantined`
     /// option or `Esc`). The TUI should quit — there is no chat
     /// surface to fall through to under ADR-0175 §4.
@@ -108,9 +111,12 @@ impl PreAttachState {
     /// [`trust_gate::gate_request`] rules are authoritative.
     pub fn from_snapshot(snapshot: &WorkspaceSecuritySnapshot) -> Option<Self> {
         let request = trust_gate::gate_request(snapshot)?;
+        let domains = trust_gate::quarantined_domains(snapshot);
         Some(Self {
             model: QuestionModel::open(request),
             acceptance: false,
+            submitting: false,
+            domains,
         })
     }
 
@@ -131,9 +137,12 @@ impl PreAttachState {
         let request = trust_gate::gate_request(&snapshot).expect(
             "synthesized quarantined snapshot with all five domains must produce a gate request",
         );
+        let domains = trust_gate::quarantined_domains(&snapshot);
         Self {
             model: QuestionModel::open(request),
             acceptance: true,
+            submitting: false,
+            domains,
         }
     }
 
@@ -143,6 +152,11 @@ impl PreAttachState {
     /// first-contact gate at a glance.
     pub fn acceptance(&self) -> bool {
         self.acceptance
+    }
+
+    /// `true` when a trust decision has been submitted and is pending unmount.
+    pub fn submitting(&self) -> bool {
+        self.submitting
     }
 
     /// The trust-gate [`QuestionModel`] backing this surface. The
@@ -163,6 +177,9 @@ impl PreAttachState {
     /// swaps the inner model out, runs the update, and writes the
     /// result back.
     pub fn apply(&mut self, action: QuestionAction) -> Option<PreAttachDecision> {
+        if self.submitting {
+            return None;
+        }
         // Clone-aside pattern: take the model, update, write back.
         let placeholder = self.model.clone();
         let model = std::mem::replace(&mut self.model, placeholder);
@@ -172,12 +189,14 @@ impl PreAttachState {
         for effect in effects {
             match effect {
                 QuestionEffect::Reply { answers, .. } => {
-                    // `answer_to_command` returns Some for "Trust all"
-                    // and "Choose domains"; None for "Keep
-                    // quarantined". Per ADR-0175 §4, the latter quits.
-                    return match trust_gate::answer_to_command(&answers) {
-                        Some(command) => Some(PreAttachDecision::TrustCommand(command)),
-                        None => Some(PreAttachDecision::Quit),
+                    return match trust_gate::answer_to_decision(&answers) {
+                        trust_gate::TrustGateDecision::Trust => {
+                            self.submitting = true;
+                            Some(PreAttachDecision::Trust {
+                                domains: self.domains.clone(),
+                            })
+                        }
+                        trust_gate::TrustGateDecision::Quit => Some(PreAttachDecision::Quit),
                     };
                 }
                 QuestionEffect::Cancelled { .. } => return Some(PreAttachDecision::Quit),
@@ -237,6 +256,35 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::default());
+
+    if state.submitting() {
+        push_wrapped_styled(
+            &mut lines,
+            INDENT,
+            INDENT,
+            "Trusting workspace...",
+            Style::default()
+                .fg(theme.info())
+                .add_modifier(Modifier::BOLD),
+            body_width,
+        );
+        lines.push(Line::default());
+        push_wrapped_styled(
+            &mut lines,
+            INDENT,
+            INDENT,
+            "Enabling configurations and entering session...",
+            Style::default().fg(theme.muted()),
+            body_width,
+        );
+        f.render_widget(
+            Paragraph::new(lines)
+                .alignment(Alignment::Left)
+                .style(Style::default().bg(Color::Black)),
+            panel,
+        );
+        return;
+    }
 
     // ── Question body ──
     let qmodel = state.model();
@@ -421,19 +469,28 @@ mod tests {
     #[test]
     fn navigate_then_submit_trust_all_emits_command() {
         let mut state = PreAttachState::from_snapshot(&quarantined_snapshot()).unwrap();
-        // Highlight starts at 0 ("Trust all domains (Recommended)").
+        // Highlight starts at 0 ("Trust and continue (Recommended)").
         let decision = state.apply(QuestionAction::Submit);
         assert_eq!(
             decision,
-            Some(PreAttachDecision::TrustCommand("/trust".to_string()))
+            Some(PreAttachDecision::Trust {
+                domains: vec![
+                    TrustDomain::Mcp,
+                    TrustDomain::Skills,
+                    TrustDomain::Instructions,
+                ],
+            })
         );
+        assert!(state.submitting());
+        // Subsequent navigation or submit actions while submitting are ignored.
+        assert_eq!(state.apply(QuestionAction::Down), None);
+        assert_eq!(state.apply(QuestionAction::Submit), None);
     }
 
     #[test]
     fn navigate_to_keep_quarantined_then_submit_emits_quit() {
         let mut state = PreAttachState::from_snapshot(&quarantined_snapshot()).unwrap();
-        state.apply(QuestionAction::Down); // → "Choose domains"
-        state.apply(QuestionAction::Down); // → "Keep quarantined"
+        state.apply(QuestionAction::Down); // → "Keep quarantined and exit"
         let decision = state.apply(QuestionAction::Submit);
         assert_eq!(decision, Some(PreAttachDecision::Quit));
     }

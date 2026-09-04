@@ -1024,8 +1024,13 @@ pub(crate) mod question_effects {
                     // TRUST_GATE_REQUEST_ID reply.
                     if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
-                        if let Some(command) = crate::trust_gate::answer_to_command(answers) {
-                            let _ = app.tx.send(AgentRequest::SlashCommand(command));
+                        if matches!(
+                            crate::trust_gate::answer_to_decision(answers),
+                            crate::trust_gate::TrustGateDecision::Trust
+                        ) {
+                            let _ = app.tx.send(AgentRequest::TrustWorkspace {
+                                domains: Vec::new(),
+                            });
                         }
                         continue;
                     }

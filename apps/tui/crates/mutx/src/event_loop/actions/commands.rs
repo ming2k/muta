@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{AgentRequest, Role};
 
-use crate::model::document::TranscriptMessage;
+use crate::model::document::{DeliveryStatus, TranscriptMessage};
 use crate::model::selection::SelectionState;
 use crate::{App, Modal, clipboard, clipboard_ops, composer_attachments};
 
@@ -133,7 +133,9 @@ pub(super) async fn handle_send_chat(
             app.idle_sessions.remove(viewed_session_id);
             app.running_sessions.insert(viewed_session_id.to_string());
             let sent_at_ms = now_epoch_ms();
-            let sent = TranscriptMessage::new(Role::User, text.clone()).with_sent_at_ms(sent_at_ms);
+            let sent = TranscriptMessage::new(Role::User, text.clone())
+                .with_sent_at_ms(sent_at_ms)
+                .sending();
             if !app.in_side_view {
                 runtime.messages.write().await.push(sent);
             } else {
@@ -396,15 +398,63 @@ pub(crate) fn handle_ctrl_c(
 /// (the "Esc again interrupts" toast), a second press inside it interrupts.
 /// `side` routes the request at the viewed aside (`InterruptSide`), which is
 /// only meaningful while the aside view is actually open.
-pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) {
+pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) -> bool {
     if !app.esc_press() {
-        return;
+        return false;
+    }
+    let target_session_id = if side {
+        app.side_session_id.clone()
+    } else if !app.current_session_id.is_empty() {
+        Some(app.current_session_id.clone())
+    } else {
+        None
+    };
+    if let Some(ref sid) = target_session_id {
+        app.block_queue(sid);
+        app.running_sessions.remove(sid);
+        app.idle_sessions.insert(sid.clone());
+    }
+    app.clear_responding();
+    // Immediately mark any in-flight prompt in `app.messages` as cancelled
+    // so the TUI updates its status and styling with zero blocking.
+    if let Some(msg) = app.messages.iter_mut().rev().find(|m| {
+        m.role == Role::User
+            && (m.is_sending() || (m.delivery == DeliveryStatus::Delivered && m.round.is_none()))
+    }) {
+        msg.cancel_prompt();
     }
     if side {
-        if let Some(side_id) = app.side_session_id.clone() {
+        if let Some(side_id) = target_session_id {
             let _ = app.tx.send(AgentRequest::InterruptSide { side_id });
         }
     } else {
         let _ = app.tx.send(AgentRequest::Interrupt);
+    }
+    true
+}
+
+/// Shared input dispatch: handles the double-Esc interrupt confirmation and
+/// immediately updates both `App` and `UiRuntime` state without latency.
+pub(crate) async fn handle_esc_interrupt_with_runtime(
+    app: &mut App,
+    runtime: &UiRuntime,
+    side: bool,
+) {
+    if !handle_esc_interrupt(app, side) {
+        return;
+    }
+    runtime.is_responding.store(false, Ordering::SeqCst);
+    *runtime.phase.lock().await = None;
+    let target_buf = if side {
+        &runtime.side_messages
+    } else {
+        &runtime.messages
+    };
+    let mut msgs = target_buf.write().await;
+    if let Some(m) = msgs.iter_mut().rev().find(|m| {
+        m.role == Role::User
+            && (m.is_sending() || (m.delivery == DeliveryStatus::Delivered && m.round.is_none()))
+    }) {
+        m.cancel_prompt();
     }
 }

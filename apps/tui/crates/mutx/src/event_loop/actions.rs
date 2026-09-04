@@ -34,7 +34,8 @@ pub(crate) use modals::{
     question_effects,
 };
 
-pub(crate) use commands::handle_esc_interrupt;
+#[allow(unused_imports)]
+pub(crate) use commands::{handle_esc_interrupt, handle_esc_interrupt_with_runtime};
 pub(super) use commands::split_command_word;
 
 #[cfg(test)]
@@ -598,7 +599,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // within that window actually interrupts the running task. A
             // press after the window lapsed starts a fresh window rather
             // than firing a stale confirmation.
-            handle_esc_interrupt(app, false);
+            handle_esc_interrupt_with_runtime(app, runtime, false).await;
         }
         input::InputAction::OpenModels => {
             enter_panel(
@@ -1607,7 +1608,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // aside's round with the same armed press-twice contract as the
             // main view's Esc interrupt. Never leaves the view, never closes
             // the aside.
-            handle_esc_interrupt(app, true);
+            handle_esc_interrupt_with_runtime(app, runtime, true).await;
         }
         input::InputAction::OpenBtwList => {
             // F5 / `/btw list` (ADR-0103 §5): ask the harness for a fresh
@@ -2727,7 +2728,7 @@ async fn execute_command_by_id(
             }
         }
         CommandId::InterruptTask => {
-            handle_esc_interrupt(app, false);
+            handle_esc_interrupt_with_runtime(app, runtime, false).await;
         }
         CommandId::Quit => {
             let _ = app.tx.send(AgentRequest::EndSession);
@@ -2971,14 +2972,12 @@ async fn apply_pre_attach_decision(
         return;
     };
     match decision {
-        crate::PreAttachDecision::TrustCommand(cmd) => {
-            tracing::info!(command = %cmd, "mutx: PreAttach decision — dispatching trust command");
-            let _ = app.tx.send(AgentRequest::SlashCommand(cmd));
+        crate::PreAttachDecision::Trust { domains } => {
+            tracing::info!(?domains, "mutx: PreAttach decision — granting workspace trust directly");
+            let _ = app.tx.send(AgentRequest::TrustWorkspace { domains });
             // The per-frame sync clears `pre_attach` once the
-            // republished snapshot reports Trusted. We do NOT clear
-            // it here so the surface stays mounted across the
-            // round-trip, preventing a one-frame flash of chat
-            // before the Trusted snapshot arrives.
+            // republished snapshot reports Trusted. The PreAttach surface
+            // shows a `Trusting workspace...` state while awaiting the snapshot.
         }
         crate::PreAttachDecision::Quit => {
             tracing::info!("mutx: PreAttach decision — quitting (keep quarantined)");

@@ -112,19 +112,19 @@ impl ConnectionUsage {
                     .insert(connection_id.clone(), model.clone());
             }
         }
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
-            engine
-                .set_json("state:connection_usage", &merged)
-                .map_err(|e| e.to_string())
-        } else {
-            let path = paths::get().connection_usage_file();
-            let _lock = crate::fsutil::FileLock::acquire(&path)
-                .map_err(|e| format!("could not lock usage file: {e}"))?;
-            let json = serde_json::to_string_pretty(&merged)
-                .map_err(|e| format!("could not serialize usage store: {e}"))?;
-            crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
-                .map_err(|e| format!("could not persist usage store: {e}"))
+        if crate::db::get_persistence_handle()
+            .set_json_blocking("state:connection_usage", &merged)
+            .is_ok()
+        {
+            return Ok(());
         }
+        let path = paths::get().connection_usage_file();
+        let _lock = crate::fsutil::FileLock::acquire(&path)
+            .map_err(|e| format!("could not lock usage file: {e}"))?;
+        let json = serde_json::to_string_pretty(&merged)
+            .map_err(|e| format!("could not serialize usage store: {e}"))?;
+        crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
+            .map_err(|e| format!("could not persist usage store: {e}"))
     }
 
     /// Remove a connection and its associated last_model pointer.

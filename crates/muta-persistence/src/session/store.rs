@@ -50,11 +50,17 @@ impl SessionStore {
         let data = load_or_seed(&db_path, id_stem, &blob_store, &project_root, Some(&path));
         let event_log = EventLog::new(event_log_path);
         let defer_persist = !path.exists() && data.is_user_facing_empty();
+        let writer = if db_path == paths::get().db_file() {
+            crate::db::get_persistence_handle()
+        } else {
+            crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
+        };
         Self {
             project_root,
             sessions_dir,
             db_path,
             blob_store,
+            writer,
             state: Mutex::new(SessionState {
                 path,
                 event_log,
@@ -83,11 +89,17 @@ impl SessionStore {
             project_root: project_root.clone(),
             ..Default::default()
         };
+        let writer = if db_path == paths::get().db_file() {
+            crate::db::get_persistence_handle()
+        } else {
+            crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
+        };
         Self {
             project_root,
             sessions_dir,
             db_path,
             blob_store,
+            writer,
             state: Mutex::new(SessionState {
                 path,
                 event_log,
@@ -220,28 +232,22 @@ impl SessionStore {
             (resolved.clone(), path, state.data.id == resolved)
         };
 
-        let db_path = self.db_path.clone();
-        let resolved_for_task = resolved.clone();
+        let db_deleted = self.writer
+            .delete_session(resolved.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+
         let log = snapshot.with_extension("jsonl");
-        tokio::task::spawn_blocking(move || {
-            let engine = crate::db::DatabaseEngine::open(&db_path, None)
-                .map_err(|e| e.to_string())?;
-            let db_deleted = engine.delete_session(&resolved_for_task).map_err(|e| e.to_string())?;
+        let file_deleted = snapshot.exists() || log.exists();
+        let _ = fs::remove_file(&snapshot);
+        let _ = fs::remove_file(&log);
 
-            let file_deleted = snapshot.exists() || log.exists();
-            let _ = fs::remove_file(&snapshot);
-            let _ = fs::remove_file(&log);
-
-            if !db_deleted && !file_deleted {
-                return Err(format!(
-                    "Could not delete session '{}': session not found.",
-                    resolved_for_task
-                ));
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| format!("delete task failed: {e}"))??;
+        if !db_deleted && !file_deleted {
+            return Err(format!(
+                "Could not delete session '{}': session not found.",
+                resolved
+            ));
+        }
 
         // Repoint at a fresh session so the store stays usable after the
         // active session is removed.
@@ -262,18 +268,11 @@ impl SessionStore {
         if is_active {
             return self.set_title(title, manual).await;
         }
-        let db_path = self.db_path.clone();
-        let title_opt = title.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = crate::db::DatabaseEngine::open(&db_path, None)
-                .map_err(|e| e.to_string())?;
-            engine
-                .rename_session(&resolved, title_opt.as_deref(), manual)
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| format!("rename task failed: {e}"))?
+        self.writer
+            .rename_session(resolved, title, manual)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// The picker-style summary of the pinned session, synthesized from
@@ -362,25 +361,23 @@ impl SessionStore {
     pub(crate) async fn persist_off_runtime(
         &self,
         path: PathBuf,
-        data: SessionData,
+        mut data: SessionData,
         blob_store: BlobStore,
     ) -> Result<(), String> {
         let _persist_guard = self.persist_gate.lock().await;
-        let db_path = self.db_path.clone();
         let log_path = path.with_extension("jsonl");
-        tokio::task::spawn_blocking(move || {
-            let mut data = data;
-            if log_path.exists() {
-                let event_log = EventLog::new(log_path.clone());
-                if let Some(high) = event_log.high_seq() {
-                    data.applied_seq = Some(high);
-                }
+        if log_path.exists() {
+            let event_log = EventLog::new(log_path);
+            if let Some(high) = event_log.high_seq() {
+                data.applied_seq = Some(high);
             }
-            compact_log_if_needed(&log_path, &data)?;
-            persist_to(&db_path, &data, &blob_store)
-        })
-        .await
-        .map_err(|e| format!("session persist task failed: {e}"))?
+        }
+        offload_session_blobs(&mut data, &blob_store)?;
+        data.checksum = Some(compute_checksum(&data)?);
+        self.writer
+            .save_session_full(data)
+            .await
+            .map_err(|e| format!("session persist task failed: {e}"))
     }
 
     /// Write `data` to the store's SQLite database.

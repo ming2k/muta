@@ -830,7 +830,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         // projected back as `▲ interrupted · <reason>` on resume.
         let stopped = match &result {
             Ok(RoundCompletion::Completed) | Ok(RoundCompletion::NotStarted) => false,
-            Ok(RoundCompletion::Unsent) | Err(_) => true,
+            Err(_) => true,
         };
         let interrupt_record = if stopped {
             // Attribution: this round's own admitted number, not the live
@@ -874,12 +874,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         };
         match result {
             Ok(_) => {}
-            Err(HarnessError::Interrupted) if is_current => {
-                let _ = context.tx.send(round_response(
-                    &context.session_id,
-                    RoundEvent::Text("... [Interrupted]".to_string()),
-                ));
-            }
+            Err(HarnessError::Interrupted) => {}
             Err(error) if is_current => {
                 let _ = context.tx.send(round_response(
                     &context.session_id,
@@ -931,38 +926,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     });
 }
 
-/// Phase-1 unsend guard: is this interrupted round reversible at the
-/// conversation layer?
-///
-/// The boundary is **the first observed content delta**, not the first
-/// response packet on the wire. A round is unsendable exactly while it has
-/// produced no observable commitment of its own — no streamed
-/// text/reasoning delta (`streamed_text`) and no dispatched tool call
-/// (`tool_activity`) — because only then can the harness restore the
-/// conversation to its pre-send state without discarding committed content
-/// or tool side effects. Both sentinels are monotonic across the round
-/// (never reset between turns), so a guard that held for turn 1 continues
-/// to hold through turns 2+; the moment either flips, the window closes
-/// permanently.
-///
-/// Kept as a free function of raw sentinel values (not `&AtomicBool`) so
-/// the invariant is directly unit-testable — see `phase1_guard_tests`.
-/// Generic over the success payload so the guard is decoupled from what a
-/// successful round carries (currently `RoundOutcome`).
-fn is_phase1_unsend<T>(
-    result: &Result<T, HarnessError>,
-    streamed_text: bool,
-    tool_activity: bool,
-) -> bool {
-    matches!(result, Err(HarnessError::Interrupted)) && !streamed_text && !tool_activity
-}
-
-/// How [`execute_round`] ended when it did **not** fail. The round task's
-/// tail needs this distinction to decide whether a parked interrupt reason
-/// describes a real stop: only [`RoundCompletion::Unsent`] is a round that
-/// actually stopped (and was rewound); [`RoundCompletion::Completed`] is a
-/// natural model convergence whose history committed, and
-/// [`RoundCompletion::NotStarted`] never opened a round at all.
+/// How [`execute_round`] ended when it did **not** fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundCompletion {
     /// The round reached its terminal path naturally — the model stopped
@@ -972,11 +936,6 @@ pub enum RoundCompletion {
     /// late to change the outcome); that park describes a stop that never
     /// happened and must **not** produce an interrupt record.
     Completed,
-    /// Phase-1 unsend: the round was interrupted before any observable
-    /// commitment and the conversation was rewound to its pre-send state
-    /// (`UnsentInput` emitted). This *is* a real stop and keeps its
-    /// interrupt record.
-    Unsent,
     /// A `UserPromptSubmit` hook denied the prompt: no round was opened, no
     /// model request was made. Nothing was interrupted, so no interrupt
     /// record applies.
@@ -1006,7 +965,6 @@ pub async fn execute_round(
     if let Some(ledger) = agent.token_ledger() {
         ledger.set_active_session(session_id.clone());
     }
-    let previous_round = agent.round_count();
     let _ = tx.send(round_response(
         &session_id,
         RoundEvent::Activity("saving request".to_string()),
@@ -1060,9 +1018,6 @@ pub async fn execute_round(
     // authoritative `model_window` plus the new user message (ADR-0048). A
     // `/retry` resume instead re-seeds from the stopped round's checkpoint
     // watermark (see the branch below) and never pushes a user message.
-    let unsent_prompt = input.prompt.clone();
-    let unsent_images = input.images.clone();
-
     let mut round_history = if let Some(point) = resumed_point.as_ref() {
         // `/retry` (ADR-0128): re-seed the round's history from the durable
         // checkpoint the stopped round left behind. The window may have moved
@@ -1366,40 +1321,6 @@ pub async fn execute_round(
             _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
         }
     };
-    if is_phase1_unsend(
-        &result,
-        streamed_text.load(Ordering::SeqCst),
-        tool_activity.load(Ordering::SeqCst),
-    ) {
-        // The user message is the last entry in `round_history` (pushed before
-        // the streaming round). Only a non-hidden round is unsendable: hidden
-        // control prompts are harness-internal and should not be surfaced as
-        // editable user input.
-        if round_history
-            .last()
-            .is_some_and(|m| m.role == Role::User && !input.hidden)
-        {
-            round_history.pop();
-            session.replace_messages(round_history).await?;
-            agent.restore_round_count(previous_round);
-            session.set_round_counter(previous_round).await?;
-            // The round was unwound to its pre-send state — nothing of it
-            // remains, so there is nothing for `/retry` to resume (ADR-0128).
-            if let Err(error) = session.clear_retry_pending().await {
-                tracing::warn!(%error, "could not clear retry point after unsend");
-            }
-            persist_request_usage(&agent, &session, &session_id).await?;
-            send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
-            let _ = tx.send(round_response(
-                &session_id,
-                RoundEvent::UnsentInput {
-                    prompt: unsent_prompt,
-                    images: unsent_images,
-                },
-            ));
-            return Ok(RoundCompletion::Unsent);
-        }
-    }
     if session.id().await != admitted_session_id {
         return Err(HarnessError::Interrupted);
     }
@@ -1443,6 +1364,14 @@ pub async fn execute_round(
             };
             if let Err(persist_error) = session.arm_retry_pending(point).await {
                 tracing::warn!(%persist_error, "could not arm retry point");
+            }
+            if matches!(error, HarnessError::Interrupted)
+                && (streamed_text.load(Ordering::SeqCst) || tool_activity.load(Ordering::SeqCst))
+            {
+                let _ = tx.send(round_response(
+                    &session_id,
+                    RoundEvent::Text("... [Interrupted]".to_string()),
+                ));
             }
             return Err(error);
         }
@@ -2591,55 +2520,6 @@ mod digest_tests {
         ));
         // Missing anchor (legacy data) → refresh once to establish it.
         assert!(digest_refresh_needed(Some(&digest), None, 0));
-    }
-}
-#[cfg(test)]
-mod phase1_guard_tests {
-    use super::is_phase1_unsend;
-    use muta_contracts::HarnessError;
-
-    const OK: Result<(), HarnessError> = Ok(());
-    const INTERRUPTED: Result<(), HarnessError> = Err(HarnessError::Interrupted);
-
-    /// Only an interrupt opens the window at all: any other outcome (success
-    /// or a provider error) is not an unsend, regardless of the sentinels.
-    #[test]
-    fn non_interrupt_outcomes_never_unsend() {
-        assert!(!is_phase1_unsend(&OK, false, false));
-        let other: Result<(), HarnessError> = Err(HarnessError::Other("boom".into()));
-        assert!(!is_phase1_unsend(&other, false, false));
-        let retryable: Result<(), HarnessError> = Err(HarnessError::Provider(
-            muta_contracts::ProviderError::new(
-                "test",
-                muta_contracts::ProviderErrorKind::RateLimited,
-                "overload",
-            )
-            .retryable(None),
-        ));
-        assert!(!is_phase1_unsend(&retryable, false, false));
-    }
-
-    /// The happy path: interrupted with neither sentinel flipped — the
-    /// request was in flight, no content delta ever reached the client.
-    #[test]
-    fn interrupted_before_any_output_unsends() {
-        assert!(is_phase1_unsend(&INTERRUPTED, false, false));
-    }
-
-    /// The first streamed content delta closes the window: once the client
-    /// has observed model output, the round is no longer conversation-
-    /// reversible and must fall through to the Phase-2 drop path instead.
-    #[test]
-    fn first_content_delta_closes_the_window() {
-        assert!(!is_phase1_unsend(&INTERRUPTED, true, false));
-    }
-
-    /// A dispatched tool call closes the window even with no streamed text:
-    /// tool execution is a real-world side effect the unsend cannot undo.
-    #[test]
-    fn any_tool_activity_closes_the_window() {
-        assert!(!is_phase1_unsend(&INTERRUPTED, false, true));
-        assert!(!is_phase1_unsend(&INTERRUPTED, true, true));
     }
 }
 

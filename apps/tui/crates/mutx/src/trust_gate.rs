@@ -45,7 +45,7 @@ pub const TRUST_GATE_REQUEST_ID: &str = "__workspace_trust_gate__";
 /// Which quarantined domains the snapshot advertises, in display order.
 /// Only `Absent` domains are skipped: there is nothing to decide about a
 /// domain the workspace does not use.
-fn quarantined_domains(snapshot: &WorkspaceSecuritySnapshot) -> Vec<TrustDomain> {
+pub fn quarantined_domains(snapshot: &WorkspaceSecuritySnapshot) -> Vec<TrustDomain> {
     [
         (TrustDomain::Mcp, snapshot.mcp),
         (TrustDomain::Skills, snapshot.skills),
@@ -79,36 +79,25 @@ pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestion
         .map(|d| format!("• {}", domain_label(*d)))
         .collect();
     let question = format!(
-        "This workspace contains project-authored configurations that are not loaded until you trust them:\n{}\n\
-         Trust them for this workspace? Trust is content-bound: if the files change (git pull, checkout), \
-         trust drops back to quarantined until reviewed again.",
+        "This workspace contains untrusted project configurations:\n{}",
         domain_rows.join("\n")
     );
     Some(UserQuestionRequest {
         id: TRUST_GATE_REQUEST_ID.to_string(),
         questions: vec![UserQuestion {
-            header: Some("Workspace trust".to_string()),
+            header: None,
             question,
             options: vec![
                 UserQuestionOption {
-                    label: "Trust all domains (Recommended)".to_string(),
+                    label: "Trust and continue (Recommended)".to_string(),
                     description: Some(
-                        "Run `/trust` — trust every domain listed above for this workspace."
-                            .to_string(),
+                        "Enable project configurations for this workspace.".to_string(),
                     ),
                 },
                 UserQuestionOption {
-                    label: "Choose domains".to_string(),
+                    label: "Keep quarantined and exit".to_string(),
                     description: Some(
-                        "Pick specific domains to trust (e.g. `/trust rules`, `/trust skills`) via `/trust <domain>`."
-                            .to_string(),
-                    ),
-                },
-                UserQuestionOption {
-                    label: "Keep quarantined".to_string(),
-                    description: Some(
-                        "Load nothing project-authored now. You can trust later with `/trust`."
-                            .to_string(),
+                        "Quit without loading project configurations.".to_string(),
                     ),
                 },
             ],
@@ -118,12 +107,18 @@ pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestion
     })
 }
 
-/// Map a trust-gate dialog answer back to the slash command the reply path
-/// should dispatch, or `None` for "no mutation" (keep quarantined / Esc).
+/// Decision made from the trust-gate dialog answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustGateDecision {
+    Trust,
+    Quit,
+}
+
+/// Map a trust-gate dialog answer back to a typed decision.
 ///
 /// `answers` is the `ask_user` reply shape: one `Vec<String>` of selected
 /// option labels per question.
-pub fn answer_to_command(answers: &[Vec<String>]) -> Option<String> {
+pub fn answer_to_decision(answers: &[Vec<String>]) -> TrustGateDecision {
     let labels: Vec<String> = answers
         .first()
         .map(|labels| {
@@ -133,30 +128,20 @@ pub fn answer_to_command(answers: &[Vec<String>]) -> Option<String> {
                 .collect()
         })
         .unwrap_or_default();
-    if labels.is_empty() {
-        return None;
+    if labels.iter().any(|l| l.starts_with("trust")) {
+        TrustGateDecision::Trust
+    } else {
+        TrustGateDecision::Quit
     }
-    if labels.iter().any(|l| l.starts_with("trust all")) {
-        return Some("/trust".to_string());
-    }
-    if labels.iter().any(|l| l.starts_with("choose domains")) {
-        // "Choose domains" needs a follow-up; without a second question we
-        // send the user to the status view, which lists every domain and
-        // the exact narrow-grant commands.
-        return Some("/trust status".to_string());
-    }
-    None
 }
 
 fn domain_label(domain: TrustDomain) -> &'static str {
     match domain {
-        TrustDomain::Mcp => "MCP servers (.muta/mcp.json or project MCP config)",
+        TrustDomain::Mcp => "MCP servers (.muta/mcp.json)",
         TrustDomain::Skills => "Skills (.muta/skills or .agents/skills)",
-        TrustDomain::Hooks => "Hooks (project hook config)",
-        TrustDomain::Instructions => "Instructions (AGENTS.md / project rules)",
-        TrustDomain::ExWorkspace => {
-            "External workspaces (.muta/config.toml [workspace].additional_roots)"
-        }
+        TrustDomain::Hooks => "Hooks (.muta/hooks.json)",
+        TrustDomain::Instructions => "Instructions (AGENTS.md)",
+        TrustDomain::ExWorkspace => "External workspaces ([workspace].additional_roots)",
     }
 }
 
@@ -227,7 +212,7 @@ mod tests {
         .expect("quarantined workspace must gate");
         assert_eq!(req.id, TRUST_GATE_REQUEST_ID);
         let q = req.questions.first().unwrap();
-        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options.len(), 2);
         assert!(q.question.contains("MCP servers"));
         assert!(q.question.contains("Skills"));
         assert!(q.question.contains("Instructions"));
@@ -236,21 +221,17 @@ mod tests {
     }
 
     #[test]
-    fn answers_map_to_commands() {
+    fn answers_map_to_decisions() {
         assert_eq!(
-            answer_to_command(&[vec!["Trust all domains (Recommended)".to_string()]]),
-            Some("/trust".to_string())
+            answer_to_decision(&[vec!["Trust and continue (Recommended)".to_string()]]),
+            TrustGateDecision::Trust
         );
         assert_eq!(
-            answer_to_command(&[vec!["Choose domains".to_string()]]),
-            Some("/trust status".to_string())
+            answer_to_decision(&[vec!["Keep quarantined and exit".to_string()]]),
+            TrustGateDecision::Quit
         );
-        assert_eq!(
-            answer_to_command(&[vec!["Keep quarantined".to_string()]]),
-            None
-        );
-        // Esc / empty reply: no mutation.
-        assert_eq!(answer_to_command(&[]), None);
-        assert_eq!(answer_to_command(&[Vec::new()]), None);
+        // Esc / empty reply: quit.
+        assert_eq!(answer_to_decision(&[]), TrustGateDecision::Quit);
+        assert_eq!(answer_to_decision(&[Vec::new()]), TrustGateDecision::Quit);
     }
 }

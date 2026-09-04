@@ -1621,3 +1621,30 @@ fn user_steer_and_followup_render_clean_unified_headers() {
         "must render queued follow-up with clean upright status:\n{grid_queued_followup}"
     );
 }
+
+#[test]
+fn user_prompt_sending_and_cancelled_render_clean_headers() {
+    let epoch_ms = 1_700_000_000_000;
+
+    // Sending prompt
+    let sending_msg = TranscriptMessage::new(muta_contracts::Role::User, "Hello world")
+        .with_sent_at_ms(epoch_ms)
+        .sending();
+
+    let grid_sending = render_transcript_grid(&[sending_msg], 72, 18);
+    assert!(
+        grid_sending.contains("< prompt  sending"),
+        "must render sending prompt with sending status chip:\n{grid_sending}"
+    );
+
+    // Cancelled prompt
+    let cancelled_msg = TranscriptMessage::new(muta_contracts::Role::User, "Cancelled prompt")
+        .with_sent_at_ms(epoch_ms)
+        .cancelled();
+
+    let grid_cancelled = render_transcript_grid(&[cancelled_msg], 72, 18);
+    assert!(
+        grid_cancelled.contains("< prompt  cancelled"),
+        "must render cancelled prompt with cancelled chip:\n{grid_cancelled}"
+    );
+}

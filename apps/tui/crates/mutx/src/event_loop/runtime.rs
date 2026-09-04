@@ -54,6 +54,9 @@ pub(crate) enum OutboxSignal {
     RoundCompleted {
         session_id: String,
     },
+    RoundInterrupted {
+        session_id: String,
+    },
     HarnessState {
         session_id: String,
         idle: bool,
@@ -75,11 +78,6 @@ pub(crate) enum OauthAddSignal {
     Failed {
         message: String,
     },
-}
-
-pub(crate) struct UnsentInput {
-    pub prompt: String,
-    pub images: Vec<muta_contracts::ImagePart>,
 }
 
 pub struct UiRuntime {
@@ -139,7 +137,6 @@ pub struct UiRuntime {
     pub round_count: Arc<Mutex<u64>>,
     pub current_turn: Arc<Mutex<u64>>,
     pub round_started_at: Arc<Mutex<Option<std::time::Instant>>>,
-    pub unsent_input_signal: Arc<Mutex<Option<UnsentInput>>>,
     pub notice_toast_signal: Arc<Mutex<Option<NoticeToastSignal>>>,
     pub outbox_signals: Arc<Mutex<VecDeque<OutboxSignal>>>,
 }
@@ -203,7 +200,6 @@ impl UiRuntime {
             round_count: Arc::new(Mutex::new(0)),
             current_turn: Arc::new(Mutex::new(0)),
             round_started_at: Arc::new(Mutex::new(None)),
-            unsent_input_signal: Arc::new(Mutex::new(None)),
             notice_toast_signal: Arc::new(Mutex::new(None)),
             outbox_signals: Arc::new(Mutex::new(VecDeque::new())),
         }
