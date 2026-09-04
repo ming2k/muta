@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.10] - 2026-09-07
+
+### Fixed
+
+- **Selection range byte clamping in TUI.** Clamped text selection byte ranges to character
+  boundaries and string lengths across checklist items, search matches, and code gutters,
+  preventing out-of-bounds byte-slicing panics when selecting text across complex tool payload views.
+
+### Performance
+
+- **Fast session summary probing.** Optimized session summary listing by probing essential
+  session metadata directly and querying SQLite-aggregated message counts, avoiding heavy
+  full-session payload deserialization during picker and overview generation.
+- **Legacy session migration.** Consolidated automated migration of legacy flat session files
+  into persistent storage.
+
 ## [0.38.9] - 2026-09-07
 
 ### Added
@@ -6060,7 +6076,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.9...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.10...HEAD
+[0.38.10]: https://github.com/ming2k/muta/compare/v0.38.9...v0.38.10
 [0.38.9]: https://github.com/ming2k/muta/compare/v0.38.8...v0.38.9
 [0.38.8]: https://github.com/ming2k/muta/compare/v0.38.7...v0.38.8
 [0.38.7]: https://github.com/ming2k/muta/compare/v0.38.6...v0.38.7
