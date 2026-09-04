@@ -652,3 +652,82 @@ fn runner_view_omits_row2_entirely() {
     let row1 = grid_row(&terminal, 1);
     assert!(row1.trim().is_empty(), "row 2 blank on runner: {row1:?}");
 }
+
+/// A checklist/todo tool step rendered while an active selection spans the block
+/// must not panic from out-of-bounds byte slicing across the glyph prefix.
+#[test]
+fn checklist_tool_step_renders_with_active_selection_without_panic() {
+    let mut m = TranscriptMessage::tool_step(
+        "todo_call",
+        "write_todos",
+        r#"{"items":[{"content":"Implement feature and verify test suite","status":"completed"}]}"#,
+    );
+    let output = r#"[{"content":"Implement feature and verify test suite","status":"completed"}]"#;
+    m.finish_tool_step(
+        "todo_call",
+        output.to_string(),
+        muta_contracts::ToolOutput::Text(output.to_string()),
+        0,
+    );
+    if let crate::model::document::MessageKind::ToolStep { expanded, .. } = &mut m.kind {
+        *expanded = true;
+    }
+    let messages = vec![m];
+    let theme = Theme::default();
+
+    let render_with_sel = |selection: &SelectionState| {
+        let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+        let mut layout_map = LayoutMap::new();
+        terminal.draw(|f| {
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection,
+                    cell_selection: None,
+                    backoff_clause: None,
+                    activity: "",
+                    awaiting_permission: false,
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                        blocked: false,
+                    },
+                    runner_bar: None,
+                    side_banner: None,
+                    page_hints: None,
+                    session_head: None,
+                    todos: None,
+                    round_started_at: None,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::Tour,
+                    carousel_index: 0,
+                    key_overrides: Default::default(),
+                    theme: &theme,
+                    layout: crate::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+    };
+
+    // Test with Block selection (covers the whole payload block, block_idx 1).
+    render_with_sel(&SelectionState::Block {
+        message_idx: 0,
+        block_idx: 1,
+    });
+
+    // Test with Range selection spanning across the block.
+    render_with_sel(&SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(0, 1, 0),
+        head: crate::model::layout::SemanticCursor::new(0, 1, 100),
+    });
+}

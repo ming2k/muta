@@ -11,8 +11,8 @@ use super::base::{
 use crate::model::layout::BlockRegion;
 use crate::model::selection::SelectionState;
 use crate::text_layout::{
-    CodeGutterParams, WrappedLine, block_selection_range, code_gutter_line, line_selection,
-    line_spans, padded_tail, wrap_text,
+    CodeGutterParams, WrappedLine, block_selection_range, clamp_selection_range, code_gutter_line,
+    line_selection, line_spans, padded_tail, wrap_text,
 };
 use crate::tools::{DiffCache, DiffHunk, DiffOp, ResultKind};
 use crate::view::{
@@ -368,21 +368,41 @@ pub(crate) fn draw_checklist_content(
                 end_byte: offset + wl.end_byte,
             };
 
+            let prefix_cols = if idx == 0 { indent } else { indent + 2 };
             let mut line = if idx == 0 && wl.text.starts_with(glyph) {
                 let rest_text = &wl.text[glyph.len()..];
+                let glyph_len = glyph.len();
+                let (glyph_bg_style, rest_sel) = match line_selection(sel_range, &block_wl) {
+                    Some((lo, hi)) => {
+                        let g_style = if lo < glyph_len {
+                            glyph_style.bg(ctx.theme.selected())
+                        } else {
+                            glyph_style
+                        };
+                        let r_sel = if hi > glyph_len {
+                            let r_lo = lo.saturating_sub(glyph_len);
+                            let r_hi = hi - glyph_len;
+                            (r_lo < r_hi).then_some((r_lo, r_hi))
+                        } else {
+                            None
+                        };
+                        (g_style, r_sel)
+                    }
+                    None => (glyph_style, None),
+                };
                 let mut spans = vec![
                     Span::styled(" ".repeat(indent), pad),
-                    Span::styled(glyph, glyph_style),
+                    Span::styled(glyph, glyph_bg_style),
                 ];
                 let rest_spans = line_spans(
                     "",
                     pad,
                     rest_text,
-                    line_selection(sel_range, &block_wl),
+                    rest_sel,
                     text_style,
                     ctx.theme.selected(),
                 );
-                spans.extend(rest_spans.spans);
+                spans.extend(rest_spans.spans.into_iter().filter(|s| !s.content.is_empty()));
                 Line::from(spans)
             } else {
                 line_spans(
@@ -395,10 +415,10 @@ pub(crate) fn draw_checklist_content(
                 )
             };
 
-            let used = indent + wl.text.width();
+            let used = prefix_cols + wl.text.width();
             line.spans
                 .push(Span::styled(padded_tail(ctx.full_width, used), pad));
-            ctx.paint_text_row(line, mi, block_idx, &block_wl, indent as u16, &[]);
+            ctx.paint_text_row(line, mi, block_idx, &block_wl, prefix_cols as u16, &[]);
         }
         offset += logical_line.len() + 1;
     }
@@ -569,7 +589,10 @@ pub(crate) fn draw_matches_content(
                         start_byte: content_abs + wl.start_byte,
                         end_byte: content_abs + wl.end_byte,
                     };
-                    let selected = line_selection(sel_range, &block_wl);
+                    let selected = clamp_selection_range(
+                        line_selection(sel_range, &block_wl),
+                        &wl.text,
+                    );
                     let mut spans = vec![
                         Span::styled(" ".repeat(indent), pad),
                         lineno_span,

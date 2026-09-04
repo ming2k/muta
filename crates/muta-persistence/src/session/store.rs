@@ -20,6 +20,11 @@ impl SessionStore {
         }
         let blob_store = BlobStore::new(dirs.blobs_dir());
 
+        // ADR-0168: Automated one-time migration of legacy flat files
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone())) {
+            let _ = engine.migrate_legacy_projects(&dirs.projects_dir());
+        }
+
         Self::pin_fresh(project_root, sessions_dir, db_path, blob_store)
     }
 
@@ -304,32 +309,18 @@ impl SessionStore {
         let active_id = self.state.lock().await.data.id.clone();
         let db_path = self.db_path.clone();
         let sessions_dir = self.sessions_dir.clone();
+        let project_root = self.project_root.clone();
         let project_root_str = self.project_root.to_string_lossy().into_owned();
         let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
-            if sessions_dir.exists() {
-                if let Ok(entries) = fs::read_dir(&sessions_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                if let Ok(session) = serde_json::from_str::<serde_json::Value>(&content) {
-                                    let is_empty = session.get("model_window").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true)
-                                        && session.get("archived_transcript").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true);
-                                    let sess_id = session.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                                    if is_empty && sess_id != active_id {
-                                        let _ = fs::remove_file(&path);
-                                        let _ = fs::remove_file(path.with_extension("jsonl"));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
                 .map_err(|e| e.to_string())?;
-            engine.list_session_summaries(Some(&project_root_str), &active_id)
+            // If any legacy flat files are present, migrate and purge them once (ADR-0168)
+            if sessions_dir.exists() {
+                let _ = engine.migrate_legacy_sessions_dir(&sessions_dir, &project_root);
+            }
+            engine
+                .list_session_summaries(Some(&project_root_str), &active_id)
                 .map_err(|e| e.to_string())
         })
         .await

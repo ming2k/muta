@@ -82,6 +82,24 @@ pub(crate) fn line_selection(
     (lo < hi).then_some((lo, hi))
 }
 
+/// Clamp a selection byte range `(lo, hi)` to `text.len()`, ensuring valid
+/// character boundaries and `lo < hi`. Returns `None` if the range is invalid
+/// or collapsed.
+pub(crate) fn clamp_selection_range(
+    selected: Option<(usize, usize)>,
+    text: &str,
+) -> Option<(usize, usize)> {
+    let (lo, hi) = selected?;
+    let text_len = text.len();
+    let lo = lo.min(text_len);
+    let hi = hi.min(text_len);
+    if lo < hi && text.is_char_boundary(lo) && text.is_char_boundary(hi) {
+        Some((lo, hi))
+    } else {
+        None
+    }
+}
+
 /// Build a rendered line: decoration prefix plus the text split into
 /// unselected / selected / unselected spans.
 pub(crate) fn line_spans(
@@ -93,6 +111,7 @@ pub(crate) fn line_spans(
     selected_bg: Color,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
+    let selected = clamp_selection_range(selected, text);
     match selected {
         None => spans.push(Span::styled(text.to_string(), base)),
         Some((lo, hi)) => {
@@ -356,6 +375,7 @@ pub(crate) fn line_spans_rich(params: RichLineParams<'_>) -> Line<'static> {
         link_fg,
         selected_bg,
     } = colors;
+    let selected = clamp_selection_range(selected, text);
 
     let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
     if text.is_empty() {
@@ -662,6 +682,7 @@ pub(crate) fn code_gutter_line(params: CodeGutterParams<'_>) -> Line<'static> {
     ));
 
     let indent = prefix + gutter.len() + gutter_gap;
+    let selected = clamp_selection_range(selected, text);
     match selected {
         None => {
             spans.push(Span::styled(
@@ -1118,5 +1139,27 @@ mod tests {
             .expect("bold content span present");
         assert!(bar_span.style.add.contains(Modifier::BOLD));
         assert_eq!(bar_span.style.fg, Color::White); // base, not code_fg
+    }
+
+    #[test]
+    fn line_spans_clamps_out_of_bounds_selection_without_panic() {
+        use super::{clamp_selection_range, line_spans};
+
+        let text = "a".repeat(60);
+        // 64 is out of bounds for string of length 60: must not panic.
+        let line = line_spans("", Style::default(), &text, Some((0, 64)), Style::default(), Color::Red);
+        let selected_spans: Vec<_> = line.spans.iter().filter(|s| s.style.bg == Color::Red).collect();
+        assert_eq!(selected_spans.len(), 1);
+        assert_eq!(selected_spans[0].content, text);
+
+        // Clamping directly:
+        assert_eq!(clamp_selection_range(Some((0, 64)), &text), Some((0, 60)));
+        assert_eq!(clamp_selection_range(Some((60, 64)), &text), None);
+        assert_eq!(clamp_selection_range(Some((10, 5)), &text), None);
+
+        // UTF-8 multi-byte boundary validation:
+        let utf8_text = "你好"; // 6 bytes: [0..3], [3..6]
+        assert_eq!(clamp_selection_range(Some((0, 3)), utf8_text), Some((0, 3)));
+        assert_eq!(clamp_selection_range(Some((1, 3)), utf8_text), None); // byte 1 is not a char boundary
     }
 }

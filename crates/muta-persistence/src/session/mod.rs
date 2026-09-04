@@ -529,7 +529,7 @@ fn ensure_event_log_started(event_log: &EventLog, data: &SessionData) -> Result<
 }
 
 /// Apply a sequence of events to a fresh or existing [`SessionData`].
-fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelope]) {
+pub(crate) fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelope]) {
     for envelope in envelopes {
         match &envelope.event {
             SessionEvent::Started {
@@ -1107,7 +1107,7 @@ pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
     found
 }
 
-fn truncate_preview(text: &str, max: usize) -> String {
+pub(crate) fn truncate_preview(text: &str, max: usize) -> String {
     // Flatten to one line: control chars (newlines, tabs, …) would otherwise
     // survive into the picker row, where the terminal paints a `\n`/`\r` as a
     // carriage return and spills the row out the left edge of the modal.
@@ -1140,6 +1140,7 @@ pub(crate) fn last_effective_prompt_from_data(data: &SessionData) -> Option<Stri
         .map(|m| m.content.clone())
 }
 
+#[allow(dead_code)]
 pub(crate) fn summary_from_data(data: &SessionData, active: bool) -> SessionSummary {
     const MAX: usize = 64;
     let overview = if let Some(title) = data.title.as_deref().filter(|t| !t.trim().is_empty()) {

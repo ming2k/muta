@@ -280,6 +280,34 @@ pub struct DatabaseEngine {
     blob_store: Option<BlobStore>,
 }
 
+#[derive(Deserialize)]
+struct FastSummaryProbe {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    digest: Option<muta_contracts::SessionDigest>,
+    #[serde(default)]
+    model_window: Vec<FastMessageProbe>,
+    #[serde(default)]
+    archived_transcript: Vec<FastMessageProbe>,
+}
+
+#[derive(Deserialize)]
+struct FastMessageProbe {
+    role: muta_contracts::Role,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    origin: Option<FastOriginProbe>,
+}
+
+#[derive(Deserialize)]
+struct FastOriginProbe {
+    kind: muta_contracts::InjectionKind,
+}
+
 impl DatabaseEngine {
     /// Open or create a database engine on a file path.
     pub fn open(db_path: &Path, blob_store: Option<BlobStore>) -> Result<Self> {
@@ -501,37 +529,140 @@ impl DatabaseEngine {
         project_root: Option<&str>,
         active_id: &str,
     ) -> Result<Vec<crate::session::SessionSummary>> {
+        let sql = r#"
+            SELECT
+                s.id,
+                s.parent_id,
+                s.fork_kind,
+                s.title,
+                s.created_at_ms,
+                s.updated_at_ms,
+                COALESCE(m.msg_count, 0) AS msg_count,
+                (
+                    SELECT content FROM messages
+                    WHERE session_id = s.id AND role = 'user'
+                    ORDER BY seq DESC LIMIT 1
+                ) AS last_user_prompt,
+                s.data
+            FROM sessions s
+            LEFT JOIN (
+                SELECT session_id, COUNT(*) AS msg_count
+                FROM messages
+                GROUP BY session_id
+            ) m ON m.session_id = s.id
+            WHERE (?1 IS NULL OR s.project_root = ?1)
+            ORDER BY s.updated_at_ms DESC;
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![project_root], |row| {
+            let id: String = row.get(0)?;
+            let parent_id: Option<String> = row.get(1)?;
+            let fork_str: String = row.get(2)?;
+            let title: Option<String> = row.get(3)?;
+            let created_at_ms: i64 = row.get(4)?;
+            let updated_at_ms: i64 = row.get(5)?;
+            let msg_count: i64 = row.get(6)?;
+            let last_user_prompt: Option<String> = row.get(7)?;
+            let data_json: Option<String> = row.get(8)?;
+            Ok((
+                id,
+                parent_id,
+                fork_str,
+                title,
+                created_at_ms,
+                updated_at_ms,
+                msg_count,
+                last_user_prompt,
+                data_json,
+            ))
+        })?;
+
         let mut summaries = Vec::new();
-        let sessions = self.list_sessions(project_root)?;
-        for rec in sessions {
-            if let Some(ref data_json) = rec.data {
-                if let Ok(data) = serde_json::from_str::<crate::session::SessionData>(data_json) {
-                    let msg_count = data.model_window.len() + data.archived_transcript.len();
-                    if msg_count == 0 && data.id != active_id {
-                        continue;
-                    }
-                    summaries.push(crate::session::summary_from_data(&data, data.id == active_id));
-                }
+        for item in rows {
+            let (
+                id,
+                parent_id,
+                fork_str,
+                title,
+                created_at_ms,
+                updated_at_ms,
+                sql_msg_count,
+                last_user_prompt,
+                data_json,
+            ) = item?;
+
+            let fork_kind = match fork_str.as_str() {
+                "fork" => muta_contracts::SessionForkKind::Fork,
+                "aside" => muta_contracts::SessionForkKind::Aside,
+                _ => muta_contracts::SessionForkKind::Trunk,
+            };
+
+            let probe_opt = data_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<FastSummaryProbe>(raw).ok());
+
+            let final_msg_count = if sql_msg_count > 0 {
+                sql_msg_count as usize
+            } else if let Some(ref probe) = probe_opt {
+                probe.model_window.len() + probe.archived_transcript.len()
             } else {
-                let fork_kind = match rec.fork_kind.as_str() {
-                    "fork" => muta_contracts::SessionForkKind::Fork,
-                    "aside" => muta_contracts::SessionForkKind::Aside,
-                    _ => muta_contracts::SessionForkKind::Trunk,
-                };
-                let overview = rec.title.clone().unwrap_or_else(|| "(empty session)".to_string());
-                summaries.push(crate::session::SessionSummary {
-                    id: rec.id.clone(),
-                    parent_id: rec.parent_id,
-                    fork_kind,
-                    message_count: 0,
-                    updated_at: rec.updated_at_ms as u64,
-                    created_at: rec.created_at_ms as u64,
-                    overview,
-                    active: rec.id == active_id,
-                    digest: None,
-                });
+                0
+            };
+
+            if final_msg_count == 0 && id != active_id {
+                continue;
             }
+
+            let overview = if let Some(t) = title
+                .as_deref()
+                .or_else(|| probe_opt.as_ref().and_then(|p| p.title.as_deref()))
+                .filter(|t| !t.trim().is_empty())
+            {
+                crate::session::truncate_preview(t, 64)
+            } else if let Some(ref probe) = probe_opt {
+                let last_prompt = probe
+                    .model_window
+                    .iter()
+                    .rev()
+                    .chain(probe.archived_transcript.iter().rev())
+                    .find(|m| {
+                        let is_echo = m
+                            .origin
+                            .as_ref()
+                            .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
+                        m.role == muta_contracts::Role::User && !m.hidden && !is_echo
+                    })
+                    .map(|m| &m.content);
+                if let Some(prompt) = last_prompt.filter(|p| !p.trim().is_empty()) {
+                    crate::session::truncate_preview(prompt, 64)
+                } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+                    crate::session::truncate_preview(prompt, 64)
+                } else {
+                    "(empty session)".to_string()
+                }
+            } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+                crate::session::truncate_preview(prompt, 64)
+            } else {
+                "(empty session)".to_string()
+            };
+
+            let digest = probe_opt.and_then(|p| p.digest);
+            let active = id == active_id;
+
+            summaries.push(crate::session::SessionSummary {
+                id,
+                parent_id,
+                fork_kind,
+                message_count: final_msg_count,
+                updated_at: updated_at_ms as u64,
+                created_at: created_at_ms as u64,
+                overview,
+                active,
+                digest,
+            });
         }
+
         summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
         Ok(summaries)
     }
@@ -895,31 +1026,56 @@ impl DatabaseEngine {
 
     // --- Legacy Flat-File Migration (ADR-0168) ---
 
-    /// Inspect legacy `projects/` directory and import older `.json` / `.jsonl` sessions into SQLite.
-    /// Idempotent: existing sessions are skipped or updated without duplicate event sequences.
-    pub fn migrate_legacy_projects(&self, projects_dir: &Path) -> usize {
-        let Ok(entries) = std::fs::read_dir(projects_dir) else {
+    /// Migrate legacy session files (.json snapshots and .jsonl logs) from a sessions directory into SQLite muta.db,
+    /// and safely purge the migrated files from disk per ADR-0168.
+    pub fn migrate_legacy_sessions_dir(&self, sessions_dir: &Path, project_root: &Path) -> usize {
+        let Ok(session_files) = std::fs::read_dir(sessions_dir) else {
             return 0;
         };
 
         let mut count = 0;
-        for bucket in entries.flatten() {
-            let sessions_dir = bucket.path().join("sessions");
-            let Ok(session_files) = std::fs::read_dir(&sessions_dir) else {
+        for file_entry in session_files.flatten() {
+            let path = file_entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+
+            let Ok(raw_json) = std::fs::read_to_string(&path) else {
                 continue;
             };
 
-            for file_entry in session_files.flatten() {
-                let path = file_entry.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            // Parse legacy snapshot
+            if let Ok(mut data) = serde_json::from_str::<crate::session::SessionData>(&raw_json) {
+                let is_empty = data.model_window.is_empty() && data.archived_transcript.is_empty();
+                if is_empty {
+                    // Prune stale empty legacy file
+                    let _ = std::fs::remove_file(&path);
+                    let _ = std::fs::remove_file(path.with_extension("jsonl"));
                     continue;
                 }
 
-                // Parse legacy snapshot
-                let Ok(raw_json) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
+                if data.project_root.as_os_str().is_empty() {
+                    data.project_root = project_root.to_path_buf();
+                }
 
+                // Check sibling JSONL if present to apply tail events
+                let jsonl_path = path.with_extension("jsonl");
+                if jsonl_path.exists() {
+                    let event_log = crate::events::EventLog::new(jsonl_path.clone());
+                    if let Ok(tail) = event_log.load_since(data.applied_seq) {
+                        if !tail.is_empty() {
+                            crate::session::apply_events(&mut data, &tail);
+                        }
+                    }
+                }
+
+                if self.save_session_full(&data).is_ok() {
+                    count += 1;
+                    // Successfully migrated to SQLite SSOT: safely purge legacy files per ADR-0168
+                    let _ = std::fs::remove_file(&path);
+                    let _ = std::fs::remove_file(path.with_extension("jsonl"));
+                }
+            } else {
                 #[derive(Deserialize)]
                 struct LegacySnapshot {
                     id: String,
@@ -937,13 +1093,25 @@ impl DatabaseEngine {
                     updated_at: Option<u64>,
                     #[serde(default)]
                     project_root: Option<PathBuf>,
+                    #[serde(default)]
+                    model_window: Vec<serde::de::IgnoredAny>,
+                    #[serde(default)]
+                    archived_transcript: Vec<serde::de::IgnoredAny>,
                 }
 
                 if let Ok(snap) = serde_json::from_str::<LegacySnapshot>(&raw_json) {
+                    let is_empty = snap.model_window.is_empty() && snap.archived_transcript.is_empty();
+                    if is_empty {
+                        let _ = std::fs::remove_file(&path);
+                        let _ = std::fs::remove_file(path.with_extension("jsonl"));
+                        continue;
+                    }
+
                     let project_root_str = snap
                         .project_root
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| project_root.to_path_buf())
+                        .to_string_lossy()
+                        .into_owned();
                     let record = SessionRecord {
                         id: snap.id.clone(),
                         parent_id: snap.parent_id,
@@ -958,35 +1126,43 @@ impl DatabaseEngine {
 
                     if self.upsert_session(&record).is_ok() {
                         count += 1;
-                    }
-
-                    // Parse sibling JSONL if present
-                    let jsonl_path = path.with_extension("jsonl");
-                    if let Ok(lines) = std::fs::read_to_string(&jsonl_path) {
-                        for (seq, line) in lines.lines().enumerate() {
-                            if line.trim().is_empty() {
-                                continue;
-                            }
-                            let _ = self.append_event(&SessionEventRecord {
-                                session_id: snap.id.clone(),
-                                seq: seq as i64 + 1,
-                                event_type: "legacy_event".to_string(),
-                                payload: line.to_string(),
-                                created_at_ms: record.updated_at_ms,
-                            });
-                        }
+                        let _ = std::fs::remove_file(&path);
+                        let _ = std::fs::remove_file(path.with_extension("jsonl"));
                     }
                 }
             }
         }
+        count
+    }
 
-        if count > 0 {
+    /// Discover every project bucket in `projects_dir` and migrate legacy flat files into SQLite muta.db.
+    /// Runs once idempotently, tracked by `kv_store`.
+    pub fn migrate_legacy_projects(&self, projects_dir: &Path) -> usize {
+        if self.get_kv("legacy_projects_migrated_v1").ok().flatten().is_some() {
+            return 0;
+        }
+
+        let Ok(entries) = std::fs::read_dir(projects_dir) else {
+            return 0;
+        };
+
+        let mut total_count = 0;
+        for bucket in entries.flatten() {
+            let sessions_dir = bucket.path().join("sessions");
+            if sessions_dir.exists() {
+                let project_root = bucket.path();
+                total_count += self.migrate_legacy_sessions_dir(&sessions_dir, &project_root);
+            }
+        }
+
+        let _ = self.set_kv("legacy_projects_migrated_v1", "true");
+        if total_count > 0 {
             info!(
-                count = count,
-                "Migrated legacy sessions into SQLite muta.db"
+                count = total_count,
+                "Migrated legacy sessions into SQLite muta.db and purged flat files (ADR-0168)"
             );
         }
-        count
+        total_count
     }
 }
 
@@ -1446,5 +1622,66 @@ mod tests {
         let reader = handle.open_reader().unwrap();
         let fetched = reader.get_session("sess_async").unwrap().unwrap();
         assert_eq!(fetched, session);
+    }
+
+    #[test]
+    fn test_migrate_legacy_projects_and_purge() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("muta.db");
+        let projects_dir = dir.path().join("projects");
+        let bucket_dir = projects_dir.join("test_bucket");
+        let sessions_dir = bucket_dir.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // 1. Create a substantive legacy session file and sibling jsonl
+        let snap_path = sessions_dir.join("leg-sess-1.json");
+        let jsonl_path = sessions_dir.join("leg-sess-1.jsonl");
+        let snap_data = serde_json::json!({
+            "id": "leg-sess-1",
+            "title": "Migrated Legacy Title",
+            "model_window": [
+                {
+                    "role": "User",
+                    "content": "hello world"
+                }
+            ],
+            "archived_transcript": []
+        });
+        std::fs::write(&snap_path, serde_json::to_string(&snap_data).unwrap()).unwrap();
+        std::fs::write(&jsonl_path, "{\"seq\":1}\n").unwrap();
+
+        // 2. Create an empty legacy session file
+        let empty_snap_path = sessions_dir.join("empty-sess.json");
+        let empty_jsonl_path = sessions_dir.join("empty-sess.jsonl");
+        let empty_snap_data = serde_json::json!({
+            "id": "empty-sess",
+            "model_window": [],
+            "archived_transcript": []
+        });
+        std::fs::write(&empty_snap_path, serde_json::to_string(&empty_snap_data).unwrap()).unwrap();
+        std::fs::write(&empty_jsonl_path, "").unwrap();
+
+        let engine = DatabaseEngine::open(&db_path, None).unwrap();
+        let migrated = engine.migrate_legacy_projects(&projects_dir);
+        assert_eq!(migrated, 1);
+
+        // Substantive legacy files should be purged from disk (ADR-0168)
+        assert!(!snap_path.exists());
+        assert!(!jsonl_path.exists());
+
+        // Empty legacy files should also be pruned from disk
+        assert!(!empty_snap_path.exists());
+        assert!(!empty_jsonl_path.exists());
+
+        // The session must be in SQLite muta.db and visible in list_session_summaries
+        let summaries = engine.list_session_summaries(None, "").unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "leg-sess-1");
+        assert_eq!(summaries[0].overview, "Migrated Legacy Title");
+        assert_eq!(summaries[0].message_count, 1);
+
+        // Idempotent: second call should be a no-op
+        let second = engine.migrate_legacy_projects(&projects_dir);
+        assert_eq!(second, 0);
     }
 }

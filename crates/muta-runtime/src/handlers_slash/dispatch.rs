@@ -467,10 +467,10 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     None => {
                         // No id (bare `/sessions`, `/session list`, or a
                         // legacy open/resume without one): open the picker.
-                        record_invocation(session, name, args).await;
-                        let _ = resp_tx.send(AgentResponse::SessionsOverview(
-                            build_sessions_overview(session).await,
-                        ));
+                        let overview_fut = build_sessions_overview(session);
+                        let record_fut = record_invocation(session, name, args);
+                        let (overview, ()) = tokio::join!(overview_fut, record_fut);
+                        let _ = resp_tx.send(AgentResponse::SessionsOverview(overview));
                         let _ = resp_tx.send(AgentResponse::OpenSessionsPanel);
                     }
                 },
