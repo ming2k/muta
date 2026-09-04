@@ -94,6 +94,106 @@ fn home_and_end_scroll_in_browse_zone() {
 }
 
 #[test]
+fn permission_sheet_left_right_tab_cycle_options() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Permission,
+            false
+        ),
+        InputAction::PermissionPrevOption
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Right,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Permission,
+            false
+        ),
+        InputAction::PermissionNextOption
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Permission,
+            false
+        ),
+        InputAction::PermissionNextOption
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::BackTab,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Permission,
+            false
+        ),
+        InputAction::PermissionPrevOption
+    );
+}
+
+#[test]
+fn question_sheet_tab_and_arrows_navigate_questions() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Question,
+            false
+        ),
+        InputAction::QuestionNext
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::BackTab,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Question,
+            false
+        ),
+        InputAction::QuestionPrevious
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Right,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Question,
+            false
+        ),
+        InputAction::QuestionNext
+    );
+    assert_eq!(
+        run_sheet_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            crate::sheet::SheetKind::Question,
+            false
+        ),
+        InputAction::QuestionPrevious
+    );
+}
+
+#[test]
 fn home_and_end_scroll_in_permission_modal() {
     let mut input = String::new();
     let mut cursor = 0;

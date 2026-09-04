@@ -67,7 +67,7 @@ pub struct KeybindingsConfig {
     #[serde(flatten)]
     pub commands: HashMap<String, String>,
     /// Surface verbs: `verb → chord spec` (step 9). Keys are the unqualified
-    /// [`crate::keymap::SurfaceVerb`] names (`open_history`, `steer`, …).
+    /// [`crate::keymap::SurfaceVerb`] names (`open_history`, `toggle_send_mode`, …).
     pub session: HashMap<String, String>,
 }
 
@@ -411,7 +411,7 @@ thinking = true
     fn parses_keybindings_table_and_builds_overrides() {
         let toml = r##"
 [keybindings]
-interrupt = "ctrl+x"
+palette = "ctrl+k"
 quit = "ctrl+shift+q"
 "##;
         let cfg: TuiConfig = toml::from_str(toml).expect("parses");
@@ -419,8 +419,8 @@ quit = "ctrl+shift+q"
         assert!(cfg.keybindings.session.is_empty());
         let o = cfg.global_key_overrides();
         assert_eq!(
-            o.effective_binding(crate::keymap::CommandId::InterruptTask),
-            crate::keymap::Key::ctrl('x')
+            o.effective_binding(crate::keymap::CommandId::CommandPalette),
+            crate::keymap::Key::ctrl('k')
         );
         assert_eq!(
             o.effective_binding(crate::keymap::CommandId::Quit),
@@ -432,8 +432,8 @@ quit = "ctrl+shift+q"
         );
         // Unconfigured commands keep their canonical binding.
         assert_eq!(
-            o.effective_binding(crate::keymap::CommandId::CommandPalette),
-            crate::keymap::Key::CTRL_P
+            o.effective_binding(crate::keymap::CommandId::Help),
+            crate::keymap::Key::F1
         );
     }
 
@@ -441,23 +441,23 @@ quit = "ctrl+shift+q"
     fn parses_session_verb_table_into_surface_overrides() {
         let toml = r##"
 [keybindings]
-interrupt = "ctrl+x"
+palette = "ctrl+k"
 
 [keybindings.session]
 open_history = "ctrl+shift+r"
-steer = "alt+enter"
+toggle_send_mode = "ctrl+t"
 bogus = "ctrl+z"
 "##;
         let cfg: TuiConfig = toml::from_str(toml).expect("parses");
         // Global parsing ignores the nested session table and unknown verbs.
         let g = cfg.global_key_overrides();
         assert_eq!(
-            g.effective_binding(crate::keymap::CommandId::InterruptTask),
-            crate::keymap::Key::ctrl('x')
+            g.effective_binding(crate::keymap::CommandId::CommandPalette),
+            crate::keymap::Key::ctrl('k')
         );
         assert_eq!(
             g.effective_binding(crate::keymap::CommandId::Quit),
-            crate::keymap::Key::CTRL_Q
+            crate::keymap::Key::CTRL_C
         );
         // Surface parsing picks only the session-table verb names.
         let s = cfg.surface_key_overrides();
@@ -466,11 +466,8 @@ bogus = "ctrl+z"
             crate::keymap::Key::CTRL_SHIFT_R
         );
         assert_eq!(
-            s.effective_binding(crate::keymap::SurfaceVerb::Steer),
-            crate::keymap::Key {
-                modifiers: crossterm::event::KeyModifiers::ALT,
-                code: crossterm::event::KeyCode::Enter
-            }
+            s.effective_binding(crate::keymap::SurfaceVerb::ToggleSendMode),
+            crate::keymap::Key::ctrl('t')
         );
         // Unconfigured verbs keep canonical; unknown verb names are skipped.
         assert_eq!(

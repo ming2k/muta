@@ -123,6 +123,19 @@ pub fn classify_click(layout_map: &LayoutMap, x: u16, y: u16) -> ClickTarget {
         return ClickTarget::Content { cursor };
     }
 
+    // Composer component hit-test: any click inside the physical bounds of the
+    // composer (e.g. top chrome row, breathing margins, bottom gap row, or
+    // hint bar) routes focus directly to the composer input box.
+    if let Some(rect) = layout_map.composer_rect()
+        && rect.x <= x
+        && x < rect.x + rect.width
+        && rect.y <= y
+        && y < rect.y + rect.height
+    {
+        let cursor = layout_map.composer_fallback_cursor(y);
+        return ClickTarget::InputBox { cursor };
+    }
+
     // No region hit. Check whether the point falls inside the content band
     // (gap rows between messages / inside expanded steps).
     if layout_map
@@ -318,5 +331,64 @@ mod tests {
         let mut map = LayoutMap::new();
         map.set_transcript_content_rect(Rect::new(2, 4, 10, 20));
         assert_eq!(classify_click(&map, 100, 100), ClickTarget::Dead);
+    }
+
+    #[test]
+    fn composer_rect_hit_on_top_chrome_snaps_to_start() {
+        let mut map = LayoutMap::new();
+        // Composer rect at y=10..14 (height 4). Text line at y=11.
+        map.set_composer_rect(Rect::new(0, 10, 40, 4));
+        push_region(&mut map, "typed prompt text", INPUT_MSG_IDX, 0, 11);
+
+        // Click on top chrome (y=10, above text at y=11)
+        assert_eq!(
+            classify_click(&map, 5, 10),
+            ClickTarget::InputBox {
+                cursor: SemanticCursor::new(INPUT_MSG_IDX, 0, 0)
+            }
+        );
+    }
+
+    #[test]
+    fn composer_rect_hit_on_bottom_gap_or_hints_snaps_to_end() {
+        let mut map = LayoutMap::new();
+        // Composer rect at y=10..14 (height 4). Text line at y=11.
+        map.set_composer_rect(Rect::new(0, 10, 40, 4));
+        push_region(&mut map, "typed prompt text", INPUT_MSG_IDX, 0, 11);
+
+        // Click on bottom gap (y=12)
+        assert_eq!(
+            classify_click(&map, 5, 12),
+            ClickTarget::InputBox {
+                cursor: SemanticCursor::new(INPUT_MSG_IDX, 0, 17)
+            }
+        );
+
+        // Click on hint bar (y=13)
+        assert_eq!(
+            classify_click(&map, 20, 13),
+            ClickTarget::InputBox {
+                cursor: SemanticCursor::new(INPUT_MSG_IDX, 0, 17)
+            }
+        );
+    }
+
+    #[test]
+    fn composer_rect_hit_with_empty_input_snaps_to_zero() {
+        let mut map = LayoutMap::new();
+        map.set_composer_rect(Rect::new(0, 10, 40, 4));
+        // No regions pushed (or 0-length region)
+        assert_eq!(
+            classify_click(&map, 5, 10),
+            ClickTarget::InputBox {
+                cursor: SemanticCursor::new(INPUT_MSG_IDX, 0, 0)
+            }
+        );
+        assert_eq!(
+            classify_click(&map, 5, 13),
+            ClickTarget::InputBox {
+                cursor: SemanticCursor::new(INPUT_MSG_IDX, 0, 0)
+            }
+        );
     }
 }

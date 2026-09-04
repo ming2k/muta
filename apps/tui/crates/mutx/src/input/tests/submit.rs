@@ -13,7 +13,29 @@ fn enter_in_compose_sends_chat() {
 }
 
 #[test]
-fn enter_in_compose_while_busy_queues_follow_up() {
+fn enter_in_compose_while_busy_steers_immediate_by_default() {
+    let mut input = "steer message".to_string();
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            is_responding: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(
+        action,
+        InputAction::SteerImmediate("steer message".to_string())
+    );
+    assert_eq!(input, "");
+}
+
+#[test]
+fn enter_in_compose_while_busy_queues_follow_up_in_follow_up_mode() {
     let mut input = "follow up message".to_string();
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
@@ -23,6 +45,7 @@ fn enter_in_compose_while_busy_queues_follow_up() {
         &mut cursor,
         InputContext {
             is_responding: true,
+            composer_send_mode: crate::app::ComposerSendMode::FollowUp,
             ..Default::default()
         },
         &mut drag,
@@ -91,7 +114,7 @@ fn enter_activates_focused_target() {
 }
 
 #[test]
-fn space_in_transcript_bounces_to_composer() {
+fn space_in_transcript_is_inert() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -105,9 +128,9 @@ fn space_in_transcript_bounces_to_composer() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::ClearFocusedTarget);
-    assert_eq!(input, " ");
-    assert_eq!(cursor, 1);
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
 }
 
 #[test]

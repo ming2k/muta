@@ -149,6 +149,15 @@ pub struct WorkspaceConfig {
     pub additional_roots: Vec<String>,
 }
 
+/// Diagnostic report of resolved additional roots and skipped entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedAdditionalRoots {
+    /// Canonical, admitted directory paths.
+    pub admitted: Vec<std::path::PathBuf>,
+    /// Configured entries that could not be admitted, with the failure reason.
+    pub skipped: Vec<(String, String)>,
+}
+
 /// Safety policy for model-issued `bash` commands. Built-in dangerous-command
 /// rules are compiled into the agent so the config only contains user choices:
 /// toggles and project-local overrides/additions.
@@ -1234,7 +1243,7 @@ impl Config {
     /// `.muta/config.toml`. Returns an empty vec when the file or table is
     /// absent. Like [`Self::load_project_mcp`] and [`Self::load_project_hooks`],
     /// this is a narrow projection (just the workspace table). Project-scope
-    /// additional roots remain quarantined until the `roots` domain is trusted.
+    /// additional roots remain quarantined until the `ex-workspace` domain is trusted.
     pub fn load_project_additional_roots(project_root: &std::path::Path) -> Vec<String> {
         let path = project_root.join(".muta/config.toml");
         let Some(content) = fs::read_to_string(&path).ok() else {
@@ -1274,35 +1283,51 @@ impl Config {
 
     /// Resolve the `[workspace].additional_roots` policy for an active project.
     /// Global and trusted project-local additional roots are resolved and canonicalized
-    /// against `project_root`.
+    /// against `project_root`. Missing or invalid paths are skipped gracefully rather
+    /// than dropping all admitted roots.
     pub fn resolve_workspace_additional_roots(
         &self,
         project_root: &std::path::Path,
     ) -> Result<Vec<std::path::PathBuf>, String> {
+        self.resolve_workspace_additional_roots_detailed(project_root)
+            .map(|detailed| detailed.admitted)
+    }
+
+    /// Resolve the `[workspace].additional_roots` policy, returning admitted paths
+    /// and explicit skipped entries for error tracking and diagnostics.
+    pub fn resolve_workspace_additional_roots_detailed(
+        &self,
+        project_root: &std::path::Path,
+    ) -> Result<ResolvedAdditionalRoots, String> {
         if self.workspace.additional_roots.is_empty() {
-            return Ok(Vec::new());
+            return Ok(ResolvedAdditionalRoots::default());
         }
         let canonical_root =
             std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let mut resolved_roots = Vec::new();
+        let mut admitted = Vec::new();
+        let mut skipped = Vec::new();
         for raw in &self.workspace.additional_roots {
             let expanded: std::path::PathBuf = if raw == "~" {
-                home.clone().ok_or_else(|| {
-                    "[workspace].additional_roots: '~' used but HOME is unset".to_string()
-                })?
+                match &home {
+                    Some(h) => h.clone(),
+                    None => {
+                        skipped.push((raw.clone(), "'~' used but HOME is unset".to_string()));
+                        continue;
+                    }
+                }
             } else if let Some(rest) = raw.strip_prefix("~/") {
                 match &home {
                     Some(h) => h.join(rest),
                     None => {
-                        return Err(format!(
-                            "[workspace].additional_roots: '{raw}' uses '~' but HOME is unset"
-                        ));
+                        skipped.push((raw.clone(), "uses '~' but HOME is unset".to_string()));
+                        continue;
                     }
                 }
             } else {
-                if std::path::Path::new(raw).starts_with("/") {
-                    std::path::PathBuf::from(raw)
+                let p = std::path::Path::new(raw);
+                if p.is_absolute() {
+                    p.to_path_buf()
                 } else {
                     canonical_root.join(raw)
                 }
@@ -1312,38 +1337,33 @@ impl Config {
             } else {
                 canonical_root.join(&expanded)
             };
-            let canonical = std::fs::canonicalize(&expanded).map_err(|_| {
-                format!(
-                    "[workspace].additional_roots: '{}' does not exist",
-                    expanded.display()
-                )
-            })?;
+            let canonical = match std::fs::canonicalize(&expanded) {
+                Ok(c) => c,
+                Err(err) => {
+                    skipped.push((raw.clone(), format!("path does not exist ({err})")));
+                    continue;
+                }
+            };
             if !canonical.is_dir() {
-                return Err(format!(
-                    "[workspace].additional_roots: '{}' is not a directory",
-                    canonical.display()
-                ));
+                skipped.push((raw.clone(), "path is not a directory".to_string()));
+                continue;
             }
             if canonical == canonical_root {
-                return Err(format!(
-                    "[workspace].additional_roots: '{}' is the workspace root itself; it is already admitted",
-                    canonical.display()
-                ));
+                skipped.push((raw.clone(), "workspace root itself; already admitted".to_string()));
+                continue;
             }
             if canonical.starts_with(&canonical_root) {
-                return Err(format!(
-                    "[workspace].additional_roots: '{}' is inside the workspace and already admitted",
-                    canonical.display()
-                ));
+                skipped.push((raw.clone(), "inside workspace; already admitted".to_string()));
+                continue;
             }
             // Distinct spellings of the same directory (relative plus
             // absolute, a symlinked twin) collapse silently: admission is a
             // set, and the second mention grants nothing new to reject.
-            if !resolved_roots.contains(&canonical) {
-                resolved_roots.push(canonical);
+            if !admitted.contains(&canonical) {
+                admitted.push(canonical);
             }
         }
-        Ok(resolved_roots)
+        Ok(ResolvedAdditionalRoots { admitted, skipped })
     }
 
     /// Append project-local `[[hooks]]` to this config's (global-origin) hooks.
@@ -1822,31 +1842,28 @@ name = "DeepSeek"
     }
 
     #[test]
-    fn resolve_workspace_additional_roots_rejects_missing_and_nested_entries() {
+    fn resolve_workspace_additional_roots_skips_missing_and_nested_entries() {
         let root = scratch_project_root();
-        // Missing directory.
-        let mut config = Config::default();
-        config.workspace.additional_roots = vec!["../does-not-exist-anywhere".to_string()];
-        let err = config
-            .resolve_workspace_additional_roots(&root)
-            .unwrap_err();
-        assert!(err.contains("does not exist"), "{err}");
-
-        // Nested inside the workspace (already admitted).
+        let sibling =
+            std::env::temp_dir().join(format!("muta-additional-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sibling).unwrap();
         std::fs::create_dir_all(root.join("nested")).unwrap();
-        config.workspace.additional_roots = vec!["nested".to_string()];
-        let err = config
-            .resolve_workspace_additional_roots(&root)
-            .unwrap_err();
-        assert!(err.contains("already admitted"), "{err}");
 
-        // The workspace root itself.
-        let canonical = root.canonicalize().unwrap();
-        config.workspace.additional_roots = vec![canonical.display().to_string()];
-        let err = config
-            .resolve_workspace_additional_roots(&root)
-            .unwrap_err();
-        assert!(err.contains("workspace root itself"), "{err}");
+        let mut config = Config::default();
+        config.workspace.additional_roots = vec![
+            "../does-not-exist-anywhere".to_string(),
+            "nested".to_string(),
+            root.canonicalize().unwrap().display().to_string(),
+            sibling.display().to_string(),
+        ];
+        let detailed = config
+            .resolve_workspace_additional_roots_detailed(&root)
+            .unwrap();
+        assert_eq!(detailed.admitted, vec![sibling.canonicalize().unwrap()]);
+        assert_eq!(detailed.skipped.len(), 3);
+        assert!(detailed.skipped[0].1.contains("does not exist"));
+        assert!(detailed.skipped[1].1.contains("inside workspace"));
+        assert!(detailed.skipped[2].1.contains("workspace root itself"));
     }
 
     #[test]

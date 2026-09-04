@@ -546,17 +546,8 @@ pub enum CommandId {
     SendPrompt,
     QueueFollowUp,
     SteerImmediate,
-    InsertNewline,
+    ToggleSendMode,
     HistorySearch,
-    ScrollTranscriptUp,
-    ScrollTranscriptDown,
-
-    // ── Transcript Focus ──
-    TranscriptMoveUp,
-    TranscriptMoveDown,
-    TranscriptOpenOrToggle,
-    TranscriptTop,
-    TranscriptBottom,
 
     // ── Surface Navigation ──
     NavigateSession,
@@ -580,16 +571,8 @@ pub enum CommandId {
     // ── Management & Actions ──
     ToggleQueueBlock,
     ClearQueue,
-    McpReconnectSelected,
-    McpToggleSelected,
-    ToolsToggleSelected,
-    PermissionsRevokeSelected,
     PermissionsClearAll,
-    SkillsToggleDetail,
     ProviderAddConnection,
-    ProviderEditSelected,
-    ProviderDeleteSelected,
-    ProviderToggleFavorite,
     RedrawScreen,
 }
 
@@ -599,9 +582,6 @@ pub enum Scope {
     Global,
     Session,
     Composer,
-    Transcript,
-    BrowsePanel,
-    BlockingDialog,
 }
 
 /// Category of the command for palette grouping and help presentation.
@@ -693,14 +673,6 @@ fn avail_always(_: &AppContext) -> Availability {
     Availability::Available
 }
 
-fn avail_session(ctx: &AppContext) -> Availability {
-    if ctx.active_view == View::Session && ctx.active_modal == Modal::None {
-        Availability::Available
-    } else {
-        Availability::Unavailable("only in session")
-    }
-}
-
 fn avail_running(ctx: &AppContext) -> Availability {
     if ctx.is_responding || ctx.has_running_task {
         Availability::Available
@@ -783,10 +755,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::InterruptTask,
         label: "Interrupt Task",
-        hint: "Ctrl+C",
-        category: CommandCategory::Global,
-        scope: Scope::Global,
-        bindings: &[Key::CTRL_C],
+        hint: "Esc Esc (running)",
+        category: CommandCategory::Session,
+        scope: Scope::Session,
+        bindings: &[],
         slash: Some("/interrupt"),
         availability: avail_running,
         disclosure: DisclosurePriority::L0Footer,
@@ -796,15 +768,15 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Quit,
         label: "Quit Muta",
-        hint: "Ctrl+Q",
+        hint: "Ctrl+C / Ctrl+Q",
         category: CommandCategory::Global,
         scope: Scope::Global,
-        bindings: &[Key::CTRL_Q],
+        bindings: &[Key::CTRL_C, Key::CTRL_Q],
         slash: Some("/exit"),
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Dangerous,
-        description: "Exit application gracefully",
+        description: "Exit application gracefully (Ctrl+C twice or Ctrl+Q)",
     },
     CommandSpec {
         id: CommandId::CopySelection,
@@ -836,10 +808,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::QueueFollowUp,
         label: "Queue Follow-up",
-        hint: "Enter (running)",
+        hint: "Enter (follow-up mode)",
         category: CommandCategory::Session,
         scope: Scope::Composer,
-        bindings: &[Key::ENTER],
+        bindings: &[],
         slash: None,
         availability: avail_running,
         disclosure: DisclosurePriority::L0Footer,
@@ -849,10 +821,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::SteerImmediate,
         label: "Steer Now",
-        hint: "Alt+S",
+        hint: "Enter (steer mode)",
         category: CommandCategory::Session,
         scope: Scope::Composer,
-        bindings: &[Key::ALT_S],
+        bindings: &[],
         slash: Some("/steer"),
         availability: avail_running,
         disclosure: DisclosurePriority::L0Footer,
@@ -860,17 +832,17 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         description: "Inject prompt immediately at next safe boundary",
     },
     CommandSpec {
-        id: CommandId::InsertNewline,
-        label: "Insert Newline",
-        hint: "Alt+Enter / Ctrl+J",
+        id: CommandId::ToggleSendMode,
+        label: "Toggle Send Mode",
+        hint: "Tab (running)",
         category: CommandCategory::Session,
         scope: Scope::Composer,
-        bindings: &[Key::ALT_ENTER, Key::CTRL_J],
+        bindings: &[Key::TAB],
         slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L3HelpOnly,
+        availability: avail_running,
+        disclosure: DisclosurePriority::L0Footer,
         danger: DangerLevel::Safe,
-        description: "Insert literal newline into composer buffer",
+        description: "Toggle between steer and follow-up queue mode while running",
     },
     CommandSpec {
         id: CommandId::HistorySearch,
@@ -884,98 +856,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
         description: "Search and recall past prompt history",
-    },
-    CommandSpec {
-        id: CommandId::ScrollTranscriptUp,
-        label: "Scroll Transcript Up",
-        hint: "PageUp",
-        category: CommandCategory::Session,
-        scope: Scope::Session,
-        bindings: &[Key::PAGE_UP],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L3HelpOnly,
-        danger: DangerLevel::Safe,
-        description: "Scroll transcript viewport upward",
-    },
-    CommandSpec {
-        id: CommandId::ScrollTranscriptDown,
-        label: "Scroll Transcript Down",
-        hint: "PageDown",
-        category: CommandCategory::Session,
-        scope: Scope::Session,
-        bindings: &[Key::PAGE_DOWN],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L3HelpOnly,
-        danger: DangerLevel::Safe,
-        description: "Scroll transcript viewport downward",
-    },
-    // ── Transcript Focus Region Actions ──
-    CommandSpec {
-        id: CommandId::TranscriptMoveUp,
-        label: "Previous Step",
-        hint: "↑",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::UP],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Move focus to previous interactive step or card",
-    },
-    CommandSpec {
-        id: CommandId::TranscriptMoveDown,
-        label: "Next Step",
-        hint: "↓",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::DOWN],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Move focus to next interactive step or card",
-    },
-    CommandSpec {
-        id: CommandId::TranscriptOpenOrToggle,
-        label: "Open / Expand Step",
-        hint: "Enter",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::ENTER],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Expand, collapse, or drill down into focused step",
-    },
-    CommandSpec {
-        id: CommandId::TranscriptTop,
-        label: "Transcript Top",
-        hint: "Home",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::HOME],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L3HelpOnly,
-        danger: DangerLevel::Safe,
-        description: "Jump to beginning of transcript",
-    },
-    CommandSpec {
-        id: CommandId::TranscriptBottom,
-        label: "Transcript Bottom",
-        hint: "End",
-        category: CommandCategory::Session,
-        scope: Scope::Transcript,
-        bindings: &[Key::END],
-        slash: None,
-        availability: avail_session,
-        disclosure: DisclosurePriority::L3HelpOnly,
-        danger: DangerLevel::Safe,
-        description: "Jump to end of transcript",
     },
     // ── Surface Navigation ──
     CommandSpec {
@@ -1227,63 +1107,11 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         description: "Discard all staged outgoing messages in outbox",
     },
     CommandSpec {
-        id: CommandId::McpReconnectSelected,
-        label: "Reconnect MCP Server",
-        hint: "Action",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L2Palette,
-        danger: DangerLevel::Safe,
-        description: "Restart and reconnect highlighted MCP server",
-    },
-    CommandSpec {
-        id: CommandId::McpToggleSelected,
-        label: "Toggle MCP Server",
-        hint: "Space",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Enable or disable highlighted MCP server for session",
-    },
-    CommandSpec {
-        id: CommandId::ToolsToggleSelected,
-        label: "Toggle Tool",
-        hint: "Space",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Enable or disable selected tool",
-    },
-    CommandSpec {
-        id: CommandId::PermissionsRevokeSelected,
-        label: "Revoke Permission Rule",
-        hint: "Space",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Cautious,
-        description: "Revoke selected cached execution rule",
-    },
-    CommandSpec {
         id: CommandId::PermissionsClearAll,
         label: "Revoke All Permissions",
         hint: "Action",
         category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
+        scope: Scope::Global,
         bindings: &[],
         slash: Some("/permissions clear"),
         availability: avail_always,
@@ -1292,69 +1120,17 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         description: "Clear all cached execution rules for workspace",
     },
     CommandSpec {
-        id: CommandId::SkillsToggleDetail,
-        label: "Toggle Skill Details",
-        hint: "Enter",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L1FocusRegion,
-        danger: DangerLevel::Safe,
-        description: "Expand or collapse details and guidance for selected skill",
-    },
-    CommandSpec {
         id: CommandId::ProviderAddConnection,
         label: "Add Provider Connection",
         hint: "Action",
         category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
+        scope: Scope::Global,
         bindings: &[],
         slash: None,
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
         description: "Configure a new provider or custom endpoint",
-    },
-    CommandSpec {
-        id: CommandId::ProviderEditSelected,
-        label: "Edit Provider / Model",
-        hint: "Action",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L2Palette,
-        danger: DangerLevel::Safe,
-        description: "Edit credentials or capability overrides for selection",
-    },
-    CommandSpec {
-        id: CommandId::ProviderDeleteSelected,
-        label: "Delete Provider Connection",
-        hint: "Action",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L2Palette,
-        danger: DangerLevel::Dangerous,
-        description: "Delete custom provider endpoint",
-    },
-    CommandSpec {
-        id: CommandId::ProviderToggleFavorite,
-        label: "Toggle Favorite Model",
-        hint: "Action",
-        category: CommandCategory::Actions,
-        scope: Scope::BrowsePanel,
-        bindings: &[],
-        slash: None,
-        availability: avail_always,
-        disclosure: DisclosurePriority::L2Palette,
-        danger: DangerLevel::Safe,
-        description: "Star or unstar model for quick switching",
     },
     CommandSpec {
         id: CommandId::RedrawScreen,
@@ -1420,8 +1196,7 @@ fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
     match cmd {
         CommandId::Help => Some(Key::F1),
         CommandId::CommandPalette => Some(Key::CTRL_P),
-        CommandId::InterruptTask => Some(Key::CTRL_C),
-        CommandId::Quit => Some(Key::CTRL_Q),
+        CommandId::Quit => Some(Key::CTRL_C),
         CommandId::CopySelection => Some(Key::CTRL_SHIFT_C),
         CommandId::OpenTelemetry => Some(Key::CTRL_O),
         CommandId::OpenActiveConnectionDetail => Some(Key::CTRL_N),
@@ -1442,9 +1217,7 @@ fn canonical_global_key(key: Key) -> Option<CommandId> {
         Some(CommandId::OpenActiveConnectionDetail)
     } else if key == Key::ESC {
         Some(CommandId::CancelOrBack)
-    } else if key == Key::CTRL_C {
-        Some(CommandId::InterruptTask)
-    } else if key == Key::CTRL_Q {
+    } else if key == Key::CTRL_C || key == Key::CTRL_Q {
         Some(CommandId::Quit)
     } else if key == Key::CTRL_SHIFT_C || key == Key::CMD_C {
         Some(CommandId::CopySelection)
@@ -1604,8 +1377,8 @@ pub fn resolve_global_key_with(key: Key, overrides: &GlobalOverrides) -> Option<
 pub enum SurfaceVerb {
     /// Open the Ctrl+R history recall modal.
     OpenHistory,
-    /// Take the draft and steer it into the running round (`Alt+S`).
-    Steer,
+    /// Toggle between steer and follow-up queue mode while running (`Tab`).
+    ToggleSendMode,
     /// Previous / next prompt-history recall (`Alt+P` / `Alt+N`).
     HistoryPrev,
     HistoryNext,
@@ -1629,7 +1402,7 @@ impl SurfaceVerb {
     pub(crate) fn canonical(self) -> Key {
         match self {
             SurfaceVerb::OpenHistory => Key::CTRL_R,
-            SurfaceVerb::Steer => Key::ALT_S,
+            SurfaceVerb::ToggleSendMode => Key::TAB,
             SurfaceVerb::HistoryPrev => Key::ALT_P,
             SurfaceVerb::HistoryNext => Key::ALT_N,
             SurfaceVerb::FocusPrevTarget => Key::ALT_UP,
@@ -1654,7 +1427,7 @@ impl SurfaceVerb {
     pub(crate) fn name(self) -> &'static str {
         match self {
             SurfaceVerb::OpenHistory => "open_history",
-            SurfaceVerb::Steer => "steer",
+            SurfaceVerb::ToggleSendMode => "toggle_send_mode",
             SurfaceVerb::HistoryPrev => "history_prev",
             SurfaceVerb::HistoryNext => "history_next",
             SurfaceVerb::FocusPrevTarget => "focus_prev",
@@ -1676,7 +1449,7 @@ impl SurfaceVerb {
     /// handling path.
     pub const ALL: [SurfaceVerb; 11] = [
         SurfaceVerb::OpenHistory,
-        SurfaceVerb::Steer,
+        SurfaceVerb::ToggleSendMode,
         SurfaceVerb::HistoryPrev,
         SurfaceVerb::HistoryNext,
         SurfaceVerb::FocusPrevTarget,
@@ -1791,7 +1564,7 @@ mod tests {
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
         assert_eq!(
             resolve_global_key(Key::CTRL_C),
-            Some(CommandId::InterruptTask)
+            Some(CommandId::Quit)
         );
         assert_eq!(resolve_global_key(Key::CTRL_Q), Some(CommandId::Quit));
         assert_eq!(
@@ -1879,18 +1652,18 @@ mod tests {
     #[test]
     fn global_overrides_remap_resolution_and_effective_binding() {
         let mut map = std::collections::HashMap::new();
-        map.insert("interrupt".to_string(), "ctrl+x".to_string());
+        map.insert("palette".to_string(), "ctrl+k".to_string());
         map.insert("quit".to_string(), "ctrl+shift+q".to_string());
         map.insert("not_a_command".to_string(), "ctrl+z".to_string());
         let o = GlobalOverrides::from_config(&map);
 
         // The remapped chord fires; the canonical chord is dead.
         assert_eq!(
-            resolve_global_key_with(Key::ctrl('x'), &o),
-            Some(CommandId::InterruptTask)
+            resolve_global_key_with(Key::ctrl('k'), &o),
+            Some(CommandId::CommandPalette)
         );
-        assert_eq!(resolve_global_key_with(Key::CTRL_C, &o), None);
-        // The remapped quit fires; canonical Ctrl+Q is dead.
+        assert_eq!(resolve_global_key_with(Key::CTRL_P, &o), None);
+        // The remapped quit fires; canonical Ctrl+C / Ctrl+Q is dead.
         let ctrl_shift_q = Key {
             modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
             code: KeyCode::Char('q'),
@@ -1899,18 +1672,19 @@ mod tests {
             resolve_global_key_with(ctrl_shift_q, &o),
             Some(CommandId::Quit)
         );
+        assert_eq!(resolve_global_key_with(Key::CTRL_C, &o), None);
         assert_eq!(resolve_global_key_with(Key::CTRL_Q, &o), None);
         // Unremapped commands keep their canonical behavior.
         assert_eq!(
-            resolve_global_key_with(Key::CTRL_P, &o),
-            Some(CommandId::CommandPalette)
+            resolve_global_key_with(Key::F1, &o),
+            Some(CommandId::Help)
         );
         // Effective binding follows the override for remapped commands.
         assert_eq!(
-            o.effective_binding(CommandId::InterruptTask),
-            Key::ctrl('x')
+            o.effective_binding(CommandId::Quit),
+            ctrl_shift_q
         );
-        assert_eq!(o.effective_binding(CommandId::CommandPalette), Key::CTRL_P);
+        assert_eq!(o.effective_binding(CommandId::Help), Key::F1);
         // Esc / Back is never remappable.
         let mut esc_map = std::collections::HashMap::new();
         esc_map.insert("cancel".to_string(), "ctrl+k".to_string());
@@ -1940,7 +1714,7 @@ mod tests {
     fn surface_overrides_remap_effective_binding_and_matches() {
         let mut map = std::collections::HashMap::new();
         map.insert("open_history".to_string(), "ctrl+shift+r".to_string());
-        map.insert("steer".to_string(), "alt+enter".to_string());
+        map.insert("toggle_send_mode".to_string(), "ctrl+t".to_string());
         map.insert("not_a_verb".to_string(), "ctrl+z".to_string());
         map.insert("interrupt".to_string(), "ctrl+x".to_string()); // global, ignored here
         map.insert("history_prev".to_string(), "bogus!!".to_string()); // bad chord, skipped
@@ -1951,11 +1725,8 @@ mod tests {
             Key::CTRL_SHIFT_R
         );
         assert_eq!(
-            o.effective_binding(SurfaceVerb::Steer),
-            Key {
-                modifiers: KeyModifiers::ALT,
-                code: KeyCode::Enter,
-            }
+            o.effective_binding(SurfaceVerb::ToggleSendMode),
+            Key::CTRL_T
         );
         // Unremapped verbs keep their canonical chord.
         assert_eq!(o.effective_binding(SurfaceVerb::HistoryNext), Key::ALT_N);
@@ -1963,8 +1734,8 @@ mod tests {
         // matches() follows the effective binding; the canonical chord is dead.
         assert!(o.matches(Key::CTRL_SHIFT_R, SurfaceVerb::OpenHistory));
         assert!(!o.matches(Key::CTRL_R, SurfaceVerb::OpenHistory));
-        assert!(o.matches(Key::ALT_ENTER, SurfaceVerb::Steer));
-        assert!(!o.matches(Key::ALT_S, SurfaceVerb::Steer));
+        assert!(o.matches(Key::CTRL_T, SurfaceVerb::ToggleSendMode));
+        assert!(!o.matches(Key::TAB, SurfaceVerb::ToggleSendMode));
         assert!(o.matches(Key::ALT_N, SurfaceVerb::HistoryNext));
         assert!(!o.is_empty());
     }

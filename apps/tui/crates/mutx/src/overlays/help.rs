@@ -69,7 +69,7 @@ pub fn draw_help_modal(
         "Session & Focus Controls",
     ))));
     for cmd in COMMAND_REGISTRY.iter().filter(|c| {
-        c.scope == Scope::Session || c.scope == Scope::Composer || c.scope == Scope::Transcript
+        c.scope == Scope::Session || c.scope == Scope::Composer
     }) {
         let key_str = if !cmd.bindings.is_empty() {
             cmd.bindings[0].display()

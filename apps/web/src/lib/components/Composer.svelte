@@ -152,6 +152,15 @@
     return Array.from(text).slice(0, scalarIndex).join("").length;
   }
 
+  function handleBoxClick(e: MouseEvent) {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest("button, input, select, textarea, a, .command-completions")) {
+      return;
+    }
+    textareaEl?.focus();
+  }
+
   function acceptCompletion(item: ComposerCompletion) {
     const start = scalarToUtf16(draft, item.replace_start);
     const end = scalarToUtf16(draft, item.replace_end);
@@ -167,7 +176,8 @@
 </script>
 
 <footer class="composer-container">
-  <div class="composer-box">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="composer-box" onclick={handleBoxClick}>
     {#if images.length > 0}
       <div class="image-chips">
         {#each images as img, i (img.previewUrl)}

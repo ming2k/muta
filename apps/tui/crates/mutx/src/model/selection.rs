@@ -511,6 +511,16 @@ impl SelectionDrag {
     ) {
         if let Some(cursor) = layout_map.cursor_at(x, y) {
             self.update_to_cursor(selection, cursor);
+        } else if let Some(anchor) = self.anchor
+            && anchor.message_idx == crate::model::layout::INPUT_MSG_IDX
+            && let Some(rect) = layout_map.composer_rect()
+            && rect.x <= x
+            && x < rect.x + rect.width
+            && rect.y <= y
+            && y < rect.y + rect.height
+        {
+            let cursor = layout_map.composer_fallback_cursor(y);
+            self.update_to_cursor(selection, cursor);
         }
     }
 

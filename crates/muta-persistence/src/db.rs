@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 1;
+pub const CURRENT_DB_VERSION: u32 = 2;
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -146,6 +146,12 @@ const MIGRATIONS: &[Migration] = &[Migration {
             VALUES (new.id, new.session_id, new.role, new.content, COALESCE(new.reasoning_content, ''));
         END;
     "#,
+}, Migration {
+    version: 2,
+    sql: r#"
+        -- Add full serialized SessionData JSON column for SQLite Single-Source-of-Truth
+        ALTER TABLE sessions ADD COLUMN data TEXT;
+    "#,
 }];
 
 /// Run all outstanding migrations in a single transactional loop.
@@ -191,6 +197,8 @@ pub struct SessionRecord {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub project_root: String,
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 /// Materialized message record in SQLite.
@@ -251,6 +259,7 @@ fn map_session_row(row: &Row) -> Result<SessionRecord> {
         created_at_ms: row.get(5)?,
         updated_at_ms: row.get(6)?,
         project_root: row.get(7)?,
+        data: row.get(8)?,
     })
 }
 
@@ -300,15 +309,16 @@ impl DatabaseEngine {
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO sessions (id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO sessions (id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 fork_kind = excluded.fork_kind,
                 title = excluded.title,
                 title_manual = excluded.title_manual,
                 updated_at_ms = excluded.updated_at_ms,
-                project_root = excluded.project_root;
+                project_root = excluded.project_root,
+                data = excluded.data;
             "#,
             params![
                 session.id,
@@ -319,6 +329,7 @@ impl DatabaseEngine {
                 session.created_at_ms,
                 session.updated_at_ms,
                 session.project_root,
+                session.data,
             ],
         )?;
         Ok(())
@@ -328,7 +339,7 @@ impl DatabaseEngine {
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data FROM sessions WHERE id = ?1",
                 params![session_id],
                 map_session_row,
             )
@@ -340,7 +351,7 @@ impl DatabaseEngine {
         let mut sessions = Vec::new();
         if let Some(root) = project_root {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root \
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data \
                  FROM sessions WHERE project_root = ?1 ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map(params![root], map_session_row)?;
@@ -349,7 +360,7 @@ impl DatabaseEngine {
             }
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root \
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data \
                  FROM sessions ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map([], map_session_row)?;
@@ -366,6 +377,229 @@ impl DatabaseEngine {
             .conn
             .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
         Ok(affected > 0)
+    }
+
+    /// Persist a complete [`crate::session::SessionData`] record into SQLite in a single transaction,
+    /// synchronizing the `sessions` table, `messages` table (and FTS5 index).
+    pub(crate) fn save_session_full(&self, data: &crate::session::SessionData) -> Result<()> {
+        let fork_str = match data.fork_kind {
+            muta_contracts::SessionForkKind::Trunk => "trunk",
+            muta_contracts::SessionForkKind::Fork => "fork",
+            muta_contracts::SessionForkKind::Aside => "aside",
+        };
+        let serialized_data = serde_json::to_string(data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+        let session_rec = SessionRecord {
+            id: data.id.clone(),
+            parent_id: data.parent_id.clone(),
+            fork_kind: fork_str.to_string(),
+            title: data.title.clone(),
+            title_manual: data.title_manual,
+            created_at_ms: data.created_at as i64,
+            updated_at_ms: data.updated_at as i64,
+            project_root: data.project_root.to_string_lossy().into_owned(),
+            data: Some(serialized_data),
+        };
+
+        // Execute in transaction
+        self.conn.execute("BEGIN IMMEDIATE", [])?;
+
+        let res: Result<()> = (|| {
+            self.upsert_session(&session_rec)?;
+
+            // Synchronize messages for this session
+            self.conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_rec.id])?;
+
+            for (seq, msg) in data.model_window.iter().enumerate() {
+                let role_str = match msg.role {
+                    muta_contracts::Role::User => "user",
+                    muta_contracts::Role::Assistant => "assistant",
+                    muta_contracts::Role::System => "system",
+                    muta_contracts::Role::Tool => "tool",
+                };
+                self.insert_message(MessageRecord {
+                    id: format!("{}:{}", session_rec.id, seq),
+                    session_id: session_rec.id.clone(),
+                    seq: seq as i64,
+                    role: role_str.to_string(),
+                    content: msg.content.clone(),
+                    content_blob_hash: msg.content_blob.clone(),
+                    reasoning_content: msg.reasoning_content.clone(),
+                    provider: None,
+                    model: None,
+                    created_at_ms: session_rec.updated_at_ms,
+                })?;
+            }
+
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                self.conn.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
+    /// Load a full [`crate::session::SessionData`] record by session ID from SQLite.
+    pub(crate) fn load_session_full(&self, session_id: &str) -> Result<Option<crate::session::SessionData>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT data FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(raw) = raw {
+            let data: crate::session::SessionData = serde_json::from_str(&raw)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Some(data))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resolve a session ID prefix (4+ hex chars) to matching full session IDs.
+    pub fn resolve_session_prefix(
+        &self,
+        prefix: &str,
+        project_root: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let pattern = format!("{prefix}%");
+        let mut matches = Vec::new();
+        if let Some(root) = project_root {
+            let mut stmt = self.conn.prepare(
+                "SELECT id FROM sessions WHERE id LIKE ?1 AND project_root = ?2 ORDER BY updated_at_ms DESC",
+            )?;
+            let rows = stmt.query_map(params![pattern, root], |row| row.get(0))?;
+            for id in rows {
+                matches.push(id?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT id FROM sessions WHERE id LIKE ?1 ORDER BY updated_at_ms DESC",
+            )?;
+            let rows = stmt.query_map(params![pattern], |row| row.get(0))?;
+            for id in rows {
+                matches.push(id?);
+            }
+        }
+        Ok(matches)
+    }
+
+    /// List session summaries for a project, sorted by `updated_at_ms` descending.
+    pub fn list_session_summaries(
+        &self,
+        project_root: Option<&str>,
+        active_id: &str,
+    ) -> Result<Vec<crate::session::SessionSummary>> {
+        let mut summaries = Vec::new();
+        let sessions = self.list_sessions(project_root)?;
+        for rec in sessions {
+            if let Some(ref data_json) = rec.data {
+                if let Ok(data) = serde_json::from_str::<crate::session::SessionData>(data_json) {
+                    let msg_count = data.model_window.len() + data.archived_transcript.len();
+                    if msg_count == 0 && data.id != active_id {
+                        continue;
+                    }
+                    summaries.push(crate::session::summary_from_data(&data, data.id == active_id));
+                }
+            } else {
+                let fork_kind = match rec.fork_kind.as_str() {
+                    "fork" => muta_contracts::SessionForkKind::Fork,
+                    "aside" => muta_contracts::SessionForkKind::Aside,
+                    _ => muta_contracts::SessionForkKind::Trunk,
+                };
+                let overview = rec.title.clone().unwrap_or_else(|| "(empty session)".to_string());
+                summaries.push(crate::session::SessionSummary {
+                    id: rec.id.clone(),
+                    parent_id: rec.parent_id,
+                    fork_kind,
+                    message_count: 0,
+                    updated_at: rec.updated_at_ms as u64,
+                    created_at: rec.created_at_ms as u64,
+                    overview,
+                    active: rec.id == active_id,
+                    digest: None,
+                });
+            }
+        }
+        summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        Ok(summaries)
+    }
+
+    /// Retrieve full session detail for on-demand inspection.
+    pub fn get_session_detail(
+        &self,
+        session_id: &str,
+        active_id: &str,
+    ) -> Result<Option<muta_contracts::SessionDetail>> {
+        if let Some(data) = self.load_session_full(session_id)? {
+            let last_prompt = crate::session::last_effective_prompt_from_data(&data);
+            Ok(Some(muta_contracts::SessionDetail {
+                id: data.id.clone(),
+                title: data.title.clone(),
+                digest: data.digest.clone(),
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+                message_count: data.model_window.len() + data.archived_transcript.len(),
+                active: data.id == active_id,
+                last_prompt,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Rename a session in the database.
+    pub fn rename_session(&self, session_id: &str, title: Option<&str>, manual: bool) -> Result<bool> {
+        let now = Utc::now().timestamp_millis();
+        if let Some(mut data) = self.load_session_full(session_id)? {
+            data.title = title.map(|s| s.to_string());
+            data.title_manual = manual;
+            data.updated_at = now as u64;
+            self.save_session_full(&data)?;
+            return Ok(true);
+        }
+        let affected = self.conn.execute(
+            "UPDATE sessions SET title = ?1, title_manual = ?2, updated_at_ms = ?3 WHERE id = ?4",
+            params![title, manual, now, session_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Discover every persisted session (across all project buckets) that has armed `/schedule` jobs.
+    pub fn list_armed_schedule_sessions(&self) -> Result<Vec<(String, PathBuf)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_root, data FROM sessions WHERE data LIKE '%\"scheduled_jobs\":[%'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let project_root: String = row.get(1)?;
+            let data_str: Option<String> = row.get(2)?;
+            Ok((id, PathBuf::from(project_root), data_str))
+        })?;
+
+        let mut armed = Vec::new();
+        for item in rows {
+            let (id, root, data_str) = item?;
+            if let Some(raw) = data_str {
+                if let Ok(data) = serde_json::from_str::<crate::session::SessionData>(&raw) {
+                    if !data.scheduled_jobs.is_empty() {
+                        armed.push((id, root));
+                    }
+                }
+            }
+        }
+        Ok(armed)
     }
 
     // --- Event Ledger Operations (ADR-0163) ---
@@ -719,6 +953,7 @@ impl DatabaseEngine {
                         created_at_ms: snap.created_at.map(|t| t as i64).unwrap_or(0),
                         updated_at_ms: snap.updated_at.map(|t| t as i64).unwrap_or(0),
                         project_root: project_root_str,
+                        data: Some(raw_json.clone()),
                     };
 
                     if self.upsert_session(&record).is_ok() {
@@ -759,6 +994,10 @@ impl DatabaseEngine {
 
 /// Command variants dispatched to the single-writer persistence actor.
 pub enum PersistenceCommand {
+    SaveSessionFull {
+        data: Box<crate::session::SessionData>,
+        ack: oneshot::Sender<Result<()>>,
+    },
     UpsertSession {
         record: SessionRecord,
         ack: oneshot::Sender<Result<()>>,
@@ -833,6 +1072,10 @@ impl PersistenceHandle {
 
                 while let Some(cmd) = rx.blocking_recv() {
                     match cmd {
+                        PersistenceCommand::SaveSessionFull { data, ack } => {
+                            let res = engine.save_session_full(&data);
+                            let _ = ack.send(res);
+                        }
                         PersistenceCommand::UpsertSession { record, ack } => {
                             let res = engine.upsert_session(&record);
                             let _ = ack.send(res);
@@ -871,6 +1114,47 @@ impl PersistenceHandle {
             db_path,
             blob_store,
         }
+    }
+
+    /// Asynchronously save a full session in SQLite.
+    #[allow(dead_code)]
+    pub(crate) async fn save_session_full(&self, data: crate::session::SessionData) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(PersistenceCommand::SaveSessionFull {
+                data: Box::new(data),
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .await
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// Synchronously save a full session on a blocking thread.
+    #[allow(dead_code)]
+    pub(crate) fn save_session_full_blocking(&self, data: crate::session::SessionData) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .blocking_send(PersistenceCommand::SaveSessionFull {
+                data: Box::new(data),
+                ack: ack_tx,
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    }
+
+    /// The database file path.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// The associated CAS blob store, if any.
+    pub fn blob_store(&self) -> Option<&BlobStore> {
+        self.blob_store.as_ref()
     }
 
     /// Asynchronously upsert a session record.
@@ -1032,6 +1316,7 @@ mod tests {
             created_at_ms: 1000,
             updated_at_ms: 1000,
             project_root: "/workspace/project".into(),
+            data: None,
         };
 
         engine.upsert_session(&session).unwrap();
@@ -1067,6 +1352,7 @@ mod tests {
             created_at_ms: 1000,
             updated_at_ms: 1000,
             project_root: "/workspace/rust-code".into(),
+            data: None,
         };
         engine.upsert_session(&session).unwrap();
 
@@ -1109,6 +1395,7 @@ mod tests {
             created_at_ms: 1000,
             updated_at_ms: 1000,
             project_root: "/workspace/cas".into(),
+            data: None,
         };
         engine.upsert_session(&session).unwrap();
 
@@ -1151,6 +1438,7 @@ mod tests {
             created_at_ms: 2000,
             updated_at_ms: 2000,
             project_root: "/workspace/async".into(),
+            data: None,
         };
 
         handle.upsert_session(session.clone()).await.unwrap();

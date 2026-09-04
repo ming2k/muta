@@ -35,7 +35,7 @@ use crate::keymap::{HintSide, LiveHint};
 pub(crate) enum HintState {
     Idle,
     Command,
-    Running,
+    Running(crate::app::ComposerSendMode),
     Completion,
 }
 
@@ -43,10 +43,13 @@ pub(crate) enum HintState {
 /// composer hint row. Every chord returned here is resolvable by
 /// [`resolve_chat_surface_key`] in that state (asserted by tests).
 ///
-/// `steer_key` is the *effective* chord of the `steer` verb (ADR-0172): the
-/// hint advertises exactly the binding that fires, so a user remap is shown
-/// (canonical `Alt+S` when unremapped).
-pub(crate) fn live_chat_hints(state: HintState, steer_key: crate::keymap::Key) -> Vec<LiveHint> {
+/// `toggle_mode_key` is the *effective* chord of the `toggle_send_mode` verb
+/// (ADR-0172): the hint advertises exactly the binding that fires, so a user
+/// remap is shown (canonical `Tab` when unremapped).
+pub(crate) fn live_chat_hints(
+    state: HintState,
+    toggle_mode_key: crate::keymap::Key,
+) -> Vec<LiveHint> {
     use crate::keymap::Key;
     let hints: &[LiveHint] = match state {
         HintState::Idle | HintState::Command => &[LiveHint {
@@ -54,10 +57,22 @@ pub(crate) fn live_chat_hints(state: HintState, steer_key: crate::keymap::Key) -
             label: "send",
             side: HintSide::Action,
         }],
-        HintState::Running => &[
+        HintState::Running(crate::app::ComposerSendMode::Steer) => &[
             LiveHint {
-                key: steer_key,
-                label: "steer now",
+                key: toggle_mode_key,
+                label: "follow-up mode",
+                side: HintSide::Nav,
+            },
+            LiveHint {
+                key: Key::ENTER,
+                label: "send steer",
+                side: HintSide::Action,
+            },
+        ],
+        HintState::Running(crate::app::ComposerSendMode::FollowUp) => &[
+            LiveHint {
+                key: toggle_mode_key,
+                label: "steer mode",
                 side: HintSide::Nav,
             },
             LiveHint {
@@ -114,8 +129,12 @@ pub(crate) fn resolve_chat_surface_key(
     if ov.matches(key, SurfaceVerb::HistoryNext) {
         return Some(InputAction::HistoryNext);
     }
-    if ov.matches(key, SurfaceVerb::Steer) {
-        return resolve_steer(ctx, input, cursor_position);
+    if ov.matches(key, SurfaceVerb::ToggleSendMode)
+        && ctx.is_responding
+        && (ctx.completion_kind == crate::completion::CompletionKind::None
+            || ctx.completion_dismissed)
+    {
+        return Some(InputAction::ToggleSendMode);
     }
     if ov.matches(key, SurfaceVerb::FocusPrevTarget) {
         return Some(InputAction::FocusPrevTarget);
@@ -164,6 +183,8 @@ pub(crate) fn resolve_chat_surface_key(
         {
             if ctx.has_focused_target && (c == 'y' || c == 'c') {
                 Some(InputAction::CopyFocusedTarget)
+            } else if ctx.has_focused_target || ctx.transcript_focused {
+                Some(InputAction::None)
             } else {
                 resolve_printable(ctx, c, input, cursor_position)
             }
@@ -254,6 +275,9 @@ fn resolve_enter(
     if ctx.has_focused_target {
         return Some(InputAction::ActivateFocusedTarget);
     }
+    if ctx.transcript_focused {
+        return Some(InputAction::None);
+    }
     // Slash-only: Enter on a unique prefix auto-accepts the first suggestion
     // rather than sending `/go` as a (rejected) command. Path mentions skip
     // this so Enter still sends the message.
@@ -294,7 +318,10 @@ fn resolve_enter(
         Some(action)
     } else if !text.is_empty() {
         if ctx.is_responding {
-            Some(InputAction::QueueFollowUp(text))
+            match ctx.composer_send_mode {
+                crate::app::ComposerSendMode::Steer => Some(InputAction::SteerImmediate(text)),
+                crate::app::ComposerSendMode::FollowUp => Some(InputAction::QueueFollowUp(text)),
+            }
         } else {
             Some(InputAction::SendChat(text))
         }
@@ -303,9 +330,8 @@ fn resolve_enter(
     }
 }
 
-/// Tab on the chat surface: commit a live completion or re-open a dismissed
-/// menu. Tab owns no navigation duty (ADR-0173): with no completion up it is
-/// inert and falls through to the shared affordance layer.
+/// Tab on the chat surface: commit a live completion, re-open a dismissed
+/// menu, or toggle between steer and follow-up queue mode while running.
 fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
     if ctx.completion_kind != crate::completion::CompletionKind::None
         && ctx.suggestion_count > 0
@@ -320,6 +346,12 @@ fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
         && !ctx.is_responding
     {
         Some(InputAction::ReopenCompletion)
+    } else if ctx.is_responding
+        && !ctx
+            .surface_overrides
+            .is_remapped(crate::keymap::SurfaceVerb::ToggleSendMode)
+    {
+        Some(InputAction::ToggleSendMode)
     } else {
         None
     }
@@ -341,21 +373,6 @@ fn resolve_esc(ctx: &InputContext) -> Option<InputAction> {
         Some(InputAction::CloseCompletion)
     } else if ctx.is_responding {
         Some(InputAction::Interrupt)
-    } else {
-        None
-    }
-}
-
-/// Alt+S: take the draft and steer it into the running round.
-fn resolve_steer(
-    ctx: &InputContext,
-    input: &mut String,
-    cursor_position: &mut usize,
-) -> Option<InputAction> {
-    if ctx.is_responding {
-        let text = std::mem::take(input);
-        *cursor_position = 0;
-        Some(InputAction::SteerImmediate(text))
     } else {
         None
     }
@@ -413,22 +430,18 @@ fn resolve_down(
     }
 }
 
-/// A printable character on the chat surface. A focused transcript step or browse focus
-/// does not capture typing: the character is inserted into the composer and focus
-/// bounces back to it (`ClearFocusedTarget`). Runner sibling navigation
-/// (`[`/`]`) is owned by the Runner view's resolver.
+/// A printable character on the chat surface. When transcript or a step target is focused,
+/// characters do not bounce to the composer: focus returns to the composer only explicitly
+/// via `Esc` or a mouse click. Runner sibling navigation (`[`/`]`) is owned by the Runner
+/// view's resolver.
 fn resolve_printable(
     ctx: &InputContext,
-    c: char,
-    input: &mut String,
-    cursor_position: &mut usize,
+    _c: char,
+    _input: &mut String,
+    _cursor_position: &mut usize,
 ) -> Option<InputAction> {
     if ctx.has_focused_target || ctx.transcript_focused {
-        let byte_pos = crate::input::normalized_cursor_byte(input, *cursor_position);
-        *cursor_position = crate::input::char_index_at_byte(input, byte_pos);
-        input.insert(byte_pos, c);
-        *cursor_position += 1;
-        return Some(InputAction::ClearFocusedTarget);
+        return Some(InputAction::None);
     }
     None
 }
@@ -511,7 +524,7 @@ mod tests {
             (crate::keymap::Key::ESC, Mode::FocusedTarget),
             (crate::keymap::Key::ESC, Mode::Side),
             (crate::keymap::Key::ESC, Mode::Runner),
-            (crate::keymap::Key::ALT_S, Mode::Running),
+            (crate::keymap::Key::TAB, Mode::Running),
             (crate::keymap::Key::CTRL_R, Mode::Idle),
             (crate::keymap::Key::ALT_P, Mode::Idle),
             (crate::keymap::Key::ALT_N, Mode::Idle),
@@ -569,13 +582,28 @@ mod tests {
         };
         assert_eq!(action, Some(InputAction::SendChat("hello".into())));
 
-        // Running + text → queue follow-up.
+        // Running + text in Steer mode (default) → steer immediate.
         let action = {
             let mut input = String::from("next");
             let mut cursor = 4;
             resolve_chat_surface_key(
                 crate::keymap::Key::ENTER,
                 &ctx(Mode::Running, |_| {}),
+                &mut input,
+                &mut cursor,
+            )
+        };
+        assert_eq!(action, Some(InputAction::SteerImmediate("next".into())));
+
+        // Running + text in FollowUp mode → queue follow-up.
+        let action = {
+            let mut input = String::from("next");
+            let mut cursor = 4;
+            resolve_chat_surface_key(
+                crate::keymap::Key::ENTER,
+                &ctx(Mode::Running, |c| {
+                    c.composer_send_mode = crate::app::ComposerSendMode::FollowUp;
+                }),
                 &mut input,
                 &mut cursor,
             )
@@ -686,20 +714,29 @@ mod tests {
             ),
             Some(InputAction::HistoryPrev)
         );
-        // Alt+S steers only while running.
+        // Tab toggles send mode only while running.
         assert!(
             resolve_chat_surface_key(
-                crate::keymap::Key::ALT_S,
+                crate::keymap::Key::TAB,
                 &ctx(Mode::Idle, |_| {}),
                 &mut String::from("steer"),
                 &mut 5,
             )
             .is_none()
         );
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::TAB,
+                &ctx(Mode::Running, |_| {}),
+                &mut String::from("steer"),
+                &mut 5,
+            ),
+            Some(InputAction::ToggleSendMode)
+        );
     }
 
     #[test]
-    fn typed_character_bounces_focus_to_composer() {
+    fn typed_character_in_transcript_is_inert_and_does_not_bounce() {
         let mut input = String::from("");
         let mut cursor = 0;
         let action = resolve_chat_surface_key(
@@ -711,8 +748,8 @@ mod tests {
             &mut input,
             &mut cursor,
         );
-        assert_eq!(action, Some(InputAction::ClearFocusedTarget));
-        assert_eq!(input, "x", "typed char must land in the composer");
+        assert_eq!(action, Some(InputAction::None));
+        assert_eq!(input, "", "typed char must not pollute the composer");
     }
 
     #[test]
@@ -791,7 +828,7 @@ mod tests {
         let mut input = String::from("next");
         assert!(resolve_chat_surface_key(Key::ENTER, &c, &mut input, &mut 4).is_some());
         let mut input = String::from("steer");
-        assert!(resolve_chat_surface_key(Key::ALT_S, &c, &mut input, &mut 5).is_some());
+        assert!(resolve_chat_surface_key(Key::TAB, &c, &mut input, &mut 5).is_some());
 
         // Completion.
         let c = ctx(Mode::Completion, |_| {});
@@ -806,7 +843,7 @@ mod tests {
 
         let mut map = std::collections::HashMap::new();
         map.insert("open_history".to_string(), "ctrl+shift+r".to_string());
-        map.insert("steer".to_string(), "alt+enter".to_string());
+        map.insert("toggle_send_mode".to_string(), "ctrl+t".to_string());
         map.insert("prev_sibling".to_string(), "alt+[".to_string());
         let ov = SurfaceOverrides::from_config(&map);
         let c = ctx(Mode::Idle, |c| c.surface_overrides = ov.clone());
@@ -827,26 +864,26 @@ mod tests {
             "the canonical Ctrl+R must go inactive once open_history is remapped"
         );
 
-        // Steer's guard still applies on the remapped chord: fires only while
+        // ToggleSendMode's guard still applies on the remapped chord: fires only while
         // running.
         assert_eq!(
             resolve_chat_surface_key(
-                crate::keymap::Key::ALT_ENTER,
+                crate::keymap::Key::CTRL_T,
                 &ctx(Mode::Running, |c| c.surface_overrides = ov.clone()),
                 &mut String::from("steer"),
                 &mut 5
             ),
-            Some(InputAction::SteerImmediate("steer".into()))
+            Some(InputAction::ToggleSendMode)
         );
         assert_eq!(
             resolve_chat_surface_key(
-                crate::keymap::Key::ALT_ENTER,
+                crate::keymap::Key::CTRL_T,
                 &c,
                 &mut String::from("steer"),
                 &mut 5
             ),
             None,
-            "steer on a remapped chord must still require a running round"
+            "toggle_send_mode on a remapped chord must still require a running round"
         );
 
         // Runner sibling nav follows the remapped chord, same guards.
@@ -924,8 +961,8 @@ mod tests {
                 &mut String::new(),
                 &mut 0
             ),
-            Some(InputAction::ClearFocusedTarget),
-            "focused step owns `[` via the bounce path"
+            Some(InputAction::None),
+            "focused step absorbs `[` and does not bounce"
         );
 
         // Side: Esc returns to the main session, unless a completion is up.

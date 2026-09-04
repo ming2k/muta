@@ -50,8 +50,8 @@ pub(crate) enum ComposeTarget {
     Prompt,
     /// Slash command buffer.
     Command,
-    /// Agent running: Enter queues follow-up, Alt+S steers now.
-    Running,
+    /// Agent running: steer or follow-up.
+    Running(crate::app::ComposerSendMode),
     /// Active completion popup.
     Completion {
         kind: crate::completion::CompletionKind,
@@ -63,7 +63,7 @@ pub(crate) enum ComposeTarget {
 /// Derive the compose target from current state.
 pub(crate) fn compose_target(
     busy: bool,
-    _send_mode: Option<crate::app::ComposerSendMode>,
+    send_mode: Option<crate::app::ComposerSendMode>,
     is_slash: bool,
     completion_active: Option<crate::completion::CompletionKind>,
     is_history_search: bool,
@@ -75,7 +75,7 @@ pub(crate) fn compose_target(
         return ComposeTarget::Completion { kind };
     }
     if busy {
-        return ComposeTarget::Running;
+        return ComposeTarget::Running(send_mode.unwrap_or_default());
     }
     if is_slash {
         ComposeTarget::Command
@@ -88,10 +88,10 @@ pub(crate) fn compose_target(
 pub(crate) struct ComposerHints {
     pub compose_target: ComposeTarget,
     pub can_retry: bool,
-    /// The effective chord for the Session view's `steer` verb (ADR-0172):
+    /// The effective chord for toggling send mode while running (ADR-0172):
     /// the hint row advertises exactly the binding that fires. Defaults to the
-    /// canonical `Alt+S` when unremapped.
-    pub steer_key: crate::keymap::Key,
+    /// canonical `Tab` when unremapped.
+    pub toggle_mode_key: crate::keymap::Key,
 }
 
 impl Default for ComposerHints {
@@ -99,7 +99,7 @@ impl Default for ComposerHints {
         Self {
             compose_target: ComposeTarget::Prompt,
             can_retry: false,
-            steer_key: crate::keymap::Key::ALT_S,
+            toggle_mode_key: crate::keymap::Key::TAB,
         }
     }
 }
@@ -118,7 +118,7 @@ pub(crate) fn hint_row_parts(
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
-    steer_key: crate::keymap::Key,
+    toggle_mode_key: crate::keymap::Key,
 ) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
     let key_style = keycap_style(theme).bg(bg);
     let hint_style = theme.keycap_label_style().bg(bg);
@@ -162,18 +162,25 @@ pub(crate) fn hint_row_parts(
     let (state, action_label_style) = match target {
         ComposeTarget::Prompt => (HintState::Idle, hint_style),
         ComposeTarget::Command => (HintState::Command, hint_style),
-        ComposeTarget::Running => (HintState::Running, verb_style.fg(theme.info())),
+        ComposeTarget::Running(crate::app::ComposerSendMode::Steer) => (
+            HintState::Running(crate::app::ComposerSendMode::Steer),
+            verb_style.fg(theme.warn()),
+        ),
+        ComposeTarget::Running(crate::app::ComposerSendMode::FollowUp) => (
+            HintState::Running(crate::app::ComposerSendMode::FollowUp),
+            verb_style.fg(theme.info()),
+        ),
         ComposeTarget::Completion { .. } => (
             HintState::Completion,
             verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
         ),
         ComposeTarget::HistorySearch => unreachable!(),
     };
-    let hints = live_chat_hints(state, steer_key);
+    let hints = live_chat_hints(state, toggle_mode_key);
 
     // Left: navigation affordances, joined by a 3-col gap. Hidden on Tiny
-    // terminals for the plain prompt / command rows; the steer verb's hint
-    // (canonical Alt+S, remapped per ADR-0172) drops when compact so a running
+    // terminals for the plain prompt / command rows; the toggle verb's hint
+    // (canonical Tab, remapped per ADR-0172) drops when compact so a running
     // row stays tight.
     let mut left: Vec<Span<'static>> = Vec::new();
     let hide_nav = tiny && matches!(state, HintState::Idle | HintState::Command);
@@ -182,7 +189,7 @@ pub(crate) fn hint_row_parts(
             if h.side != HintSide::Nav {
                 continue;
             }
-            if h.key == steer_key && compact {
+            if h.key == toggle_mode_key && compact {
                 continue;
             }
             if !left.is_empty() {
@@ -235,9 +242,9 @@ pub(crate) fn hint_row_spans(
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
-    steer_key: crate::keymap::Key,
+    toggle_mode_key: crate::keymap::Key,
 ) -> Vec<Span<'static>> {
-    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg, steer_key);
+    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg, toggle_mode_key);
     if left.is_empty() {
         right
     } else {
@@ -265,42 +272,57 @@ mod tests {
             ComposeTarget::Prompt,
             &theme,
             Color::Reset,
-            crate::keymap::Key::ALT_S,
+            crate::keymap::Key::TAB,
         );
         assert_eq!(text(&left), "", "idle row carries no nav chords (ADR-0173)");
         assert_eq!(text(&right), "Enter send");
     }
 
     #[test]
-    fn running_hint_shows_steer_and_queue_follow_up() {
+    fn running_hint_shows_toggle_and_send_steer_by_default() {
         let theme = Theme::default();
         let (left, right) = hint_row_parts(
             false,
             ActionDensity::Full,
-            ComposeTarget::Running,
+            ComposeTarget::Running(crate::app::ComposerSendMode::Steer),
             &theme,
             Color::Reset,
-            crate::keymap::Key::ALT_S,
+            crate::keymap::Key::TAB,
         );
-        assert_eq!(text(&left), "Alt+S steer now");
+        assert_eq!(text(&left), "Tab follow-up mode");
+        assert_eq!(text(&right), "Enter send steer");
+    }
+
+    #[test]
+    fn running_hint_shows_toggle_and_queue_follow_up_in_follow_up_mode() {
+        let theme = Theme::default();
+        let (left, right) = hint_row_parts(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Running(crate::app::ComposerSendMode::FollowUp),
+            &theme,
+            Color::Reset,
+            crate::keymap::Key::TAB,
+        );
+        assert_eq!(text(&left), "Tab steer mode");
         assert_eq!(text(&right), "Enter queue follow-up");
     }
 
     #[test]
-    fn running_hint_advertises_remapped_steer_chord() {
+    fn running_hint_advertises_remapped_toggle_chord() {
         let theme = Theme::default();
         let (left, _) = hint_row_parts(
             false,
             ActionDensity::Full,
-            ComposeTarget::Running,
+            ComposeTarget::Running(crate::app::ComposerSendMode::Steer),
             &theme,
             Color::Reset,
-            crate::keymap::Key::ALT_ENTER,
+            crate::keymap::Key::CTRL_T,
         );
         assert_eq!(
             text(&left),
-            "Alt+Enter steer now",
-            "the hint must advertise the effective steer binding, not the canonical"
+            "Ctrl+T follow-up mode",
+            "the hint must advertise the effective toggle binding, not the canonical"
         );
     }
 }

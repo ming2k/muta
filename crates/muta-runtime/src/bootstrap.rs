@@ -22,8 +22,9 @@ use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use muta_agent::{Agent, AgentIdentity, MasterPreset, RoundLifecycle, RunnerTool};
 use muta_contracts::{
-    AgentNotice, AgentRequest, AgentResponse, Message, NoticeSurface, Provider, RUNNER_EXPLORE,
-    RoundEvent, ToolContextBuilder, ToolSet, WorkspaceTrustState, collect_toolset,
+    AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
+    NoticeSurface, Provider, RUNNER_EXPLORE, RoundEvent, ToolContextBuilder, ToolSet,
+    WorkspaceTrustState, collect_toolset,
 };
 
 use muta_mcp::{McpCatalog, McpRuntime};
@@ -362,16 +363,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     if security_snapshot.ex_workspace.is_trusted() {
         config.merge_project_additional_roots(Config::load_project_additional_roots(&project_root));
     }
-    let additional_roots: Vec<std::path::PathBuf> =
-        match config.resolve_workspace_additional_roots(&project_root) {
-            Ok(roots) => roots,
-            Err(reason) => {
-                // Fail closed to the primary workspace when any configured
-                // linked root is invalid.
-                eprintln!("muta: additional workspace roots unavailable: {reason}");
-                Vec::new()
-            }
-        };
+    let resolved_additional = config
+        .resolve_workspace_additional_roots_detailed(&project_root)
+        .unwrap_or_default();
+    for (raw, reason) in &resolved_additional.skipped {
+        tracing::warn!(
+            root = %raw,
+            %reason,
+            "additional workspace root skipped"
+        );
+    }
+    let additional_roots: Vec<std::path::PathBuf> = resolved_additional.admitted;
     // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
     // (via the tool context below), and `UpdateWebSearchConfig` /
     // `/settings reload` write into it, so backend/reader/proxy changes
@@ -544,6 +546,27 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                         "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust instructions`).",
                         gated.join(", ")
                     )),
+            ),
+        ));
+    }
+    if !resolved_additional.skipped.is_empty() {
+        let details = resolved_additional
+            .skipped
+            .iter()
+            .map(|(p, r)| format!("`{p}` ({r})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    NoticeKind::ReviewAlert,
+                    NoticeSeverity::Warning,
+                    "Some additional workspace roots could not be loaded",
+                    NoticeSource::Harness,
+                )
+                .with_surface(NoticeSurface::Toast)
+                .with_body(format!("Skipped roots: {details}")),
             ),
         ));
     }

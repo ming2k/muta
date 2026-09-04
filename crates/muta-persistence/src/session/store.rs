@@ -5,27 +5,22 @@ use super::*;
 impl SessionStore {
     /// Open a per-project store pinned to a **fresh** session file.
     ///
-    /// As of ADR-0018 the project bucket no longer keeps a single shared
-    /// `session.json` "active pointer": every running `muta` instance mints
-    /// its own `sessions/<id>.json` + `sessions/<id>.jsonl`, so two instances
-    /// in the same project never share a mutable file. To continue a previous
-    /// session the caller picks one via the `/sessions` picker or
-    /// [`Self::open`] / [`Self::resume`].
+    /// Under ADR-0168 all session state is stored authoritatively in SQLite (`muta.db`).
     pub fn load_for_project(project_root: PathBuf) -> Self {
-        // Establish one physical identity at the persistence boundary. This
-        // prevents aliases such as macOS `/var` -> `/private/var` (and normal
-        // symlinks elsewhere) from splitting one project across durable
-        // session identities. Non-existent roots retain their caller-supplied
-        // spelling so tests and future create-on-demand flows remain valid.
+        // Establish one physical identity at the persistence boundary.
         let project_root = project_root.canonicalize().unwrap_or(project_root);
         let dirs = paths::get();
         let sessions_dir = dirs.project_sessions_dir(&project_root);
         if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
             tracing::warn!(error = %e, "could not create project sessions dir");
         }
+        let db_path = dirs.db_file();
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let blob_store = BlobStore::new(dirs.blobs_dir());
 
-        Self::pin_fresh(project_root, sessions_dir, blob_store)
+        Self::pin_fresh(project_root, sessions_dir, db_path, blob_store)
     }
 
     /// Backwards-compatible alias for [`Self::load_for_project`] using the
@@ -35,15 +30,8 @@ impl SessionStore {
         Self::load_for_project(project_root)
     }
 
-    /// Open a `SessionStore` pinned to an explicit snapshot `path`. The
-    /// session's event log lives at `path.with_extension("jsonl")`, and its
-    /// sibling session files (forks, archives) live in `path.parent()` — i.e.
-    /// the parent directory plays the role of the project's `sessions/` dir.
-    ///
-    /// This is the low-level constructor used by runners / side
-    /// conversations (ADR-0017) and by tests that want a throwaway file
-    /// without wiring up the global paths table. Production startup uses
-    /// [`Self::load_for_project`].
+    /// Open a `SessionStore` pinned to an explicit snapshot `path`.
+    /// In the unified SQLite architecture, `sessions_dir` hosts `muta.db`.
     pub fn for_path(path: PathBuf) -> Self {
         let sessions_dir = path
             .parent()
@@ -51,16 +39,16 @@ impl SessionStore {
             .unwrap_or_else(|| PathBuf::from("."));
         let event_log_path = path.with_extension("jsonl");
         let project_root = sessions_dir.clone();
+        let db_path = sessions_dir.join("muta.db");
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
-        let data = load_or_seed(&path, &event_log_path, &blob_store, &project_root);
+        let id_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("default");
+        let data = load_or_seed(&db_path, id_stem, &blob_store, &project_root, Some(&path));
         let event_log = EventLog::new(event_log_path);
-        // Defer only while the pinned snapshot does not exist yet: a `for_path`
-        // into a never-written file is a fresh, content-less session (lazy,
-        // ADR-0018); opening an existing snapshot is already materialised.
-        let defer_persist = !path.exists();
+        let defer_persist = !path.exists() && data.is_user_facing_empty();
         Self {
             project_root,
             sessions_dir,
+            db_path,
             blob_store,
             state: Mutex::new(SessionState {
                 path,
@@ -73,10 +61,15 @@ impl SessionStore {
     }
 
     /// Construct a store pinned to a brand-new, empty session file in
-    /// `sessions_dir`. The file is **not** written until the session gains
+    /// `sessions_dir`. The session is **not** written until the session gains
     /// real content, so a `muta` that starts and exits without a round
     /// leaves no empty-file litter behind.
-    fn pin_fresh(project_root: PathBuf, sessions_dir: PathBuf, blob_store: BlobStore) -> Self {
+    fn pin_fresh(
+        project_root: PathBuf,
+        sessions_dir: PathBuf,
+        db_path: PathBuf,
+        blob_store: BlobStore,
+    ) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
         let event_log = EventLog::new(path.with_extension("jsonl"));
@@ -88,6 +81,7 @@ impl SessionStore {
         Self {
             project_root,
             sessions_dir,
+            db_path,
             blob_store,
             state: Mutex::new(SessionState {
                 path,
@@ -196,33 +190,24 @@ impl SessionStore {
         if state.data.id == resolved {
             return Ok(());
         }
-        let event_log_path = path.with_extension("jsonl");
+        let db_path = self.db_path.clone();
         let project_root = self.project_root.clone();
         let blob_store = self.blob_store.clone();
-        // Blocking load on a worker thread; the lock is held across the await
-        // so the swap below is atomic with the resolve above.
         let load_path = path.clone();
-        let load_event_log_path = event_log_path.clone();
+        let resolved_id = resolved.clone();
         let data = tokio::task::spawn_blocking(move || {
-            load_or_seed(&load_path, &load_event_log_path, &blob_store, &project_root)
+            load_or_seed(&db_path, &resolved_id, &blob_store, &project_root, Some(&load_path))
         })
         .await
         .map_err(|e| format!("session open task failed: {e}"))?;
         state.path = path;
-        state.event_log = EventLog::new(event_log_path);
+        state.event_log = EventLog::new(state.path.with_extension("jsonl"));
         state.data = data;
-        // The opened session is already materialised on disk; persist eagerly.
         state.defer_persist = false;
         Ok(())
     }
 
-    /// Delete a session by id or short id prefix. Deleting the active session
-    /// removes its snapshot and event log, then repoints the store at a fresh
-    /// empty session; other sessions just have their two files removed from
-    /// the sessions directory.
-    ///
-    /// Returns the **resolved full id** of the deleted session so callers can
-    /// prune derived per-session state (e.g. the project embedding index).
+    /// Delete a session by id or short id prefix.
     pub async fn delete(&self, id: &str) -> Result<String, String> {
         let (resolved, snapshot, is_active) = {
             let state = self.state.lock().await;
@@ -230,16 +215,21 @@ impl SessionStore {
             (resolved.clone(), path, state.data.id == resolved)
         };
 
-        let log = snapshot.with_extension("jsonl");
+        let db_path = self.db_path.clone();
         let resolved_for_task = resolved.clone();
+        let log = snapshot.with_extension("jsonl");
         tokio::task::spawn_blocking(move || {
-            let existed = snapshot.exists() || log.exists();
+            let engine = crate::db::DatabaseEngine::open(&db_path, None)
+                .map_err(|e| e.to_string())?;
+            let db_deleted = engine.delete_session(&resolved_for_task).map_err(|e| e.to_string())?;
+
+            let file_deleted = snapshot.exists() || log.exists();
             let _ = fs::remove_file(&snapshot);
             let _ = fs::remove_file(&log);
 
-            if !existed {
+            if !db_deleted && !file_deleted {
                 return Err(format!(
-                    "Could not delete session '{}': files not found.",
+                    "Could not delete session '{}': session not found.",
                     resolved_for_task
                 ));
             }
@@ -256,55 +246,33 @@ impl SessionStore {
         Ok(resolved)
     }
 
-    /// Set (or clear) a session's manual title by id or short id prefix — the
-    /// storage half of `AgentRequest::RenameSession`. `Some(title)` records a
-    /// user-set title (`manual = true`, so AI generation will not overwrite
-    /// it, ADR-0022); `None` clears the manual override (`manual = false`,
-    /// [`Self::set_title`]'s documented clear form), returning the picker /
-    /// monitor overview to the AI-title / first-prompt fallback.
-    ///
-    /// Renaming the active session delegates to [`Self::set_title`] so the
-    /// in-memory state and the empty-session laziness guard stay
-    /// authoritative. Renaming an archived session mirrors [`Self::delete`]'s
-    /// shape: the one file is loaded, mutated, and re-persisted on a blocking
-    /// thread (with the `TitleSet` event appended to its log), leaving this
-    /// store's pinned session untouched.
+    /// Set (or clear) a session's manual title by id or short id prefix.
     pub async fn rename(&self, id: &str, title: Option<String>) -> Result<(), String> {
         let manual = title.is_some();
-        let (path, is_active) = {
+        let (resolved, is_active) = {
             let state = self.state.lock().await;
-            let (resolved, path) = self.resolve_session(id, &state)?;
-            (path, state.data.id == resolved)
+            let (resolved, _) = self.resolve_session(id, &state)?;
+            (resolved.clone(), state.data.id == resolved)
         };
         if is_active {
             return self.set_title(title, manual).await;
         }
-        let blob_store = self.blob_store.clone();
-        let project_root = self.project_root.clone();
+        let db_path = self.db_path.clone();
+        let title_opt = title.clone();
         tokio::task::spawn_blocking(move || {
-            let log_path = path.with_extension("jsonl");
-            let mut data = load_or_seed(&path, &log_path, &blob_store, &project_root);
-            data.title = title.clone();
-            data.title_manual = manual;
-            data.updated_at = unix_timestamp();
-            let event_log = EventLog::new(log_path.clone());
-            ensure_event_log_started(&event_log, &data)?;
-            event_log.append(SessionEvent::TitleSet { title, manual })?;
-            // Same ordering as `persist_off_runtime`: compact before the
-            // snapshot write so the stamped watermark matches the seed.
-            compact_log_if_needed(&log_path, &data)?;
-            persist_to(&path, &data, &blob_store)
+            let engine = crate::db::DatabaseEngine::open(&db_path, None)
+                .map_err(|e| e.to_string())?;
+            engine
+                .rename_session(&resolved, title_opt.as_deref(), manual)
+                .map_err(|e| e.to_string())?;
+            Ok(())
         })
         .await
         .map_err(|e| format!("rename task failed: {e}"))?
     }
 
     /// The picker-style summary of the pinned session, synthesized from
-    /// in-memory state. The disk-backed [`Self::list`] only sees persisted
-    /// sessions, so a title change on a live, never-persisted session (empty
-    /// transcript — `set_title` deliberately does not persist those) is
-    /// invisible to every `list()` consumer. Monitor reseeds and overview
-    /// pushes after a rename use this to see it anyway.
+    /// in-memory state.
     pub async fn active_summary(&self) -> SessionSummary {
         let state = self.state.lock().await;
         let data = &state.data;
@@ -334,71 +302,56 @@ impl SessionStore {
 
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
+        let db_path = self.db_path.clone();
         let sessions_dir = self.sessions_dir.clone();
+        let project_root_str = self.project_root.to_string_lossy().into_owned();
+        let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
-            let mut summaries = Vec::new();
             if sessions_dir.exists() {
-                for entry in fs::read_dir(&sessions_dir).map_err(|error| error.to_string())? {
-                    let entry = entry.map_err(|error| error.to_string())?;
-                    let path = entry.path();
-                    if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                        continue;
-                    }
-                    let Ok(content) = fs::read_to_string(&path) else {
-                        continue;
-                    };
-                    let Ok(session) = serde_json::from_str::<SessionHeader>(&content) else {
-                        continue;
-                    };
-                    // Empty sessions (no dialogue messages in model_window or
-                    // archived_transcript) are never valid history records.
-                    // Skip them, and prune legacy stale empty files from disk.
-                    if session.model_window.is_empty() && session.archived_transcript.is_empty() {
-                        if session.id != active_id {
-                            let _ = fs::remove_file(&path);
-                            let _ = fs::remove_file(path.with_extension("jsonl"));
+                if let Ok(entries) = fs::read_dir(&sessions_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                            if let Ok(content) = fs::read_to_string(&path) {
+                                if let Ok(session) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    let is_empty = session.get("model_window").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true)
+                                        && session.get("archived_transcript").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true);
+                                    let sess_id = session.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                    if is_empty && sess_id != active_id {
+                                        let _ = fs::remove_file(&path);
+                                        let _ = fs::remove_file(path.with_extension("jsonl"));
+                                    }
+                                }
+                            }
                         }
-                        continue;
                     }
-                    summaries.push(summary_header(&session, session.id == active_id));
                 }
             }
-            summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-            Ok(summaries)
+            let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
+                .map_err(|e| e.to_string())?;
+            engine.list_session_summaries(Some(&project_root_str), &active_id)
+                .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| format!("session list task failed: {e}"))?
     }
 
-    /// Full detail for one session, requested on demand by the session-info
-    /// sub-view (`i` from the picker). Like [`Self::list`], this uses the
-    /// deferred `SessionHeader` parse (no full-transcript deserialize) and runs
-    /// on a blocking thread; unlike the list rows it returns the *complete*
-    /// last effective user prompt rather than a truncated preview. Returns
-    /// `Err` for an unknown / unreadable id.
+    /// Full detail for one session, requested on demand by the session-info sub-view.
     pub async fn detail(&self, id: &str) -> Result<SessionDetail, String> {
         let active_id = self.state.lock().await.data.id.clone();
-        // Resolve to a path (filename match, no full parse) and hand the one
-        // file off to a blocking thread for the header extract.
-        let (resolved, path) = {
+        let (resolved, _) = {
             let state = self.state.lock().await;
             self.resolve_session(id, &state)?
         };
+        let db_path = self.db_path.clone();
+        let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
-            let content = fs::read_to_string(&path)
-                .map_err(|e| format!("could not read session '{}': {e}", resolved))?;
-            let header = serde_json::from_str::<SessionHeader>(&content)
-                .map_err(|e| format!("could not parse session '{}': {e}", resolved))?;
-            Ok(SessionDetail {
-                id: header.id.clone(),
-                title: header.title.clone(),
-                digest: header.digest.clone(),
-                created_at: header.created_at,
-                updated_at: header.updated_at,
-                message_count: header.model_window.len() + header.archived_transcript.len(),
-                active: header.id == active_id,
-                last_prompt: last_effective_prompt(&header),
-            })
+            let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
+                .map_err(|e| e.to_string())?;
+            engine
+                .get_session_detail(&resolved, &active_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Session '{resolved}' not found."))
         })
         .await
         .map_err(|e| format!("session detail task failed: {e}"))?
@@ -421,49 +374,32 @@ impl SessionStore {
         data: SessionData,
         blob_store: BlobStore,
     ) -> Result<(), String> {
-        // Every mutator calls this immediately after releasing `state` and
-        // awaits the result. The FIFO gate therefore preserves mutation order
-        // while the actual fsync-heavy work remains off the async executor.
         let _persist_guard = self.persist_gate.lock().await;
-        // `spawn_blocking` is the right primitive: this is real blocking I/O,
-        // not async work. `BlockingError` only occurs at runtime shutdown, in
-        // which case the session is tearing down anyway — surface it as a
-        // plain error.
-        //
-        // Log compaction runs *before* the snapshot write when the append-only
-        // log has grown past its threshold and the snapshot has fully folded
-        // it. Compacting first means the snapshot's `applied_seq` watermark
-        // (stamped from the log's high-water mark inside `write_session_file`)
-        // ends up equal to the compacted seed's high-water mark, so the next
-        // load replays an empty tail. The log stays bounded over the life of a
-        // long session without ever dropping an event the snapshot has not
-        // already absorbed.
+        let db_path = self.db_path.clone();
         let log_path = path.with_extension("jsonl");
         tokio::task::spawn_blocking(move || {
+            let mut data = data;
+            if log_path.exists() {
+                let event_log = EventLog::new(log_path.clone());
+                if let Some(high) = event_log.high_seq() {
+                    data.applied_seq = Some(high);
+                }
+            }
             compact_log_if_needed(&log_path, &data)?;
-            persist_to(&path, &data, &blob_store)
+            persist_to(&db_path, &data, &blob_store)
         })
         .await
         .map_err(|e| format!("session persist task failed: {e}"))?
     }
 
-    /// Write `data` to `sessions_dir/<data.id>.json`. Used to materialise a
-    /// session file for a snapshot that is not (or not yet) the pinned one —
-    /// for example seeding an archived branch in tests.
+    /// Write `data` to the store's SQLite database.
     #[cfg(test)]
     pub(crate) fn persist_archive(&self, data: &SessionData) -> Result<(), String> {
-        let path = self.sessions_dir.join(format!("{}.json", data.id));
-        persist_to(&path, data, &self.blob_store)
+        persist_to(&self.db_path, data, &self.blob_store)
     }
 
     /// Resolve `input` (a 4+ char hex id or prefix) to the full session id
-    /// **and the file path** that holds it. Identity is matched against the
-    /// `id` field stored inside each snapshot, not the filename, so a session
-    /// pinned via [`SessionStore::for_path`] under an arbitrary name (e.g. a
-    /// test's `session.json`, or a not-yet-migrated legacy active file) is
-    /// found just as reliably as a canonical `sessions/<id>.json`. The active
-    /// session is matched against its in-memory id first so a prefix of the
-    /// current session resolves without touching disk.
+    /// and the path that identifies it.
     pub(crate) fn resolve_session(
         &self,
         input: &str,
@@ -483,55 +419,33 @@ impl SessionStore {
         if active.data.id.starts_with(input) {
             matches.push((active.data.id.clone(), active.path.clone()));
         }
-        // Fast path: a session's filename *is* its id
-        // (`sessions/<id>.json`, ADR-0018), so resolve a prefix by listing the
-        // directory and matching file stems — no file is ever opened. This used
-        // to read + fully deserialize every session's `SessionData` (the full
-        // recursive transcript) on each `delete` / `open` just to compare an id
-        // prefix; with hundreds of multi-megabyte snapshots that dominated the
-        // delete latency and made the `/sessions` picker lag.
-        if self.sessions_dir.exists() {
-            for entry in fs::read_dir(&self.sessions_dir).map_err(|error| error.to_string())? {
-                let entry = entry.map_err(|error| error.to_string())?;
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                // Prefer the filename stem — the authoritative id for every
-                // snapshot written since ADR-0018. Legacy snapshots that carry
-                // an `id` differing from their filename are still reachable
-                // through the content-scan fallback below.
-                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                if stem.starts_with(input) && !matches.iter().any(|(id, _)| id == stem) {
-                    matches.push((stem.to_string(), path));
+
+        // Query SQLite database
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path, None) {
+            let project_root_str = self.project_root.to_string_lossy();
+            if let Ok(found) = engine.resolve_session_prefix(input, Some(&project_root_str)) {
+                for id in found {
+                    if !matches.iter().any(|(m_id, _)| m_id == &id) {
+                        let path = self.sessions_dir.join(format!("{id}.json"));
+                        matches.push((id, path));
+                    }
                 }
             }
-            // Content-scan fallback, only when no filename matched: a legacy
-            // snapshot (pre-ADR-0018 active-pointer file) can store an `id` that
-            // differs from its filename, so a user typing that id finds nothing
-            // by filename. Falling back to an id-only deserialize — `SessionIdOnly`
-            // skips every other field, so it never allocates the transcript —
-            // keeps those rare sessions resolvable. The common case above never
-            // opens a file, so a large project pays this only on a genuine miss.
-            if matches.is_empty() {
-                for entry in fs::read_dir(&self.sessions_dir).map_err(|error| error.to_string())? {
-                    let entry = entry.map_err(|error| error.to_string())?;
+        }
+
+        // Fallback to scanning legacy sessions directory
+        if matches.is_empty() && self.sessions_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&self.sessions_dir) {
+                for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|s| s.to_str()) != Some("json") {
                         continue;
                     }
-                    let Ok(content) = fs::read_to_string(&path) else {
+                    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                         continue;
                     };
-                    let Ok(header) = serde_json::from_str::<SessionIdOnly>(&content) else {
-                        continue;
-                    };
-                    if header.id.starts_with(input)
-                        && !matches.iter().any(|(id, _)| id == &header.id)
-                    {
-                        matches.push((header.id, path));
+                    if stem.starts_with(input) && !matches.iter().any(|(id, _)| id == stem) {
+                        matches.push((stem.to_string(), path));
                     }
                 }
             }

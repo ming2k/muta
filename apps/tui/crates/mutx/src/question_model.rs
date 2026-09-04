@@ -86,7 +86,9 @@ pub enum QuestionAction {
     /// Advance to the next question, or submit all answers from the final
     /// question (Enter).
     Submit,
-    /// Return to the previous question (Shift+Tab). No-op on the first page.
+    /// Advance to the next question without submitting (Tab / Right). No-op on the final page.
+    Next,
+    /// Return to the previous question (Shift+Tab / Left). No-op on the first page.
     Previous,
     /// Cancel the modal (Esc).
     Cancel,
@@ -375,6 +377,12 @@ impl QuestionModel {
                         QuestionEffect::Closed { request_id },
                     ]
                 }
+            }
+            QuestionAction::Next => {
+                if self.current + 1 < self.request.questions.len() {
+                    self.current += 1;
+                }
+                Vec::new()
             }
             QuestionAction::Previous => {
                 self.current = self.current.saturating_sub(1);
@@ -820,6 +828,32 @@ mod tests {
     }
 
     // ── Multi-question answers ───────────────────────────────────────────
+
+    #[test]
+    fn next_and_previous_navigate_pages_without_early_submit() {
+        let m = QuestionModel::open(two_question_req());
+        assert_eq!(m.current(), 0);
+
+        // Previous on first question is a no-op
+        let (m, effects) = m.update(QuestionAction::Previous);
+        assert_eq!(m.current(), 0);
+        assert!(effects.is_empty());
+
+        // Next moves to page 1
+        let (m, effects) = m.update(QuestionAction::Next);
+        assert_eq!(m.current(), 1);
+        assert!(effects.is_empty());
+
+        // Next on last question does NOT submit; it stays at the end
+        let (m, effects) = m.update(QuestionAction::Next);
+        assert_eq!(m.current(), 1);
+        assert!(effects.is_empty());
+
+        // Previous steps back to page 0
+        let (m, effects) = m.update(QuestionAction::Previous);
+        assert_eq!(m.current(), 0);
+        assert!(effects.is_empty());
+    }
 
     #[test]
     fn compute_answers_covers_all_questions() {

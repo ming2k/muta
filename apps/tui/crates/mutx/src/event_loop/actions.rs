@@ -265,6 +265,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::QueueFollowUp(text) => {
             commands::handle_queue_follow_up(app, runtime, viewed_session_id, text).await;
         }
+        input::InputAction::ToggleSendMode => {
+            app.composer_send_mode = match app.composer_send_mode {
+                crate::app::ComposerSendMode::Steer => crate::app::ComposerSendMode::FollowUp,
+                crate::app::ComposerSendMode::FollowUp => crate::app::ComposerSendMode::Steer,
+            };
+        }
         input::InputAction::SendSlash(cmd) => {
             return commands::handle_send_slash(app, runtime, session, cmd).await;
         }
@@ -1673,6 +1679,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             };
             let entries = crate::overlays::command_palette::filter_palette_commands(
                 &app.command_palette_query,
+                &app.command_catalog,
                 &app.recent_commands,
                 &app_ctx,
             );
@@ -1681,17 +1688,36 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 .or_else(|| entries.first())
                 && matches!(entry.availability, crate::keymap::Availability::Available)
             {
-                let cmd_id = entry.spec.id;
-                if let Some(pos) = app.recent_commands.iter().position(|&id| id == cmd_id) {
+                let cmd_key = entry.slash.clone().unwrap_or_else(|| entry.label.clone());
+                if let Some(pos) = app.recent_commands.iter().position(|id| id == &cmd_key) {
                     app.recent_commands.remove(pos);
                 }
-                app.recent_commands.insert(0, cmd_id);
+                app.recent_commands.insert(0, cmd_key);
                 if app.recent_commands.len() > 10 {
                     app.recent_commands.truncate(10);
                 }
 
                 app.pop_transient_surface();
-                return execute_command_by_id(app, ctx, cmd_id).await;
+                match entry.action.clone() {
+                    crate::overlays::command_palette::PaletteAction::Client(cmd_id) => {
+                        return execute_command_by_id(app, ctx, cmd_id).await;
+                    }
+                    crate::overlays::command_palette::PaletteAction::Harness {
+                        slash,
+                        requires_args,
+                    } => {
+                        if requires_args {
+                            app.show_chat_surface();
+                            app.input = format!("{} ", slash);
+                            app.set_cursor_end();
+                            app.completion_dismissed = false;
+                            app.suggestion_index = None;
+                            return ActionFlow::Handled;
+                        } else {
+                            return commands::handle_send_slash(app, runtime, session, slash).await;
+                        }
+                    }
+                }
             }
         }
         input::InputAction::ViewCloseSelected => {
@@ -1986,6 +2012,15 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.question_modal_follow = true;
             }
         }
+        input::InputAction::QuestionNext => {
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
+                && let Some(qm) = app.question.take()
+            {
+                app.question = Some(qm.update(crate::question_model::QuestionAction::Next).0);
+                app.question_scroll = 0;
+                app.question_modal_follow = true;
+            }
+        }
         input::InputAction::QuestionCancel => {
             if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && let Some(qm) = app.question.take()
@@ -2104,6 +2139,34 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 // Backspace can collapse the field back up a line;
                 // re-arm follow so the caret stays on screen.
                 app.question_modal_follow = true;
+            }
+        }
+        input::InputAction::PermissionPrevOption => {
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Permission) {
+                let one_off = app.pending_permission.as_ref().is_some_and(|r| r.one_off);
+                let total = crate::overlays::permission_action_count(
+                    app.permission_confirm_always,
+                    one_off,
+                );
+                if total > 0 {
+                    app.modal_index = if app.modal_index == 0 {
+                        total - 1
+                    } else {
+                        app.modal_index - 1
+                    };
+                }
+            }
+        }
+        input::InputAction::PermissionNextOption => {
+            if app.active_sheet() == Some(crate::sheet::SheetKind::Permission) {
+                let one_off = app.pending_permission.as_ref().is_some_and(|r| r.one_off);
+                let total = crate::overlays::permission_action_count(
+                    app.permission_confirm_always,
+                    one_off,
+                );
+                if total > 0 {
+                    app.modal_index = (app.modal_index + 1) % total;
+                }
             }
         }
         input::InputAction::PermissionSubmit => {
@@ -2664,7 +2727,7 @@ async fn execute_command_by_id(
             }
         }
         CommandId::InterruptTask => {
-            return commands::handle_ctrl_c(app, viewed_session_id, copy_tx, copy_pending);
+            handle_esc_interrupt(app, false);
         }
         CommandId::Quit => {
             let _ = app.tx.send(AgentRequest::EndSession);
@@ -2696,9 +2759,11 @@ async fn execute_command_by_id(
             app.set_cursor(0);
             commands::handle_send_steer(app, runtime, viewed_session_id, text).await;
         }
-        CommandId::InsertNewline => {
-            app.input.push('\n');
-            app.set_cursor_end();
+        CommandId::ToggleSendMode => {
+            app.composer_send_mode = match app.composer_send_mode {
+                crate::app::ComposerSendMode::Steer => crate::app::ComposerSendMode::FollowUp,
+                crate::app::ComposerSendMode::FollowUp => crate::app::ComposerSendMode::Steer,
+            };
         }
         CommandId::HistorySearch => {
             enter_panel(
@@ -2707,54 +2772,6 @@ async fn execute_command_by_id(
                 runtime,
                 viewed_session_id,
             );
-        }
-        CommandId::ScrollTranscriptUp => {
-            app.scroll = app
-                .scroll
-                .saturating_sub(app.view_height.saturating_sub(2).max(1));
-        }
-        CommandId::ScrollTranscriptDown => {
-            app.scroll = app
-                .scroll
-                .saturating_add(app.view_height.saturating_sub(2).max(1))
-                .min(app.max_scroll);
-        }
-        CommandId::TranscriptMoveUp => {
-            app.focus_interactive_target(-1);
-        }
-        CommandId::TranscriptMoveDown => {
-            app.focus_interactive_target(1);
-        }
-        CommandId::TranscriptOpenOrToggle => {
-            if let Some(target) = app.focused_target
-                && target.kind == InteractiveTargetKind::ToolStep
-            {
-                let mut messages = runtime.messages.write().await;
-                let enter_id =
-                    resolve_focused_mut(&mut messages, &app.focus_stack, target.message_idx)
-                        .and_then(|message| {
-                            if message.is_runner_task() {
-                                message.tool_step_call_id().map(String::from)
-                            } else {
-                                None
-                            }
-                        });
-                if let Some(id) = enter_id {
-                    drop(messages);
-                    app.enter_runner(id);
-                } else {
-                    app.toggle_step_pinned(&mut messages, target.message_idx);
-                    drop(messages);
-                }
-            }
-        }
-        CommandId::TranscriptTop => {
-            app.scroll = 0;
-            app.follow_bottom = false;
-        }
-        CommandId::TranscriptBottom => {
-            app.scroll = app.max_scroll;
-            app.follow_bottom = true;
         }
         CommandId::NavigateSession => {
             enter_view(app, crate::surfaces::View::Session, runtime);
@@ -2901,10 +2918,6 @@ async fn execute_command_by_id(
                 std::time::Duration::from_millis(2000),
             );
         }
-        CommandId::McpReconnectSelected => {}
-        CommandId::McpToggleSelected => {}
-        CommandId::ToolsToggleSelected => {}
-        CommandId::PermissionsRevokeSelected => {}
         CommandId::PermissionsClearAll => {
             if let Some(ref ctx) = app.session_context {
                 for perm in &ctx.permissions {
@@ -2921,13 +2934,9 @@ async fn execute_command_by_id(
                 std::time::Duration::from_millis(2000),
             );
         }
-        CommandId::SkillsToggleDetail => {}
         CommandId::ProviderAddConnection => {
             app.open_preset_chooser();
         }
-        CommandId::ProviderEditSelected => {}
-        CommandId::ProviderDeleteSelected => {}
-        CommandId::ProviderToggleFavorite => {}
         CommandId::RedrawScreen => {
             show_local_toast(
                 app,

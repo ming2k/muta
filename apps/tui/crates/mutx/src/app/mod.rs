@@ -486,7 +486,7 @@ pub struct App {
     pub(crate) command_palette_selected: usize,
     pub(crate) command_palette_scroll: usize,
     /// Recently executed commands for MRU display in Command Palette.
-    pub(crate) recent_commands: Vec<crate::keymap::CommandId>,
+    pub(crate) recent_commands: Vec<String>,
     /// The session whose outbox the Queue view auto-blocked on entry
     /// (ADR-0139). `hide_active_panel` is an `&mut App` method that
     /// cannot see the loop's `viewed_session_id`, so the block site records

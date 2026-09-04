@@ -1848,13 +1848,22 @@ fn composer_hint_sentence_names_the_delivery_group() {
     use crate::components::composer_hints::{ComposeTarget, ComposerHints};
 
     let hints = ComposerHints {
-        compose_target: ComposeTarget::Running,
+        compose_target: ComposeTarget::Running(crate::app::ComposerSendMode::Steer),
         ..Default::default()
     };
     let mut terminal = draw_frame_composer("wait", true, hints);
     let row4 = frame_row_text(&mut terminal, 3);
+    assert!(row4.contains("send steer"), "steer verb: {row4:?}");
+    assert!(row4.contains("follow-up mode"), "follow-up mode affordance: {row4:?}");
+
+    let hints_followup = ComposerHints {
+        compose_target: ComposeTarget::Running(crate::app::ComposerSendMode::FollowUp),
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("wait", true, hints_followup);
+    let row4 = frame_row_text(&mut terminal, 3);
     assert!(row4.contains("queue follow-up"), "follow-up verb: {row4:?}");
-    assert!(row4.contains("steer now"), "steer now affordance: {row4:?}");
+    assert!(row4.contains("steer mode"), "steer mode affordance: {row4:?}");
 }
 
 /// Once the draft outgrows the box, the three-part overflow affordance
@@ -2021,5 +2030,83 @@ fn composer_top_row_renders_history_mode_badges() {
     assert!(
         row0.contains("[history search · draft saved]"),
         "top row has history search badge: {row0:?}"
+    );
+}
+
+#[test]
+fn draw_composer_records_composer_rect_enabling_whole_component_focus() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(40, 6);
+    let mut layout_map = LayoutMap::new();
+    let input_rect = Rect::new(0, 1, 40, 4);
+
+    terminal.draw(|f| {
+        draw_composer(
+            ComposerView {
+                frame: f,
+                input_rect,
+                theme: &theme,
+                layout_map: &mut layout_map,
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: "hello world",
+                byte_cursor: 11,
+            },
+            true,
+            true,
+            true,
+            0,
+            0,
+            crate::components::composer_hints::ComposerHints::default(),
+        );
+    });
+
+    // Verify composer_rect is recorded
+    assert_eq!(layout_map.composer_rect(), Some(input_rect));
+
+    // 1. Click on Row 0 (top chrome row): y = 1 -> snaps to start of input
+    let target_row0 = crate::interaction::classify_click(&layout_map, 10, 1);
+    assert_eq!(
+        target_row0,
+        crate::interaction::ClickTarget::InputBox {
+            cursor: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 0)
+        }
+    );
+
+    // 2. Click on Row 1 (text row): y = 2 -> precise text cursor
+    let target_row1 = crate::interaction::classify_click(&layout_map, COMPOSER_PROMPT_PREFIX_COLS as u16 + 2, 2);
+    assert!(matches!(
+        target_row1,
+        crate::interaction::ClickTarget::InputBox { .. }
+    ));
+
+    // 3. Click on Row 2 (gap row): y = 3 -> snaps to end of input
+    let target_row2 = crate::interaction::classify_click(&layout_map, 10, 3);
+    assert_eq!(
+        target_row2,
+        crate::interaction::ClickTarget::InputBox {
+            cursor: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 11)
+        }
+    );
+
+    // 4. Click on Row 3 (hint row): y = 4 -> snaps to end of input
+    let target_row3 = crate::interaction::classify_click(&layout_map, 10, 4);
+    assert_eq!(
+        target_row3,
+        crate::interaction::ClickTarget::InputBox {
+            cursor: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 11)
+        }
+    );
+
+    // 5. Click outside the composer component (e.g. y = 0 or y = 5) -> Dead
+    assert_eq!(
+        crate::interaction::classify_click(&layout_map, 10, 0),
+        crate::interaction::ClickTarget::Dead
+    );
+    assert_eq!(
+        crate::interaction::classify_click(&layout_map, 10, 5),
+        crate::interaction::ClickTarget::Dead
     );
 }

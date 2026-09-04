@@ -68,7 +68,7 @@ pub(crate) fn parse_trust_domain(sub: &str) -> Result<TrustDomain, String> {
         "skills" => Ok(TrustDomain::Skills),
         "hooks" => Ok(TrustDomain::Hooks),
         "instructions" | "agents" | "rules" => Ok(TrustDomain::Instructions),
-        "ex-workspace" | "ex-workspaces" | "externals" | "workspace" | "roots" => {
+        "ex-workspace" | "ex-workspaces" | "externals" | "workspace" => {
             Ok(TrustDomain::ExWorkspace)
         }
         other => Err(format!(
@@ -104,8 +104,7 @@ pub(crate) fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, Stri
         Some("ex-workspace")
         | Some("ex-workspaces")
         | Some("externals")
-        | Some("workspace")
-        | Some("roots") => Ok(TrustRoute::Grant(TrustDomain::ExWorkspace)),
+        | Some("workspace") => Ok(TrustRoute::Grant(TrustDomain::ExWorkspace)),
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(

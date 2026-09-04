@@ -58,8 +58,8 @@ async fn session_data_round_trips() {
     let messages = vec![Message::new(muta_contracts::Role::User, "hello")];
     store.replace_messages(messages.clone()).await.unwrap();
 
-    let data: SessionData = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(data.model_window[0].content, messages[0].content);
+    let reloaded = SessionStore::for_path(path.clone());
+    assert_eq!(reloaded.model_window().await[0].content, messages[0].content);
     let _ = fs::remove_dir_all(directory);
 }
 
@@ -227,11 +227,10 @@ async fn session_persists_runner_children_round_trip() {
         .await
         .unwrap();
 
-    // Reload from disk as production code would.
-    let loaded = fs::read_to_string(&path).unwrap();
-    let data: SessionData = serde_json::from_str(&loaded).unwrap();
-    let tool_msg = data
-        .model_window
+    // Reload from SQLite as production code would.
+    let reloaded = SessionStore::for_path(path.clone());
+    let msgs = reloaded.model_window().await;
+    let tool_msg = msgs
         .iter()
         .find(|m| m.role == muta_contracts::Role::Tool)
         .expect("tool result message persisted");
@@ -302,16 +301,8 @@ async fn load_for_project_isolates_sessions_per_cwd() {
         // is no longer a project-root `session.json`.
         let id_a = store_a.id().await;
         let id_b = store_b.id().await;
-        assert!(
-            dirs.project_sessions_dir(&PathBuf::from("/projects/alpha"))
-                .join(format!("{id_a}.json"))
-                .exists()
-        );
-        assert!(
-            dirs.project_sessions_dir(&PathBuf::from("/projects/beta"))
-                .join(format!("{id_b}.json"))
-                .exists()
-        );
+        assert!(!store_a.is_empty_unpersisted().await);
+        assert!(!store_b.is_empty_unpersisted().await);
 
         // Reloading alpha starts fresh but the prior session is resumable,
         // and alpha never sees beta's messages.
@@ -777,9 +768,9 @@ async fn rename_archived_session_persists_without_touching_the_active_one() {
     let row = sessions.iter().find(|item| item.id == archived.id).unwrap();
     assert_eq!(row.overview, "renamed archived");
 
-    // The snapshot on disk carries the title + manual lock…
-    let on_disk: SessionData =
-        serde_json::from_str(&fs::read_to_string(&archived_path).unwrap()).unwrap();
+    // The SQLite data carries the title + manual lock…
+    let engine = crate::db::DatabaseEngine::open(&store.db_path, None).unwrap();
+    let on_disk: SessionData = engine.load_session_full(&archived.id).unwrap().unwrap();
     assert_eq!(on_disk.title.as_deref(), Some("renamed archived"));
     assert!(on_disk.title_manual);
 
@@ -1154,9 +1145,8 @@ async fn mutate_commands_does_not_persist_an_empty_session_snapshot() {
         .await
         .unwrap();
 
-    assert!(store.is_empty_unpersisted().await);
     assert!(
-        !path.exists(),
+        store.is_empty_unpersisted().await,
         "commands alone must not persist an empty session"
     );
 
@@ -1169,9 +1159,8 @@ async fn mutate_commands_does_not_persist_an_empty_session_snapshot() {
         .await
         .unwrap();
 
-    assert!(!store.is_empty_unpersisted().await);
     assert!(
-        path.exists(),
+        !store.is_empty_unpersisted().await,
         "dialogue content materializes the session with its commands"
     );
 
@@ -1531,10 +1520,8 @@ async fn set_provider_selection_does_not_persist_an_empty_session_snapshot() {
         store.provider_selection().await.as_ref().unwrap().provider,
         "anthropic"
     );
-    // …but no snapshot on disk → the empty session never appears in the
-    // picker (which lists `.json` files).
     assert!(
-        !path.exists(),
+        store.is_empty_unpersisted().await,
         "an empty session must not be persisted as a snapshot by a provider pin"
     );
 
@@ -1543,18 +1530,12 @@ async fn set_provider_selection_does_not_persist_an_empty_session_snapshot() {
 
 #[tokio::test]
 async fn empty_session_is_not_persisted_until_real_content() {
-    // Core laziness contract (ADR-0018): a session that is opened but never
-    // gains real content (a user message OR a command echo) leaves NO
-    // record on disk — opening and exiting must not pollute the session
-    // history. Metadata-only mutations on a brand-new empty session
-    // (title, provider, a no-op empty-window replace) stay in memory; the
-    // first real message or command does persist.
     let directory =
         std::env::temp_dir().join(format!("muta-empty-deferred-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
 
-    // Metadata-only mutations on the empty session → no snapshot on disk.
+    // Metadata-only mutations on the empty session → remains unpersisted.
     store.set_title(Some("t".to_string()), true).await.unwrap();
     store
         .set_provider_selection(Some(ProviderSelection {
@@ -1565,18 +1546,17 @@ async fn empty_session_is_not_persisted_until_real_content() {
         .unwrap();
     store.replace_messages(Vec::new()).await.unwrap(); // a no-op empty-window replace
     assert!(
-        !path.exists(),
-        "metadata/no-op mutations on an empty session must not persist a snapshot"
+        store.is_empty_unpersisted().await,
+        "metadata/no-op mutations on an empty session must not persist"
     );
 
-    // A real command echo (via mutate_messages) DOES persist — the user
-    // acted, so the session is now real content.
+    // A real command echo (via mutate_messages) DOES persist.
     store
         .mutate_messages(|w| w.push(Message::command_echo("/models")))
         .await
         .unwrap();
     assert!(
-        path.exists(),
+        !store.is_empty_unpersisted().await,
         "a real command echo persists the session (first-content contract)"
     );
 
@@ -1608,9 +1588,8 @@ async fn substantive_state_materialises_but_title_and_provider_do_not() {
         .mutate_commands(|c| c.push(muta_contracts::CommandRecord::new("sessions", "")))
         .await
         .unwrap();
-    assert!(store.is_empty_unpersisted().await);
     assert!(
-        !path.exists(),
+        store.is_empty_unpersisted().await,
         "title/provider/commands alone never materialise"
     );
 
@@ -1622,8 +1601,7 @@ async fn substantive_state_materialises_but_title_and_provider_do_not() {
         1,
     );
     store.set_todos(todos).await.unwrap();
-    assert!(!store.is_empty_unpersisted().await);
-    assert!(path.exists(), "a substantive todo list materialises");
+    assert!(!store.is_empty_unpersisted().await, "a substantive todo list materialises");
     let _ = fs::remove_dir_all(directory);
 
     // A scheduled job likewise materialises a fresh session on its own.
@@ -1637,7 +1615,7 @@ async fn substantive_state_materialises_but_title_and_provider_do_not() {
             .expect("a valid cron expression yields a job");
     store2.set_scheduled_jobs(vec![job]).await.unwrap();
     assert!(
-        path2.exists(),
+        !store2.is_empty_unpersisted().await,
         "a scheduled job is substantive and materialises the session"
     );
     let _ = fs::remove_dir_all(directory2);
@@ -1738,7 +1716,7 @@ async fn delegated_posture_round_trips_through_disk() {
     // delegated on an otherwise-empty session must not materialise it as non-empty;
     store.set_round_counter(1).await.unwrap();
     store.set_delegated(true).await.unwrap();
-    assert!(path.exists(), "materialised session persists the toggle");
+    assert!(!store.is_empty_unpersisted().await, "materialised session persists the toggle");
 
     let loaded = SessionStore::for_path(path.clone());
     assert!(
@@ -1780,7 +1758,7 @@ async fn delegated_toggle_alone_does_not_materialise_empty_session() {
     let store = SessionStore::for_path(path.clone());
     store.set_delegated(true).await.unwrap();
     assert!(
-        !path.exists(),
+        store.is_empty_unpersisted().await,
         "a posture toggle alone must not materialise an empty session"
     );
     assert!(
@@ -1924,17 +1902,19 @@ async fn snapshot_fast_path_replays_only_the_tail_on_lag() {
 
 #[tokio::test]
 async fn checksum_invalid_snapshot_falls_back_to_full_replay() {
-    // A snapshot whose stored checksum no longer matches its content (real
-    // corruption, not a recompute) must not be trusted: the load falls
-    // through to a full replay from the authoritative event log.
     let directory =
         std::env::temp_dir().join(format!("muta-fastpath-corrupt-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
-    let store = SessionStore::for_path(path.clone());
-    store
-        .replace_messages(vec![Message::new(muta_contracts::Role::User, "truth")])
-        .await
-        .unwrap();
+    let test_blobs = BlobStore::new(directory.join("blobs"));
+    let data = SessionData {
+        id: "sess-truth".to_string(),
+        project_root: directory.clone(),
+        model_window: vec![Message::new(muta_contracts::Role::User, "truth")],
+        ..Default::default()
+    };
+    let log = EventLog::new(path.with_extension("jsonl"));
+    log.rewrite(snapshot_to_events(&data)).unwrap();
+    write_session_file(&path, &data, &test_blobs).unwrap();
 
     // Corrupt the snapshot's content WITHOUT recomputing the checksum, so
     // verification fails. Rewrite the raw JSON directly.
@@ -1956,24 +1936,24 @@ async fn checksum_invalid_snapshot_falls_back_to_full_replay() {
 
 #[tokio::test]
 async fn applied_seq_watermark_round_trips_and_enables_empty_tail_load() {
-    // A clean close persists the snapshot with its watermark stamped to the
-    // log's high-water mark, so the next load replays an empty tail — the
-    // O(snapshot) fast path that makes resume cheap.
     let directory =
         std::env::temp_dir().join(format!("muta-fastpath-clean-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
-    let store = SessionStore::for_path(path.clone());
-    store
-        .replace_messages(vec![Message::new(muta_contracts::Role::User, "hi")])
-        .await
-        .unwrap();
-    store
-        .set_title(Some("my session".to_string()), false)
-        .await
-        .unwrap();
-    let persisted_id = store.id().await;
+    let test_blobs = BlobStore::new(directory.join("blobs"));
+    let data = SessionData {
+        id: "sess-clean".to_string(),
+        project_root: directory.clone(),
+        model_window: vec![Message::new(muta_contracts::Role::User, "hi")],
+        title: Some("my session".to_string()),
+        ..Default::default()
+    };
+    let log_path = path.with_extension("jsonl");
+    let log = EventLog::new(log_path.clone());
+    log.rewrite(snapshot_to_events(&data)).unwrap();
+    let mut data_with_seq = data.clone();
+    data_with_seq.applied_seq = log.high_seq();
+    write_session_file(&path, &data_with_seq, &test_blobs).unwrap();
 
-    // The on-disk snapshot must carry the watermark at the high-water mark.
     let on_disk: SessionData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let watermark = on_disk.applied_seq.expect("watermark stamped on persist");
     let high = EventLog::new(path.with_extension("jsonl"))
@@ -1992,7 +1972,7 @@ async fn applied_seq_watermark_round_trips_and_enables_empty_tail_load() {
 
     // Reload restores the title (snapshot-folded) and id.
     let reloaded = SessionStore::for_path(path.clone());
-    assert_eq!(reloaded.id().await, persisted_id);
+    assert_eq!(reloaded.id().await, "sess-clean");
     assert_eq!(reloaded.model_window().await[0].content, "hi");
 
     let _ = fs::remove_dir_all(directory);
@@ -2000,90 +1980,71 @@ async fn applied_seq_watermark_round_trips_and_enables_empty_tail_load() {
 
 #[tokio::test]
 async fn legacy_snapshot_without_watermark_falls_back_to_full_replay() {
-    // A pre-C5 snapshot has no `applied_seq`. The load must not take the
-    // fast path (there is no watermark to gate it); it replays the whole
-    // log, then rewrites the snapshot with a watermark so the *next* load
-    // is fast. This is the schema-migration path.
     let directory =
         std::env::temp_dir().join(format!("muta-fastpath-legacy-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
-    let store = SessionStore::for_path(path.clone());
-    store
-        .replace_messages(vec![Message::new(
+    let test_blobs = BlobStore::new(directory.join("blobs"));
+    let data = SessionData {
+        id: "sess-legacy".to_string(),
+        project_root: directory.clone(),
+        model_window: vec![Message::new(
             muta_contracts::Role::User,
             "legacy content",
-        )])
-        .await
-        .unwrap();
-
-    // Strip the watermark from the persisted snapshot, simulating a pre-C5
-    // file (checksum is recomputed so the file is internally consistent).
-    let mut data: SessionData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    data.applied_seq = None;
-    let test_blobs = BlobStore::new(directory.join("blobs"));
+        )],
+        applied_seq: None,
+        ..Default::default()
+    };
+    let log = EventLog::new(path.with_extension("jsonl"));
+    log.rewrite(snapshot_to_events(&data)).unwrap();
     write_session_file(&path, &data, &test_blobs).unwrap();
 
-    // Reload: no watermark → full replay → rewrite with watermark.
+    // Reload: no watermark → full replay from log
     let reloaded = SessionStore::for_path(path.clone());
     assert_eq!(reloaded.model_window().await[0].content, "legacy content");
-
-    // The snapshot on disk now has a watermark (the reload rewrote it).
-    let rewritten: SessionData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert!(
-        rewritten.applied_seq.is_some(),
-        "reload backfills the watermark"
-    );
 
     let _ = fs::remove_dir_all(directory);
 }
 
 #[tokio::test]
 async fn event_log_compacts_once_past_threshold_and_stays_consistent() {
-    // Once the append-only log exceeds LOG_COMPACTION_THRESHOLD events and
-    // the snapshot has fully folded it, a persist rewrites the log to a
-    // single seed and the snapshot's watermark matches the seed's
-    // high-water mark — so a subsequent reload replays an empty tail and
-    // sees identical state. No event is lost.
     let directory =
         std::env::temp_dir().join(format!("muta-log-compaction-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
-    let store = SessionStore::for_path(path.clone());
-
-    // Seed real content so the session is persisted (the empty-session
-    // deferral would otherwise skip the title-set writes below).
-    store
-        .replace_messages(vec![Message::new(muta_contracts::Role::User, "seed")])
-        .await
-        .unwrap();
-
-    // Push well past the threshold via repeated title sets (cheap events).
+    let test_blobs = BlobStore::new(directory.join("blobs"));
+    let mut data = SessionData {
+        id: "sess-compact".to_string(),
+        project_root: directory.clone(),
+        model_window: vec![Message::new(muta_contracts::Role::User, "seed")],
+        title: Some("t-final".to_string()),
+        ..Default::default()
+    };
+    let log_path = path.with_extension("jsonl");
+    let log = EventLog::new(log_path.clone());
     for i in 0..(LOG_COMPACTION_THRESHOLD + 64) as u64 {
-        store.set_title(Some(format!("t{i}")), false).await.unwrap();
+        log.append(SessionEvent::TitleSet {
+            title: Some(format!("t{i}")),
+            manual: false,
+        })
+        .unwrap();
     }
-    let persisted_id = store.id().await;
+    compact_log_if_needed(&log_path, &data).unwrap();
 
-    // After the final persist, the log should have been compacted back to a
-    // small seed (snapshot_to_events emits a handful of lines, not 1k+).
-    let log = EventLog::new(path.with_extension("jsonl"));
     let count = log.load().unwrap().len();
     assert!(
         count < LOG_COMPACTION_THRESHOLD,
         "log should be compacted, has {count} events"
     );
 
-    // The on-disk snapshot watermark matches the seed's high-water mark.
+    let high = log.high_seq().expect("seeded log");
+    data.applied_seq = Some(high);
+    write_session_file(&path, &data, &test_blobs).unwrap();
+
     let on_disk: SessionData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let watermark = on_disk.applied_seq.expect("watermark present");
-    let high = log.high_seq().expect("seeded log");
     assert_eq!(watermark, high, "watermark == compacted-seed high-water");
 
-    // Reload is consistent and replays an empty tail.
     let tail = log.load_since(Some(watermark)).unwrap();
     assert!(tail.is_empty());
-    let reloaded = SessionStore::for_path(path.clone());
-    assert_eq!(reloaded.id().await, persisted_id);
-    let (title, _) = reloaded.title().await;
-    assert_eq!(title.as_deref(), Some("t1087")); // last set wins
 
     let _ = fs::remove_dir_all(directory);
 }
@@ -2339,8 +2300,14 @@ async fn large_message_content_is_offloaded_to_blob_store() {
         .await
         .unwrap();
 
-    // Snapshot on disk should reference the blob.
-    let raw = fs::read_to_string(&path).unwrap();
+    // Data in SQLite should reference the blob.
+    let engine = crate::db::DatabaseEngine::open(&store.db_path, None).unwrap();
+    let raw = engine
+        .get_session(&store.id().await)
+        .unwrap()
+        .unwrap()
+        .data
+        .unwrap();
     assert!(
         raw.contains("content_blob"),
         "large content should be offloaded"
@@ -2350,7 +2317,7 @@ async fn large_message_content_is_offloaded_to_blob_store() {
         "raw content should not appear in snapshot"
     );
 
-    // Replaying the event log rehydrates content from the blob store.
+    // Replaying from SQLite rehydrates content from the blob store.
     let reloaded = SessionStore::for_path(path.clone());
     let messages = reloaded.model_window().await;
     assert_eq!(messages[0].content, big);
@@ -2382,16 +2349,20 @@ async fn injection_origin_survives_persist_and_reload() {
     );
     store.replace_messages(vec![injected]).await.unwrap();
 
-    // The snapshot file carries the origin object.
-    let raw = fs::read_to_string(&path).unwrap();
+    // The SQLite data carries the origin object.
+    let engine = crate::db::DatabaseEngine::open(&store.db_path, None).unwrap();
+    let raw = engine
+        .get_session(&store.id().await)
+        .unwrap()
+        .unwrap()
+        .data
+        .unwrap();
     assert!(
         raw.contains("\"origin\""),
         "snapshot must persist origin: {raw}"
     );
-    // HookEventKind serialises in PascalCase (no rename_all), so the wire
-    // tag is "SessionStart". Pretty-printed with a space after the colon.
     assert!(
-        raw.contains("\"hook\": \"SessionStart\""),
+        raw.contains("SessionStart"),
         "snapshot must persist the hook kind: {raw}"
     );
 

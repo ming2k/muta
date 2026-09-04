@@ -55,7 +55,7 @@ pub use history::draw_history_panel;
 pub use btw::{BtwModalView, draw_btw_modal};
 pub(crate) use command_palette::draw_command_palette;
 pub use mcp::draw_mcp_modal;
-pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
+pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal, permission_action_count};
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
     CustomEditorView, draw_connections_modal, draw_custom_provider_editor, draw_model_editor,

@@ -59,7 +59,7 @@ pub enum TrustDomain {
     /// Trust project-authored instructions and rules (`AGENTS.md`, rules).
     Instructions,
     /// Trust project-level external workspace roots (`[workspace].additional_roots`).
-    #[serde(rename = "ex_workspace", alias = "ex-workspace", alias = "roots")]
+    #[serde(rename = "ex_workspace", alias = "ex-workspace")]
     ExWorkspace,
 }
 
@@ -102,7 +102,7 @@ pub struct WorkspaceSecuritySnapshot {
     #[serde(default, alias = "rules")]
     pub instructions: WorkspaceTrustState,
     /// Trust status for project-declared external workspace roots.
-    #[serde(default, alias = "roots")]
+    #[serde(default)]
     pub ex_workspace: WorkspaceTrustState,
 }
 

@@ -118,7 +118,7 @@ pub struct ComposerText<'a> {
 
 /// Special message_idx for the live input box in the layout map, so semantic
 /// selection / copy works on input text just like transcript messages.
-pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
+pub use crate::model::layout::INPUT_MSG_IDX;
 
 /// Build the wrapped-line list the composer renders, including the synthetic
 /// trailing row it appends when the caret rests past the last wrapped line
@@ -646,7 +646,7 @@ fn draw_composer_impl(
                 hints.compose_target,
                 theme,
                 panel_bg,
-                hints.steer_key,
+                hints.toggle_mode_key,
             );
             let left_w: usize = left_spans.iter().map(|s| str_len(&s.content)).sum();
             let right_w: usize = right_spans.iter().map(|s| str_len(&s.content)).sum();
@@ -709,6 +709,7 @@ fn draw_composer_impl(
     // and copy work on the live input. Skipped when the API-key modal masks
     // the display (byte offsets wouldn't match the real input).
     if record {
+        layout_map.set_composer_rect(input_rect);
         let start = *input_scroll;
         let end = (*input_scroll + visible_rows).min(wrapped.len());
         for (i, wl) in wrapped[start..end].iter().enumerate() {

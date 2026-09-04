@@ -27,13 +27,11 @@
 
 use crate::blobs::BlobStore;
 use crate::events::{EventLog, SessionEvent};
-use crate::fsutil;
 use crate::paths;
 use muta_contracts::{
     InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, estimate_tokens,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -88,9 +86,9 @@ pub struct ContextProjectionCheckpoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct SessionData {
-    id: String,
-    parent_id: Option<String>,
+pub struct SessionData {
+    pub(crate) id: String,
+    pub(crate) parent_id: Option<String>,
     /// How this session came to exist relative to its lineage: a root trunk,
     /// an explicit `/fork` branch, or a `/btw` aside forked off the trunk.
     /// `#[serde(default)]` so legacy snapshots (which predate lineage
@@ -98,24 +96,24 @@ pub(crate) struct SessionData {
     /// to `Fork` in the summary layer, preserving whatever lineage the old
     /// data carried.
     #[serde(default)]
-    fork_kind: muta_contracts::SessionForkKind,
-    created_at: u64,
-    updated_at: u64,
-    model_window: Vec<Message>,
-    archived_transcript: Vec<Message>,
+    pub(crate) fork_kind: muta_contracts::SessionForkKind,
+    pub(crate) created_at: u64,
+    pub(crate) updated_at: u64,
+    pub(crate) model_window: Vec<Message>,
+    pub(crate) archived_transcript: Vec<Message>,
     /// Stats of the most recent model-context projection (prune or compaction).
-    last_projection: Option<ContextProjectionCheckpoint>,
+    pub(crate) last_projection: Option<ContextProjectionCheckpoint>,
     /// Working directory this session belongs to. Phase 2 (project isolation)
     /// uses this to route archived sessions to the right per-project bucket
     /// during the one-shot legacy migration. Legacy snapshots missing the
     /// field default to the current cwd.
-    project_root: PathBuf,
+    pub(crate) project_root: PathBuf,
     /// Unified task list, mirrored from `Agent::todos`. The single source of
     /// truth for "what is left to do." An empty list means
     /// no active task list. `#[serde(default)]` so legacy snapshots load as
     /// an empty list with no migration.
     #[serde(default)]
-    todos: muta_contracts::TodoList,
+    pub(crate) todos: muta_contracts::TodoList,
     /// Session-scoped scheduled-prompt list (`/schedule`, formerly `/repeat`).
     /// Each entry is either a recurring cron job or a one-shot (countdown /
     /// absolute-time) job. The session that created a job owns it; the
@@ -124,35 +122,35 @@ pub(crate) struct SessionData {
     /// snapshots load with whatever they had and no migration is required for
     /// the field rename (only the schema bump records the change).
     #[serde(default)]
-    scheduled_jobs: Vec<muta_contracts::ScheduledJob>,
+    pub(crate) scheduled_jobs: Vec<muta_contracts::ScheduledJob>,
     /// Schema version of this session file. Migrations increment this and are
     /// applied lazily on load.
-    schema_version: u32,
+    pub(crate) schema_version: u32,
     /// CRC32C checksum of the canonical JSON payload (excluding this field).
     /// `None` for legacy files written before C10; new writes always populate
     /// it so `muta doctor` and future loaders can detect corruption.
-    checksum: Option<u32>,
+    pub(crate) checksum: Option<u32>,
     /// AI-generated session title (ADR-0022). Displayed in the session picker
     /// in preference to the first-user-message fallback. `None` for legacy
     /// snapshots and for sessions that have not yet generated a title.
     #[serde(default)]
-    title: Option<String>,
+    pub(crate) title: Option<String>,
     /// Whether `title` was set manually via `/title <text>` and must not be
     /// overwritten by automatic or on-demand AI generation (ADR-0022).
     /// `false` for legacy snapshots and AI-generated titles.
     #[serde(default)]
-    title_manual: bool,
+    pub(crate) title_manual: bool,
     /// AI-generated session digest (title + intent + history checklist) —
     /// the resume-time working-memory projection shown by the session
     /// picker's detail view. `None` for legacy snapshots and sessions that
     /// have not yet generated one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    digest: Option<muta_contracts::SessionDigest>,
+    pub(crate) digest: Option<muta_contracts::SessionDigest>,
     /// Transcript char count when `digest` was generated — the watermark the
     /// refresh throttle measures growth against. `None` while `digest` is
     /// `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    digest_anchor: Option<u64>,
+    pub(crate) digest_anchor: Option<u64>,
     /// High-water mark: the `seq` of the last event already folded into this
     /// snapshot. On load, the snapshot is read as a fast path and only log
     /// events with `seq > applied_seq` are replayed (the tail), so resuming a
@@ -162,31 +160,31 @@ pub(crate) struct SessionData {
     /// Covered by the checksum like every other field, so a tampered watermark
     /// is rejected as corruption rather than silently skipping events.
     #[serde(default)]
-    applied_seq: Option<u64>,
+    pub(crate) applied_seq: Option<u64>,
     /// Session-scoped provider + model pin (C6). `None` for a session that has
     /// never run `/models`; the harness then seeds it from the global default
     /// on first switch. Persisted so resume restores the session's own provider
     /// instead of whatever global default is current at reopen time.
     #[serde(default)]
-    provider_selection: Option<ProviderSelection>,
+    pub(crate) provider_selection: Option<ProviderSelection>,
     /// Session-level disabled-tool mask (ADR-0048 Phase 2). Names here are
     /// hidden from the model and rejected at dispatch. Mirrored from
     /// `Agent::disabled_tools` so a user toggle survives restart instead of
     /// silently resetting. `#[serde(default)]` so legacy snapshots load with
     /// an empty set (all tools enabled) and no migration.
     #[serde(default)]
-    disabled_tools: std::collections::HashSet<String>,
+    pub(crate) disabled_tools: std::collections::HashSet<String>,
     /// Harness round counter, the session-scoped monotonic watermark (ADR-0048
     /// Phase 2). Bumped at the start of every round; read by the todo
     /// stale-detector via `updated_at_round`. Persisted so a resumed session's
     /// staleness comparisons stay valid instead of the counter resetting to 0.
     #[serde(default)]
-    round_counter: u64,
+    pub(crate) round_counter: u64,
     /// Per-request token accounting for this session. Unlike the historical
     /// process-global ledger, these records survive resume and cannot leak
     /// across `/session open` boundaries.
     #[serde(default)]
-    request_usage_records: Vec<muta_contracts::RequestUsageRecord>,
+    pub(crate) request_usage_records: Vec<muta_contracts::RequestUsageRecord>,
     /// Durable command ledger (ADR-0091): every slash command (and `!cmd`
     /// passthrough) invocation with its typed result. Commands are operations
     /// on the session, not conversation turns, so they live here instead of in
@@ -196,7 +194,7 @@ pub(crate) struct SessionData {
     /// "Vec::is_empty")]` keeps legacy canonical JSON byte-identical so
     /// existing stored checksums stay valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    commands: Vec<muta_contracts::CommandRecord>,
+    pub(crate) commands: Vec<muta_contracts::CommandRecord>,
     /// Durable round-interrupt records (C11): one entry per round stopped
     /// before its natural terminal path — user interrupt (Esc Esc),
     /// superseded by newer input, or killed with the process. Pure
@@ -207,14 +205,14 @@ pub(crate) struct SessionData {
     /// legacy canonical JSON byte-identical so existing checksums stay
     /// valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+    pub(crate) round_interrupts: Vec<muta_contracts::RoundInterrupt>,
     /// The durable `/retry` resume point (C12): the stopped round's
     /// history watermark, committed-turn count, and paused accumulator.
     /// `None` on a fresh session and after the parked round completes.
     /// `#[serde(default, skip_serializing_if = "Option::is_none")]` keeps
     /// legacy canonical JSON byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    retry_pending: Option<muta_contracts::RetryPoint>,
+    pub(crate) retry_pending: Option<muta_contracts::RetryPoint>,
     /// Session-scoped delegated posture: `true` means the agent
     /// runs in full auto-approve mode (bypasses tool permission prompts).
     #[serde(
@@ -223,10 +221,10 @@ pub(crate) struct SessionData {
         alias = "autopilot",
         skip_serializing_if = "std::ops::Not::not"
     )]
-    delegated: bool,
+    pub(crate) delegated: bool,
     /// Native DAG session tree (Schema v12).
     #[serde(default)]
-    tree: muta_contracts::SessionTree,
+    pub(crate) tree: muta_contracts::SessionTree,
 }
 
 impl Default for SessionData {
@@ -447,69 +445,17 @@ const BLOB_OFFLOAD_THRESHOLD: usize = 4_096;
 /// [`SessionData::applied_seq`] watermark to the sibling event log's high-water
 /// `seq`, so a later load of this snapshot replays only the tail past it. The
 /// log file is derived from `path` (`.json` → `.jsonl`); a missing or empty log
-/// leaves an existing watermark untouched (a snapshot can be written with no
-/// log yet during seeding, in which case the load path falls back to full
-/// replay anyway).
-fn write_session_file(
+/// Legacy snapshot file writer, preserved for test migration fixtures.
+#[cfg(test)]
+pub(crate) fn write_session_file(
     path: &Path,
     data: &SessionData,
     blob_store: &BlobStore,
 ) -> Result<(), String> {
     let mut data = data.clone();
     offload_session_blobs(&mut data, blob_store)?;
-    // The watermark reflects the events already folded into `data`. Each write
-    // site appends its event(s) to the log *before* persisting, so the log's
-    // high-water mark is exactly what this snapshot has absorbed.
-    let log_path = path.with_extension("jsonl");
-    let event_log = EventLog::new(log_path);
-    if let Some(high) = event_log.high_seq() {
-        data.applied_seq = Some(high);
-    }
     data.checksum = Some(compute_checksum(&data)?);
-    let write_res = fsutil::atomic_write_json(path, &data);
-
-    // Synchronize to unified SQLite database via Single-Writer Actor (ADR-0163 / ADR-0168)
-    let handle = crate::db::get_persistence_handle();
-    let fork_str = match data.fork_kind {
-        muta_contracts::SessionForkKind::Trunk => "trunk",
-        muta_contracts::SessionForkKind::Fork => "fork",
-        muta_contracts::SessionForkKind::Aside => "aside",
-    };
-    let session_rec = crate::db::SessionRecord {
-        id: data.id.clone(),
-        parent_id: data.parent_id.clone(),
-        fork_kind: fork_str.to_string(),
-        title: data.title.clone(),
-        title_manual: data.title_manual,
-        created_at_ms: data.created_at as i64,
-        updated_at_ms: data.updated_at as i64,
-        project_root: data.project_root.to_string_lossy().into_owned(),
-    };
-    handle.try_upsert_session(session_rec);
-
-    // Materialize active model window messages into messages table & FTS index
-    for (seq, msg) in data.model_window.iter().enumerate() {
-        let role_str = match msg.role {
-            muta_contracts::Role::User => "user",
-            muta_contracts::Role::Assistant => "assistant",
-            muta_contracts::Role::System => "system",
-            muta_contracts::Role::Tool => "tool",
-        };
-        handle.try_insert_message(crate::db::MessageRecord {
-            id: format!("{}:{}", data.id, seq),
-            session_id: data.id.clone(),
-            seq: seq as i64,
-            role: role_str.to_string(),
-            content: msg.content.clone(),
-            content_blob_hash: msg.content_blob.clone(),
-            reasoning_content: msg.reasoning_content.clone(),
-            provider: None,
-            model: None,
-            created_at_ms: data.updated_at as i64,
-        });
-    }
-
-    write_res
+    crate::fsutil::atomic_write_json(path, &data)
 }
 
 /// Move large `Message.content` strings into the blob store and replace them
@@ -882,50 +828,41 @@ pub struct SessionStore {
     /// `reset` / `fork` / `open` targets live here, so the store never writes
     /// outside it.
     sessions_dir: PathBuf,
+    pub(crate) db_path: PathBuf,
     blob_store: BlobStore,
     state: Mutex<SessionState>,
     /// FIFO commit gate for snapshot writes.
-    ///
-    /// State mutations are ordered by `state`, but snapshot I/O runs on the
-    /// blocking pool after that guard is released. Without a second ordered
-    /// gate, two callers could write the same snapshot concurrently and an
-    /// older clone could replace a newer one. Tokio's mutex is FIFO, so callers
-    /// reserve persistence in the same order they leave their state mutation.
     persist_gate: Mutex<()>,
 }
 
-/// Write `data` to `path`, creating its parent directory first.
-fn persist_to(path: &Path, data: &SessionData, blob_store: &BlobStore) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+/// Write `data` authoritatively to the SQLite database at `db_path`.
+fn persist_to(db_path: &Path, data: &SessionData, blob_store: &BlobStore) -> Result<(), String> {
+    if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    write_session_file(path, data, blob_store)
+    let mut data = data.clone();
+    offload_session_blobs(&mut data, blob_store)?;
+    data.checksum = Some(compute_checksum(&data)?);
+
+    let engine = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone()))
+        .map_err(|e| format!("failed to open sqlite db {}: {e}", db_path.display()))?;
+    engine
+        .save_session_full(&data)
+        .map_err(|e| format!("failed to save session to sqlite: {e}"))?;
+    Ok(())
 }
 
 /// Once the append-only event log holds more than this many events it is
 /// rewritten to a single seed derived from the session's current full
-/// snapshot. Every call to `persist_off_runtime` writes a *full* snapshot of
-/// the current state (the only non-full persist is `append_turn`'s
-/// `Persist::None` mid-turn arm, which does not reach this path), so any event
-/// the seed would supersede has already been folded into the snapshot about to
-/// be written. Compaction can therefore never drop an unabsorbed event. The
-/// seed keeps the replay tail short over a long-lived session: the rewrite is
-/// `snapshot_to_events`, one line per non-empty field.
+/// snapshot. A no-op when the log is small or does not exist.
 const LOG_COMPACTION_THRESHOLD: usize = 1024;
 
 /// Compact the event log at `log_path` to a single seed when it has grown past
-/// [`LOG_COMPACTION_THRESHOLD`]. The seed is derived from `data` via
-/// `snapshot_to_events`, so the freshly-rewritten log's high-water mark is
-/// picked up by the subsequent `write_session_file` (which stamps
-/// `applied_seq` from the log) and the next load replays an empty tail. A no-op
-/// when the log is small.
+/// [`LOG_COMPACTION_THRESHOLD`]. A no-op when the file does not exist or is small.
 fn compact_log_if_needed(log_path: &Path, data: &SessionData) -> Result<(), String> {
-    // Cheap stat-based size check first: avoid parsing a log that is under the
-    // threshold on every persist. Events average well under 1 KiB of envelope
-    // overhead but carry arbitrary message payloads, so a byte threshold would
-    // be payload-dependent; counting lines needs a read regardless, so gate it
-    // behind the metadata length so the common (small-log) case pays only a
-    // `stat`.
+    if !log_path.exists() {
+        return Ok(());
+    }
     let len = match std::fs::metadata(log_path) {
         Ok(m) => m.len() as usize,
         Err(_) => return Ok(()),
@@ -947,122 +884,139 @@ fn compact_log_if_needed(log_path: &Path, data: &SessionData) -> Result<(), Stri
     Ok(())
 }
 
-/// Load the session for `path` from its event log when one exists; otherwise
-/// import from the snapshot file (seeding a fresh log from it), or start from
-/// an empty session when neither exists. This is the single load path shared
-/// by [`SessionStore::for_path`] and [`SessionStore::open`], and it also
-/// lazily seeds event logs for legacy archived snapshots that predate the
-/// per-session log layout (ADR-0018).
-///
-/// Fast path (snapshot present, `applied_seq` watermark set, checksum ok):
-/// deserialise the snapshot JSON and replay only log events with
-/// `seq > applied_seq`. This is O(snapshot + tail), not O(snapshot + history).
-/// The snapshot is written on every turn-boundary persist with its watermark
-/// stamped to the log's high-water mark, so a clean close leaves an empty tail
-/// and resume is a single JSON read. A crash mid-round (after `append_turn`
-/// appended a `MessagesAppended` event but before the next `replace_messages`
-/// rewrote the snapshot) leaves a short tail of at most a few events, replayed
-/// in O(tail).
-///
-/// Fallbacks: a missing/corrupt snapshot, a snapshot without a watermark
-/// (pre-C5 legacy), a checksum mismatch, or an event whose `Started` seq differs
-/// from the snapshot's identity all drop to a full replay from the event log,
-/// which is the authoritative source. If there is no log either, the snapshot
-/// is imported and a fresh log is seeded from it.
+/// Load the session for `session_id` directly from SQLite (SSOT).
+/// If not present in SQLite, checks for a legacy flat-file snapshot/log for one-time migration.
 fn load_or_seed(
-    path: &Path,
-    event_log_path: &Path,
+    db_path: &Path,
+    session_id: &str,
     blob_store: &BlobStore,
     project_root: &Path,
+    legacy_file: Option<&Path>,
 ) -> SessionData {
-    let event_log = EventLog::new(event_log_path.to_path_buf());
-    let log_seeded = !event_log.is_empty();
+    let engine_opt = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone())).ok();
 
-    // ── Fast path: snapshot + watermark + checksum-valid → replay only tail.
-    // A corrupt snapshot or checksum mismatch must not surface as a hard error
-    // (the log is authoritative), so any deserialise/verify failure falls
-    // through to the full-replay path below rather than aborting the load.
-    if log_seeded
-        && let Ok(snapshot) = load_snapshot(path)
-        && let Some(watermark) = snapshot.applied_seq
-        && verify_checksum(&snapshot).is_ok()
-    {
-        let tail = event_log.load_since(Some(watermark)).unwrap_or_default();
-        let mut data = snapshot;
-        if !tail.is_empty() {
-            apply_events(&mut data, &tail);
+    // Check path alias in kv_store if legacy_file path is provided
+    let mapped_id = if let Some(path) = legacy_file {
+        if let Some(ref engine) = engine_opt {
+            let key = format!("path:{}", path.display());
+            engine.get_kv(&key).ok().flatten()
+        } else {
+            None
         }
-        if let Err(error) = load_session_blobs(&mut data, blob_store) {
-            tracing::warn!(error = %error, "could not load session blobs");
-        }
-        if data.schema_version < CURRENT_SCHEMA_VERSION {
-            data = migrate_session_data(data);
-        }
-        return data;
-    }
+    } else {
+        None
+    };
 
-    // ── Full replay from the event log (authoritative). Integrity is
-    // guaranteed by the replay itself: each event carries full snapshot
-    // semantics, so re-deriving the state from the log is as trustworthy as
-    // verifying a stored checksum. (Replay starts from `default()` whose
-    // `checksum` is `None`, so a post-replay `verify_checksum` is a no-op
-    // accept — it was already a no-op before this change, not a lost check.)
-    if log_seeded
-        && let Ok(envelopes) = event_log.load()
-        && !envelopes.is_empty()
-    {
-        let mut data = SessionData::default();
-        apply_events(&mut data, &envelopes);
-        if let Err(error) = load_session_blobs(&mut data, blob_store) {
-            tracing::warn!(error = %error, "could not load session blobs from event log");
-        }
-        if data.schema_version < CURRENT_SCHEMA_VERSION {
-            data = migrate_session_data(data);
-        }
-        // The snapshot was missing/legacy/corrupt; rewrite it now so the next
-        // load takes the fast path.
-        let _ = persist_to(path, &data, blob_store);
-        return data;
-    }
+    let target_id = mapped_id.as_deref().unwrap_or(session_id);
 
-    // ── No event log: import from the snapshot, or start fresh.
-    let snapshot_existed = path.exists();
-    let mut data = fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<SessionData>(&content).ok())
-        .unwrap_or_else(|| {
-            if path.exists() {
-                // Unparseable snapshot (e.g. pre-rename field names — the
-                // ADR-0120 no-alias policy): start fresh rather than
-                // half-migrate, and say so loudly.
-                tracing::warn!(
-                    path = %path.display(),
-                    "session snapshot failed to parse; starting a fresh session"
-                );
+    // 1. Primary path: load directly from SQLite (SSOT)
+    if let Some(ref engine) = engine_opt {
+        if let Ok(Some(mut data)) = engine.load_session_full(target_id) {
+            if let Some(path) = legacy_file {
+                let event_log_path = path.with_extension("jsonl");
+                let event_log = EventLog::new(event_log_path);
+                if let Ok(tail) = event_log.load_since(data.applied_seq) {
+                    if !tail.is_empty() {
+                        apply_events(&mut data, &tail);
+                        let _ = persist_to(db_path, &data, blob_store);
+                    }
+                }
             }
-            SessionData {
-                project_root: project_root.to_path_buf(),
-                ..Default::default()
+            if let Err(error) = load_session_blobs(&mut data, blob_store) {
+                tracing::warn!(error = %error, "could not load session blobs from sqlite");
             }
-        });
-    if let Err(error) = load_session_blobs(&mut data, blob_store) {
-        tracing::warn!(error = %error, "could not load session blobs from snapshot");
+            if data.schema_version < CURRENT_SCHEMA_VERSION {
+                data = migrate_session_data(data);
+            }
+            return data;
+        }
     }
-    if let Err(error) = verify_checksum(&data) {
-        tracing::warn!(path = %path.display(), error = %error, "session checksum failed");
+
+    // 2. Legacy fallback: import from disk .json/.jsonl if present
+    if let Some(path) = legacy_file {
+        let event_log_path = path.with_extension("jsonl");
+        let event_log = EventLog::new(event_log_path.to_path_buf());
+        let log_seeded = !event_log.is_empty();
+
+        if log_seeded
+            && let Ok(snapshot) = load_snapshot(path)
+            && let Some(watermark) = snapshot.applied_seq
+            && verify_checksum(&snapshot).is_ok()
+        {
+            let tail = event_log.load_since(Some(watermark)).unwrap_or_default();
+            let mut data = snapshot;
+            if !tail.is_empty() {
+                apply_events(&mut data, &tail);
+            }
+            if let Err(error) = load_session_blobs(&mut data, blob_store) {
+                tracing::warn!(error = %error, "could not load session blobs");
+            }
+            if data.schema_version < CURRENT_SCHEMA_VERSION {
+                data = migrate_session_data(data);
+            }
+            let _ = persist_to(db_path, &data, blob_store);
+            if let Some(ref engine) = engine_opt {
+                let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
+            }
+            return data;
+        }
+
+        if log_seeded
+            && let Ok(envelopes) = event_log.load()
+            && !envelopes.is_empty()
+        {
+            let mut data = SessionData::default();
+            apply_events(&mut data, &envelopes);
+            if let Err(error) = load_session_blobs(&mut data, blob_store) {
+                tracing::warn!(error = %error, "could not load session blobs from event log");
+            }
+            if data.schema_version < CURRENT_SCHEMA_VERSION {
+                data = migrate_session_data(data);
+            }
+            let _ = persist_to(db_path, &data, blob_store);
+            if let Some(ref engine) = engine_opt {
+                let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
+            }
+            return data;
+        }
+
+        if path.exists() {
+            if let Ok(mut data) = load_snapshot(path) {
+                if let Err(error) = load_session_blobs(&mut data, blob_store) {
+                    tracing::warn!(error = %error, "could not load session blobs from snapshot");
+                }
+                if data.schema_version < CURRENT_SCHEMA_VERSION {
+                    data = migrate_session_data(data);
+                }
+                let _ = persist_to(db_path, &data, blob_store);
+                if let Some(ref engine) = engine_opt {
+                    let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
+                }
+                return data;
+            }
+        }
     }
-    if data.schema_version < CURRENT_SCHEMA_VERSION {
-        data = migrate_session_data(data);
+
+    // 3. Brand-new empty session
+    let id = if target_id.len() >= 32
+        && target_id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-')
+    {
+        target_id.to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+    if let Some(path) = legacy_file {
+        if let Some(ref engine) = engine_opt {
+            let _ = engine.set_kv(&format!("path:{}", path.display()), &id);
+        }
     }
-    // Laziness invariant (ADR-0018): a brand-new session with no snapshot and
-    // no messages is NOT seeded to disk here — opening a session and exiting
-    // without content must leave no empty-session litter. Only when there was
-    // a real snapshot to import (e.g. a legacy file) do we (re)write the log.
-    // The in-memory `data` is returned regardless, so the store is usable.
-    if snapshot_existed {
-        let _ = event_log.rewrite(snapshot_to_events(&data));
+    SessionData {
+        id,
+        project_root: project_root.to_path_buf(),
+        ..Default::default()
     }
-    data
 }
 
 /// Deserialise the snapshot JSON at `path` into a [`SessionData`], rehydrating
@@ -1109,8 +1063,20 @@ struct ScheduleProbeHeader {
 /// from starting (its session still lazy-resumes on attach, where the full
 /// error surface applies).
 pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
-    let projects_dir = paths::get().projects_dir();
     let mut found = Vec::new();
+    let db_path = paths::get().db_file();
+    if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
+        if let Ok(armed) = engine.list_armed_schedule_sessions() {
+            for (id, root) in armed {
+                found.push(ArmedSession {
+                    session_id: id,
+                    project_root: root,
+                });
+            }
+        }
+    }
+
+    let projects_dir = paths::get().projects_dir();
     let Ok(buckets) = fs::read_dir(&projects_dir) else {
         return found;
     };
@@ -1130,7 +1096,7 @@ pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
             let Ok(header) = serde_json::from_str::<ScheduleProbeHeader>(&content) else {
                 continue;
             };
-            if !header.scheduled_jobs.is_empty() {
+            if !header.scheduled_jobs.is_empty() && !found.iter().any(|a| a.session_id == header.id) {
                 found.push(ArmedSession {
                     session_id: header.id,
                     project_root: header.project_root,
@@ -1139,125 +1105,6 @@ pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
         }
     }
     found
-}
-
-/// Header-only view of a session snapshot, used by [`SessionStore::list`] to
-/// populate the sessions picker without paying for a full [`SessionData`]
-/// deserialize.
-///
-/// The message arrays (`model_window` / `archived_transcript`) are kept as
-/// [`Box<RawValue>`] — serde validates their JSON structure and records the
-/// byte range but defers the per-message deserialize. `list()` only needs the
-/// array *length* and the *first user message's* `content`, so a full decode of
-/// every message (content blobs, recursive runner `children`, tool calls,
-/// provider meta, …) on every session file is pure waste. With hundreds of
-/// multi-megabyte snapshots this was the dominant cost of opening `/sessions`
-/// and the per-delete picker refresh (`build_sessions_overview`): each call
-/// re-read and re-allocated the entire transcript of every session on disk.
-/// `Box<RawValue>` keeps the byte ranges but skips the allocation, so the
-/// picker scales with the *number* of sessions, not their total content size.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-struct SessionHeader {
-    id: String,
-    parent_id: Option<String>,
-    #[serde(default)]
-    fork_kind: muta_contracts::SessionForkKind,
-    created_at: u64,
-    updated_at: u64,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    digest: Option<muta_contracts::SessionDigest>,
-    #[serde(default)]
-    model_window: Vec<Box<RawValue>>,
-    #[serde(default)]
-    archived_transcript: Vec<Box<RawValue>>,
-}
-
-/// The fields `list()` decodes out of a deferred message body: the `role` and
-/// `content` (for the picker preview), plus `origin` so a non-driving command
-/// echo (slash commands, `!shell` passthroughs — ADR-0050) can be excluded from
-/// the preview. Every other field is skipped, so a large transcript contributes
-/// a few bytes of allocation instead of a full message tree. `origin` is
-/// `#[serde(default)]`-optional and was absent from legacy on-disk snapshots,
-/// so adding it is backward-compatible.
-#[derive(Default, Deserialize)]
-struct MessagePreview {
-    role: Option<muta_contracts::Role>,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    origin: Option<muta_contracts::InjectionOrigin>,
-}
-
-/// Id-only projection of a session snapshot, used by the
-/// [`SessionStore::resolve_session`] content-scan fallback for legacy files
-/// whose stored `id` does not match their filename. `#[serde(default)]` plus
-/// ignored unknown fields means every other top-level key — including the huge
-/// `model_window` / `archived_transcript` arrays — is *skipped* rather than
-/// decoded, so this never allocates the transcript. It still walks the bytes to
-/// balance braces, but that is cheap relative to a full `SessionData` decode.
-#[derive(Default, Deserialize)]
-struct SessionIdOnly {
-    #[serde(default)]
-    id: String,
-}
-
-fn summary_header(data: &SessionHeader, active: bool) -> SessionSummary {
-    // Lineage: the recorded kind wins; a legacy file that carries a
-    // `parent_id` but predates `fork_kind` (serialized as the default
-    // `Trunk`) degrades to `Fork` so its branch relationship is not lost.
-    let fork_kind = match (data.fork_kind, data.parent_id.as_ref()) {
-        (muta_contracts::SessionForkKind::Trunk, Some(_)) => muta_contracts::SessionForkKind::Fork,
-        (kind, _) => kind,
-    };
-    SessionSummary {
-        id: data.id.clone(),
-        parent_id: data.parent_id.clone(),
-        fork_kind,
-        message_count: data.model_window.len() + data.archived_transcript.len(),
-        updated_at: data.updated_at,
-        created_at: data.created_at,
-        overview: session_overview_header(data),
-        active,
-        digest: data.digest.clone(),
-    }
-}
-
-fn session_overview_header(data: &SessionHeader) -> String {
-    const MAX: usize = 64;
-    if let Some(title) = data.title.as_deref().filter(|t| !t.trim().is_empty()) {
-        return truncate_preview(title, MAX);
-    }
-    // Show the LAST effective user prompt (the freshest real turn, excluding
-    // non-driving command echoes — see [`last_effective_prompt`]). Truncated to
-    // the picker-row budget; the full text is available via
-    // [`SessionStore::detail`] for the session-info sub-view.
-    match last_effective_prompt(data) {
-        Some(content) => truncate_preview(&content, MAX),
-        None => "(empty session)".to_string(),
-    }
-}
-
-/// The complete, untruncated text of the last effective user prompt — the most
-/// recent user turn that is not a non-driving command echo (slash command /
-/// `!shell` passthrough, ADR-0050). Shared by the picker preview (truncated
-/// there) and the on-demand [`SessionStore::detail`] (returned in full). Uses
-/// the deferred header parse, decoding only candidate bodies lazily.
-fn last_effective_prompt(data: &SessionHeader) -> Option<String> {
-    data.model_window
-        .iter()
-        .rev()
-        .chain(data.archived_transcript.iter().rev())
-        .find_map(|raw| {
-            let preview = serde_json::from_str::<MessagePreview>(raw.get()).ok()?;
-            let is_echo = preview
-                .origin
-                .as_ref()
-                .is_some_and(|o| o.kind == InjectionKind::CommandEcho);
-            (preview.role == Some(Role::User) && !is_echo).then_some(preview.content)
-        })
 }
 
 fn truncate_preview(text: &str, max: usize) -> String {
@@ -1276,6 +1123,44 @@ fn truncate_preview(text: &str, max: usize) -> String {
     }
     let head: String = chars.into_iter().take(max.saturating_sub(1)).collect();
     format!("{head}…")
+}
+
+pub(crate) fn last_effective_prompt_from_data(data: &SessionData) -> Option<String> {
+    data.model_window
+        .iter()
+        .rev()
+        .chain(data.archived_transcript.iter().rev())
+        .find(|m| {
+            let is_echo = m
+                .origin
+                .as_ref()
+                .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
+            m.role == muta_contracts::Role::User && !m.hidden && !is_echo
+        })
+        .map(|m| m.content.clone())
+}
+
+pub(crate) fn summary_from_data(data: &SessionData, active: bool) -> SessionSummary {
+    const MAX: usize = 64;
+    let overview = if let Some(title) = data.title.as_deref().filter(|t| !t.trim().is_empty()) {
+        truncate_preview(title, MAX)
+    } else {
+        match last_effective_prompt_from_data(data) {
+            Some(content) => truncate_preview(&content, MAX),
+            None => "(empty session)".to_string(),
+        }
+    };
+    SessionSummary {
+        id: data.id.clone(),
+        parent_id: data.parent_id.clone(),
+        fork_kind: data.fork_kind,
+        message_count: data.model_window.len() + data.archived_transcript.len(),
+        updated_at: data.updated_at,
+        created_at: data.created_at,
+        overview,
+        active,
+        digest: data.digest.clone(),
+    }
 }
 
 pub(crate) fn unix_timestamp() -> u64 {

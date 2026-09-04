@@ -1,6 +1,5 @@
 //! Session lifecycle, creation, resumption, branching, and runtime teardown operations.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
@@ -33,46 +32,10 @@ pub(crate) fn apply_additional_roots(
     effective: &Config,
     project_root: &std::path::Path,
 ) {
-    let resolved = resolve_roots_from_strings(&effective.workspace.additional_roots, project_root);
+    let resolved = effective
+        .resolve_workspace_additional_roots(project_root)
+        .unwrap_or_default();
     handle.store(resolved);
-}
-
-fn resolve_roots_from_strings(raws: &[String], project_root: &std::path::Path) -> Vec<PathBuf> {
-    let canonical_root =
-        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let mut resolved = Vec::new();
-    for raw in raws {
-        let expanded = match raw.as_str() {
-            "~" => home.clone(),
-            r => {
-                if let Some(rest) = r.strip_prefix("~/") {
-                    home.as_ref().map(|h| h.join(rest))
-                } else {
-                    let p = std::path::PathBuf::from(r);
-                    Some(if p.is_absolute() {
-                        p
-                    } else {
-                        canonical_root.join(p)
-                    })
-                }
-            }
-        };
-        let Some(path) = expanded else { continue };
-        let Ok(canonical) = std::fs::canonicalize(&path) else {
-            continue;
-        };
-        if !canonical.is_dir() {
-            continue;
-        }
-        if canonical == canonical_root || canonical.starts_with(&canonical_root) {
-            continue;
-        }
-        if !resolved.contains(&canonical) {
-            resolved.push(canonical);
-        }
-    }
-    resolved
 }
 
 pub async fn teardown_sides_for_session_switch(

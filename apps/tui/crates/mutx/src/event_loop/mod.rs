@@ -501,6 +501,7 @@ async fn process_one_event(
                 session_info_detail,
                 connection_info_detail,
                 is_responding,
+                composer_send_mode: app.composer_send_mode,
                 completion_kind,
                 suggestion_count,
                 has_exact_suggestion,
@@ -571,22 +572,6 @@ async fn process_one_event(
         || (composer_owned_before && event_rearms_composer_follow(event))
     {
         app.input_scroll_follow_cursor = true;
-    }
-
-    // ADR-0174: a keypress that expresses composer editing intent (the same
-    // predicate that re-arms caret following) hands keyboard attention back
-    // from the transcript's browse focus — typing always bounces to the
-    // draft, so the composer must light back up.
-    // Up / Down during transcript or target focus are navigational gestures
-    // and must not disarm transcript focus.
-    if event_rearms_composer_follow(event) && active_modal == Modal::None {
-        if matches!(event, Event::Key(k) if matches!(k.code, KeyCode::Up | KeyCode::Down))
-            && (app.transcript_focused || app.focused_target.is_some())
-        {
-            // Up/Down is consumed by transcript scrolling or target walking
-        } else {
-            app.transcript_focused = false;
-        }
     }
 
     if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {

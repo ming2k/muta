@@ -17,6 +17,8 @@ pub struct InputContext {
     /// is a read-only read-out.
     pub connection_info_detail: bool,
     pub is_responding: bool,
+    /// Target queue mode for the live composer while a round is running.
+    pub composer_send_mode: crate::app::ComposerSendMode,
     /// Which completion menu (slash command vs `@path` mention) is active, or
     /// `None` when no menu is shown. Drives Tab/↑/↓ cycling and the
     /// slash-specific Enter auto-accept. Mirrors [`super::CompletionKind`].
@@ -213,10 +215,12 @@ pub enum InputAction {
     Quit,
     /// Send a chat message.
     SendChat(String),
-    /// Immediate steering intervention (Alt+S while running).
+    /// Immediate steering intervention (while running).
     SteerImmediate(String),
-    /// Enqueue follow-up prompt into outbox queue (Enter while running).
+    /// Enqueue follow-up prompt into outbox queue (while running).
     QueueFollowUp(String),
+    /// Toggle between steer and follow-up queue mode while running.
+    ToggleSendMode,
     /// Send a slash command.
     SendSlash(String),
     /// Activate the highlighted row of the **Models** picker: a flat
@@ -614,10 +618,16 @@ pub enum InputAction {
     /// single-select it is a harmless no-op because the highlight already
     /// *is* the live selection.
     QuestionToggle,
+    /// Move selection to previous action in the permission sheet (Left / BackTab).
+    PermissionPrevOption,
+    /// Move selection to next action in the permission sheet (Right / Tab).
+    PermissionNextOption,
     /// Advance to the next question, or submit all answers from the final
     /// question (Enter).
     QuestionSubmit,
-    /// Return to the previous question (Shift+Tab).
+    /// Advance to the next question in a multi-question ask_user request (Tab / Right).
+    QuestionNext,
+    /// Return to the previous question (Shift+Tab / Left).
     QuestionPrevious,
     /// Cancel the question modal.
     QuestionCancel,
@@ -1277,8 +1287,14 @@ pub fn process_event(
                             return InputAction::OpenActiveConnectionDetail;
                         }
                     }
-                    crate::keymap::CommandId::InterruptTask => return InputAction::CtrlC,
-                    crate::keymap::CommandId::Quit => return InputAction::Quit,
+                    crate::keymap::CommandId::InterruptTask => return InputAction::Interrupt,
+                    crate::keymap::CommandId::Quit => {
+                        if physical_key == crate::keymap::Key::CTRL_Q {
+                            return InputAction::Quit;
+                        } else {
+                            return InputAction::CtrlC;
+                        }
+                    }
                     crate::keymap::CommandId::CopySelection => return InputAction::CopySelection,
                     _ => {}
                 }
@@ -1916,9 +1932,6 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Left => {
-                    if permission_sheet_up(&context) {
-                        return InputAction::ModalUp;
-                    }
                     if context.active_modal == super::Modal::Telemetry {
                         return InputAction::TelemetryPrevTab;
                     }
@@ -1961,9 +1974,6 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Right => {
-                    if permission_sheet_up(&context) {
-                        return InputAction::ModalDown;
-                    }
                     if context.active_modal == super::Modal::Telemetry {
                         return InputAction::TelemetryNextTab;
                     }
@@ -2233,9 +2243,18 @@ pub fn process_event(
 
 /// Resolve a screen coordinate to the block it belongs to.
 pub fn resolve_block(layout_map: &LayoutMap, x: u16, y: u16) -> Option<(usize, usize)> {
-    layout_map
-        .region_at(x, y)
-        .map(|r| (r.message_idx, r.block_idx))
+    if let Some(r) = layout_map.region_at(x, y) {
+        return Some((r.message_idx, r.block_idx));
+    }
+    if let Some(rect) = layout_map.composer_rect()
+        && rect.x <= x
+        && x < rect.x + rect.width
+        && rect.y <= y
+        && y < rect.y + rect.height
+    {
+        return Some((crate::model::layout::INPUT_MSG_IDX, 0));
+    }
+    None
 }
 
 #[cfg(test)]

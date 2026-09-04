@@ -88,7 +88,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
 }
 
 #[test]
-fn q_while_focused_in_transcript_bounces_to_composer() {
+fn q_while_focused_in_transcript_is_inert() {
     let mut input = String::new();
     let mut cursor = 0;
     let action = run_key(
@@ -99,9 +99,9 @@ fn q_while_focused_in_transcript_bounces_to_composer() {
         crate::Modal::None,
         true,
     );
-    assert_eq!(action, InputAction::ClearFocusedTarget);
-    assert_eq!(input, "q");
-    assert_eq!(cursor, 1);
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
 }
 
 #[test]

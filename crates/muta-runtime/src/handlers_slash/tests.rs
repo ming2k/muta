@@ -184,10 +184,6 @@ mod trust_route_tests {
             Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
         );
         assert_eq!(
-            trust_route("trust", &parts("/trust roots")),
-            Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
-        );
-        assert_eq!(
             trust_route("trust", &parts("/trust status")),
             Ok(TrustRoute::Status)
         );
@@ -312,7 +308,6 @@ mod trust_domain_tests {
             parse_trust_domain("externals"),
             Ok(TrustDomain::ExWorkspace)
         );
-        assert_eq!(parse_trust_domain("roots"), Ok(TrustDomain::ExWorkspace));
     }
 
     #[test]

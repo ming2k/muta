@@ -277,9 +277,9 @@ fn alt_arrows_drive_step_selection() {
 }
 
 #[test]
-fn typing_while_focused_auto_bounces_to_composer() {
+fn typing_while_focused_is_inert() {
     let action = key_with_focus(KeyCode::Char('a'));
-    assert_eq!(action, InputAction::ClearFocusedTarget);
+    assert_eq!(action, InputAction::None);
 }
 
 /// Ctrl+↑ / Ctrl+↓ inside any scrollable modal advance the body by a page
@@ -1472,17 +1472,18 @@ fn tab_is_inert_without_a_completion() {
 }
 
 #[test]
-fn alt_s_while_running_emits_steer_immediate() {
+fn enter_while_running_in_steer_mode_emits_steer_immediate() {
     let mut input = "steer command".to_string();
     let mut cursor = 13;
     let mut drag = SelectionDrag::default();
 
     let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT)),
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         InputContext {
             is_responding: true,
+            composer_send_mode: crate::app::ComposerSendMode::Steer,
             ..Default::default()
         },
         &mut drag,
@@ -1496,7 +1497,51 @@ fn alt_s_while_running_emits_steer_immediate() {
 }
 
 #[test]
-fn printable_char_in_transcript_auto_bounces_and_inserts() {
+fn tab_while_running_emits_toggle_send_mode() {
+    let mut input = "some text".to_string();
+    let mut cursor = 9;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            is_responding: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ToggleSendMode);
+}
+
+#[test]
+fn enter_while_running_in_follow_up_mode_emits_queue_follow_up() {
+    let mut input = "followup text".to_string();
+    let mut cursor = 13;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            is_responding: true,
+            composer_send_mode: crate::app::ComposerSendMode::FollowUp,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(
+        action,
+        InputAction::QueueFollowUp("followup text".to_string())
+    );
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn printable_char_in_transcript_is_inert_and_does_not_mutate_composer() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -1511,9 +1556,9 @@ fn printable_char_in_transcript_auto_bounces_and_inserts() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::ClearFocusedTarget);
-    assert_eq!(input, "h");
-    assert_eq!(cursor, 1);
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "");
+    assert_eq!(cursor, 0);
 }
 
 #[test]
@@ -1573,4 +1618,22 @@ fn key_repeat_events_are_processed() {
     assert_eq!(action, InputAction::InsertChar('a'));
     assert_eq!(input, "a");
     assert_eq!(cursor, 1);
+}
+
+#[test]
+fn resolve_block_resolves_composer_chrome_to_input_sentinel() {
+    let mut map = LayoutMap::new();
+    map.set_composer_rect(mutx_engine::Rect::new(0, 10, 50, 4));
+
+    // Middle-click on chrome row (e.g. y = 10 or 13) resolves to composer block
+    assert_eq!(
+        resolve_block(&map, 5, 10),
+        Some((crate::model::layout::INPUT_MSG_IDX, 0))
+    );
+    assert_eq!(
+        resolve_block(&map, 5, 13),
+        Some((crate::model::layout::INPUT_MSG_IDX, 0))
+    );
+    // Outside composer
+    assert_eq!(resolve_block(&map, 5, 15), None);
 }

@@ -89,29 +89,44 @@ pub(crate) fn resolve_sheet_key(
     ctx: &crate::input::InputContext,
 ) -> Option<crate::input::InputAction> {
     use crate::input::InputAction;
+    use crossterm::event::KeyCode;
 
-    if kind != Question {
-        return None;
-    }
-    let c = match key.code {
-        crossterm::event::KeyCode::Char(c)
-            if !key.modifiers.intersects(
-                crossterm::event::KeyModifiers::CONTROL
-                    | crossterm::event::KeyModifiers::ALT
-                    | crossterm::event::KeyModifiers::SUPER,
-            ) =>
-        {
-            c
-        }
-        _ => return None,
-    };
-    if c == ' ' && !ctx.question_other_highlighted {
-        Some(InputAction::QuestionToggle)
-    } else if let Some(d) = c.to_digit(10)
-        && (1..=9).contains(&d)
-    {
-        Some(InputAction::QuestionSelect(d as usize))
-    } else {
-        Some(InputAction::QuestionInsertChar(c))
+    let ctrl_alt_super = key.modifiers.intersects(
+        crossterm::event::KeyModifiers::CONTROL
+            | crossterm::event::KeyModifiers::ALT
+            | crossterm::event::KeyModifiers::SUPER,
+    );
+
+    match kind {
+        SheetKind::Permission => match key.code {
+            KeyCode::Left if !ctrl_alt_super => Some(InputAction::PermissionPrevOption),
+            KeyCode::Right if !ctrl_alt_super => Some(InputAction::PermissionNextOption),
+            KeyCode::Tab if !ctrl_alt_super => Some(InputAction::PermissionNextOption),
+            KeyCode::BackTab => Some(InputAction::PermissionPrevOption),
+            _ => None,
+        },
+        SheetKind::Question => match key.code {
+            KeyCode::Tab if !ctrl_alt_super => Some(InputAction::QuestionNext),
+            KeyCode::BackTab => Some(InputAction::QuestionPrevious),
+            KeyCode::Left if !ctrl_alt_super && !ctx.question_other_highlighted => {
+                Some(InputAction::QuestionPrevious)
+            }
+            KeyCode::Right if !ctrl_alt_super && !ctx.question_other_highlighted => {
+                Some(InputAction::QuestionNext)
+            }
+            KeyCode::Char(c) if !ctrl_alt_super => {
+                if c == ' ' && !ctx.question_other_highlighted {
+                    Some(InputAction::QuestionToggle)
+                } else if let Some(d) = c.to_digit(10)
+                    && (1..=9).contains(&d)
+                {
+                    Some(InputAction::QuestionSelect(d as usize))
+                } else {
+                    Some(InputAction::QuestionInsertChar(c))
+                }
+            }
+            _ => None,
+        },
+        SheetKind::InputInjection => None,
     }
 }

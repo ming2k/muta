@@ -16,6 +16,8 @@ pub const COMMAND_RESULT_BLOCK_IDX: usize = usize::MAX - 3;
 /// Expandable notice header rows (e.g. provider error with formatted JSON).
 pub const NOTICE_BLOCK_IDX: usize = usize::MAX - 4;
 /// Sentinel message index for text regions inside modal overlays.
+/// Sentinel message index for live composer input regions.
+pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
 pub const MODAL_DOC_MSG_IDX: usize = usize::MAX - 5;
 
 /// Identifies a specific position inside the document model.
@@ -150,6 +152,8 @@ pub struct LayoutMap {
     /// they separate rather than dead zones. The outer
     /// gutters are excluded on purpose: clicks there are not transcript clicks.
     transcript_content_rect: Option<Rect>,
+    /// Screen rectangle enclosing the entire composer component.
+    composer_rect: Option<Rect>,
 }
 
 /// Per-frame hit boxes for modal-local controls that are not part of the
@@ -236,6 +240,38 @@ impl LayoutMap {
     /// the horizontal gutters. Called once at the end of `draw_transcript`.
     pub fn set_transcript_content_rect(&mut self, rect: Rect) {
         self.transcript_content_rect = Some(rect);
+    }
+
+    /// Record the screen rectangle enclosing the composer component.
+    pub fn set_composer_rect(&mut self, rect: Rect) {
+        self.composer_rect = Some(rect);
+    }
+
+    /// The screen rectangle of the composer component, if rendered this frame.
+    pub fn composer_rect(&self) -> Option<Rect> {
+        self.composer_rect
+    }
+
+    /// Resolve a semantic cursor for a click within the composer component that
+    /// landed outside any specific text line (e.g. on the top breathing row,
+    /// mode indicator, bottom gap row, or hint bar).
+    pub fn composer_fallback_cursor(&self, y: u16) -> SemanticCursor {
+        let input_regions: Vec<&BlockRegion> = self
+            .regions
+            .iter()
+            .filter(|r| r.message_idx == INPUT_MSG_IDX)
+            .collect();
+
+        if let Some(first) = input_regions.first() {
+            let last = input_regions.last().unwrap_or(first);
+            if y < first.rect.y {
+                SemanticCursor::new(INPUT_MSG_IDX, 0, first.start_byte)
+            } else {
+                SemanticCursor::new(INPUT_MSG_IDX, 0, last.end_byte)
+            }
+        } else {
+            SemanticCursor::new(INPUT_MSG_IDX, 0, 0)
+        }
     }
 
     /// The visible transcript content rect, if any content was drawn this frame.

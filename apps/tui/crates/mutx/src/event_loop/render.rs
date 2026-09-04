@@ -532,9 +532,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         is_history_search,
                     ),
                     can_retry: !busy && viewed_chrome.can_retry,
-                    steer_key: app
+                    toggle_mode_key: app
                         .surface_overrides
-                        .effective_binding(crate::keymap::SurfaceVerb::Steer),
+                        .effective_binding(crate::keymap::SurfaceVerb::ToggleSendMode),
                 }
             };
             let composer_options = view::ComposerDrawOptions {
@@ -1170,6 +1170,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             };
             let entries = crate::overlays::command_palette::filter_palette_commands(
                 &app.command_palette_query,
+                &app.command_catalog,
                 &app.recent_commands,
                 &app_ctx,
             );

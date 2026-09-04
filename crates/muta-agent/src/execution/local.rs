@@ -209,7 +209,7 @@ impl ExecutionEnvironment for LocalExecutionEnvironment {
 /// additional roots).
 ///
 /// The additional set lives behind a [`SharedAdditionalRoots`] handle so a
-/// runtime trust decision (`/trust roots`, `/trust revoke`, `/settings
+/// runtime trust decision (`/trust ex-workspace`, `/trust revoke`, `/settings
 /// reload`) re-admits or collapses it live — every operation snapshots the
 /// current set, so there is no stale clone and no restart needed.
 #[derive(Debug, Clone)]

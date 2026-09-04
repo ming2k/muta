@@ -28,6 +28,17 @@ const PERMISSION_COLLAPSED_BODY_CAP: u16 = 2;
 /// Max body rows when "Details" is expanded; the rest is scrollable.
 const PERMISSION_MAX_BODY_ROWS: u16 = 14;
 
+/// Total number of interactive actions in the permission sheet footer.
+pub fn permission_action_count(confirm_always: bool, one_off: bool) -> usize {
+    if confirm_always && !one_off {
+        2
+    } else if one_off {
+        3
+    } else {
+        4
+    }
+}
+
 /// options; the user navigates with ↑/↓, selects with Space, and advances with
 /// Enter. Multi-select questions use checkboxes; single-select
 /// shows no marker at all — the highlight *is* the selection (it moves live

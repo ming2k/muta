@@ -284,12 +284,7 @@ impl SessionStore {
         // value used only to shuttle the snapshot out of the locked scope —
         // boxing the `Snapshot` payload to equalize variants would add an
         // allocation on the hot path for no benefit, so the lint is allowed.
-        #[allow(clippy::large_enum_variant)]
-        enum Persist {
-            None,
-            Snapshot { path: PathBuf, data: SessionData },
-        }
-        let persist = {
+        let (path, data) = {
             let mut state = self.state.lock().await;
             let baseline = state.data.model_window.len();
             // Only the strictly-new tail is the delta. If `current` is shorter
@@ -324,13 +319,7 @@ impl SessionStore {
                 state.event_log.append(SessionEvent::MessagesReplaced {
                     messages: state.data.model_window.clone(),
                 })?;
-                Persist::Snapshot {
-                    path: state.path.clone(),
-                    data: state.data.clone(),
-                }
             } else {
-                // Advance the in-memory state and append the delta event. The
-                // snapshot cache is not touched (stays at the round boundary).
                 let delta = current[baseline..].to_vec();
                 state.data.model_window.extend(delta.clone());
                 state.data.updated_at = unix_timestamp();
@@ -338,16 +327,10 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::MessagesAppended { messages: delta })?;
-                Persist::None
             }
+            (state.path.clone(), state.data.clone())
         };
-        match persist {
-            Persist::None => Ok(()),
-            Persist::Snapshot { path, data } => {
-                self.persist_off_runtime(path, data, self.blob_store.clone())
-                    .await
-            }
-        }
+        self.persist_off_runtime(path, data, self.blob_store.clone()).await
     }
 
     /// Commit everything a finished ReAct turn changed, in **one** lock
@@ -538,12 +521,7 @@ impl SessionStore {
 
         let child_path = self.sessions_dir.join(format!("{fork_id}.json"));
         let child_log = EventLog::new(child_path.with_extension("jsonl"));
-        // Seed the child's own event log first, then persist the snapshot, so
-        // the snapshot's `applied_seq` watermark reflects the freshly-seeded
-        // log and a later load takes the fast path (one store = one file =
-        // one log).
-        child_log.rewrite(snapshot_to_events(&child))?;
-        persist_to(&child_path, &child, &self.blob_store)?;
+        persist_to(&self.db_path, &child, &self.blob_store)?;
 
         // Repoint this store at the child; the parent file is already current.
         state.path = child_path;
@@ -578,39 +556,33 @@ impl SessionStore {
         side.updated_at = now;
         side.request_usage_records.clear();
 
-        let side_path = self.sessions_dir.join(format!("{side_id}.json"));
-        let side_log = EventLog::new(side_path.with_extension("jsonl"));
-        // Seed the side's own event log first, then persist the snapshot, so the
-        // snapshot's `applied_seq` watermark reflects the seeded log and a later
-        // load takes the fast path (one store = one file = one log), exactly
-        // like `fork`. The primary's files are never touched.
-        side_log.rewrite(snapshot_to_events(&side))?;
-        persist_to(&side_path, &side, &self.blob_store)?;
+        persist_to(&self.db_path, &side, &self.blob_store)?;
 
         // Deliberately do NOT mutate `state` — the primary keeps its active
         // pointer, history, and in-flight turn intact.
         Ok((side_id, parent_id))
     }
 
-    /// Construct a live [`SessionStore`] pinned to a side session file that
-    /// lives in this store's `sessions_dir` (written by `fork_to_side`). The
-    /// returned store shares the primary's project root, sessions dir, and blob
-    /// store root, so inherited content (including image blobs) resolves the
-    /// same way as in the primary. It writes only its own `sessions/<id>.*`
-    /// files, so the two stores never race on the same file.
+    /// Construct a live [`SessionStore`] pinned to a side session.
     pub async fn open_side(&self, side_id: &str) -> Result<SessionStore, String> {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
-        if !side_path.exists() {
-            return Err(format!("Side session '{side_id}' was not found."));
-        }
-        let event_log_path = side_path.with_extension("jsonl");
+        let db_path = self.db_path.clone();
         let project_root = self.project_root.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
-        let data = load_or_seed(&side_path, &event_log_path, &blob_store, &project_root);
-        let event_log = EventLog::new(event_log_path);
+        let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone()))
+            .map_err(|e| e.to_string())?;
+        let data = if let Some(data) = engine.load_session_full(side_id).map_err(|e| e.to_string())? {
+            data
+        } else if side_path.exists() {
+            load_or_seed(&db_path, side_id, &blob_store, &project_root, Some(&side_path))
+        } else {
+            return Err(format!("Side session '{side_id}' was not found."));
+        };
+        let event_log = EventLog::new(side_path.with_extension("jsonl"));
         Ok(SessionStore {
             project_root,
             sessions_dir: self.sessions_dir.clone(),
+            db_path,
             blob_store,
             state: Mutex::new(SessionState {
                 path: side_path,
@@ -639,7 +611,7 @@ impl SessionStore {
         state.data.tree.insert_entry(entry);
         state.data.model_window = state.data.tree.get_context_messages(&id);
         state.data.updated_at = unix_timestamp();
-        persist_to(&state.path, &state.data, &self.blob_store)?;
+        persist_to(&self.db_path, &state.data, &self.blob_store)?;
         Ok(id)
     }
 
@@ -653,7 +625,7 @@ impl SessionStore {
         let messages = state.data.tree.get_context_messages(target_leaf_id);
         state.data.model_window = messages.clone();
         state.data.updated_at = unix_timestamp();
-        persist_to(&state.path, &state.data, &self.blob_store)?;
+        persist_to(&self.db_path, &state.data, &self.blob_store)?;
         Ok(messages)
     }
 }

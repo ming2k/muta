@@ -112,6 +112,7 @@ pub(super) async fn handle_send_chat(
                     app.pin_summary_line = None;
                 }
             }
+            app.composer_send_mode = crate::app::ComposerSendMode::Steer;
         } else {
             // Expand `[Pasted text #N +M lines]` chips into
             // their full staged text right before dispatch so
