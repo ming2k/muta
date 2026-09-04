@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.8] - 2026-09-06
+
+### Added
+
+- **Target focus and elastic intent architecture (ADR-0176).** Formalized the
+  modeless three-domain focus architecture (`Composer`, `Interactive Target`,
+  `Browse Focus`) and established the Visual-Action Parity (VAP) and Intent
+  Orthogonality invariants.
+- **Symmetric bidirectional target navigation.** Bound `SurfaceVerb::FocusNextTarget`
+  to `Alt+↓` (`session.focus_next`) and `FocusPrevTarget` to `Alt+↑` (`session.focus_prev`),
+  with smooth downward edge egress back to the composer.
+- **Component autonomy & target copy key.** Pressing `y` or `c` on any focused
+  interactive target (`ToolStep`, `Thinking`, `CommandResult`, `Notice`) copies
+  its content to the system clipboard with an immediate toast notification.
+
+### Fixed
+
+- **Readline `Home`/`End` behavior in Composer.** Restored caret line-start/end
+  navigation (`Home`/`End`) while composing in the prompt without stealing global
+  transcript scrolling (`Ctrl+Home`/`Ctrl+End` or during target/browse focus).
+- **History recall leak during composer blur.** Prevented bare `↑`/`↓` keys from
+  corrupting composer draft text when a target or the transcript viewport is focused.
+- **Zero-overhead `/new` session reset.** Implemented idempotent activation guard
+  in `reapply_session_selection`, eliminating redundant provider re-connections,
+  OAuth scans, and telemetry writes on session reset (<1ms).
+- **Persistence SSOT unification.** Eliminated legacy dual-write technical debt
+  in `connection_usage` and `route_settings`, making SQLite the authoritative SSOT.
+- **Test hygiene & leaked `/tmp` cleanup.** Replaced leaked manual `std::env::temp_dir()`
+  allocations with RAII `tempfile::TempDir` guards across all test suites.
+
 ## [0.38.7] - 2026-09-04
 
 ### Added
@@ -6009,7 +6039,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.7...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.8...HEAD
+[0.38.8]: https://github.com/ming2k/muta/compare/v0.38.7...v0.38.8
 [0.38.7]: https://github.com/ming2k/muta/compare/v0.38.6...v0.38.7
 [0.38.6]: https://github.com/ming2k/muta/compare/v0.38.5...v0.38.6
 [0.38.4]: https://github.com/ming2k/muta/compare/v0.38.3...v0.38.4
