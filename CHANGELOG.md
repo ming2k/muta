@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.9] - 2026-09-07
+
+### Added
+
+- **Federated command catalog in Command Palette (ADR-0177).** Unified client UI /
+  router commands with daemon slash commands (`BuiltinCmd` and workspace-authored
+  commands), enabling direct search and execution of all session control verbs
+  (`/compact`, `/undo`, `/diff`, `/new`, `/schedule`, `/trust`, etc.) directly from
+  the palette.
+
+### Changed
+
+- **Motion-affordance bifurcation (ADR-0177).** Purged contextual viewport scrolling,
+  line navigation, and editing motions from `CommandId` and `COMMAND_REGISTRY`,
+  routing them strictly to active widget handlers and surface keybinding schemes.
+- **Ghost action purge.** Removed modal-local verbs (`McpReconnectSelected`,
+  `ToolsToggleSelected`, etc.) from the global command registry, exposing them
+  exclusively via contextual footer hints in their respective modals.
+- **Palette fuzzy match correction.** Fixed target and query argument inversion in
+  palette fuzzy matching.
+
 ## [0.38.8] - 2026-09-06
 
 ### Added
@@ -6039,7 +6060,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.8...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.9...HEAD
+[0.38.9]: https://github.com/ming2k/muta/compare/v0.38.8...v0.38.9
 [0.38.8]: https://github.com/ming2k/muta/compare/v0.38.7...v0.38.8
 [0.38.7]: https://github.com/ming2k/muta/compare/v0.38.6...v0.38.7
 [0.38.6]: https://github.com/ming2k/muta/compare/v0.38.5...v0.38.6
