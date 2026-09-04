@@ -204,6 +204,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_permission_depth: 0,
         pending_question_depth: 0,
         pending_input: None,
+        pre_attach: None,
         question: None,
         question_scroll: 0,
         question_modal_follow: true,

@@ -64,7 +64,12 @@ pub(crate) async fn sync_runtime_state_to_app(
     {
         let pending = runtime.pending_question.lock().await;
         let front = pending.front().cloned();
-        app.pending_question_depth = pending.len();
+        // ADR-0175 §7: the badge reports items queued *behind* the one
+        // already mounted on the sheet — not counting the mounted one
+        // itself. The permission sheet's predicate is `> 1` for the
+        // same reason; the question sheet's renderer uses `> 0`, so the
+        // depth must subtract the front item here.
+        app.pending_question_depth = pending.len().saturating_sub(1);
         drop(pending);
         let model_matches_front = match (&app.question, &front) {
             (Some(m), Some(req)) => m.request().id == req.id,
@@ -90,6 +95,66 @@ pub(crate) async fn sync_runtime_state_to_app(
             app.push_sheet_surface(crate::sheet::Question);
             app.modal_index = 0;
             app.focused_target = None;
+        }
+    }
+
+    // ADR-0175: PreAttach interstitial sync. Two flows:
+    //
+    // 1. **Mount.** The listener task published a fresh quarantined
+    //    snapshot through `pre_attach_signal`. Drain the cell and
+    //    build a `PreAttachState` from it. Mounting is suppressed
+    //    when the per-run `trust_gate_dismissed` latch is set (the
+    //    operator dismissed earlier in this run) or when `pre_attach`
+    //    is already mounted — the listener only republishes on
+    //    snapshot change, so a duplicate publication is a no-op.
+    //
+    // 2. **Unmount.** When the snapshot transitions to `Trusted`
+    //    (the operator chose "Trust all" → daemon persisted via
+    //    `/trust` → republished `HarnessState`), clear `pre_attach`
+    //    so the chat surface mounts on the next frame. The harness
+    //    snapshot lives on `UiRuntime::harness` and was already
+    //    mirrored into `app` higher in this function via
+    //    `runtime.harness`; reading it through the runtime cell
+    //    avoids racing the listener.
+    {
+        let mut signal = runtime.pre_attach_signal.lock().await;
+        if let Some(pub_) = signal.take() {
+            let dismissed = runtime.trust_gate_dismissed.load(Ordering::SeqCst);
+            if !dismissed
+                && let Some(state) = crate::PreAttachState::from_snapshot(&pub_.snapshot)
+                && app.pre_attach.is_none()
+            {
+                tracing::info!("mutx: mounting PreAttach interstitial");
+                app.pre_attach = Some(state);
+                // PreAttach claims the keyboard; reset the
+                // composer/sheet state the way an ordinary
+                // sheet mount does, so nothing downstream
+                // assumes it owns input.
+                app.modal_index = 0;
+                app.focused_target = None;
+            }
+        }
+        drop(signal);
+
+        // Unmount when the snapshot turns trusted or the workspace
+        // is no longer quarantined. The harness snapshot on
+        // `UiRuntime::harness` is the freshest one the listener has
+        // observed; reading it through the runtime cell avoids racing
+        // the listener's own `harness_clone` update.
+        if app.pre_attach.is_some() {
+            let harness = runtime.harness.lock().await;
+            let trusted = harness.workspace_security.aggregate()
+                == muta_contracts::WorkspaceTrustState::Trusted
+                || harness.workspace_security.aggregate()
+                    == muta_contracts::WorkspaceTrustState::Absent;
+            if trusted {
+                tracing::info!("mutx: clearing PreAttach interstitial (workspace trusted)");
+                app.pre_attach = None;
+                // The latch is set so a subsequent periodic republish
+                // of a still-quarantined snapshot (race with the
+                // `/trust` reload) does not re-mount within this run.
+                runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
+            }
         }
     }
 

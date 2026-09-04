@@ -138,4 +138,5 @@ eval "$(mutx completions bash)"
 | `MUTA_BIN` | Explicit `muta` executable used by `mutx` for on-demand daemon startup; normally unnecessary because a sibling binary and then `PATH` are checked |
 | `MUTX_STARTUP_VIEW` | Acceptance/test/launch view override: boot directly into a full-screen view (`settings`, `settings:<category>`, `dashboard`, `sessions`) |
 | `MUTX_SETTINGS_NAV` | Initial navigation category for the settings view (`appearance`, `transcript`, `behavior`, `web`, `system` or index `0..4`) |
+| `MUTX_FORCE_PRE_ATTACH` | Force-mount the PreAttach workspace-trust interstitial at startup with a synthesized quarantined snapshot, for visual acceptance (ADR-0175). Truthy values: `1`, `true`, `yes`, `on` |
 | `RUST_LOG` | Per-target filter; takes precedence over `MUTA_LOG` when set |

@@ -92,6 +92,12 @@ pub struct UiRuntime {
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
     pub pending_question: Arc<Mutex<VecDeque<UserQuestionRequest>>>,
     pub pending_input: Arc<Mutex<VecDeque<muta_contracts::InputRequest>>>,
+    /// ADR-0175: the listener task publishes a freshly-arrived
+    /// `WorkspaceSecuritySnapshot` to this cell when its
+    /// `aggregate() == Quarantined`, so the per-frame sync can mount
+    /// the PreAttach interstitial. Drained back to `None` once the
+    /// loop has consumed the signal.
+    pub pre_attach_signal: Arc<Mutex<Option<crate::PreAttachSignal>>>,
     pub is_responding: Arc<AtomicBool>,
     pub trust_gate_dismissed: Arc<AtomicBool>,
     pub dirty: Arc<AtomicBool>,
@@ -158,6 +164,7 @@ impl UiRuntime {
             pending_permission: Arc::new(Mutex::new(VecDeque::new())),
             pending_question: Arc::new(Mutex::new(VecDeque::new())),
             pending_input: Arc::new(Mutex::new(VecDeque::new())),
+            pre_attach_signal: Arc::new(Mutex::new(None)),
             is_responding: Arc::new(AtomicBool::new(false)),
             trust_gate_dismissed: Arc::new(AtomicBool::new(false)),
             dirty: Arc::new(AtomicBool::new(false)),

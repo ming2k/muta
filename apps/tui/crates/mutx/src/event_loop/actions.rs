@@ -1993,6 +1993,35 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 question_effects::apply(&effects, app, runtime).await;
             }
         }
+        // ADR-0175: PreAttach interstitial actions. The surface owns
+        // the keyboard when mounted; routing is disjoint from the
+        // Question sheet so neither flow can interact with the other.
+        // Quit decisions flip `should_quit` so the loop terminates on
+        // the next iteration; trust decisions dispatch the canonical
+        // `/trust` slash command and let the per-frame sync clear
+        // `pre_attach` once the daemon republishes a Trusted snapshot.
+        input::InputAction::PreAttachUp => {
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let _ = pa.apply(crate::question_model::QuestionAction::Up);
+            }
+        }
+        input::InputAction::PreAttachDown => {
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let _ = pa.apply(crate::question_model::QuestionAction::Down);
+            }
+        }
+        input::InputAction::PreAttachSubmit => {
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let decision = pa.apply(crate::question_model::QuestionAction::Submit);
+                apply_pre_attach_decision(decision, app, runtime).await;
+            }
+        }
+        input::InputAction::PreAttachCancel => {
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let decision = pa.apply(crate::question_model::QuestionAction::Cancel);
+                apply_pre_attach_decision(decision, app, runtime).await;
+            }
+        }
         input::InputAction::InputSubmit => {
             if app.active_sheet() == Some(crate::sheet::SheetKind::InputInjection) {
                 let text = std::mem::take(&mut app.input);
@@ -2907,4 +2936,51 @@ async fn execute_command_by_id(
         }
     }
     ActionFlow::Handled
+}
+
+/// ADR-0175: apply a PreAttach surface decision.
+///
+/// `TrustCommand` routes through the canonical `/trust` slash command
+/// — the same path the daemon's `/trust` handler uses, so persistence
+/// AND the live reload stay owned by the one code path. The per-frame
+/// sync observes the subsequent `Trusted` snapshot and clears
+/// `App::pre_attach` on the next frame.
+///
+/// `Quit` flips `should_quit` so the loop terminates on its next
+/// iteration; the cleanup path (EndSession wire message, terminal
+/// restore) runs in the existing `run_tui` epilogue. There is no
+/// chat surface to fall through to under ADR-0175 §4 — dismissing is
+/// quitting.
+async fn apply_pre_attach_decision(
+    decision: Option<crate::PreAttachDecision>,
+    app: &mut App,
+    _runtime: &UiRuntime,
+) {
+    let Some(decision) = decision else {
+        return;
+    };
+    match decision {
+        crate::PreAttachDecision::TrustCommand(cmd) => {
+            tracing::info!(command = %cmd, "mutx: PreAttach decision — dispatching trust command");
+            let _ = app.tx.send(AgentRequest::SlashCommand(cmd));
+            // The per-frame sync clears `pre_attach` once the
+            // republished snapshot reports Trusted. We do NOT clear
+            // it here so the surface stays mounted across the
+            // round-trip, preventing a one-frame flash of chat
+            // before the Trusted snapshot arrives.
+        }
+        crate::PreAttachDecision::Quit => {
+            tracing::info!("mutx: PreAttach decision — quitting (keep quarantined)");
+            // Drop the PreAttach state so the listener's
+            // `trust_gate_dismissed` latch (set below) is what stops
+            // a subsequent snapshot from re-mounting within this
+            // terminating run.
+            app.pre_attach = None;
+            // Mark the gate dismissed so any in-flight snapshot the
+            // listener publishes before the loop terminates cannot
+            // re-mount PreAttach on the dying frame.
+            app.should_quit.store(true, Ordering::SeqCst);
+            let _ = app.tx.send(AgentRequest::EndSession);
+        }
+    }
 }

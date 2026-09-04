@@ -604,41 +604,111 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
 }
 
 #[test]
-fn ctrl_c_while_running_arms_and_interrupts_with_confirmation() {
+fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
+    use std::sync::atomic::Ordering;
+
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    app.tx = tx;
-    app.running_sessions.insert("test-session".to_string());
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.set_active_modal_for_test(Modal::Host);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    // First Ctrl+C: arms the interrupt window
+    // First Ctrl+C: arms the quit window, dashboard stays open.
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
-    assert!(
-        app.ctrl_c_armed(),
-        "first Ctrl+C arms the interrupt confirmation"
-    );
+    assert!(app.ctrl_c_armed(), "first Ctrl+C arms the quit window");
+    assert_eq!(app.active_modal(), Modal::Host, "dashboard stays open");
+    assert!(!app.should_quit.load(Ordering::SeqCst));
 
-    // Second Ctrl+C: sends Interrupt request
+    // Second Ctrl+C inside the window: quit, not a drop into the chat.
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(
-        matches!(rx.try_recv(), Ok(AgentRequest::Interrupt)),
-        "confirmed Ctrl+C dispatches interrupt request"
+        app.should_quit.load(Ordering::SeqCst),
+        "double Ctrl+C exits the whole TUI"
+    );
+    assert_eq!(
+        app.active_modal(),
+        Modal::Host,
+        "the exit never demotes the dashboard to the conversation"
     );
 }
 
 #[test]
-fn ctrl_c_while_idle_does_not_clear_composer() {
+fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
+    use std::sync::atomic::Ordering;
+
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.input = "keep this text".to_string();
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.set_active_modal_for_test(Modal::Host);
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // First press arms; simulate the window lapsing (wall-clock deadline).
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    app.arm_ctrl_c(Some(std::time::Instant::now()));
+
+    // A press after the deadline re-arms instead of closing the dashboard.
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert!(app.ctrl_c_armed(), "the lapsed window re-arms");
+    assert_eq!(app.active_modal(), Modal::Host);
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+}
+
+/// The in-session dashboard (`/dashboard` typed in a conversation) keeps the
+/// same double-Ctrl+C UX, but its second press is the client-declared
+/// session end (ADR-0112) — `EndSession` to the agent, then loop exit — not
+/// the detach-flavoured `should_quit` of the startup screen.
+#[test]
+fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    app.startup_overlay = crate::StartupOverlay::None;
+    app.set_active_modal_for_test(Modal::Host);
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Arm, then quit. The loop-exit flow is asserted indirectly: the arm is
+    // consumed and `EndSession` was sent (the Exit arm is the only path that
+    // sends it), while `should_quit` stays clear — the startup flavour never
+    // runs in-session.
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert!(
+        matches!(rx.try_recv(), Ok(AgentRequest::EndSession)),
+        "double Ctrl+C declares the session end like the conversation path"
+    );
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+}
+
+/// The dashboard's inline prompt (`p` / `n`) borrows the composer buffer.
+/// Ctrl+C with text staged there clears it first — the same two-press
+/// shape as the conversation composer — and only then arms toward quit.
+#[test]
+fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.set_active_modal_for_test(Modal::Host);
+    app.host_prompting = true;
+    app.host_prompt_new = true;
+    app.input = "refactor the parser".to_string();
+    app.cursor_position = app.input.chars().count();
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
-    assert_eq!(
-        app.input, "keep this text",
-        "Ctrl+C must NEVER clear composer text"
-    );
+    assert!(app.input.is_empty(), "the staged task text is cleared");
+    assert!(app.ctrl_c_armed(), "clearing arms the quit window");
+    assert_eq!(app.active_modal(), Modal::Host, "the dashboard stays open");
+    assert!(app.host_prompting, "the prompt itself stays mounted");
+
+    // Second press (input now empty) quits.
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert!(app.should_quit.load(Ordering::SeqCst));
+    assert_eq!(app.active_modal(), Modal::Host);
 }
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a

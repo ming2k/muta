@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-attach workspace trust interstitial (ADR-0175).** A workspace whose
+  project-authored contributions (skills, MCP, hooks, instructions) have never
+  been trusted — `WorkspaceTrustState::Quarantined` — now presents the
+  first-contact trust decision as a full-screen black interstitial surface
+  that mounts **before** any chat transcript, composer, or session chrome.
+  Selection uses background highlight only (no cursor marker); `↑`/`↓`
+  navigate, `Enter` selects, `Esc` quits — there is no longer a
+  "stay untrusted and use the app" path because an untrusted workspace has
+  no useful work to do (model rounds fail preflight per ADR-0140 §3).
+  Selecting "Trust all domains" sends the canonical `/trust` slash command;
+  the per-frame sync observes the republished `Trusted` snapshot and the
+  chat surface mounts on the next frame — never earlier. This replaces the
+  previous post-mount `Question` sheet that interrupted an already-live
+  chat surface, and the +1-queued badge lie that any single-question
+  ask_user painted (`pending_question_depth` is now
+  `pending.len().saturating_sub(1)`, matching the permission sheet's `> 1`
+  predicate). The wire-level admission handshake variant is deferred as a
+  separate ADR.
+
+- **`MUTX_FORCE_PRE_ATTACH=1` acceptance toggle.** Force-mounts the
+  PreAttach interstitial at startup with a synthesized quarantined
+  snapshot, so operators can visually verify the surface — wording,
+  highlight, navigation, transition — without preparing a quarantined
+  workspace. Selecting "Trust all domains" still routes through the real
+  `/trust` path and persists against the real workspace root.
+
 ## [0.38.6] - 2026-09-04
 
 ### Changed

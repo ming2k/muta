@@ -90,6 +90,10 @@ pub struct InputContext {
     /// §3). Mutually exclusive with a non-`None` `active_modal`: a sheet is
     /// not a modal, and `active_modal` is `None` while one is up.
     pub active_sheet: Option<crate::sheet::SheetKind>,
+    /// ADR-0175: `true` while the PreAttach interstitial surface owns
+    /// the terminal. Mirrors `App::pre_attach.is_some()` so `process_event`
+    /// can route keyboard events to PreAttach without inspecting `App`.
+    pub pre_attach_active: bool,
     /// Which pane of the Settings View currently owns focus. Mirrors `App::config_focus`.
     pub config_focus: crate::overlays::ConfigFocus,
     /// The full-screen view the user stands in (ADR-0141). Surface dispatch
@@ -613,6 +617,16 @@ pub enum InputAction {
     QuestionPrevious,
     /// Cancel the question modal.
     QuestionCancel,
+    /// ADR-0175: navigation/decision actions on the PreAttach
+    /// interstitial surface. The four variants mirror the Question
+    /// sheet's, but route to `PreAttachState::apply` instead of the
+    /// Question sheet's `QuestionModel::update`, keeping the two
+    /// surfaces' dispatch disjoint (no overloading of `Question*`
+    /// actions).
+    PreAttachUp,
+    PreAttachDown,
+    PreAttachSubmit,
+    PreAttachCancel,
     /// Submit the input-injection panel's typed text (L3.5 β).
     InputSubmit,
     /// Cancel the input-injection panel (run the command non-interactively).
@@ -1264,6 +1278,27 @@ pub fn process_event(
                     crate::keymap::CommandId::CopySelection => return InputAction::CopySelection,
                     _ => {}
                 }
+            }
+
+            // ADR-0175: PreAttach interstitial owns the keyboard. The
+            // four navigation keys map to dedicated PreAttach actions
+            // and everything else is swallowed (no chat composer,
+            // modal, or sheet behind the surface). Global chords
+            // (Ctrl+C, Ctrl+Q) still resolve above as escape hatches,
+            // which is consistent with how SessionsPicker handles
+            // them — the operator always has a force-quit path.
+            if context.pre_attach_active {
+                return match key.code {
+                    KeyCode::Up => InputAction::PreAttachUp,
+                    KeyCode::Down => InputAction::PreAttachDown,
+                    KeyCode::Enter => InputAction::PreAttachSubmit,
+                    // Backspace, Delete, all chars, all Fn keys, all
+                    // Ctrl+X chords (other than the globals handled
+                    // above) and any unrecognized key fall through to
+                    // Esc semantics — the PreAttach surface has only
+                    // four meaningful inputs.
+                    _ => InputAction::PreAttachCancel,
+                };
             }
 
             // While the `/host` dashboard's inline prompt is open, printable

@@ -1013,6 +1013,15 @@ pub(crate) mod question_effects {
                     request_id,
                     answers,
                 } => {
+                    // ADR-0175: trust gate requests no longer route
+                    // through the pending_question queue (they mount
+                    // the PreAttach interstitial instead). This guard
+                    // is defensive: should a trust_gate request ever
+                    // reach the Question sheet (legacy path, test
+                    // fixture, or malformed wire), intercept it here
+                    // instead of forwarding to the daemon — the
+                    // daemon has no parked round waiting for a
+                    // TRUST_GATE_REQUEST_ID reply.
                     if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
                         if let Some(command) = crate::trust_gate::answer_to_command(answers) {
@@ -1032,6 +1041,7 @@ pub(crate) mod question_effects {
                     });
                 }
                 crate::question_model::QuestionEffect::Cancelled { request_id } => {
+                    // ADR-0175 defensive guard — see the Reply arm.
                     if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
                         continue;

@@ -496,6 +496,7 @@ async fn process_one_event(
             input::InputContext {
                 active_modal,
                 active_sheet,
+                pre_attach_active: app.pre_attach.is_some(),
                 session_info_detail,
                 connection_info_detail,
                 is_responding,

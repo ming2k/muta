@@ -11,15 +11,13 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{AgentRequest, Role};
 
-use crate::App;
-use crate::clipboard;
-use crate::composer_attachments;
+use crate::{App, Modal, clipboard, clipboard_ops, composer_attachments};
 use crate::model::document::TranscriptMessage;
 use crate::model::selection::SelectionState;
 
 use super::super::runtime::{UiRuntime, now_epoch_ms};
 use super::super::sync::show_local_toast;
-use super::super::transcript::resolve_focused_mut;
+use super::super::transcript::{extract_selection_text, resolve_focused_mut};
 use super::ActionFlow;
 
 /// Split a raw composer command into the ledger identity (`name`, `args`)
@@ -242,39 +240,151 @@ pub(super) async fn handle_queue_follow_up(
     handle_send_chat(app, runtime, viewed_session_id, text).await;
 }
 
-/// Loop stage (input dispatch): the `CtrlC` arm of the action match (purely interrupts running task).
+/// Loop stage (input dispatch): the `CtrlC` arm of the action match (copy
+/// selection, close overlay, clear input, armed double-press quit).
 pub(crate) fn handle_ctrl_c(
     app: &mut App,
     viewed_session_id: &str,
-    _copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
-    _copy_pending: &Arc<AtomicUsize>,
+    copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
+    copy_pending: &Arc<AtomicUsize>,
 ) -> ActionFlow {
-    if app.running_sessions.contains(viewed_session_id) {
-        if app.ctrl_c_armed() {
-            let _ = app.tx.send(AgentRequest::Interrupt);
+    if let Some(text) = extract_selection_text(
+        &app.selection,
+        app.focused_messages(),
+        &app.input,
+        &app.layout_map,
+        app.drag.cell_info.as_ref(),
+    ) {
+        clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+    } else if app.active_modal() == Modal::HistorySearch {
+        // Cancel the history modal via the shared dismiss verb: the
+        // per-view draft is handed back and the sub-flags cleared
+        // (ADR-0139).
+        app.dismiss_surface();
+    } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
+        && app.active_modal() == Modal::Sessions
+    {
+        // `mutx attach` (no id) opened the picker at startup:
+        // there is no conversation behind it, so Ctrl+C — like
+        // Esc and an outside click — quits the program rather
+        // than dropping into an empty session. Without this,
+        // Ctrl+C used to close the modal and land the user in a
+        // bare empty chat (which a stray /models then persisted
+        // as an empty-session file).
+        tracing::info!(reason = "startup_picker_cancelled", "app exiting");
+        app.should_quit.store(true, Ordering::SeqCst);
+    } else if app.active_modal() == Modal::OauthPending {
+        let text = if !app.oauth_pending_url.is_empty() {
+            app.oauth_pending_url.clone()
+        } else if !app.oauth_pending_user_code.is_empty() {
+            app.oauth_pending_user_code.clone()
+        } else {
+            String::new()
+        };
+        if !text.is_empty() {
+            clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
             show_local_toast(
                 app,
-                "Task interrupted",
+                "Link copied to clipboard",
                 false,
                 std::time::Duration::from_millis(2000),
             );
-            app.arm_ctrl_c(None);
-        } else {
-            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
+        }
+    } else if app.active_modal() == Modal::Host {
+        // The session dashboard owns Ctrl+C: it is a first-class
+        // screen, not a transient modal, so Ctrl+C never closes
+        // it into the conversation behind it. The gesture is the
+        // app-wide double-press — first press arms a 2s quit
+        // window (the "press Ctrl+C again to exit" toast), the
+        // second exits the whole TUI.
+        if app.host_prompting && !app.input.is_empty() {
+            // Same two-press shape as the composer: with text in
+            // the dashboard's inline prompt, the first Ctrl+C
+            // clears it (and arms), the second quits.
+            app.input.clear();
+            app.set_cursor(0);
             show_local_toast(
                 app,
-                "Press Ctrl+C again to confirm interruption",
+                "input cleared — Ctrl+C again to exit",
                 false,
                 App::CTRL_C_ARM_WINDOW,
             );
+            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
+        } else if app.ctrl_c_armed() {
+            tracing::info!(reason = "dashboard_ctrl_c_double_press", "app exiting");
+            if app.startup_overlay == crate::StartupOverlay::Dashboard
+                || matches!(app.startup_overlay, crate::StartupOverlay::Settings { .. })
+            {
+                // Standalone entry (`mutx dashboard` or `mutx settings`) opened this
+                // screen without an attached conversation: quit cleanly.
+                app.should_quit.store(true, Ordering::SeqCst);
+            } else {
+                // `/dashboard` opened in-session: the same
+                // client-declared session end as the
+                // conversation's double Ctrl+C (ADR-0112).
+                let _ = app.tx.send(AgentRequest::EndSession);
+                return ActionFlow::Exit;
+            }
+        } else {
+            // Arm the real 2s window in which a second Ctrl+C
+            // quits (the toast renders over the dashboard).
+            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         }
-    } else {
+    } else if app.active_modal() != Modal::None && app.active_sheet().is_none() {
+        // Ctrl+C over a surface is the same dismiss as Esc (ADR-0139):
+        // retained browse views hide with state saved, the quick switcher
+        // cancels to its origin, everything else falls to plain close.
+        super::modals::handle_close_modal(app, viewed_session_id);
+    } else if app.in_side_view {
+        // `/btw` aside view: Ctrl+C detaches back to the primary
+        // transcript (ADR-0103 §2) — the aside keeps running, so
+        // this is the "get me out" gesture, matching the shell/REPL
+        // muscle memory. Slotted after modal-close so an open
+        // overlay still wins. The composer draft is deliberately
+        // preserved (it belongs to the aside's next turn, not to a
+        // quit intent).
+        app.exit_side_view();
+        let _ = app.tx.send(AgentRequest::ExitSideView);
+    } else if !app.input.is_empty() {
+        // Ctrl+C is purely a compose-level action: copy,
+        // close overlay, clear, or quit. It never interrupts a
+        // running turn — only double-Esc does — so a task in
+        // flight is left untouched here and the input is
+        // cleared instead. Clearing the input also arms the
+        // quit window so
+        // the chain is exactly two presses total (clear,
+        // then quit). The combined toast says both what
+        // just happened and what the next Ctrl+C will do,
+        // removing the old "silent clear → user can't tell
+        // if the next press will quit or do something else"
+        // ambiguity. Pending-image reminders skip their
+        // per-frame refresh while the quit window is armed
+        // so this toast keeps the floor.
+        app.input.clear();
+        app.set_cursor(0);
+        app.input_scroll = 0;
+        app.history_index = None;
+        app.clear_history_draft();
+        app.pending_images.clear();
+        app.pending_text_pastes.clear();
         show_local_toast(
             app,
-            "No running task to interrupt (Use Ctrl+Q to quit)",
+            "input cleared — Ctrl+C again to exit",
             false,
-            std::time::Duration::from_millis(2000),
+            App::CTRL_C_ARM_WINDOW,
         );
+        app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
+    } else if app.ctrl_c_armed() {
+        // Double Ctrl+C inside the conversation is a quit intent — same
+        // client-declared session end as `/exit` (ADR-0112), unlike the
+        // detach-flavoured exits (host switch, startup overlays).
+        let _ = app.tx.send(AgentRequest::EndSession);
+        tracing::info!(reason = "ctrl_c_double_press", "app exiting");
+        return ActionFlow::Exit;
+    } else {
+        // Arm a real 2s window (wall-clock) in which a second Ctrl+C
+        // quits.
+        app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
     }
     ActionFlow::Handled
 }

@@ -735,6 +735,14 @@ pub struct App {
     /// session is opened from the picker. Always `None` for the in-session
     /// `/sessions` modal, which just dismisses on Esc/click-out.
     pub startup_overlay: crate::StartupOverlay,
+    /// The PreAttach interstitial state, mounted when the attaching
+    /// workspace's first-contact trust snapshot is `Quarantined`
+    /// (ADR-0175). `Some` means the chat surface is gated and the
+    /// per-frame render paints a full-screen black interstitial
+    /// instead of chat; the per-frame sync clears it once a
+    /// subsequent `HarnessState` reports `aggregate() == Trusted`.
+    /// Force-mounted by `MUTX_FORCE_PRE_ATTACH=1` for acceptance.
+    pub pre_attach: Option<crate::PreAttachState>,
     pub permission_confirm_always: bool,
     /// Whether the inline permission sheet is expanded to show the full
     /// description + arguments. Collapsed by default so the prompt stays

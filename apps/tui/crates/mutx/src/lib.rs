@@ -38,7 +38,9 @@ pub mod keymap;
 pub mod paths;
 pub mod phase;
 pub mod question_model;
-pub mod step_interaction;
+mod pre_attach;
+pub(crate) use pre_attach::{PreAttachDecision, PreAttachSignal, PreAttachState};
+mod step_interaction;
 mod terminal;
 mod transcript;
 pub mod trust_gate;
@@ -220,6 +222,31 @@ impl StartupOverlay {
 /// for the active 10fps render heartbeat. The listener still applies it and
 /// marks the UI dirty immediately; it merely avoids waking the event loop for
 /// every token. Starts, ends, errors, permissions, and tool lifecycle changes
+/// Initial `App::pre_attach` value resolved from the acceptance
+/// environment. Returns the PreAttach acceptance fixture when
+/// `MUTX_FORCE_PRE_ATTACH` is set to a truthy value (`1`, `true`,
+/// `yes`, `on` — case-insensitive); `None` otherwise, so the
+/// per-frame sync owns the production mounting path through the
+/// `pre_attach_signal` cell.
+///
+/// Documented alongside the other `MUTX_*` acceptance toggles per
+/// ADR-0175 §6.
+fn pre_attach_initial() -> Option<PreAttachState> {
+    let raw = std::env::var("MUTX_FORCE_PRE_ATTACH")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let truthy = |v: &str| matches!(v, "1" | "true" | "yes" | "on");
+    if raw.as_deref().is_some_and(truthy) {
+        tracing::info!(
+            "mutx: MUTX_FORCE_PRE_ATTACH set — mounting PreAttach acceptance fixture"
+        );
+        Some(PreAttachState::acceptance_fixture())
+    } else {
+        None
+    }
+}
+
 /// remain immediate so the UI never feels unresponsive at a state boundary.
 fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
     matches!(
@@ -379,6 +406,12 @@ pub async fn run_tui(
     let pending_permission_clone = pending_permission.clone();
     let pending_question = Arc::new(Mutex::new(VecDeque::<UserQuestionRequest>::new()));
     let pending_question_clone = pending_question.clone();
+    // ADR-0175: the listener publishes a freshly-arrived quarantined
+    // snapshot to this cell so the per-frame sync can mount the
+    // PreAttach interstitial surface before the chat mounts. Drained
+    // back to `None` by the sync once consumed.
+    let pre_attach_signal = Arc::new(Mutex::new(None::<crate::PreAttachSignal>));
+    let pre_attach_signal_clone = pre_attach_signal.clone();
     // Trust gate: whether the gate already got its answer this attach.
     // The daemon republishes `HarnessState` periodically; without this
     // latch a dismissed gate (Esc = keep quarantined) would re-open on the
@@ -1632,48 +1665,48 @@ pub async fn run_tui(
                                 }
                                 *round_count_clone.lock().await = round_counter;
                                 *harness_clone.lock().await = snapshot;
-                                // Trust gate: the security snapshot
-                                // riding this HarnessState decides whether
-                                // the primary session's workspace still
-                                // needs a first-contact trust decision.
-                                // Quarantined → ensure the synthesized gate
-                                // question is parked ahead of any real
-                                // ask_user (it is the modal the user must
-                                // answer before the composer takes input);
-                                // anything else → drain a stale gate so the
-                                // dialog cannot linger after the decision.
-                                // `trust_gate_dismissed` latches the
-                                // keep-quarantined answer so periodic
-                                // snapshots do not re-nag within one run.
+                                // ADR-0175: Trust gate moved out of the
+                                // `pending_question` queue and into the
+                                // PreAttach interstitial. Publish the
+                                // freshly-arrived snapshot to the
+                                // `pre_attach_signal` cell whenever it
+                                // demands a first-contact trust decision
+                                // (aggregate == Quarantined) and the
+                                // per-run latch has not already cleared
+                                // the gate. The per-frame sync consumes
+                                // the signal, mounts PreAttach before
+                                // chat, and drains the cell. Choosing to
+                                // stop nagging within one run is still
+                                // owned by `trust_gate_dismissed` so the
+                                // periodic republish cannot re-mount.
+                                //
+                                // Snapshot transitions `Quarantined →
+                                // Trusted` (after the user picked "Trust
+                                // all" and the daemon republished) are
+                                // observed by the per-frame sync, which
+                                // is the one place that clears
+                                // `App::pre_attach`.
                                 {
-                                    let mut queue = pending_question_clone.lock().await;
-                                    let gate_queued = queue.front().is_some_and(|req| {
-                                        req.id == crate::trust_gate::TRUST_GATE_REQUEST_ID
-                                    });
+                                    let security =
+                                        harness_clone.lock().await.workspace_security.clone();
                                     let gate_needed = !trust_gate_dismissed_clone
                                         .load(Ordering::SeqCst)
-                                        && crate::trust_gate::gate_request(
-                                            &harness_clone.lock().await.workspace_security,
-                                        )
-                                        .is_some();
-                                    match (gate_queued, gate_needed) {
-                                        (false, true) => {
-                                            if let Some(req) = crate::trust_gate::gate_request(
-                                                &harness_clone.lock().await.workspace_security,
-                                            ) {
-                                                queue.push_front(req);
-                                                tracing::debug!(
-                                                    "mutx: workspace trust gate queued"
-                                                );
-                                            }
+                                        && crate::trust_gate::gate_request(&security)
+                                            .is_some();
+                                    if gate_needed {
+                                        let mut slot = pre_attach_signal_clone.lock().await;
+                                        // Only overwrite when the snapshot
+                                        // differs from the currently-pending
+                                        // signal so a no-op republish does
+                                        // not reset the loop's drain cursor.
+                                        let replace = match &*slot {
+                                            None => true,
+                                            Some(prev) => prev.snapshot != security,
+                                        };
+                                        if replace {
+                                            *slot =
+                                                Some(crate::PreAttachSignal { snapshot: security });
                                         }
-                                        (true, false) => {
-                                            queue.retain(|req| {
-                                                req.id != crate::trust_gate::TRUST_GATE_REQUEST_ID
-                                            });
-                                            tracing::debug!("mutx: workspace trust gate cleared");
-                                        }
-                                        _ => {}
                                     }
                                 }
                                 if running {
@@ -2312,6 +2345,13 @@ pub async fn run_tui(
         pending_permission: None,
         active_sheet: None,
         pending_permission_depth: 0,
+        // ADR-0175 §6: `MUTX_FORCE_PRE_ATTACH=1` force-mounts the
+        // PreAttach interstitial at startup so operators can verify
+        // the surface — wording, highlight, navigation, transition —
+        // without preparing a quarantined workspace. Resolved to
+        // `None` later in this function based on the resolved startup
+        // intent; this initializer is the no-forcing default.
+        pre_attach: pre_attach_initial(),
         pending_question_depth: 0,
         pending_input: None,
         question: None,
@@ -2468,6 +2508,7 @@ pub async fn run_tui(
             pending_permission,
             pending_question,
             pending_input,
+            pre_attach_signal,
             is_responding,
             trust_gate_dismissed,
             dirty,

@@ -20,6 +20,22 @@ use super::transcript::display_status;
 pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str) {
     let mut layout_map = LayoutMap::new();
 
+    // ADR-0175: PreAttach interstitial takes over the terminal before
+    // any chat/composer/transcript chrome is painted. The render
+    // early-returns, exactly like the SessionsPicker guard below, so
+    // nothing downstream (chrome, composer, panels) runs while the
+    // workspace trust decision is still pending. The only interactive
+    // surface on this frame is the trust prompt rendered by
+    // `draw_pre_attach`.
+    if let Some(pre_attach_state) = app.pre_attach.as_ref() {
+        crate::pre_attach::draw_pre_attach(f, pre_attach_state, &app.theme);
+        // Layout map / modal rect / modal hit map stay empty — there
+        // is no chrome to interact with, and the PreAttach surface
+        // owns its own hit-testing (it does not consume LayoutMap).
+        app.layout_map = layout_map;
+        return;
+    }
+
     if app.startup_overlay == crate::StartupOverlay::SessionsPicker
         && app.active_modal() == Modal::Sessions
     {
