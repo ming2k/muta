@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.11] - 2026-09-07
+
+### Added
+
+- **Prompt component lifecycle statuses (`Sending`, `Cancelled`).** Sent prompt entries
+  are preserved in the transcript with an explicit in-flight `Sending` status and
+  transition to `Delivered` on response, or `Cancelled` upon interrupt.
+
+### Changed
+
+- **Append-only transcript discipline.** Removed Phase-1 unsend prompt retraction
+  (`UnsentInput` popping and composer clobbering). Sent prompt components remain
+  honestly preserved in the transcript and update their status in-place.
+- **Zero-latency Esc Esc interrupt.** Pressing `Esc Esc` immediately clears responding
+  and busy states in the TUI without awaiting backend cancellation or disk persistence
+  round-trips.
+
+### Removed
+
+- **Phase-1 unsend runtime signals and dead code.** Purged `UnsentInput` event loop
+  signals, `drain_unsent_input` polling, and associated session rollback branches.
+
 ## [0.38.10] - 2026-09-07
 
 ### Fixed
@@ -6076,7 +6098,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.10...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.11...HEAD
+[0.38.11]: https://github.com/ming2k/muta/compare/v0.38.10...v0.38.11
 [0.38.10]: https://github.com/ming2k/muta/compare/v0.38.9...v0.38.10
 [0.38.9]: https://github.com/ming2k/muta/compare/v0.38.8...v0.38.9
 [0.38.8]: https://github.com/ming2k/muta/compare/v0.38.7...v0.38.8
