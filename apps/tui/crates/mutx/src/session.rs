@@ -120,16 +120,29 @@ pub(crate) fn resolve_chat_surface_key(
     if ov.matches(key, SurfaceVerb::FocusPrevTarget) {
         return Some(InputAction::FocusPrevTarget);
     }
-    if ov.matches(key, SurfaceVerb::ClearFocusedTarget) && ctx.has_focused_target {
+    if ov.matches(key, SurfaceVerb::FocusNextTarget) {
+        return Some(InputAction::FocusNextTarget);
+    }
+    if ov.matches(key, SurfaceVerb::ClearFocusedTarget)
+        && (ctx.has_focused_target || ctx.transcript_focused)
+    {
         return Some(InputAction::ClearFocusedTarget);
     }
-    // Home / End unconditionally scroll the transcript (ADR-0173): reading
-    // the transcript never requires entering a state first.
-    if ov.matches(key, SurfaceVerb::ScrollTop) {
+    // Home / End scroll the transcript when target or browse focus is active (or if explicitly remapped).
+    // When composer is active, bare Home / End fall through to readline line-start/end.
+    if ov.is_remapped(SurfaceVerb::ScrollTop) && ov.matches(key, SurfaceVerb::ScrollTop) {
         return Some(InputAction::ScrollTop);
     }
-    if ov.matches(key, SurfaceVerb::ScrollBottom) {
+    if ov.is_remapped(SurfaceVerb::ScrollBottom) && ov.matches(key, SurfaceVerb::ScrollBottom) {
         return Some(InputAction::ScrollBottom);
+    }
+    if ctx.has_focused_target || ctx.transcript_focused {
+        if ov.matches(key, SurfaceVerb::ScrollTop) {
+            return Some(InputAction::ScrollTop);
+        }
+        if ov.matches(key, SurfaceVerb::ScrollBottom) {
+            return Some(InputAction::ScrollBottom);
+        }
     }
 
     match key.code {
@@ -143,12 +156,17 @@ pub(crate) fn resolve_chat_surface_key(
         // Only unmodified (or Shift-capitalized) characters are owned as
         // text; every Control/Alt/Super chord is a shared command chord
         // (readline editing, paste, …) handled by the router.
+        // When a target is focused, 'y' and 'c' copy the target's content.
         KeyCode::Char(c)
             if !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
         {
-            resolve_printable(ctx, c, input, cursor_position)
+            if ctx.has_focused_target && (c == 'y' || c == 'c') {
+                Some(InputAction::CopyFocusedTarget)
+            } else {
+                resolve_printable(ctx, c, input, cursor_position)
+            }
         }
         _ => None,
     }
@@ -314,7 +332,7 @@ fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
 fn resolve_esc(ctx: &InputContext) -> Option<InputAction> {
     if ctx.completion_kind != crate::completion::CompletionKind::None && !ctx.completion_dismissed {
         Some(InputAction::CloseCompletion)
-    } else if ctx.has_focused_target {
+    } else if ctx.has_focused_target || ctx.transcript_focused {
         Some(InputAction::ClearFocusedTarget)
     } else if ctx.completion_kind != crate::completion::CompletionKind::None
         && ctx.suggestion_count > 0
@@ -343,17 +361,17 @@ fn resolve_steer(
     }
 }
 
-/// ↑ on the chat surface: walk completion suggestions, move the caret up
-/// through a multi-line draft, then — at the top line of the draft (ADR-0174
-/// revision of ADR-0173's arrow table) — hand off to inline history recall
-/// toward older entries. Transcript step walking stays owned by the
-/// remappable `FocusPrevTarget` verb (canonical `Alt+↑`, ADR-0173).
-fn resolve_up(
-    ctx: &InputContext,
-    input: &str,
-    cursor_position: &mut usize,
-) -> Option<InputAction> {
-    if ctx.completion_kind != crate::completion::CompletionKind::None
+/// ↑ on the chat surface:
+/// - When a transcript step is focused, walk focus to the previous step.
+/// - When transcript browse focus is active, scroll the transcript up.
+/// - Otherwise, walk completion suggestions, move caret up through multi-line draft,
+///   or at top line hand off to inline history recall.
+fn resolve_up(ctx: &InputContext, input: &str, cursor_position: &mut usize) -> Option<InputAction> {
+    if ctx.has_focused_target {
+        Some(InputAction::FocusPrevTarget)
+    } else if ctx.transcript_focused {
+        Some(InputAction::ScrollUp)
+    } else if ctx.completion_kind != crate::completion::CompletionKind::None
         && ctx.suggestion_count > 0
         && !ctx.has_exact_suggestion
     {
@@ -367,14 +385,21 @@ fn resolve_up(
     }
 }
 
-/// ↓ on the chat surface: mirror of [`resolve_up`], handing off to history
-/// recall toward newer entries at the draft's last line.
+/// ↓ on the chat surface:
+/// - When a transcript step is focused, walk focus to the next step.
+/// - When transcript browse focus is active, scroll the transcript down.
+/// - Otherwise, walk completion suggestions, move caret down through multi-line draft,
+///   or at bottom line hand off to newer history recall / stashed draft.
 fn resolve_down(
     ctx: &InputContext,
     input: &str,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    if ctx.completion_kind != crate::completion::CompletionKind::None
+    if ctx.has_focused_target {
+        Some(InputAction::FocusNextTarget)
+    } else if ctx.transcript_focused {
+        Some(InputAction::ScrollDown)
+    } else if ctx.completion_kind != crate::completion::CompletionKind::None
         && ctx.suggestion_count > 0
         && !ctx.has_exact_suggestion
     {
@@ -388,8 +413,8 @@ fn resolve_down(
     }
 }
 
-/// A printable character on the chat surface. A focused transcript step does
-/// not capture typing: the character is inserted into the composer and focus
+/// A printable character on the chat surface. A focused transcript step or browse focus
+/// does not capture typing: the character is inserted into the composer and focus
 /// bounces back to it (`ClearFocusedTarget`). Runner sibling navigation
 /// (`[`/`]`) is owned by the Runner view's resolver.
 fn resolve_printable(
@@ -398,7 +423,7 @@ fn resolve_printable(
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    if ctx.has_focused_target {
+    if ctx.has_focused_target || ctx.transcript_focused {
         let byte_pos = crate::input::normalized_cursor_byte(input, *cursor_position);
         *cursor_position = crate::input::char_index_at_byte(input, byte_pos);
         input.insert(byte_pos, c);
@@ -612,12 +637,50 @@ mod tests {
             ),
             None
         );
-        // Bare ↑ with no completion and a single-line draft hands off to
-        // inline history recall (ADR-0174 edge hand-off revision).
+        // While a step is focused, bare ↑ steps to the previous target.
         assert_eq!(
             resolve_chat_surface_key(
                 crate::keymap::Key::UP,
                 &ctx(Mode::FocusedTarget, |_| {}),
+                &mut String::new(),
+                &mut 0,
+            ),
+            Some(InputAction::FocusPrevTarget)
+        );
+        // While a step is focused, bare ↓ steps to the next target.
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::DOWN,
+                &ctx(Mode::FocusedTarget, |_| {}),
+                &mut String::new(),
+                &mut 0,
+            ),
+            Some(InputAction::FocusNextTarget)
+        );
+        // While transcript browse focus is active, bare ↑/↓ scroll the transcript.
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::UP,
+                &ctx(Mode::Idle, |c| c.transcript_focused = true),
+                &mut String::new(),
+                &mut 0,
+            ),
+            Some(InputAction::ScrollUp)
+        );
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::DOWN,
+                &ctx(Mode::Idle, |c| c.transcript_focused = true),
+                &mut String::new(),
+                &mut 0,
+            ),
+            Some(InputAction::ScrollDown)
+        );
+        // While idle in composer, bare ↑ hands off to inline history recall.
+        assert_eq!(
+            resolve_chat_surface_key(
+                crate::keymap::Key::UP,
+                &ctx(Mode::Idle, |_| {}),
                 &mut String::new(),
                 &mut 0,
             ),
@@ -650,6 +713,37 @@ mod tests {
         );
         assert_eq!(action, Some(InputAction::ClearFocusedTarget));
         assert_eq!(input, "x", "typed char must land in the composer");
+    }
+
+    #[test]
+    fn copy_keys_act_on_focused_target() {
+        let mut input = String::from("");
+        let mut cursor = 0;
+        // 'y' copies focused target content without bouncing
+        let action = resolve_chat_surface_key(
+            crate::keymap::Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('y'),
+            },
+            &ctx(Mode::FocusedTarget, |_| {}),
+            &mut input,
+            &mut cursor,
+        );
+        assert_eq!(action, Some(InputAction::CopyFocusedTarget));
+        assert_eq!(input, "", "yank key must not pollute composer input");
+
+        // 'c' also copies focused target
+        let action = resolve_chat_surface_key(
+            crate::keymap::Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('c'),
+            },
+            &ctx(Mode::FocusedTarget, |_| {}),
+            &mut input,
+            &mut cursor,
+        );
+        assert_eq!(action, Some(InputAction::CopyFocusedTarget));
+        assert_eq!(input, "", "copy key must not pollute composer input");
     }
 
     #[test]
@@ -941,7 +1035,10 @@ mod tests {
             ),
             Some(InputAction::None)
         );
-        assert_eq!(cursor, 4, "↓ moved the caret to the next line (column kept)");
+        assert_eq!(
+            cursor, 4,
+            "↓ moved the caret to the next line (column kept)"
+        );
     }
 
     #[test]

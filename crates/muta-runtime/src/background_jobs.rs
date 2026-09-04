@@ -50,6 +50,17 @@ impl Default for BackgroundJobManager {
     }
 }
 
+/// Execution configuration and sandboxing roots for background process spawning.
+#[derive(Debug, Clone)]
+pub struct ProcessSpawnOptions<'a> {
+    pub label: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub workspace_root: &'a Path,
+    pub additional_roots: &'a [PathBuf],
+    pub detached: bool,
+    pub timeout: Option<Duration>,
+}
+
 impl BackgroundJobManager {
     pub fn new() -> Self {
         let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
@@ -111,17 +122,19 @@ impl BackgroundJobManager {
     }
 
     /// Spawn a deterministic shell command in the background.
-    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_process(
         &self,
         command: String,
-        label: Option<String>,
-        cwd: Option<PathBuf>,
-        workspace_root: &Path,
-        additional_roots: &[PathBuf],
-        detached: bool,
-        timeout: Option<Duration>,
+        opts: ProcessSpawnOptions<'_>,
     ) -> Result<BackgroundJobInfo, String> {
+        let ProcessSpawnOptions {
+            label,
+            cwd,
+            workspace_root,
+            additional_roots,
+            detached,
+            timeout,
+        } = opts;
         let job_id = JobId::new("job");
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -378,22 +391,14 @@ impl BackgroundJobManager {
     }
 
     /// Report completion of a Sub-Runner job.
-    #[allow(clippy::too_many_arguments)]
     pub fn finish_runner_job(
         &self,
         job_id: JobId,
-        description: String,
-        role: String,
-        prompt: String,
+        spec: JobSpec,
         duration_ms: u64,
         summary: String,
         success: bool,
     ) {
-        let spec = JobSpec::Runner {
-            description,
-            role,
-            prompt,
-        };
         let state = if success {
             JobState::Succeeded {
                 duration_ms,
@@ -568,12 +573,14 @@ impl muta_contracts::BackgroundJobService for SessionJobService {
         self.manager
             .spawn_process(
                 command,
-                label,
-                cwd,
-                self.env.workspace_root(),
-                &roots,
-                detached,
-                timeout,
+                ProcessSpawnOptions {
+                    label,
+                    cwd,
+                    workspace_root: self.env.workspace_root(),
+                    additional_roots: &roots,
+                    detached,
+                    timeout,
+                },
             )
             .await
     }
@@ -617,12 +624,14 @@ mod tests {
         let info = mgr
             .spawn_process(
                 "echo 'hello from background'".to_string(),
-                Some("test-echo".to_string()),
-                None,
-                &ws,
-                &roots,
-                false,
-                Some(Duration::from_secs(5)),
+                ProcessSpawnOptions {
+                    label: Some("test-echo".to_string()),
+                    cwd: None,
+                    workspace_root: &ws,
+                    additional_roots: &roots,
+                    detached: false,
+                    timeout: Some(Duration::from_secs(5)),
+                },
             )
             .await
             .expect("spawn success");
@@ -676,12 +685,14 @@ mod tests {
         let info = mgr
             .spawn_process(
                 "sleep 10".to_string(),
-                Some("test-sleep".to_string()),
-                None,
-                &ws,
-                &roots,
-                false,
-                Some(Duration::from_secs(10)),
+                ProcessSpawnOptions {
+                    label: Some("test-sleep".to_string()),
+                    cwd: None,
+                    workspace_root: &ws,
+                    additional_roots: &roots,
+                    detached: false,
+                    timeout: Some(Duration::from_secs(10)),
+                },
             )
             .await
             .expect("spawn success");

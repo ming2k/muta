@@ -22,7 +22,7 @@ use crate::{App, Modal};
 
 use super::runtime::UiRuntime;
 use super::sync::show_local_toast;
-use super::transcript::{extract_selection_text, resolve_focused_mut};
+use super::transcript::{extract_focused_target_text, extract_selection_text, resolve_focused_mut};
 
 mod commands;
 mod host;
@@ -1423,6 +1423,17 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.drag.cell_info.as_ref(),
             ) {
                 clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+            } else if let Some(target) = app.focused_target
+                && let Some(text) = extract_focused_target_text(app.focused_messages(), target)
+            {
+                clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+            }
+        }
+        input::InputAction::CopyFocusedTarget => {
+            if let Some(target) = app.focused_target
+                && let Some(text) = extract_focused_target_text(app.focused_messages(), target)
+            {
+                clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
             }
         }
         input::InputAction::CtrlC => {
@@ -1478,6 +1489,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::ClearFocusedTarget => {
             app.focused_target = None;
+            app.transcript_focused = false;
         }
         input::InputAction::ActivateFocusedTarget => {
             if let Some(target) = app.focused_target {
@@ -1679,16 +1691,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 }
 
                 app.pop_transient_surface();
-                return execute_command_by_id(
-                    app,
-                    runtime,
-                    session,
-                    viewed_session_id,
-                    copy_tx,
-                    copy_pending,
-                    cmd_id,
-                )
-                .await;
+                return execute_command_by_id(app, ctx, cmd_id).await;
             }
         }
         input::InputAction::ViewCloseSelected => {
@@ -2633,16 +2636,15 @@ fn cycle_tri_state(v: Option<bool>) -> Option<bool> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn execute_command_by_id(
     app: &mut App,
-    runtime: &UiRuntime,
-    _session: &crate::SessionSource,
-    viewed_session_id: &str,
-    copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
-    copy_pending: &Arc<AtomicUsize>,
+    ctx: &ActionContext<'_>,
     cmd_id: crate::keymap::CommandId,
 ) -> ActionFlow {
+    let runtime = ctx.runtime;
+    let viewed_session_id = ctx.viewed_session_id;
+    let copy_tx = ctx.copy_tx;
+    let copy_pending = ctx.copy_pending;
     use crate::keymap::CommandId;
     match cmd_id {
         CommandId::Help => {

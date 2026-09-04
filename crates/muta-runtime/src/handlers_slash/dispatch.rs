@@ -52,9 +52,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         base_tools_for_side,
         provider_for_task,
         ref mut provider_usage,
-        ref skills_registry,
-        skills_registry_for_commands,
-        embedding_store_for_commands,
+        skills_registry,
         req_tx_for_commands,
         project_root_for_side,
         startup,
@@ -376,9 +374,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         shared_additional_roots: env.shared_additional_roots,
                         shared_unconfined: env.shared_unconfined,
                         base_tools_for_side: env.base_tools_for_side,
-                        skills_registry: env.skills_registry.clone(),
-                        skills_registry_for_commands: env.skills_registry_for_commands,
-                        embedding_store_for_commands: env.embedding_store_for_commands,
+                        skills_registry: env.skills_registry,
                         req_tx_for_commands: env.req_tx_for_commands,
                         project_root_for_side: env.project_root_for_side,
                         startup: env.startup,
@@ -586,7 +582,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 session,
                 base_tools_for_side,
                 provider_for_task,
-                Arc::unwrap_or_clone(skills_registry.clone()),
+                Arc::unwrap_or_clone((*skills_registry).clone()),
                 project_root_for_side,
                 agent.identity().clone(),
                 agent.workspace_security_handle(),
@@ -1155,7 +1151,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         mcp_runtime,
                         workspace_security,
                         project_root_for_side,
-                        skills_registry_for_commands,
+                        skills_registry,
                         shared_additional_roots,
                     )
                     .await
@@ -1210,7 +1206,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         mcp_runtime,
                         workspace_security,
                         project_root_for_side,
-                        skills_registry_for_commands,
+                        skills_registry,
                         shared_additional_roots,
                     )
                     .await
@@ -1251,7 +1247,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             match sub {
                 "list" => {
                     let tool = ListSkillsTool {
-                        registry: (*skills_registry_for_commands).clone(),
+                        registry: (*skills_registry).clone(),
                     };
                     match tool.call("{}").await {
                         Ok(output) => {
@@ -1271,7 +1267,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
                 "status" => {
                     let status_lines = {
-                        let guard = skills_registry_for_commands.lock();
+                        let guard = skills_registry.lock();
                         let list = guard.list();
                         let total = list.len();
                         let quarantined = list.iter().filter(|s| s.quarantined).count();
@@ -1727,8 +1723,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     base_tools: base_tools_for_side,
                     provider_holder: provider_for_task,
                     provider_usage,
-                    skills_registry: skills_registry_for_commands,
-                    embedding_store: embedding_store_for_commands,
+                    skills_registry,
                     req_tx: req_tx_for_commands,
                     project_root: project_root_for_side,
                     startup,

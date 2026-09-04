@@ -1609,9 +1609,11 @@ pub enum SurfaceVerb {
     /// Previous / next prompt-history recall (`Alt+P` / `Alt+N`).
     HistoryPrev,
     HistoryNext,
-    /// Enter transcript step focus at the nearest step (`Alt+↑`).
+    /// Enter or step backward through transcript step focus (`Alt+↑`).
     FocusPrevTarget,
-    /// Clear step focus back to the composer (`Alt+↓`, needs focus).
+    /// Step forward through transcript step focus (`Alt+↓`).
+    FocusNextTarget,
+    /// Clear step focus back to the composer (`Esc`).
     ClearFocusedTarget,
     /// Jump the focused step's scroll to the conversation edges (`Home`/`End`).
     ScrollTop,
@@ -1631,7 +1633,8 @@ impl SurfaceVerb {
             SurfaceVerb::HistoryPrev => Key::ALT_P,
             SurfaceVerb::HistoryNext => Key::ALT_N,
             SurfaceVerb::FocusPrevTarget => Key::ALT_UP,
-            SurfaceVerb::ClearFocusedTarget => Key::ALT_DOWN,
+            SurfaceVerb::FocusNextTarget => Key::ALT_DOWN,
+            SurfaceVerb::ClearFocusedTarget => Key::ESC,
             SurfaceVerb::ScrollTop => Key::HOME,
             SurfaceVerb::ScrollBottom => Key::END,
             SurfaceVerb::PrevSibling => Key {
@@ -1655,6 +1658,7 @@ impl SurfaceVerb {
             SurfaceVerb::HistoryPrev => "history_prev",
             SurfaceVerb::HistoryNext => "history_next",
             SurfaceVerb::FocusPrevTarget => "focus_prev",
+            SurfaceVerb::FocusNextTarget => "focus_next",
             SurfaceVerb::ClearFocusedTarget => "clear_focus",
             SurfaceVerb::ScrollTop => "scroll_top",
             SurfaceVerb::ScrollBottom => "scroll_bottom",
@@ -1670,12 +1674,13 @@ impl SurfaceVerb {
     /// All verbs — `from_name` and the consistency test iterate this so a new
     /// verb must ship a config name, a canonical chord, and a resolvable
     /// handling path.
-    pub const ALL: [SurfaceVerb; 10] = [
+    pub const ALL: [SurfaceVerb; 11] = [
         SurfaceVerb::OpenHistory,
         SurfaceVerb::Steer,
         SurfaceVerb::HistoryPrev,
         SurfaceVerb::HistoryNext,
         SurfaceVerb::FocusPrevTarget,
+        SurfaceVerb::FocusNextTarget,
         SurfaceVerb::ClearFocusedTarget,
         SurfaceVerb::ScrollTop,
         SurfaceVerb::ScrollBottom,
@@ -1716,6 +1721,11 @@ impl SurfaceOverrides {
     /// Whether any surface verb is remapped.
     pub fn is_empty(&self) -> bool {
         self.assigned.is_empty()
+    }
+
+    /// Whether a specific surface verb has been explicitly remapped in configuration.
+    pub fn is_remapped(&self, verb: SurfaceVerb) -> bool {
+        self.remapped.contains(&verb)
     }
 
     /// The chord that should *display* and *dispatch* for a verb (override,

@@ -19,7 +19,7 @@ use muta_agent::{Agent, RoundLifecycle};
 use muta_contracts::{AgentRequest, AgentResponse, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
-    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
+    config::Config, connection_usage::ConnectionUsage, session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::SkillRegistry;
@@ -43,9 +43,7 @@ pub struct SlashEnv<'a> {
     pub base_tools_for_side: &'a Arc<Vec<Arc<dyn Tool>>>,
     pub provider_for_task: &'a Arc<RwLock<Arc<dyn Provider>>>,
     pub provider_usage: &'a mut ConnectionUsage,
-    pub skills_registry: Arc<SkillRegistry>,
-    pub skills_registry_for_commands: &'a Arc<SkillRegistry>,
-    pub embedding_store_for_commands: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
+    pub skills_registry: &'a Arc<SkillRegistry>,
     pub req_tx_for_commands: &'a mpsc::UnboundedSender<AgentRequest>,
     pub project_root_for_side: &'a std::path::Path,
     pub startup: &'a SessionStart,

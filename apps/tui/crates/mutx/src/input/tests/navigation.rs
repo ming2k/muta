@@ -3,19 +3,17 @@
 use super::*;
 
 #[test]
-fn bare_arrows_do_not_walk_steps() {
-    // ADR-0173: the step walk is verb-owned (Alt+↑/↓). Bare ↑/↓ never move
-    // the step selection. ADR-0174: an empty draft is all edge, so the bare
-    // arrows hand off to inline history recall instead of being inert.
-    assert_eq!(key_with_focus(KeyCode::Up), InputAction::HistoryPrev);
-    assert_eq!(key_with_focus(KeyCode::Down), InputAction::HistoryNext);
+fn bare_arrows_walk_steps_when_focused() {
+    // ADR-0176: When a target is focused, bare ↑/↓ navigate targets.
+    // When composer is active, bare ↑/↓ hand off to history recall.
+    assert_eq!(key_with_focus(KeyCode::Up), InputAction::FocusPrevTarget);
+    assert_eq!(key_with_focus(KeyCode::Down), InputAction::FocusNextTarget);
 }
 
 #[test]
-fn home_and_end_scroll_the_transcript_in_compose_zone() {
-    // ADR-0173: Home/End unconditionally scroll the transcript — reading
-    // never requires entering a state, even from the compose zone. Caret
-    // line-start/end moved to Ctrl+A/E.
+fn home_and_end_navigate_line_in_composer_and_scroll_in_focus() {
+    // ADR-0176: Home/End in the composer move caret to line-start/end (readline convention).
+    // In target focus or browse focus, Home/End scroll the transcript to top/bottom.
     let mut input = "hello".to_string();
     let mut cursor = 3;
 
@@ -27,9 +25,8 @@ fn home_and_end_scroll_the_transcript_in_compose_zone() {
         crate::Modal::None,
         false,
     );
-    assert_eq!(action, InputAction::ScrollTop);
-    assert_eq!(input, "hello", "the draft is untouched");
-    assert_eq!(cursor, 3, "the caret is untouched");
+    assert_eq!(action, InputAction::None);
+    assert_eq!(cursor, 0, "Home moves caret to start of line in composer");
 
     let action = run_key(
         &mut input,
@@ -39,12 +36,29 @@ fn home_and_end_scroll_the_transcript_in_compose_zone() {
         crate::Modal::None,
         false,
     );
-    assert_eq!(action, InputAction::ScrollBottom);
-    assert_eq!(input, "hello");
-    assert_eq!(
-        cursor, 3,
-        "Home/End never touch the caret (Ctrl+A/E own it)"
+    assert_eq!(action, InputAction::None);
+    assert_eq!(cursor, 5, "End moves caret to end of line in composer");
+
+    // When target or browse focus is active, Home/End scroll transcript
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Home,
+        KeyModifiers::NONE,
+        crate::Modal::None,
+        true,
     );
+    assert_eq!(action, InputAction::ScrollTop);
+
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::End,
+        KeyModifiers::NONE,
+        crate::Modal::None,
+        true,
+    );
+    assert_eq!(action, InputAction::ScrollBottom);
 }
 
 #[test]
@@ -419,7 +433,7 @@ fn up_arrow_in_browse_hands_off_to_history() {
             completion_dismissed: false,
             has_trigger_text: false,
             permission_confirm_always: false,
-            has_focused_target: true,
+            has_focused_target: false,
             ..Default::default()
         },
         &mut drag,

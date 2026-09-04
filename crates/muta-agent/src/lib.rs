@@ -60,23 +60,6 @@
 
 pub use muta_contracts::*;
 
-// Explicit re-exports of core's top-level re-exports. `pub use X::*` does
-// not propagate through X's own `pub use` re-exports in Rust, so the items
-// the Agent struct expects at the crate root have to be listed here by name.
-// Keep this list in sync with `muta_contracts`'s lib.rs re-exports.
-pub use muta_contracts::{
-    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, ExecutionEnvironment,
-    FsError, FsMetadata, FsProvider, HarnessError, HarnessSnapshot, ImagePart, InjectionKind,
-    InjectionOrigin, InputReply, InputRequest, McpConnectionStatus, McpServerConfig, Message,
-    ModelRequest, PatchOp, PermissionDecision, PermissionRequest, ProcessOutput, ProcessRunner,
-    Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot, ProviderStreamEvent,
-    PruneOutcome, RUNNER_EXPLORE, RUNNER_TITLE, Role, RunnerEvent, RunnerPreset, SessionOverview,
-    ShellTermination, SkillsConfig, StdinPolicy, TodoId, TodoItem, TodoList, TodoStatus,
-    TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy, ToolResult, ToolStream,
-    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
-    WebSearchConfig, estimate_bytes, estimate_tokens, truncate_utf8,
-};
-
 // Same ambient std/tokio prelude the Agent struct used to inherit from
 // `muta-contracts`'s lib.rs (`use super::*`).
 use futures::StreamExt;

@@ -25,9 +25,7 @@
 //! purity keeps the input path testable without a terminal.
 
 use muta_contracts::{WorkspaceSecuritySnapshot, WorkspaceTrustState};
-use mutx_engine::{
-    Alignment, Block, Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style,
-};
+use mutx_engine::{Alignment, Block, Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 
 use crate::components::options::push_wrapped_styled;
 use crate::primitives::contrast_fg;
@@ -130,8 +128,9 @@ impl PreAttachState {
             instructions: WorkspaceTrustState::Quarantined,
             ex_workspace: WorkspaceTrustState::Quarantined,
         };
-        let request = trust_gate::gate_request(&snapshot)
-            .expect("synthesized quarantined snapshot with all five domains must produce a gate request");
+        let request = trust_gate::gate_request(&snapshot).expect(
+            "synthesized quarantined snapshot with all five domains must produce a gate request",
+        );
         Self {
             model: QuestionModel::open(request),
             acceptance: true,
@@ -222,7 +221,9 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             INDENT,
             INDENT,
             "Acceptance mode (MUTX_FORCE_PRE_ATTACH=1) — selecting Trust persists against the real workspace.",
-            Style::default().fg(theme.warn()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
             body_width,
         );
         lines.push(Line::default());
@@ -275,11 +276,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             let (row_bg, row_fg, row_mod) = if is_highlighted {
                 (selected_bg, selected_fg, Modifier::BOLD)
             } else {
-                (
-                    Color::Reset,
-                    theme.fg(),
-                    Modifier::empty(),
-                )
+                (Color::Reset, theme.fg(), Modifier::empty())
             };
             // Highlight is conveyed purely by background fill across
             // the whole row — pad the label out to the panel width so
@@ -287,10 +284,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             let label_line = format_option_row(opt.label.as_str(), body_width, INDENT.len());
             lines.push(Line::from(vec![Span::styled(
                 label_line,
-                Style::default()
-                    .bg(row_bg)
-                    .fg(row_fg)
-                    .add_modifier(row_mod),
+                Style::default().bg(row_bg).fg(row_fg).add_modifier(row_mod),
             )]));
             if let Some(description) = opt.description.as_deref() {
                 let desc_fg = if is_highlighted {

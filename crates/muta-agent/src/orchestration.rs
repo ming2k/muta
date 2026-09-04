@@ -2170,17 +2170,28 @@ mod schedule_tests {
     use chrono::TimeZone;
     use muta_contracts::ScheduledJob;
 
+    #[allow(dead_code)]
+    struct AutoCleanSession(SessionStore, tempfile::TempDir);
+    impl AutoCleanSession {
+        fn into_store(self) -> SessionStore {
+            self.0
+        }
+    }
+    impl std::ops::Deref for AutoCleanSession {
+        type Target = SessionStore;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
     /// Build an isolated in-memory session for scheduler tests.
-    async fn fresh_session() -> SessionStore {
-        let dir = std::env::temp_dir().join(format!(
-            "muta-schedule-session-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    async fn fresh_session() -> AutoCleanSession {
+        let dir = tempfile::tempdir().unwrap();
         // `for_path` pins the fresh session file (and its blobs) under the
         // throwaway dir — `load_for_project` would resolve the real XDG
         // project bucket and mint files under ~/.local/share/muta.
-        SessionStore::for_path(dir.join("session.json"))
+        let store = SessionStore::for_path(dir.path().join("session.json"));
+        AutoCleanSession(store, dir)
     }
 
     /// Build a cron `ScheduledJob` with an explicit `next_fire` (so the test
@@ -2337,7 +2348,7 @@ mod schedule_tests {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
         let teardown = tokio_util::sync::CancellationToken::new();
         let handle = start_schedule_scheduler(
-            Arc::new(session),
+            Arc::new(session.into_store()),
             tx,
             std::time::Duration::from_millis(10),
             Some(teardown.clone()),
@@ -2400,13 +2411,19 @@ mod digest_tests {
         }
     }
 
-    async fn fresh_digest_session() -> Arc<SessionStore> {
-        let dir = std::env::temp_dir().join(format!(
-            "muta-digest-session-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Arc::new(SessionStore::for_path(dir.join("session.json")))
+    #[allow(dead_code)]
+    struct AutoCleanArcSession(Arc<SessionStore>, tempfile::TempDir);
+    impl std::ops::Deref for AutoCleanArcSession {
+        type Target = Arc<SessionStore>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    async fn fresh_digest_session() -> AutoCleanArcSession {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::for_path(dir.path().join("session.json")));
+        AutoCleanArcSession(store, dir)
     }
 
     /// The digest trigger is fire-and-forget (spawned); poll until it lands.

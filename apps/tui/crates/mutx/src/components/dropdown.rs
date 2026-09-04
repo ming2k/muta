@@ -5,8 +5,6 @@
 //! adaptive auto-flip geometry (Above/Below/CenterScreen), status indicators,
 //! badges, shortcuts, multi-line descriptions, and scroll indicators.
 
-#![allow(dead_code)]
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mutx_engine::{
     Alignment, Block as RtBlock, BorderType, Borders, Clear, Frame, Line, Modifier, Paragraph,

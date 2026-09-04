@@ -12,19 +12,7 @@
 //! This is deliberately minimal — one method — and grows only when another
 //! slash command genuinely needs a frontend-side side effect. See ADR-0037.
 
-/// The mechanism used to deliver text to the user's clipboard. The `/export`
-/// command surfaces this in its confirmation message so the user knows whether
-/// the native clipboard captured it or whether it fell back to OSC52 (which
-/// some terminals do not relay).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopyOutcome {
-    /// A native clipboard owner (arboard on macOS/Windows, wl-copy/X11 on
-    /// Linux) accepted the write.
-    Native,
-    /// The write went out as an OSC52 escape sequence, which the terminal may
-    /// or may not relay to the system clipboard.
-    Osc52,
-}
+pub use muta_platform::clipboard::CopyOutcome;
 
 /// Frontend-side capabilities the slash-command dispatcher needs. Implemented
 /// by the TUI (real clipboard) and any future frontend.

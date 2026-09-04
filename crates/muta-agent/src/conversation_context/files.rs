@@ -346,24 +346,24 @@ mod tests {
     fn rejects_absolute_path() {
         let tmp = tempdir();
         let absolute = std::env::temp_dir().join("muta-absolute-path-probe");
-        let err = load_sandboxed(&tmp, absolute.to_str().unwrap()).unwrap_err();
+        let err = load_sandboxed(tmp.path(), absolute.to_str().unwrap()).unwrap_err();
         assert!(err.contains("absolute paths are not allowed"));
     }
 
     #[test]
     fn rejects_parent_traversal() {
         let tmp = tempdir();
-        let err = load_sandboxed(&tmp, "../secret").unwrap_err();
+        let err = load_sandboxed(tmp.path(), "../secret").unwrap_err();
         assert!(err.contains("`..` traversal is not allowed"));
     }
 
     #[test]
     fn loads_file_inside_root() {
         let tmp = tempdir();
-        let target = tmp.join("src").join("main.rs");
+        let target = tmp.path().join("src").join("main.rs");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, "fn main() {}").unwrap();
-        let (resolved, bytes) = load_sandboxed(&tmp, "src/main.rs").unwrap();
+        let (resolved, bytes) = load_sandboxed(tmp.path(), "src/main.rs").unwrap();
         assert!(resolved.ends_with("main.rs"));
         assert_eq!(bytes, b"fn main() {}");
     }
@@ -371,38 +371,31 @@ mod tests {
     #[test]
     fn rejects_symlink_escape() {
         let tmp = tempdir();
-        // An outside file the workspace has no business reading.
-        let outside = std::env::temp_dir().join(format!(
-            "muta-file-inject-outside-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let outside_dir = tempdir();
+        let outside = outside_dir.path().join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
         // A symlink inside the workspace that points outside.
-        if muta_platform::fs::symlink_file(&outside, &tmp.join("escape")).is_err() {
-            // Skip test if symlink creation is not permitted on host (e.g. unprivileged Windows)
-            let _ = std::fs::remove_file(&outside);
+        if muta_platform::fs::symlink_file(&outside, &tmp.path().join("escape")).is_err() {
             return;
         }
 
-        let err = load_sandboxed(&tmp, "escape").unwrap_err();
+        let err = load_sandboxed(tmp.path(), "escape").unwrap_err();
         assert!(err.contains("escapes the workspace root"), "got: {err}");
-        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]
     fn rejects_directory() {
         let tmp = tempdir();
-        std::fs::create_dir_all(tmp.join("dir")).unwrap();
-        let err = load_sandboxed(&tmp, "dir").unwrap_err();
+        std::fs::create_dir_all(tmp.path().join("dir")).unwrap();
+        let err = load_sandboxed(tmp.path(), "dir").unwrap_err();
         assert!(err.contains("directory"));
     }
 
     #[test]
     fn rejects_binary() {
         let tmp = tempdir();
-        std::fs::write(tmp.join("blob.bin"), [0u8, 1, 2, 0, 4, 5]).unwrap();
-        let err = load_sandboxed(&tmp, "blob.bin").unwrap_err();
+        std::fs::write(tmp.path().join("blob.bin"), [0u8, 1, 2, 0, 4, 5]).unwrap();
+        let err = load_sandboxed(tmp.path(), "blob.bin").unwrap_err();
         assert!(err.contains("binary"));
     }
 
@@ -411,8 +404,8 @@ mod tests {
         let tmp = tempdir();
         // Double the cap, all ASCII so it is not flagged binary.
         let big = "a".repeat(MAX_FILE_BYTES * 2);
-        std::fs::write(tmp.join("big.txt"), &big).unwrap();
-        let (_, bytes) = load_sandboxed(&tmp, "big.txt").unwrap();
+        std::fs::write(tmp.path().join("big.txt"), &big).unwrap();
+        let (_, bytes) = load_sandboxed(tmp.path(), "big.txt").unwrap();
         assert!(bytes.len() > MAX_FILE_BYTES);
         assert!(bytes.len() < MAX_FILE_BYTES * 2);
         let text = String::from_utf8_lossy(&bytes);
@@ -425,9 +418,9 @@ mod tests {
     #[tokio::test]
     async fn inject_appends_hidden_message_for_file_ref() {
         let tmp = tempdir();
-        std::fs::write(tmp.join("lib.rs"), "pub fn x() {}").unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "pub fn x() {}").unwrap();
         let mut messages = vec![Message::new(Role::User, "review @file:lib.rs".to_string())];
-        inject_mentioned_files(Some(&tmp), &mut messages).await;
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
         assert_eq!(messages.len(), 2);
         assert!(messages[1].hidden);
         assert!(messages[1].content.contains("[File 'lib.rs' loaded]"));
@@ -437,17 +430,17 @@ mod tests {
     #[tokio::test]
     async fn inject_skips_already_loaded_file() {
         let tmp = tempdir();
-        std::fs::write(tmp.join("lib.rs"), "pub fn x() {}").unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "pub fn x() {}").unwrap();
         // First turn: loads it.
         let mut messages = vec![Message::new(Role::User, "@file:lib.rs".to_string())];
-        inject_mentioned_files(Some(&tmp), &mut messages).await;
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
         assert_eq!(messages.len(), 2);
         // Second turn: mention it again — must NOT re-inject.
         messages.push(Message::new(
             Role::User,
             "and @file:lib.rs again".to_string(),
         ));
-        inject_mentioned_files(Some(&tmp), &mut messages).await;
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
         // One user turn each + exactly one hidden load.
         assert_eq!(messages.len(), 3);
         assert_eq!(
@@ -466,13 +459,7 @@ mod tests {
         assert_eq!(messages.len(), 1);
     }
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "muta-file-inject-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 }

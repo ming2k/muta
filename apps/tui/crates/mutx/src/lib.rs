@@ -37,8 +37,8 @@ pub mod interaction;
 pub mod keymap;
 pub mod paths;
 pub mod phase;
-pub mod question_model;
 mod pre_attach;
+pub mod question_model;
 pub(crate) use pre_attach::{PreAttachDecision, PreAttachSignal, PreAttachState};
 mod step_interaction;
 mod terminal;
@@ -238,9 +238,7 @@ fn pre_attach_initial() -> Option<PreAttachState> {
         .filter(|s| !s.is_empty());
     let truthy = |v: &str| matches!(v, "1" | "true" | "yes" | "on");
     if raw.as_deref().is_some_and(truthy) {
-        tracing::info!(
-            "mutx: MUTX_FORCE_PRE_ATTACH set — mounting PreAttach acceptance fixture"
-        );
+        tracing::info!("mutx: MUTX_FORCE_PRE_ATTACH set — mounting PreAttach acceptance fixture");
         Some(PreAttachState::acceptance_fixture())
     } else {
         None
@@ -1691,8 +1689,7 @@ pub async fn run_tui(
                                         harness_clone.lock().await.workspace_security.clone();
                                     let gate_needed = !trust_gate_dismissed_clone
                                         .load(Ordering::SeqCst)
-                                        && crate::trust_gate::gate_request(&security)
-                                            .is_some();
+                                        && crate::trust_gate::gate_request(&security).is_some();
                                     if gate_needed {
                                         let mut slot = pre_attach_signal_clone.lock().await;
                                         // Only overwrite when the snapshot

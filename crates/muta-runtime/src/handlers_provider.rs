@@ -803,6 +803,9 @@ pub async fn reapply_session_selection(
         catalog::resolved_model_name_with_usage(&effective, &provider_id, provider_usage)
             .unwrap_or_default()
     });
+    if agent.provider.provider_id() == provider_id && agent.provider.model() == model {
+        return;
+    }
     activate(
         ActivateEnv {
             config: &effective,

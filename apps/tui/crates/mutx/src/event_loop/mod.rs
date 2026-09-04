@@ -440,6 +440,7 @@ async fn process_one_event(
     let in_runner_view = app.in_runner_view();
     let in_side_view = app.in_side_view;
     let has_focused_target = app.focused_target.is_some();
+    let transcript_focused = app.transcript_focused;
     let history_searching = app.history_search;
     let model_searching = app.model_search;
     let custom_provider_field =
@@ -511,6 +512,7 @@ async fn process_one_event(
                 in_runner_view,
                 in_side_view,
                 has_focused_target,
+                transcript_focused,
                 history_searching,
                 model_searching,
                 custom_provider_field,
@@ -575,8 +577,16 @@ async fn process_one_event(
     // predicate that re-arms caret following) hands keyboard attention back
     // from the transcript's browse focus — typing always bounces to the
     // draft, so the composer must light back up.
+    // Up / Down during transcript or target focus are navigational gestures
+    // and must not disarm transcript focus.
     if event_rearms_composer_follow(event) && active_modal == Modal::None {
-        app.transcript_focused = false;
+        if matches!(event, Event::Key(k) if matches!(k.code, KeyCode::Up | KeyCode::Down))
+            && (app.transcript_focused || app.focused_target.is_some())
+        {
+            // Up/Down is consumed by transcript scrolling or target walking
+        } else {
+            app.transcript_focused = false;
+        }
     }
 
     if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {

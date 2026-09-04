@@ -121,13 +121,16 @@ impl RouteSettingsStore {
         }
     }
 
-    /// Persist atomically under `$XDG_STATE_HOME/muta/route_settings.json` and SQLite.
+    /// Persist atomically into SQLite (SSOT), with fallback to legacy file when DB unavailable.
     pub fn save(&self) -> Result<(), String> {
         if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
-            let _ = engine.set_json("state:route_settings", &self.file);
+            engine
+                .set_json("state:route_settings", &self.file)
+                .map_err(|e| e.to_string())
+        } else {
+            let path = paths::get().route_settings_file();
+            fsutil::atomic_write_json(&path, &self.file).map_err(|e| e.to_string())
         }
-        let path = paths::get().route_settings_file();
-        fsutil::atomic_write_json(&path, &self.file).map_err(|e| e.to_string())
     }
 
     /// The reasoning override for one route, if set.

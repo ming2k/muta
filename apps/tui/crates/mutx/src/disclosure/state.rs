@@ -211,11 +211,15 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(
             summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
-            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+            theme
+                .muted()
+                .blend(theme.affordance(), INTERACTION_HOVER_BLEND)
         );
         assert_eq!(
             summary_text_color(None, Disclosure::Collapsed, Interaction::Focused, &theme),
-            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+            theme
+                .muted()
+                .blend(theme.affordance(), INTERACTION_HOVER_BLEND)
         );
         // A hue shift, not a luminance step: the tinted result must differ
         // from both plain rungs.
@@ -351,7 +355,9 @@ mod tests {
         // stays pinned at fg (an open body needs no transient cue).
         assert_eq!(
             summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
-            theme.muted().blend(theme.affordance(), INTERACTION_HOVER_BLEND)
+            theme
+                .muted()
+                .blend(theme.affordance(), INTERACTION_HOVER_BLEND)
         );
         assert_eq!(
             summary_text_color(None, Disclosure::Expanded, Interaction::Hovered, &theme),

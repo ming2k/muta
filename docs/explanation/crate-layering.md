@@ -8,12 +8,12 @@ head before reading any individual crate or ADR.
 
 ```text
 muta core ──┐
-            ├──► muta-runtime ──► muta-agent ──► muta-persistence
-mutx app ───┘          │   │            ├──► muta-skills ───────┤
-     │                 │   │            └──► muta-providers     │
-     │                 │   └──► muta-mcp                        ▼
-     │                 └──────────────────────────────────► muta-contracts
-     └──► mutx-engine
+            ├──► muta-runtime ──► muta-agent ──► muta-persistence ──┐
+mutx app ───┘          │   │            ├──► muta-skills ──────────┤
+     │                 │   │            └──► muta-providers ───────┼──► muta-contracts
+     │                 │   └──► muta-mcp ──────────────────────────┤          ▲
+     │                 └───────────────────────────────────────────┤          │
+     └──► mutx-engine ─────────────────────────────────────────────┴──► muta-platform
 
 web app ── control protocol ──► muta-runtime
 ```
@@ -67,13 +67,17 @@ These crates implement the contracts below orchestration:
   periodic refresh, and `use_skill` / `list_skills` tool adapters. The agent
   consumes the registry for model-context injection; Session also reads and
   refreshes it without reaching through Agent internals.
-- **`muta-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
+- **`muta-persistence`** — durable state: SQLite database, `SessionStore`, `Config`,
   repeat store, XDG paths (ADR-0014).
 - **`muta-mcp`** — the MCP connector (ADR-0060, re-extracted by ADR-0098):
   stdio JSON-RPC transport, server lifecycle, tool adapters, the live
   `McpRuntime`, and catalog refresh. A session (in `muta-runtime`) owns each
   runtime; discovered tools reach the agent through the `DynamicToolSink`
-  contract, so `muta-agent` carries no MCP protocol dependency.
+  contract, and workspace trust is injected via a callback, so `muta-mcp`
+  carries no dependency on `muta-persistence` or agent orchestration.
+- **`muta-platform`** — the OS platform abstraction layer (PAL): process tree
+  containment, native shell dialects and quoting, local IPC (UDS/Named Pipes),
+  cross-platform clipboard, secure file replacement, and workspace sandboxing.
 
 ### `muta-agent` — orchestration
 

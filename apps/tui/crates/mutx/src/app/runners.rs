@@ -242,7 +242,11 @@ impl App {
                         self.pin_summary_line = None;
                         return;
                     } else {
-                        0
+                        self.focused_target = None;
+                        self.transcript_focused = false;
+                        self.selection = SelectionState::None;
+                        self.drag.cancel();
+                        return;
                     }
                 } else {
                     idx + 1

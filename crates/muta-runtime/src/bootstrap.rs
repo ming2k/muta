@@ -28,7 +28,7 @@ use muta_contracts::{
 
 use muta_mcp::{McpCatalog, McpRuntime};
 use muta_persistence::{
-    config::Config, connection_usage, embedding, paths, session::SessionStore,
+    config::Config, connection_usage, paths, session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::SkillRegistry;
@@ -225,17 +225,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
 
-    // Open the per-project embedding index (a file read for the
-    // semantic-search index) concurrently with nothing else heavy; it feeds
-    // `/search` and the agent's retrieval tools.
-    let embedding_store = embedding::EmbeddingStore::open(
-        paths::get().project_embeddings(&project_root),
-        Arc::new(embedding::MockEmbeddingProvider::new(384)),
-    )
-    .await?;
-    let embedding_store: Arc<AsyncRwLock<embedding::EmbeddingStore>> =
-        Arc::new(AsyncRwLock::new(embedding_store));
-
     // Initialize Agent logic. The provider is resolved through the model
     // catalog (`build_provider_for`), the single source of truth for the
     // env-var-then-config resolution rules shared with runtime switching. See
@@ -410,7 +399,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(websearch_shared.clone());
         builder.provide(config.websearch.clone());
         builder.provide(skills_registry.clone());
-        builder.provide(embedding_store.clone());
         builder.provide(session.clone());
         builder.provide(execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>);
         builder.provide(job_service);
@@ -560,6 +548,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ));
     }
     let command_catalog = crate::startup::command_catalog(&[]);
+    // Wire workspace security trust verifier into muta-mcp so MCP server
+    // connections can verify sandbox trust without depending on muta-persistence.
+    let ws_security_for_mcp = workspace_security.clone();
+    muta_mcp::set_trust_verifier(Arc::new(move |root| {
+        ws_security_for_mcp
+            .snapshot(root)
+            .is_trusted(muta_contracts::TrustDomain::Mcp)
+    }));
     // Connect every configured MCP server in the BACKGROUND so a slow/unreachable
     // server (8s connect timeout each) never delays the first frame. The
     // runtime is ready immediately with every enabled server in `Connecting`;
@@ -755,7 +751,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Primary round lifecycle: at most one active round, superseded by the
     // next begin (replaces the old token-slot + generation-counter pair).
     let lifecycle = Arc::new(RoundLifecycle::new());
-    let embedding_store_for_commands = embedding_store.clone();
     let req_tx_for_commands = req_tx.clone();
     // `/btw` aside state (ADR-0017, lifted to a multi-slot registry by
     // ADR-0103). The primary round machinery is left exactly as-is; the
@@ -834,7 +829,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         shared_additional_roots: shared_additional_roots.clone(),
         shared_unconfined: shared_unconfined.clone(),
         command_catalog: command_catalog.clone(),
-        embedding_store: embedding_store_for_commands,
         lifecycle,
         side,
         base_tools: base_tools_for_side,

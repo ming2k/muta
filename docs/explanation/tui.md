@@ -344,19 +344,21 @@ the user had it. This is what prevents the historical class of bug where
 ### No modes: a single optional focused step
 
 The application deliberately does not have a `vi`-style modal-vs-insert
-split, nor even two navigable "zones" — and since ADR-0173 the keyboard is
+split, nor even two navigable "zones" — and since ADR-0173/0176 the keyboard is
 *plane-less*: there is no state to enter or leave at all. Every chord has one
 meaning. The only navigation state is an optional **selected step** in the
-transcript (`App::focused_target`): `Alt+↑`/`Alt+↓` (remappable
-`session.focus_prev`/`clear_focus` verbs) select and walk steps, `Enter`
-opens the selected one, and `Esc` clears it. Typing any printable character
-falls through to the prompt, `Tab` belongs to completion only, and
-`PageUp`/`PageDown`/`Home`/`End` page the transcript unconditionally —
-reading never requires entering a state first. The benefit is that the user
-never has to remember "which mode am I in" to predict what a key will do, and
-the composer panel quietly drops to a dimmer palette while a step is selected
-so the state is legible at a glance. Because no mode exists, no mode
-indicator does either.
+transcript (`App::focused_target`) or **browse focus** (`App::transcript_focused`):
+`Alt+↑`/`Alt+↓` (remappable `session.focus_prev`/`session.focus_next` verbs) select
+and symmetrically walk steps, `Enter` opens the selected one, and `Esc` clears it.
+Stepping downward past the newest visible target exits smoothly back to the composer.
+While a target is selected, bare `↑`/`↓` walk targets; while browse focus is active,
+bare `↑`/`↓` line-scroll the transcript. Typing any printable character bounces
+focus to the prompt, `Tab` belongs to completion only, and `PageUp`/`PageDown`/`Home`/`End`
+page the transcript unconditionally — reading never requires entering a state first.
+The benefit is that the user never has to remember "which mode am I in" to predict what
+a key will do, and the composer panel quietly drops to a dimmer palette while a step
+or the transcript is focused so the state is legible at a glance. Because no modal
+mode exists, no mode indicator does either.
 
 ### A breathing dot, not a spinner
 

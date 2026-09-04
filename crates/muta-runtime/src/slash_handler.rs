@@ -31,9 +31,7 @@ use std::sync::{Arc, RwLock};
 
 use muta_agent::{Agent, RoundLifecycle};
 use muta_contracts::{AgentRequest, AgentResponse, Provider, Tool};
-use muta_persistence::{
-    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
-};
+use muta_persistence::{config::Config, connection_usage::ConnectionUsage, session::SessionStore};
 use muta_skills::SkillRegistry;
 
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
@@ -72,7 +70,6 @@ pub struct SlashContext<'a> {
     pub provider_holder: &'a Arc<RwLock<Arc<dyn Provider>>>,
     pub provider_usage: &'a mut ConnectionUsage,
     pub skills_registry: &'a Arc<SkillRegistry>,
-    pub embedding_store: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     pub req_tx: &'a mpsc::UnboundedSender<AgentRequest>,
     pub project_root: &'a Path,
     pub startup: &'a SessionStart,

@@ -805,13 +805,12 @@ pub fn draw_transcript(
     // Skipped for the empty-state hero, which owns its own rect and is not
     // part of the interactive transcript surface.
     if !show_empty_state {
-        layout_map
-            .set_transcript_content_rect(Rect::new(
-                transcript_area.x,
-                transcript_area.y,
-                transcript_area.width,
-                transcript_area.height,
-            ));
+        layout_map.set_transcript_content_rect(Rect::new(
+            transcript_area.x,
+            transcript_area.y,
+            transcript_area.width,
+            transcript_area.height,
+        ));
     }
 
     // The footer stacks, from top to bottom: a permanent blank separator,

@@ -55,6 +55,8 @@ pub struct InputContext {
     /// and `Esc` clears the focus. When `false` every key has its ordinary
     /// input-box meaning. Mirrors `App::focused_target.is_some()`.
     pub has_focused_target: bool,
+    /// Whether the transcript currently holds browse focus (e.g. via mouse click into viewport).
+    pub transcript_focused: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -153,7 +155,7 @@ fn foreground_scrolls_own_body(context: &InputContext) -> bool {
 }
 
 fn edits_input_field(context: &InputContext) -> bool {
-    if context.has_focused_target {
+    if context.has_focused_target || context.transcript_focused {
         return false;
     }
     // Sheet foreground: only the injection sheet borrows the composer line;
@@ -501,6 +503,8 @@ pub enum InputAction {
     FocusPrevTarget,
     /// Activate the current keyboard-focused target (`Enter`).
     ActivateFocusedTarget,
+    /// Copy the content of the currently focused target (`y` or `c` while a step is focused).
+    CopyFocusedTarget,
     /// Clear the keyboard-focused target, returning every key to its ordinary
     /// input-box meaning. Triggered by `Esc` while a step is focused.
     ClearFocusedTarget,
@@ -2169,13 +2173,14 @@ pub fn process_event(
                 {
                     InputAction::ScrollBottom
                 }
-                // Bare Home / End: the chat surface claims them
-                // unconditionally for transcript scrolling (ADR-0173, resolved
-                // by the Session view's scheme before this arm). What remains
-                // here is the Permission sheet and caret motion inside modal
-                // text fields (readline line-start/end lives on Ctrl+A/E).
+                // Bare Home / End:
+                // - When a target or browse focus is active (or in permission sheet): scroll transcript to top / bottom.
+                // - When composer or modal input field is active: move caret to line start / line end (readline convention).
                 KeyCode::Home => {
-                    if permission_sheet_up(&context) || context.active_modal == super::Modal::None {
+                    if permission_sheet_up(&context)
+                        || context.has_focused_target
+                        || context.transcript_focused
+                    {
                         InputAction::ScrollTop
                     } else if edits_input_field(&context) {
                         cursor_line_start(input, cursor_position);
@@ -2185,7 +2190,10 @@ pub fn process_event(
                     }
                 }
                 KeyCode::End => {
-                    if permission_sheet_up(&context) || context.active_modal == super::Modal::None {
+                    if permission_sheet_up(&context)
+                        || context.has_focused_target
+                        || context.transcript_focused
+                    {
                         InputAction::ScrollBottom
                     } else if edits_input_field(&context) {
                         cursor_line_end(input, cursor_position);

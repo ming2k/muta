@@ -1,11 +1,10 @@
-//! Pure, orthogonal application wire protocol (ADR-0134, ADR-0158, ADR-0159).
+//! Unified application wire protocol (ADR-0134, ADR-0158).
 //!
-//! Provides the four fundamental orthogonal primitives:
-//! 1. [`Wire::Call`] / [`Wire::Reply`] - Point-to-point RPC with correlation IDs.
-//! 2. [`Wire::Patch`] - Versioned domain state synchronization (Replace | Update).
-//! 3. [`Wire::Gate`] / [`Wire::GateDecision`] - Server-initiated interactive gates.
-//! 4. [`Wire::Stream`] - High-throughput token/output chunks.
-//! 5. Control & lifecycle frames: `Select`, `Welcome`, `Pick`, `Error`, `Monitor`.
+//! Provides the fundamental client-daemon wire envelopes:
+//! - Handshake & selection: `Select`, `Welcome`, `Pick`
+//! - Single-shot control: `ControlReply`
+//! - Full-duplex session transport: `Request`, `Response`
+//! - Observability & diagnostics: `Monitor`, `Error`
 
 use serde::{Deserialize, Serialize};
 
@@ -67,159 +66,27 @@ pub enum Wire {
         error: Option<String>,
     },
 
-    // --- Core Orthogonal Primitives (ADR-0159) ---
-    /// 1. Unicast Client RPC Request.
-    Call {
-        id: u64,
-        #[serde(flatten)]
-        call: RpcCall,
-    },
-    /// 1. Unicast Server RPC Response.
-    Reply {
-        id: u64,
-        result: Result<serde_json::Value, ProtocolError>,
-    },
-
-    /// 2. Versioned State Synchronization.
-    Patch {
-        session_id: String,
-        domain: StateDomain,
-        version: u64,
-        #[serde(flatten)]
-        op: PatchOp,
-    },
-
-    /// 3. Interactive Gate Request (Daemon -> Client).
-    Gate {
-        gate_id: String,
-        session_id: String,
-        #[serde(flatten)]
-        payload: GatePayload,
-    },
-    /// 3. Interactive Gate Resolution (Client -> Daemon).
-    GateDecision {
-        gate_id: String,
-        decision: GateDecision,
-    },
-
-    /// 4. High-frequency Streaming Output Chunk.
-    Stream {
-        session_id: String,
-        #[serde(flatten)]
-        chunk: StreamChunk,
-    },
-
-    // --- Legacy compatibility envelopes during transition ---
+    /// Full-duplex client agent request envelope.
     Request {
         #[serde(flatten)]
         request: crate::AgentRequest,
     },
+    /// Full-duplex daemon agent response envelope.
     Response {
         #[serde(flatten)]
         response: crate::AgentResponse,
     },
+    /// Daemon observability event envelope.
     Monitor {
         #[serde(flatten)]
         event: crate::MonitorEvent,
     },
+    /// Connection-level error envelope.
     Error {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
     },
-}
-
-/// Point-to-point RPC methods (ADR-0159).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum RpcCall {
-    CompleteComposer {
-        text: String,
-        cursor: usize,
-    },
-    SwitchProvider {
-        provider: String,
-        model: Option<String>,
-    },
-    GetSessionDetail {
-        session_id: String,
-    },
-}
-
-/// Domain classification for state synchronization (ADR-0159).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StateDomain {
-    Transcript,
-    TodoList,
-    SecurityTrust,
-    Pressure,
-    RuntimeMeta,
-}
-
-/// State patch operation: full replacement or diff (ADR-0159).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "op", content = "data", rename_all = "snake_case")]
-pub enum PatchOp {
-    Replace(serde_json::Value),
-    Update(serde_json::Value),
-}
-
-/// Interactive gate request payload (ADR-0159).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "gate_type", rename_all = "snake_case")]
-pub enum GatePayload {
-    Permission {
-        tool_name: String,
-        arguments: String,
-        preview: Option<String>,
-    },
-    AskUser {
-        questions: Vec<crate::UserQuestion>,
-    },
-}
-
-/// Interactive gate resolution decision (ADR-0159).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum GateDecision {
-    Allow,
-    Deny { reason: Option<String> },
-    Answer { answers: Vec<String> },
-}
-
-/// Fast streaming data chunk (ADR-0159).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "stream_kind", rename_all = "snake_case")]
-pub enum StreamChunk {
-    TokenDelta(String),
-    ProcessStdout(String),
-    ProcessStderr(String),
-}
-
-/// Unified protocol error model (ADR-0159).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProtocolError {
-    pub domain: String,
-    pub code: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
-impl ProtocolError {
-    pub fn new(
-        domain: impl Into<String>,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            domain: domain.into(),
-            code: code.into(),
-            message: message.into(),
-            details: None,
-        }
-    }
 }
 
 /// What role the connection wants to assume.

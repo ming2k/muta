@@ -20,11 +20,26 @@ use muta_contracts::Tool;
 use muta_contracts::mcp::{McpConnectionStatus, McpServerConfig};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
+
+/// Pluggable trust verifier for project-level MCP servers.
+pub type McpTrustVerifier = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+static TRUST_VERIFIER: OnceLock<McpTrustVerifier> = OnceLock::new();
+
+/// Configure the global trust verifier used by MCP server connections.
+pub fn set_trust_verifier(verifier: McpTrustVerifier) {
+    let _ = TRUST_VERIFIER.set(verifier);
+}
+
+pub fn is_sandbox_trusted(root: &Path) -> bool {
+    TRUST_VERIFIER.get().map(|v| v(root)).unwrap_or(true)
+}
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
@@ -543,16 +558,14 @@ impl McpServer {
     /// Connect (or reconnect) and return the live client. If a client is
     /// already held, it is reused; otherwise a fresh connection is established.
     async fn ensure_connected(&self) -> Result<Arc<McpClient>, String> {
-        if let Some(root) = &self.config.sandbox_root {
-            let snapshot =
-                muta_persistence::workspace_security::WorkspaceSecurityStore::load().snapshot(root);
-            if !snapshot.is_trusted(muta_contracts::TrustDomain::Mcp) {
-                *self.client.lock().await = None;
-                return Err(format!(
-                    "project MCP '{}' is quarantined because its extension content is not currently attested (run `/trust mcp` or `/trust` to authorize)",
-                    self.server_name
-                ));
-            }
+        if let Some(root) = &self.config.sandbox_root
+            && !is_sandbox_trusted(root)
+        {
+            *self.client.lock().await = None;
+            return Err(format!(
+                "project MCP '{}' is quarantined because its extension content is not currently attested (run `/trust mcp` or `/trust` to authorize)",
+                self.server_name
+            ));
         }
         let mut guard = self.client.lock().await;
         if let Some(c) = guard.as_ref() {

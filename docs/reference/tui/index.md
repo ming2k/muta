@@ -38,21 +38,22 @@ optional state — the **selected step** (`App::focused_target`):
 
 | State | Owns keys | How to enter | How to leave |
 |-------|-----------|--------------|--------------|
-| **Prompt** (default) | Input box — typing inserts into the prompt | (default) | `Alt+↑` / `Alt+↓` selects a step; clicking the transcript parks browse focus |
-| **Selected step** | One transcript step is reverse-highlighted | `Alt+↑` / `Alt+↓` (remappable `session.focus_prev`), or clicking a step | `Esc`, or any printable character falls through to the prompt |
-| **Browse focus** | Attention is on the transcript (pointer-derived) | Clicking anywhere in the transcript viewport — text, gaps, blank space, gutters | Clicking the composer, or any editing keystroke |
+| **Prompt** (default) | Input box — typing inserts into the prompt; `↑`/`↓` move caret or recall history at boundaries | (default) | `Alt+↑` / `Alt+↓` selects a step; clicking transcript parks browse focus |
+| **Selected step** | One transcript step is reverse-highlighted; `↑`/`↓` and `Alt+↑`/`Alt+↓` walk steps; `Enter` activates | `Alt+↑` / `Alt+↓` (remappable `session.focus_prev` / `focus_next`), or clicking a step | `Esc`, downward edge exit, or printable characters bounce to prompt |
+| **Browse focus** | Attention is on the transcript (pointer-derived); `↑`/`↓` line-scroll transcript | Clicking anywhere in the transcript viewport — text, gaps, blank space, gutters | `Esc`, clicking the composer, or printable characters bounce to prompt |
 
-While a step is selected, `Alt+↑`/`Alt+↓` walk steps and `Enter` opens it;
+While a step is selected, `Alt+↑`/`Alt+↓` (and bare `↑`/`↓`) walk steps and `Enter` opens it;
 the composer frame drops to its dimmer stroke and sheds its inlaid meta to
 signal "keys act on the step" — browse focus dims the composer the same way.
-Typing still lands in the prompt. `Tab` is completion-only (commits the
+Stepping downward past the newest visible target exits gracefully back to the composer.
+Typing any printable character still bounces into the prompt. `Tab` is completion-only (commits the
 highlighted slash/path suggestion when a menu is open, re-opens one that
 `Esc` dismissed) — never a focus toggle. Scrolling never requires entering a
 state: `PageUp`/`PageDown` page the transcript and `Home`/`End` jump to its
 edges from anywhere (readline line-start/end lives on `Ctrl+A`/`Ctrl+E`).
-`↑`/`↓` walk completion suggestions, then move the caret through a multi-line
+When the prompt is active, `↑`/`↓` walk completion suggestions, then move the caret through a multi-line
 draft, then — at the draft's first/last line — hand off to inline history
-recall (the same walk as `Alt+P`/`Alt+N`; ADR-0174).
+recall (the same walk as `Alt+P`/`Alt+N`; ADR-0174/0176).
 
 ## Components
 

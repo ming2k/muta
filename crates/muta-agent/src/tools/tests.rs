@@ -106,10 +106,8 @@ mod tests {
         // on to number an offset snippet from its true file line. A read with
         // `offset: 3` must surface `start_line: 3` (and only the post-offset
         // content), while a plain read reports `start_line: 1`.
-        let dir =
-            std::env::temp_dir().join(format!("muta-read-start-line-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("lines.txt");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lines.txt");
         std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
 
         let tool = ReadTextTool::new(None);
@@ -137,8 +135,6 @@ mod tests {
             }
             _ => panic!("expected Code"),
         }
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Pull `(text, prefix, suffix)` out of a `Code` output for assertions.
@@ -156,22 +152,22 @@ mod tests {
 
     /// A file whose every line is exactly `line_width` chars so the byte-budget
     /// math is predictable in the pagination tests below.
-    fn make_fixed_width_file(line_count: usize) -> (std::path::PathBuf, Vec<String>) {
-        let dir = std::env::temp_dir().join(format!("muta-read-paginate-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("big.txt");
+    fn make_fixed_width_file(
+        line_count: usize,
+    ) -> (tempfile::TempDir, std::path::PathBuf, Vec<String>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
         let lines: Vec<String> = (1..=line_count).map(|n| format!("line{n:05}")).collect();
         std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
-        (path, lines)
+        (dir, path, lines)
     }
 
     #[tokio::test]
     async fn plain_small_read_has_no_framing() {
         // The common case stays byte-identical to the legacy model output:
         // no prefix/suffix, so we don't tax every small read.
-        let dir = std::env::temp_dir().join(format!("muta-read-plain-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("small.txt");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.txt");
         std::fs::write(&path, "a\nb\nc\n").unwrap();
 
         let arguments = serde_json::json!({ "path": &path }).to_string();
@@ -183,8 +179,6 @@ mod tests {
         assert_eq!(text, "a\nb\nc");
         assert!(prefix.is_none());
         assert!(suffix.is_none());
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
@@ -195,7 +189,7 @@ mod tests {
         // must continue without overlap or gap (the loop-safety contract).
         const LINES: usize = 6000;
         const PAGE: usize = 5000; // 50_000 / (9 + 1)
-        let (path, _lines) = make_fixed_width_file(LINES);
+        let (_tmp, path, _lines) = make_fixed_width_file(LINES);
         let tool = ReadTextTool::new(None);
         let arg =
             |offset: usize| serde_json::json!({ "path": &path, "offset": offset }).to_string();
@@ -242,7 +236,7 @@ mod tests {
         // Now the window is line-bounded and the continuation is concrete, so
         // the model advances instead of looping.
         const LINES: usize = 6000;
-        let (path, _lines) = make_fixed_width_file(LINES);
+        let (_tmp, path, _lines) = make_fixed_width_file(LINES);
         let arg = serde_json::json!({ "path": &path, "limit": LINES }).to_string();
         let (text, _pre, suf) =
             code_parts(ReadTextTool::new(None).call_structured(&arg).await.unwrap());
@@ -253,8 +247,6 @@ mod tests {
                 .contains("offset="),
             "gives a concrete next offset rather than a generic hint"
         );
-
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]
@@ -262,10 +254,9 @@ mod tests {
         // Both cases used to return a bare empty string, which a model can
         // mistake for a failure and re-read in a loop. They now carry an
         // explicit note via the model-facing prefix.
-        let dir = std::env::temp_dir().join(format!("muta-read-edge-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
 
-        let empty = dir.join("empty.txt");
+        let empty = dir.path().join("empty.txt");
         std::fs::write(&empty, "").unwrap();
         let empty_arguments = serde_json::json!({ "path": &empty }).to_string();
         let (text, pre, suf) = code_parts(
@@ -281,7 +272,7 @@ mod tests {
         );
         assert!(suf.is_none());
 
-        let small = dir.join("small.txt");
+        let small = dir.path().join("small.txt");
         std::fs::write(&small, "a\nb\n").unwrap();
         let past_eof_arguments = serde_json::json!({ "path": &small, "offset": 99 }).to_string();
         let (text, pre, suf) = code_parts(
@@ -296,8 +287,6 @@ mod tests {
             "pre={pre:?}"
         );
         assert!(suf.is_none());
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
@@ -306,10 +295,9 @@ mod tests {
         // (os error 21)"), which gives the model no hint about what to do.
         // Now it gets an explicit, actionable message naming `list_dir`, which
         // breaks any retry loop.
-        let dir = std::env::temp_dir().join(format!("muta-read-isdir-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
 
-        let arguments = serde_json::json!({ "path": &dir }).to_string();
+        let arguments = serde_json::json!({ "path": dir.path() }).to_string();
         let err = ReadTextTool::new(None).call(&arguments).await.unwrap_err();
         assert!(
             err.contains("list_dir"),
@@ -319,8 +307,6 @@ mod tests {
             !err.contains("os error"),
             "should not leak the raw OS error, got: {err}"
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

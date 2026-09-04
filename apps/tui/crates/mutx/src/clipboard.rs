@@ -30,10 +30,7 @@ pub struct TuiClipboard;
 #[async_trait::async_trait]
 impl muta_runtime::UiBridge for TuiClipboard {
     async fn copy_to_clipboard(&self, text: &str) -> Result<muta_runtime::CopyOutcome, String> {
-        copy(text).await.map(|outcome| match outcome {
-            CopyOutcome::Native => muta_runtime::CopyOutcome::Native,
-            CopyOutcome::Osc52 => muta_runtime::CopyOutcome::Osc52,
-        })
+        copy(text).await
     }
 }
 

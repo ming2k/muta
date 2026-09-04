@@ -244,13 +244,6 @@ impl Dirs {
         self.state_dir.join("workspace_security.json")
     }
 
-    /// Per-project embedding index. A lightweight brute-force index by default;
-    /// future versions may swap in an HNSW/vector-DB backend using the same
-    /// path convention.
-    pub fn project_embeddings(&self, project_root: &Path) -> PathBuf {
-        self.project_dir(project_root).join("embeddings.json")
-    }
-
     /// Per-project directory holding every session file. As of ADR-0018 each
     /// live `muta` instance pins its own `sessions/<id>.json` plus
     /// `sessions/<id>.jsonl` here, so concurrent instances never share a

@@ -9,7 +9,7 @@ use muta_agent::Agent;
 use muta_agent::orchestration::send_harness_state_for_session;
 use muta_contracts::{AgentResponse, LoopStatus, SessionOverview};
 use muta_mcp::McpRuntime;
-use muta_persistence::{config::Config, embedding, session::SessionStore};
+use muta_persistence::{config::Config, session::SessionStore};
 use muta_skills::SkillRegistry;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
@@ -18,31 +18,14 @@ use crate::session_view::{build_session_context, build_sessions_overview};
 use crate::side::{SideRegistry, SideSession};
 
 /// `AgentRequest::DeleteSession` — delete by id (or short-id prefix) and push
-/// a fresh sessions-overview snapshot, or surface the storage error. The
-/// project embedding index is pruned of the deleted session's entries so the
-/// on-disk union does not keep them forever.
+/// a fresh sessions-overview snapshot, or surface the storage error.
 pub async fn delete(
     session: &Arc<SessionStore>,
-    embedding_store: &Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     id: String,
 ) {
     match session.delete(&id).await {
-        Ok(deleted_id) => {
-            // Prune the deleted session's entries from the project embedding
-            // index so the on-disk union does not keep them forever.
-            if let Err(error) = embedding_store
-                .write()
-                .await
-                .remove_session(&deleted_id)
-                .await
-            {
-                tracing::warn!(
-                    session = %deleted_id,
-                    %error,
-                    "could not prune deleted session from the embedding index"
-                );
-            }
+        Ok(_deleted_id) => {
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(session).await,
             ));

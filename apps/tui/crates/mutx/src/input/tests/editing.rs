@@ -108,30 +108,14 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
 }
 
 #[test]
-fn bang_prefix_dispatches_as_normal_chat() {
-    let mut input = "!git status".to_string();
-    assert_eq!(
-        enter_shell(&mut input),
-        InputAction::SendChat("!git status".to_string())
-    );
-}
-
-#[test]
-fn bang_prefix_with_whitespace_dispatches_as_chat() {
-    let mut input = "!   ls -la".to_string();
-    assert_eq!(
-        enter_shell(&mut input),
-        InputAction::SendChat("!   ls -la".to_string())
-    );
-}
-
-#[test]
-fn bare_bang_dispatches_as_chat() {
-    let mut input = "!".to_string();
-    assert_eq!(
-        enter_shell(&mut input),
-        InputAction::SendChat("!".to_string())
-    );
+fn bang_prefix_variants_dispatch_as_chat() {
+    for cmd in ["!git status", "!   ls -la", "!"] {
+        let mut input = cmd.to_string();
+        assert_eq!(
+            enter_shell(&mut input),
+            InputAction::SendChat(cmd.to_string())
+        );
+    }
 }
 
 #[test]
@@ -150,40 +134,26 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
 }
 
 #[test]
-fn a_in_connections_modal_opens_preset_chooser() {
-    // `a` in Connections opens the Add preset connection branch.
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Connections,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::OpenPresetChooser);
-}
-
-#[test]
-fn c_in_connections_modal_opens_custom_connection() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Connections,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::OpenCustomConnection);
+fn single_key_shortcuts_in_connections_modal() {
+    for (key, expected) in [
+        ('a', InputAction::OpenPresetChooser),
+        ('c', InputAction::OpenCustomConnection),
+    ] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::Connections,
+                ..Default::default()
+            },
+            &mut drag,
+        );
+        assert_eq!(action, expected, "key '{key}' in connections modal");
+    }
 }
 
 #[test]
@@ -302,7 +272,7 @@ fn alt_arrows_drive_step_selection() {
             crate::Modal::None,
             true,
         ),
-        InputAction::ClearFocusedTarget
+        InputAction::FocusNextTarget
     );
 }
 
@@ -386,7 +356,7 @@ fn alt_arrows_drive_transcript_focus_on_no_modal() {
             crate::Modal::None,
             true
         ),
-        InputAction::ClearFocusedTarget
+        InputAction::FocusNextTarget
     );
 }
 
@@ -1306,9 +1276,8 @@ fn digit_jump_is_scoped_to_the_effort_field() {
 }
 
 #[test]
-fn delete_key_removes_char_after_cursor() {
-    // The Del key's defining behaviour: remove the character *after* the
-    // caret, leaving the caret unmoved.
+fn delete_key_removes_char_after_cursor_and_inert_at_end() {
+    // Forward delete removes character after caret; inert when at buffer end.
     let mut input = "hello".to_string();
     let mut cursor = 2;
     assert_eq!(
@@ -1317,10 +1286,7 @@ fn delete_key_removes_char_after_cursor() {
     );
     assert_eq!(input, "helo");
     assert_eq!(cursor, 2, "forward delete must not move the caret");
-}
 
-#[test]
-fn delete_key_at_end_is_inert() {
     let mut input = "hello".to_string();
     let mut cursor = 5;
     assert_eq!(

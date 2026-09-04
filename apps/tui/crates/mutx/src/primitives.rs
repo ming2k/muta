@@ -175,55 +175,8 @@ impl FixedModalSpec {
 
     // The preset chooser shares the provider list's footprint.
     pub const PROVIDER: Self = Self::new(76, 80);
-    #[allow(dead_code)]
-    pub const OAUTH_PENDING: Self = Self::new(76, 75);
-    #[allow(dead_code)]
-    pub const CUSTOM_PROVIDER: Self = Self::new(72, 78);
     pub const HELP: Self = Self::new(66, 78);
     pub const SESSIONS: Self = Self::new(82, 78);
-    #[allow(dead_code)]
-    pub const PERMISSIONS: Self = Self::new(72, 75);
-    #[allow(dead_code)]
-    pub const SKILLS: Self = Self::new(72, 75);
-
-    /// Construct a modal spec with custom width and height percentages.
-    #[allow(dead_code)]
-    pub const fn custom(width_percent: u16, height_percent: u16) -> Self {
-        Self::new(width_percent, height_percent)
-    }
-
-    /// Return a new spec with modified height percentage.
-    #[allow(dead_code)]
-    pub const fn with_height(mut self, height_percent: u16) -> Self {
-        self.height_percent = height_percent;
-        self
-    }
-
-    /// Return a new spec with modified width percentage.
-    #[allow(dead_code)]
-    pub const fn with_width(mut self, width_percent: u16) -> Self {
-        self.spec.width_percent = width_percent;
-        self
-    }
-
-    /// The width percentage of the modal relative to the viewport.
-    #[allow(dead_code)]
-    pub const fn width_percent(&self) -> u16 {
-        self.spec.width_percent
-    }
-
-    /// The height percentage of the modal relative to the viewport.
-    #[allow(dead_code)]
-    pub const fn height_percent(&self) -> u16 {
-        self.height_percent
-    }
-
-    /// Calculate the exact columns and rows this modal occupies in `frame`.
-    #[allow(dead_code)]
-    pub fn exact_dimensions(&self, frame: &Frame) -> (u16, u16) {
-        let r = modal_area(frame, *self);
-        (r.width, r.height)
-    }
 }
 
 /// Geometry for a modal whose height follows its rendered content up to max bounds.
@@ -278,97 +231,6 @@ impl ContentModalSpec {
     pub const CUSTOM_PROVIDER: Self = Self::new(72, 8, 80);
     pub const PERMISSIONS: Self = Self::new(72, 7, 80);
     pub const SKILLS: Self = Self::new(72, 7, 80);
-    #[allow(dead_code)]
-    pub const HELP: Self = Self::new(66, 10, 84);
-
-    /// Construct a modal spec with custom max constraints.
-    #[allow(dead_code)]
-    pub const fn custom(width_percent: u16, min_rows: u16, max_viewport_percent: u16) -> Self {
-        Self::new(width_percent, min_rows, max_viewport_percent)
-    }
-
-    /// Set an explicit maximum row ceiling.
-    #[allow(dead_code)]
-    pub const fn with_max_rows(mut self, max_rows: u16) -> Self {
-        self.max_height_rows = Some(max_rows);
-        self
-    }
-
-    /// Set an explicit maximum column width.
-    #[allow(dead_code)]
-    pub const fn with_max_cols(mut self, max_cols: u16) -> Self {
-        self.max_width_cols = Some(max_cols);
-        self
-    }
-
-    /// Set maximum viewport height percentage.
-    #[allow(dead_code)]
-    pub const fn with_max_percent(mut self, max_viewport_percent: u16) -> Self {
-        self.max_viewport_percent = max_viewport_percent;
-        self
-    }
-
-    /// Set minimum row count.
-    #[allow(dead_code)]
-    pub const fn with_min_rows(mut self, min_rows: u16) -> Self {
-        self.min_rows = min_rows;
-        self
-    }
-
-    /// Set width percentage.
-    #[allow(dead_code)]
-    pub const fn with_width(mut self, width_percent: u16) -> Self {
-        self.spec.width_percent = width_percent;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub const fn width_percent(&self) -> u16 {
-        self.spec.width_percent
-    }
-
-    #[allow(dead_code)]
-    pub const fn max_viewport_percent(&self) -> u16 {
-        self.max_viewport_percent
-    }
-
-    #[allow(dead_code)]
-    pub const fn min_rows(&self) -> u16 {
-        self.min_rows
-    }
-
-    #[allow(dead_code)]
-    pub const fn max_height_rows(&self) -> Option<u16> {
-        self.max_height_rows
-    }
-
-    #[allow(dead_code)]
-    pub const fn max_width_cols(&self) -> Option<u16> {
-        self.max_width_cols
-    }
-
-    /// Calculate the exact dimensions (cols, rows) for a given desired row count in `frame`.
-    #[allow(dead_code)]
-    pub fn exact_dimensions(&self, frame: &Frame, desired_rows: u16) -> (u16, u16) {
-        let area = content_modal_area(frame, *self, desired_rows);
-        (area.width, area.height)
-    }
-
-    /// Calculate the maximum dimensions (cols, rows) this modal can occupy in `frame`.
-    #[allow(dead_code)]
-    pub fn max_dimensions(&self, frame: &Frame) -> (u16, u16) {
-        let area = frame.area();
-        let mut max_h = ((area.height as u32 * self.max_viewport_percent as u32) / 100) as u16;
-        if let Some(limit) = self.max_height_rows {
-            max_h = max_h.min(limit);
-        }
-        let probe = content_modal_probe(frame, *self);
-        let mut w = probe.width;
-        if let Some(limit_w) = self.max_width_cols {
-            w = w.min(limit_w);
-        }
-        (w, max_h.max(self.min_rows))
-    }
 
     pub const fn modal_spec(self) -> ModalSpec {
         self.spec

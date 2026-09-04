@@ -19,7 +19,7 @@ use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
-    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
+    config::Config, connection_usage::ConnectionUsage, session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::SkillRegistry;
@@ -78,8 +78,6 @@ pub struct SessionDriver {
     /// Backend-owned command vocabulary used by both attach metadata and the
     /// composer completion engine.
     pub command_catalog: muta_contracts::CommandCatalog,
-    /// Project embedding index for `/search` (`embedding_store_for_commands`).
-    pub embedding_store: Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     /// Primary round lifecycle: at most one active round, superseded by the
     /// next begin (replaces the old token-slot + generation-counter pair).
     pub lifecycle: Arc<RoundLifecycle>,
@@ -146,7 +144,6 @@ impl SessionDriver {
             shared_additional_roots,
             shared_unconfined,
             command_catalog,
-            embedding_store: embedding_store_for_commands,
             lifecycle,
             side,
             base_tools: base_tools_for_side,
@@ -162,11 +159,6 @@ impl SessionDriver {
         // Hand the shared token-source ledger to the agent so each turn's token
         // usage (reported vs. estimated) is booked into it for the report modal.
         agent.install_token_ledger(token_ledger.clone());
-        // The old inline block captured two clones of the skills registry —
-        // `skills_registry` (read for the session-context snapshot) and
-        // `skills_registry_for_commands` (handed to the `/skills`
-        // tools). One driver field backs both; re-create the alias here.
-        let skills_registry_for_commands = skills_registry.clone();
         let completion_engine = crate::input_completion::InputCompletionEngine::new(
             command_catalog,
             project_root_for_side.clone(),
@@ -682,10 +674,8 @@ impl SessionDriver {
                 AgentRequest::DeleteSession { id } => {
                     let session = session.clone();
                     let resp_tx = resp_tx.clone();
-                    let embedding_store = embedding_store_for_commands.clone();
                     tokio::spawn(async move {
-                        crate::handlers_session::delete(&session, &embedding_store, &resp_tx, id)
-                            .await;
+                        crate::handlers_session::delete(&session, &resp_tx, id).await;
                     });
                 }
                 AgentRequest::RenameSession { id, title } => {
@@ -807,9 +797,7 @@ impl SessionDriver {
                             base_tools_for_side: &base_tools_for_side,
                             provider_for_task: &provider_for_task,
                             provider_usage: &mut provider_usage,
-                            skills_registry: skills_registry.clone(),
-                            skills_registry_for_commands: &skills_registry_for_commands,
-                            embedding_store_for_commands: &embedding_store_for_commands,
+                            skills_registry: &skills_registry,
                             req_tx_for_commands: &req_tx_for_commands,
                             project_root_for_side: &project_root_for_side,
                             startup: &startup,

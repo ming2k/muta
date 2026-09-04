@@ -89,12 +89,8 @@ impl ConnectionUsage {
         self.last_models.get(connection_id).map(|m| m.as_str())
     }
 
-    /// Persist atomically, merged with whatever another `muta` instance may
-    /// have written since this store was loaded.
+    /// Persist atomically into SQLite (SSOT), with fallback to legacy file when DB unavailable.
     pub fn save(&self) -> Result<(), String> {
-        let path = paths::get().connection_usage_file();
-        let _lock = crate::fsutil::FileLock::acquire(&path)
-            .map_err(|e| format!("could not lock usage file: {e}"))?;
         let mut merged = ConnectionUsage::load();
         for (id, entry) in &self.connections {
             let disk = merged.connections.entry(id.clone()).or_default();
@@ -117,12 +113,18 @@ impl ConnectionUsage {
             }
         }
         if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None) {
-            let _ = engine.set_json("state:connection_usage", &merged);
+            engine
+                .set_json("state:connection_usage", &merged)
+                .map_err(|e| e.to_string())
+        } else {
+            let path = paths::get().connection_usage_file();
+            let _lock = crate::fsutil::FileLock::acquire(&path)
+                .map_err(|e| format!("could not lock usage file: {e}"))?;
+            let json = serde_json::to_string_pretty(&merged)
+                .map_err(|e| format!("could not serialize usage store: {e}"))?;
+            crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
+                .map_err(|e| format!("could not persist usage store: {e}"))
         }
-        let json = serde_json::to_string_pretty(&merged)
-            .map_err(|e| format!("could not serialize usage store: {e}"))?;
-        crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
-            .map_err(|e| format!("could not persist usage store: {e}"))
     }
 
     /// Remove a connection and its associated last_model pointer.

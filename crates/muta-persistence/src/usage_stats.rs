@@ -251,12 +251,13 @@ fn read_day_file(path: &Path) -> DayFile {
 /// Write a day file under its companion lock and synchronize with SQLite.
 fn persist_day_file(path: &Path, day_file: &DayFile) -> Result<(), String> {
     let _lock = FileLock::acquire(path).map_err(|e| e.to_string())?;
+    atomic_write_json(path, &day_file)?;
     if let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
         && let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
     {
         let _ = engine.set_json(&format!("usage:day:{file_name}"), day_file);
     }
-    atomic_write_json(path, &day_file)
+    Ok(())
 }
 
 /// Insert-or-upgrade one record. Same-key replay is idempotent; a reported
@@ -341,18 +342,16 @@ mod tests {
         }
     }
 
-    fn temp_root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "muta-usage-stats-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).expect("create temp root");
-        dir
+    fn temp_root() -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("create temp root");
+        let path = dir.path().to_path_buf();
+        (path, dir)
     }
 
     #[test]
     fn record_round_trips_through_disk() {
-        let store = UsageStatsStore::with_root(temp_root());
+        let (root, _tmp) = temp_root();
+        let store = UsageStatsStore::with_root(root);
         let record = sample_record("s1", 1, 1_000);
         store
             .record(1_700_000_000_000, "bucket-a", &record)
@@ -368,7 +367,8 @@ mod tests {
 
     #[test]
     fn replay_is_idempotent_but_reported_upgrades_estimate() {
-        let store = UsageStatsStore::with_root(temp_root());
+        let (root, _tmp) = temp_root();
+        let store = UsageStatsStore::with_root(root);
         let mut estimated = sample_record("s1", 1, 900);
         estimated.source = RequestUsageSource::Estimated;
         estimated.total_tokens = 900;
@@ -394,7 +394,8 @@ mod tests {
 
     #[test]
     fn in_flight_records_are_not_persisted() {
-        let store = UsageStatsStore::with_root(temp_root());
+        let (root, _tmp) = temp_root();
+        let store = UsageStatsStore::with_root(root);
         let mut in_flight = sample_record("s1", 1, 500);
         in_flight.status = RequestUsageStatus::InFlight;
         store.record(1_700_000_000_000, "p", &in_flight).unwrap();
@@ -403,7 +404,8 @@ mod tests {
 
     #[test]
     fn days_partition_and_aggregate() {
-        let store = UsageStatsStore::with_root(temp_root());
+        let (root, _tmp) = temp_root();
+        let store = UsageStatsStore::with_root(root);
         // Two different local days: 2023-11-14 22:13:20Z and (likely) the
         // next local day is far away, so pick two instants 48h apart.
         let t0 = 1_700_000_000_000u64;
@@ -422,7 +424,8 @@ mod tests {
 
     #[test]
     fn record_batch_groups_by_day() {
-        let store = UsageStatsStore::with_root(temp_root());
+        let (root, _tmp) = temp_root();
+        let store = UsageStatsStore::with_root(root);
         let t0 = 1_700_000_000_000u64;
         let t1 = t0 + 48 * 3600 * 1_000;
         let a = sample_record("s1", 1, 100);
@@ -438,7 +441,7 @@ mod tests {
 
     #[test]
     fn corrupt_day_file_is_skipped() {
-        let root = temp_root();
+        let (root, _tmp) = temp_root();
         let store = UsageStatsStore::with_root(root.clone());
         store
             .record(1_700_000_000_000, "p", &sample_record("s1", 1, 10))
@@ -454,7 +457,7 @@ mod tests {
 
     #[test]
     fn non_day_files_are_ignored() {
-        let root = temp_root();
+        let (root, _tmp) = temp_root();
         let store = UsageStatsStore::with_root(root.clone());
         let daily = store.root().join("daily");
         std::fs::create_dir_all(&daily).unwrap();
@@ -473,7 +476,8 @@ mod tests {
         use muta_contracts::TokenUsage;
         use std::sync::Arc;
 
-        let store = Arc::new(UsageStatsStore::with_root(temp_root()));
+        let (root, _tmp) = temp_root();
+        let store = Arc::new(UsageStatsStore::with_root(root));
         let ledger = muta_contracts::TokenSourceLedger::new();
         muta_contracts::TokenSourceLedger::install_usage_sink(
             &ledger,
