@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.13] - 2026-09-07
+
+### Fixed
+
+- **Route-resolved vision capability surfaced to frontends (ADR-0149).** `ProviderModelInfo`
+  (wire contract) now carries a `vision` field with the daemon-side full capability resolution
+  (user overrides ⊕ remote advertisement ⊕ static baseline) from `Channel::capabilities()`.
+  The TUI composer's image-paste gate consults the picker snapshot's per-route flag first —
+  fixing relay models the client baseline does not know (e.g. `omen-alpha` via `opencode-go`,
+  advertised vision-capable on models.dev) being wrongly rejected — and the agent tool pool
+  overlays the provider's capability snapshot so vision-gated tools (`read_image`) survive for
+  fitted relay models. `apps/web/src/lib/generated/wire.gen.ts` regenerated.
+
+
 ## [0.38.12] - 2026-09-07
 
 ### Changed
