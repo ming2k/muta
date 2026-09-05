@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.14] - 2026-09-07
+
+### Changed
+
+- **SQLite SSOT session persistence and session-switch UX.** Consolidated session
+  persistence to SQLite single-source-of-truth while preserving legacy JSON file import fallback.
+  Optimized session driver dispatch context projection checks to avoid unnecessary token
+  calculations during control-plane commands. Enhanced TUI session switching with loading
+  indicators in the modal, header, and empty state.
+- **Anthropic thinking wire protocol.** Omit unsigned thinking blocks on Anthropic wire requests
+  to avoid 400 Bad Request errors.
+
+
 ## [0.38.13] - 2026-09-07
 
 ### Fixed
