@@ -44,6 +44,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod backend;
+pub mod driver;
+pub mod glyph;
+pub mod profile;
 
 pub use backend::Backend;
 mod cell;
@@ -57,8 +60,13 @@ pub mod widgets;
 
 pub use cell::{Cell, Color, CompactSymbol, Modifier, Style};
 pub use diff::{Draw, DrawCmd};
+pub use driver::{
+    Ansi16Driver, DirectColorDriver, EscapeEmitter, MonochromeDriver, TerminalDriver,
+};
 pub use flex::{AlignItem, Basis, Flex, FlexDirection, FlexItem, Justify, SolvedFlex};
 pub use frame::{CursorState, Frame, Terminal, TestTerminal, Widget};
+pub use glyph::{ASCII_GLYPHS, GlyphSet, UNICODE_GLYPHS};
 pub use grid::{Fit, Grid, Pos};
 pub use layout::{Constraint, Direction, Layout, Margin, Rect};
+pub use profile::{CharsetStandard, ColorStandard, TerminalProfile};
 pub use widgets::{Alignment, Block, BorderType, Borders, Clear, Line, Paragraph, Span, Wrap};

@@ -134,6 +134,7 @@ pub struct Block<'a> {
     pub border_type: BorderType,
     pub border_style: Style,
     pub title: Option<Line<'a>>,
+    pub glyph_v: Option<&'static str>,
 }
 
 /// Border sides.
@@ -158,12 +159,13 @@ impl std::ops::BitOr for Borders {
     }
 }
 
-/// Border rendering style. Only `Thick` (a solid `┃` bar) is used in prod.
+/// Border rendering style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BorderType {
     #[default]
     Plain,
     Thick,
+    Ascii,
 }
 
 impl<'a> Block<'a> {
@@ -183,13 +185,21 @@ impl<'a> Block<'a> {
         self.border_style = s;
         self
     }
+    pub fn glyph_v(mut self, sym: &'static str) -> Self {
+        self.glyph_v = Some(sym);
+        self
+    }
 
     /// Render the block's background and borders into `grid`. Returns the
     /// inner rect (area minus borders/padding).
     pub fn render(&self, area: Rect, grid: &mut crate::Grid) {
         // Background fill.
         grid.fill_rect(area.x, area.y, area.width, area.height, self.style);
-        // Left thick border. The bar uses the block bg so its background
+        let sym = self.glyph_v.unwrap_or(match self.border_type {
+            BorderType::Thick => "┃",
+            BorderType::Plain | BorderType::Ascii => "|",
+        });
+        // Left border. The bar uses the block bg so its background
         // spillover matches the panel, and the border_style fg.
         if self.borders.0 & Borders::LEFT.0 != 0 && area.width > 0 {
             let bar_style = Style {
@@ -198,10 +208,10 @@ impl<'a> Block<'a> {
                 add: self.border_style.add,
             };
             for y in area.y..area.y + area.height {
-                grid.set(area.x, y, Cell::narrow("┃", bar_style));
+                grid.set(area.x, y, Cell::narrow(sym, bar_style));
             }
         }
-        // Right thick border.
+        // Right border.
         if self.borders.0 & Borders::RIGHT.0 != 0 && area.width > 1 {
             let bar_style = Style {
                 fg: self.border_style.fg,
@@ -210,7 +220,7 @@ impl<'a> Block<'a> {
             };
             let rx = area.x + area.width - 1;
             for y in area.y..area.y + area.height {
-                grid.set(rx, y, Cell::narrow("┃", bar_style));
+                grid.set(rx, y, Cell::narrow(sym, bar_style));
             }
         }
     }

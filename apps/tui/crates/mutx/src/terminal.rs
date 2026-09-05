@@ -14,24 +14,34 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static KEYBOARD_ENHANCEMENT_ENABLED: AtomicBool = AtomicBool::new(false);
+static MOUSE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
+static BRACKETED_PASTE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Set up raw mode, alternate screen, mouse capture, bracketed paste, and
 /// negotiate progressive keyboard enhancement if supported by the host terminal.
-pub(super) fn enter_terminal() -> io::Result<()> {
+pub(super) fn enter_terminal(profile: &mutx_engine::TerminalProfile) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )?;
+    execute!(stdout, EnterAlternateScreen)?;
+
+    if profile.supports_mouse {
+        if execute!(stdout, EnableMouseCapture).is_ok() {
+            MOUSE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
+        }
+    }
+
+    if profile.color_standard != mutx_engine::ColorStandard::Monochrome {
+        if execute!(stdout, EnableBracketedPaste).is_ok() {
+            BRACKETED_PASTE_ENABLED.store(true, Ordering::Relaxed);
+        }
+    }
 
     // Progressive keyboard enhancement (Kitty keyboard protocol) allows modifier-bearing
     // keys (e.g. Ctrl+M vs Enter) to be disambiguated.
     // Query capability first so modern Windows Terminal/ConPTY and Linux/macOS
     // terminals receive exact protocol compliance without unsupported errors.
-    if supports_keyboard_enhancement().unwrap_or(false)
+    if profile.color_standard == mutx_engine::ColorStandard::DirectColor
+        && supports_keyboard_enhancement().unwrap_or(false)
         && execute!(
             stdout,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -55,13 +65,17 @@ pub(super) fn restore_terminal() {
         let _ = execute!(stdout, PopKeyboardEnhancementFlags);
     }
 
-    let _ = execute!(
-        stdout,
-        DisableBracketedPaste,
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        cursor::Show
-    );
+    if BRACKETED_PASTE_ENABLED.swap(false, Ordering::Relaxed) {
+        let _ = execute!(stdout, DisableBracketedPaste);
+    }
+
+    let _ = execute!(stdout, LeaveAlternateScreen);
+
+    if MOUSE_CAPTURE_ENABLED.swap(false, Ordering::Relaxed) {
+        let _ = execute!(stdout, DisableMouseCapture);
+    }
+
+    let _ = execute!(stdout, cursor::Show);
     let _ = disable_raw_mode();
     let _ = stdout.flush();
 }

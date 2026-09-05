@@ -10,10 +10,10 @@ use crate::view::Theme;
 /// spinner tick this is ~1.2s per cycle — calm, not frantic.
 pub const SPINNER_PHASES: usize = 12;
 
-/// The activity indicator glyph: a single dot whose luminance breathes (see
-/// [`breathing_color`]) rather than a cycling braille frame.
-pub fn spinner_glyph() -> &'static str {
-    "●"
+/// The activity indicator glyph: delegates to the active typography glyph set.
+#[allow(dead_code)]
+pub fn spinner_glyph(glyphs: &mutx_engine::GlyphSet) -> &'static str {
+    glyphs.dot
 }
 
 /// Cosine luminance sweep between `bg` (dim, at phase 0) and `base` (bright,

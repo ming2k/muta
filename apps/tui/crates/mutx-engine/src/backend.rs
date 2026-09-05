@@ -21,12 +21,13 @@ use std::io::{self, Write};
 
 use crossterm::{
     QueueableCommand, cursor,
-    style::{Attribute, Color as CtColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, ClearType, DisableLineWrap, EnableLineWrap},
 };
 
 use crate::diff::{Draw, DrawCmd};
-use crate::{Color, Modifier, Style};
+use crate::driver::{EscapeEmitter, TerminalDriver};
+use crate::profile::TerminalProfile;
+use crate::{Color, Style};
 
 /// Whether the terminal advertises back-color-erase (`bce`).
 ///
@@ -109,6 +110,7 @@ impl Default for Bce {
 pub struct Backend<W: Write> {
     out: W,
     bce: Bce,
+    driver: TerminalDriver,
     /// Last cursor position we moved to. `None` until the first move, which
     /// means the next draw must always reposition.
     cur: Option<(u16, u16)>,
@@ -118,27 +120,51 @@ pub struct Backend<W: Write> {
     /// visibility sequence every frame, which on light, frequent incremental
     /// redraws shows up as a caret flicker.
     cursor_visible: Option<bool>,
-    /// The style currently applied to the terminal (so we can skip redundant
-    /// SGR sequences). Starts as the "unknown" default.
-    style: Style,
 }
 
 impl<W: Write> Backend<W> {
-    /// Wrap an output writer (typically `io::stdout()`), detecting `bce` from
-    /// the environment.
+    /// Wrap an output writer (typically `io::stdout()`), detecting `bce` and
+    /// terminal profile from the environment.
     pub fn new(out: W) -> Self {
-        Self::with_bce(out, Bce::detect())
+        let profile = TerminalProfile::detect();
+        Self::with_bce_and_driver(out, Bce::detect(), TerminalDriver::for_profile(&profile))
     }
 
     /// Construct with an explicit `bce` setting (for tests / overrides).
     pub fn with_bce(out: W, bce: Bce) -> Self {
+        let profile = TerminalProfile::detect();
+        Self::with_bce_and_driver(out, bce, TerminalDriver::for_profile(&profile))
+    }
+
+    /// Construct with an explicit [`TerminalProfile`] setting.
+    pub fn with_profile(out: W, profile: TerminalProfile) -> Self {
+        Self::with_bce_and_driver(out, Bce::detect(), TerminalDriver::for_profile(&profile))
+    }
+
+    /// Construct with an explicit [`TerminalDriver`] setting.
+    pub fn with_driver(out: W, driver: TerminalDriver) -> Self {
+        Self::with_bce_and_driver(out, Bce::detect(), driver)
+    }
+
+    /// Construct with explicit `bce` and [`TerminalProfile`] settings.
+    pub fn with_bce_and_profile(out: W, bce: Bce, profile: TerminalProfile) -> Self {
+        Self::with_bce_and_driver(out, bce, TerminalDriver::for_profile(&profile))
+    }
+
+    /// Construct with explicit `bce` and [`TerminalDriver`] settings.
+    pub fn with_bce_and_driver(out: W, bce: Bce, driver: TerminalDriver) -> Self {
         Self {
             out,
             bce,
+            driver,
             cur: None,
             cursor_visible: None,
-            style: Style::RESET,
         }
+    }
+
+    /// Return the active terminal driver.
+    pub fn driver(&self) -> TerminalDriver {
+        self.driver
     }
 
     /// Borrow the underlying writer (for the app to queue alt-screen, raw
@@ -150,19 +176,16 @@ impl<W: Write> Backend<W> {
     /// Open a DEC synchronized-update (mode 2026) envelope: queue the begin
     /// marker *without* flushing, so it reaches the terminal in the same
     /// ordered stream as (and ahead of) everything written until the matching
-    /// [`Self::end_sync_update`].
+    /// [`Self::end_sync_update`]. Delegated to the driver (no-op on legacy terminals).
     pub fn begin_sync_update(&mut self) -> io::Result<()> {
-        use crossterm::terminal::BeginSynchronizedUpdate;
-        self.out.queue(BeginSynchronizedUpdate).map(|_| ())
+        self.driver.begin_sync(&mut self.out)
     }
 
     /// Close a synchronized-update envelope opened by
     /// [`Self::begin_sync_update`], presenting everything written in between
-    /// atomically. This is the envelope's single flush point.
+    /// atomically. Delegated to the driver.
     pub fn end_sync_update(&mut self) -> io::Result<()> {
-        use crossterm::terminal::EndSynchronizedUpdate;
-        self.out.queue(EndSynchronizedUpdate)?;
-        self.out.flush()
+        self.driver.end_sync(&mut self.out)
     }
 
     /// Apply a diff's draw commands: move the cursor into place, set the
@@ -330,126 +353,20 @@ impl<W: Write> Backend<W> {
         self.show_cursor()
     }
 
-    /// Apply only the style attributes that differ from the currently-applied
-    /// style. Resets all attributes first when any attribute dropped, because
-    /// SGR has no per-bit "off" that's universally cheaper than reset+reapply.
+    /// Apply style delta using the configured terminal protocol driver.
     fn apply_style(&mut self, want: Style) -> io::Result<()> {
-        if want == self.style {
-            return Ok(());
-        }
-        let have = self.style;
-        // Foreground / background: only re-emit when changed.
-        if want.fg != have.fg {
-            self.out.queue(SetForegroundColor(to_ct_color(want.fg)))?;
-        }
-        if want.bg != have.bg {
-            self.out.queue(SetBackgroundColor(to_ct_color(want.bg)))?;
-        }
-        // Attributes: if any bit dropped, reset all then reapply the wanted
-        // set; if only bits were added, emit just the new ones.
-        let dropped = have.add & !want.add;
-        let added = want.add & !have.add;
-        if !dropped.is_empty() {
-            self.out.queue(SetAttribute(Attribute::Reset))?;
-            // Re-assert colors too, since Reset also clears them.
-            self.out.queue(SetForegroundColor(to_ct_color(want.fg)))?;
-            self.out.queue(SetBackgroundColor(to_ct_color(want.bg)))?;
-            for attr in iter_attrs(want.add) {
-                self.out.queue(SetAttribute(attr))?;
-            }
-        } else {
-            for attr in iter_attrs(added) {
-                self.out.queue(SetAttribute(attr))?;
-            }
-        }
-        self.style = want;
-        Ok(())
+        self.driver.apply_style(want, &mut self.out)
     }
 
     /// Reset style/cursor tracking — call after the app does a wholesale
     /// screen clear or enters the alt screen, where the terminal's state no
     /// longer matches our tracked style.
-    ///
-    /// Crucially, this **emits a real SGR reset** (`\x1b[0m`) to the terminal,
-    /// not just resets our in-memory tracking. Entering the alt screen *does*
-    /// clear the terminal's SGR state, so a pure tracking reset is sufficient
-    /// there — but a resize (tmux forwarding `SIGWINCH`, or a detach/reattach)
-    /// does **not** touch the terminal's SGR: whatever attribute the previous
-    /// frame last applied (often a bold tool-step summary line) stays on. If
-    /// we only reset our tracker while the terminal keeps the old attribute,
-    /// the next frame's delta-style computation (`apply_style`) sees equal
-    /// attribute bits and emits nothing, so subsequent plain text renders with
-    /// the stale attribute (e.g. the whole transcript reads as bold). Emitting
-    /// the reset forces the real terminal back to RESET, keeping the tracker
-    /// and the terminal honest with each other.
     pub fn invalidate(&mut self) -> io::Result<()> {
-        // Queued (not flushed): callers bracket this inside a synchronized-
-        // update envelope when one is open (see `Terminal::commit_frame`), so
-        // the reset reaches the terminal as part of the same atomic frame.
-        // Flushing here would split that envelope mid-frame and let the
-        // terminal paint a half-reset screen — the resize flicker this path
-        // exists to prevent. `Terminal::commit` still owns the single flush
-        // at the end of the envelope; direct callers (tests) flush manually.
-        self.out.queue(SetAttribute(Attribute::Reset))?;
+        self.driver.invalidate(&mut self.out)?;
         self.cur = None;
-        // The terminal's cursor visibility is also outside our control on a
-        // resize/reattach (the real terminal may have been reset to its
-        // default-visible state), so forget what we last set. The next
-        // hide/show then re-emits, keeping us honest — same rationale as the
-        // SGR reset above.
         self.cursor_visible = None;
-        self.style = Style::RESET;
         Ok(())
     }
-}
-
-/// Map an engine [`Color`] to a crossterm color.
-fn to_ct_color(c: Color) -> CtColor {
-    match c {
-        Color::Reset => CtColor::Reset,
-        Color::Rgb(r, g, b) => CtColor::Rgb { r, g, b },
-        Color::Black => CtColor::Black,
-        Color::Red => CtColor::DarkRed,
-        Color::Green => CtColor::DarkGreen,
-        Color::Yellow => CtColor::DarkYellow,
-        Color::Blue => CtColor::DarkBlue,
-        Color::Magenta => CtColor::DarkMagenta,
-        Color::Cyan => CtColor::DarkCyan,
-        Color::Gray => CtColor::Grey,
-        Color::DarkGray => CtColor::DarkGrey,
-        Color::LightRed => CtColor::Red,
-        Color::LightGreen => CtColor::Green,
-        Color::LightYellow => CtColor::Yellow,
-        Color::LightBlue => CtColor::Blue,
-        Color::LightMagenta => CtColor::Magenta,
-        Color::LightCyan => CtColor::Cyan,
-        Color::White => CtColor::White,
-    }
-}
-
-/// Translate the set modifier bits into crossterm `Attribute`s in a stable
-/// order.
-fn iter_attrs(m: Modifier) -> impl Iterator<Item = Attribute> {
-    let mut v = Vec::new();
-    if m.contains(Modifier::BOLD) {
-        v.push(Attribute::Bold);
-    }
-    if m.contains(Modifier::DIM) {
-        v.push(Attribute::Dim);
-    }
-    if m.contains(Modifier::ITALIC) {
-        v.push(Attribute::Italic);
-    }
-    if m.contains(Modifier::UNDERLINE) {
-        v.push(Attribute::Underlined);
-    }
-    if m.contains(Modifier::REVERSE) {
-        v.push(Attribute::Reverse);
-    }
-    if m.contains(Modifier::STRIKETHROUGH) {
-        v.push(Attribute::CrossedOut);
-    }
-    v.into_iter()
 }
 
 #[cfg(test)]
@@ -824,5 +741,76 @@ mod tests {
         }
         assert!(properly_nested, "envelopes never nest: {s:?}");
         assert_eq!(depth, 0, "every envelope closes: {s:?}");
+    }
+
+    #[test]
+    fn monochrome_profile_emits_no_color_escape_codes() {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut be = Backend::with_profile(&mut buf, TerminalProfile::dec_vt100_monochrome());
+            let cmd = DrawCmd {
+                w: 10,
+                h: 2,
+                draws: vec![
+                    Draw::Cells {
+                        x: 0,
+                        y: 0,
+                        style: Style::default().fg(Color::Rgb(255, 0, 0)).bg(Color::Rgb(0, 0, 255)),
+                        cells: vec![("A".into(), 1)],
+                    },
+                    Draw::Cells {
+                        x: 1,
+                        y: 0,
+                        style: Style::default().fg(Color::White),
+                        cells: vec![("B".into(), 1)],
+                    },
+                ],
+            };
+            be.render(&cmd).unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        // Must contain NO TrueColor or ANSI color SGR codes
+        assert!(!s.contains("\x1b[38;"), "no 38; color codes in monochrome: {s:?}");
+        assert!(!s.contains("\x1b[48;"), "no 48; color codes in monochrome: {s:?}");
+        assert!(!s.contains("\x1b[31m"), "no ANSI color codes in monochrome: {s:?}");
+        // Highlighted cell with bg tint should emit SGR 7 (reverse video)
+        assert!(s.contains("\x1b[7m"), "highlighted cell uses reverse video: {s:?}");
+        assert!(s.contains('A'));
+        assert!(s.contains('B'));
+    }
+
+    #[test]
+    fn monochrome_profile_disables_sync_update() {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut be = Backend::with_profile(&mut buf, TerminalProfile::dec_vt100_monochrome());
+            be.begin_sync_update().unwrap();
+            be.end_sync_update().unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.contains("?2026h"), "monochrome profile must not emit sync update: {s:?}");
+        assert!(!s.contains("?2026l"), "monochrome profile must not emit sync update: {s:?}");
+    }
+
+    #[test]
+    fn ansi16_profile_quantizes_rgb_to_standard_ansi() {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut be = Backend::with_profile(&mut buf, TerminalProfile::ecma48_ansi16());
+            let cmd = DrawCmd {
+                w: 10,
+                h: 2,
+                draws: vec![Draw::Cells {
+                    x: 0,
+                    y: 0,
+                    style: Style::default().fg(Color::Rgb(255, 10, 10)),
+                    cells: vec![("X".into(), 1)],
+                }],
+            };
+            be.render(&cmd).unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.contains("\x1b[38;2;"), "ANSI16 profile must not emit DirectColor 38;2: {s:?}");
+        assert!(s.contains('X'));
     }
 }

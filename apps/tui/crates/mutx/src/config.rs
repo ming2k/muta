@@ -1,6 +1,6 @@
 //! TUI presentation configuration and state for `mutx`.
 //!
-//! Stored in `$XDG_CONFIG_HOME/mutx/config.toml` (and `$XDG_STATE_HOME/mutx/history.json`),
+//! Stored in `$XDG_CONFIG_HOME/mutx/config.toml` (and SQLite `muta.db`),
 //! cleanly decoupled from the core Muta daemon's configuration (ADR-0136).
 
 use serde::{Deserialize, Serialize};
@@ -172,46 +172,28 @@ pub fn thinking_default_expanded(config: &TuiConfig) -> bool {
         .unwrap_or(false)
 }
 
-/// Load prompt input history from `$XDG_STATE_HOME/mutx/history.json`.
+/// Load prompt input history from SQLite muta.db (authoritative SSOT).
 pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
-    let path = crate::paths::get().history_file();
-    if let Ok(content) = fs::read_to_string(&path)
-        && let Ok(entries) = serde_json::from_str(&content)
-    {
-        return entries;
-    }
-    // Migration fallback: check muta's legacy history.json
-    let legacy_path = muta_persistence::paths::get().history_file();
-    if let Ok(content) = fs::read_to_string(&legacy_path)
-        && let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content)
-    {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+    let db_path = muta_persistence::paths::get().db_file();
+    if let Ok(engine) = muta_persistence::db::DatabaseEngine::open(&db_path, None) {
+        if let Ok(entries) = engine.load_input_history(muta_contracts::HISTORY_CAP) {
+            return entries;
         }
-        let _ = fs::copy(&legacy_path, &path);
-        return entries;
     }
     Vec::new()
 }
 
-/// Save prompt input history to `$XDG_STATE_HOME/mutx/history.json`.
+/// Save prompt input history to SQLite muta.db (authoritative SSOT).
 pub fn save_history(
     history: &[muta_contracts::HistoryEntry],
     dedup: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let path = crate::paths::get().history_file();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let _lock = muta_persistence::fsutil::FileLock::acquire(&path)
-        .map_err(|e| format!("could not lock history file: {e}"))?;
-    let existing: Vec<muta_contracts::HistoryEntry> = fs::read_to_string(&path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default();
-    let merged = muta_contracts::merge_history(&existing, history, dedup);
-    muta_persistence::fsutil::atomic_write_json(&path, &merged)
-        .map_err(Box::<dyn std::error::Error>::from)?;
+    let db_path = muta_persistence::paths::get().db_file();
+    let engine = muta_persistence::db::DatabaseEngine::open(&db_path, None)
+        .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
+    engine
+        .save_input_history(history, dedup)
+        .map_err(|e| format!("could not save input history to sqlite: {e}"))?;
     Ok(())
 }
 

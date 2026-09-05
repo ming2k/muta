@@ -275,6 +275,9 @@ impl App {
         if let Some(sid) = self.queue_exit_session.take() {
             self.resume_queue(&sid);
         }
+        if self.input_history_persist {
+            self.input_history = crate::config::load_history();
+        }
         self.surfaces.show_session_view();
         self.panels.close_all();
         for id in crate::surfaces::PanelId::ALL {
@@ -311,6 +314,9 @@ impl App {
             && current != id
         {
             self.deactivate_panel(current);
+        }
+        if id == crate::surfaces::PanelId::HistorySearch && self.input_history_persist {
+            self.input_history = crate::config::load_history();
         }
         let first = self.panels.open(id).is_none();
         self.surfaces.show_panel(id);

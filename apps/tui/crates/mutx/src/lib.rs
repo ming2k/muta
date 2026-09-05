@@ -299,15 +299,16 @@ pub async fn run_tui(
         token_ledger,
         startup_overlay,
     } = config;
-    // Setup terminal
-    terminal::enter_terminal()?;
+    // Setup terminal with adaptive capability profile (ADR-0180)
+    let profile = mutx_engine::TerminalProfile::detect();
+    terminal::enter_terminal(&profile)?;
     let stdout = io::stdout();
     // The mutx-engine engine owns its grid + diff + crossterm I/O directly. No
     // ratatui, no WideHealBackend wrapper — the engine's retained grid writes
     // wide-glyph trailing cells with the glyph's own background at write time,
     // so ghost cells cannot occur regardless of terminal or multiplexer
     // (ADR-0038).
-    let backend = Backend::new(stdout);
+    let backend = Backend::with_profile(stdout, profile);
     let mut terminal = Terminal::new(backend);
     // Install the signal guard after the terminal enters raw mode + alt screen
     // so any later SIGTERM/SIGINT/SIGHUP restores it instead of stranding it.
@@ -2423,7 +2424,7 @@ pub async fn run_tui(
         input_history_dedup: input_history_config.dedup,
         input_history_record_commands: input_history_config.record_commands,
         // This is the production TUI path (see `main` → `run_tui`): the
-        // process owns the user's real `history.json`, so disk persistence
+        // process owns the user's real database, so SQLite persistence
         // is enabled. Tests build `App` directly and keep this `false` so
         // they never write to (or truncate) the user's state directory.
         input_history_persist: true,
@@ -2507,7 +2508,13 @@ pub async fn run_tui(
         provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
-        theme: Theme::from_color_scheme(&tui_config.color_scheme, &tui_config.custom_color_scheme),
+        theme: Theme::resolve_with_profile(
+            &tui_config.color_scheme,
+            &tui_config.custom_color_scheme,
+            None,
+            &profile,
+        ),
+        profile,
         logo: load_user_logo(),
     };
 

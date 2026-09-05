@@ -223,16 +223,9 @@ impl Dirs {
         self.data_dir.join("commands")
     }
 
-    /// Slash-command input history. Rebuildable.
-    pub fn history_file(&self) -> PathBuf {
-        self.state_dir.join("history.json")
-    }
-
     /// Per-model usage telemetry (`last_used`, use count) driving recency
     /// ordering in the connection picker. Rebuildable: loss affects sort
-    /// order only, never configuration. Sits next to [`Self::history_file`]
-    /// under `$XDG_STATE_HOME` since it is the same kind of program-generated
-    /// signal.
+    /// order only, never configuration. Stored under `$XDG_STATE_HOME`.
     pub fn connection_usage_file(&self) -> PathBuf {
         self.state_dir.join("connection_usage.json")
     }

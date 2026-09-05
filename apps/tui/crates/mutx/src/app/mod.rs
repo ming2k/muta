@@ -90,8 +90,8 @@ pub struct QueuedDispatch {
 /// identity [`muta_contracts::merge_history`] uses, so a recall finds the
 /// payloads that shipped with the exact prompt text.
 ///
-/// Deliberately **not** persisted: `history.json` is rebuildable cosmetic
-/// telemetry (ADR-0018), and base64 image blobs would balloon the file and
+/// Deliberately **not** persisted: input history in SQLite is rebuildable cosmetic
+/// telemetry, and base64 image blobs would balloon the database and
 /// duplicate conversation data. The cache lives for the process lifetime
 /// (capped, newest-first) and is re-seeded on every send, which is exactly
 /// the window the interrupt → ↑/↓ → resend flow needs.
@@ -777,12 +777,12 @@ pub struct App {
     /// history (`[input_history] record_commands`, default `false`).
     pub input_history_record_commands: bool,
     /// Whether `record_input_history` actually touches
-    /// the on-disk `history.json`. Production keeps this `true` (set from
+    /// SQLite storage. Production keeps this `true` (set from
     /// `main`'s TUI entry point); tests construct `App` directly and default
     /// it to `false`, so a unit test can never write (or truncate!) the
-    /// user's real `$XDG_STATE_HOME/muta/history.json` — a bug that once
+    /// user's real database — a bug that once
     /// polluted it with synthetic `prompt N` rows stamped `session-a`.
-    /// In-memory history still behaves identically; only the disk write is
+    /// In-memory history still behaves identically; only the database write is
     /// suppressed.
     pub input_history_persist: bool,
     /// The inline ↑/↓ history **pointer**. Together with [`Self::history_draft`]
@@ -1124,6 +1124,8 @@ pub struct App {
     pub provider_picker: ProviderPickerSnapshot,
     /// Theme.
     pub theme: Theme,
+    /// Terminal capability profile (ADR-0180).
+    pub profile: mutx_engine::TerminalProfile,
     /// User-supplied ASCII logo lines loaded at startup from
     /// `$XDG_CONFIG_HOME/muta/logo.txt` (clamped to the empty-state bounding
     /// box). `None` when no user logo is present → built-in wordmark is used.

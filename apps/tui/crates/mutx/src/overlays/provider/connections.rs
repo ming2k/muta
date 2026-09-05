@@ -121,9 +121,7 @@ pub fn draw_connections_modal(
         };
         let body = match connection_detail {
             None => {
-                const SPINNER_FRAMES: [&str; 10] =
-                    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-                let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+                let spin = theme.glyphs.spinner_frame(spinner_phase);
                 vec![
                     Line::from(""),
                     Line::from(vec![
@@ -621,8 +619,7 @@ pub(crate) fn connection_detail_body(
             ]));
         }
         muta_contracts::ConnectionUsageState::Fetching => {
-            const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+            let spin = theme.glyphs.spinner_frame(spinner_phase);
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),

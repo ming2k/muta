@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 3;
+pub const CURRENT_DB_VERSION: u32 = 4;
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -163,6 +163,21 @@ const MIGRATIONS: &[Migration] = &[Migration {
         ALTER TABLE sessions ADD COLUMN last_user_prompt TEXT;
         ALTER TABLE sessions ADD COLUMN digest TEXT;
         CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_ms DESC);
+    "#,
+}, Migration {
+    version: 4,
+    sql: r#"
+        -- Unified prompt input history table (ADR-0168 / SSOT)
+        CREATE TABLE IF NOT EXISTS input_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            session_id TEXT,
+            workspace TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_input_history_text ON input_history(text);
+        CREATE INDEX IF NOT EXISTS idx_input_history_created_at ON input_history(created_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_input_history_session ON input_history(session_id, created_at_ms DESC);
     "#,
 }];
 
@@ -372,7 +387,11 @@ impl DatabaseEngine {
     /// Open or create a database engine on a file path.
     pub fn open(db_path: &Path, blob_store: Option<BlobStore>) -> Result<Self> {
         let conn = initialize_db(db_path)?;
-        Ok(Self { conn, blob_store })
+        let engine = Self { conn, blob_store };
+        if db_path == crate::paths::get().db_file() {
+            let _ = engine.migrate_legacy_input_history();
+        }
+        Ok(engine)
     }
 
     /// Open an in-memory database engine for testing.
@@ -1055,6 +1074,228 @@ impl DatabaseEngine {
         self.set_kv(key, &serialized)
     }
 
+    // --- Authoritative Input History Operations (ADR-0168 / SSOT) ---
+
+    /// Record a prompt into `input_history`, respecting `dedup` and the global `HISTORY_CAP`.
+    pub fn record_input_history(
+        &self,
+        entry: &muta_contracts::HistoryEntry,
+        dedup: bool,
+    ) -> Result<()> {
+        self.conn.execute("BEGIN IMMEDIATE", [])?;
+        let res = (|| -> Result<()> {
+            if dedup {
+                self.conn.execute(
+                    "DELETE FROM input_history WHERE text = ?1",
+                    params![entry.text],
+                )?;
+            } else if let Some(session_id) = &entry.session_id {
+                let latest_same: bool = self
+                    .conn
+                    .query_row(
+                        "SELECT text = ?1 FROM input_history WHERE session_id = ?2 ORDER BY created_at_ms DESC, id DESC LIMIT 1",
+                        params![entry.text, session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                if latest_same {
+                    return Ok(());
+                }
+            }
+
+            self.conn.execute(
+                r#"
+                INSERT INTO input_history (text, session_id, workspace, created_at_ms)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![
+                    entry.text,
+                    entry.session_id,
+                    entry.workspace,
+                    entry.created_at_ms as i64,
+                ],
+            )?;
+
+            self.conn.execute(
+                r#"
+                DELETE FROM input_history WHERE id NOT IN (
+                    SELECT id FROM input_history ORDER BY created_at_ms DESC, id DESC LIMIT ?1
+                )
+                "#,
+                params![muta_contracts::HISTORY_CAP as i64],
+            )?;
+
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                self.conn.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
+    /// Load the newest prompt history entries up to `limit`.
+    pub fn load_input_history(&self, limit: usize) -> Result<Vec<muta_contracts::HistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT text, session_id, workspace, created_at_ms
+            FROM input_history
+            ORDER BY created_at_ms DESC, id DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let text: String = row.get(0)?;
+            let session_id: Option<String> = row.get(1)?;
+            let workspace: Option<String> = row.get(2)?;
+            let created_at_ms: i64 = row.get(3)?;
+            Ok(muta_contracts::HistoryEntry {
+                text,
+                session_id,
+                workspace,
+                created_at_ms: created_at_ms as u64,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    /// Persist or batch-merge a list of history entries into SQLite.
+    pub fn save_input_history(
+        &self,
+        entries: &[muta_contracts::HistoryEntry],
+        dedup: bool,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        if entries.len() == 1 {
+            return self.record_input_history(&entries[0], dedup);
+        }
+
+        self.conn.execute("BEGIN IMMEDIATE", [])?;
+        let res = (|| -> Result<()> {
+            let mut insert_stmt = self.conn.prepare(
+                r#"
+                INSERT INTO input_history (text, session_id, workspace, created_at_ms)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+            )?;
+
+            let mut delete_dedup_stmt = if dedup {
+                Some(self.conn.prepare("DELETE FROM input_history WHERE text = ?1")?)
+            } else {
+                None
+            };
+
+            for entry in entries {
+                if let Some(del_stmt) = &mut delete_dedup_stmt {
+                    del_stmt.execute(params![entry.text])?;
+                }
+                insert_stmt.execute(params![
+                    entry.text,
+                    entry.session_id,
+                    entry.workspace,
+                    entry.created_at_ms as i64,
+                ])?;
+            }
+
+            self.conn.execute(
+                r#"
+                DELETE FROM input_history WHERE id NOT IN (
+                    SELECT id FROM input_history ORDER BY created_at_ms DESC, id DESC LIMIT ?1
+                )
+                "#,
+                params![muta_contracts::HISTORY_CAP as i64],
+            )?;
+
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                self.conn.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
+    /// Delete all prompt history records.
+    pub fn clear_input_history(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM input_history", [])?;
+        Ok(())
+    }
+
+    /// Migrate legacy history.json files into SQLite and purge them from disk.
+    pub fn migrate_legacy_input_history(&self) -> usize {
+        let mut candidates = Vec::new();
+        let muta_state = crate::paths::get().state_dir;
+        candidates.push(muta_state.join("history.json"));
+        if let Some(parent) = muta_state.parent() {
+            candidates.push(parent.join("mutx").join("history.json"));
+            candidates.push(parent.join("neenee").join("history.json"));
+        }
+
+        if let Some(state_home) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
+            candidates.push(state_home.join("mutx").join("history.json"));
+            candidates.push(state_home.join("muta").join("history.json"));
+            candidates.push(state_home.join("neenee").join("history.json"));
+        } else if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()).map(PathBuf::from) {
+            let state_home = home.join(".local").join("state");
+            candidates.push(state_home.join("mutx").join("history.json"));
+            candidates.push(state_home.join("muta").join("history.json"));
+            candidates.push(state_home.join("neenee").join("history.json"));
+        }
+
+        candidates.sort();
+        candidates.dedup();
+
+        let mut total = 0;
+        for file in candidates {
+            if !file.exists() {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content) else {
+                let _ = std::fs::remove_file(&file);
+                continue;
+            };
+
+            if !entries.is_empty() {
+                let count = entries.len();
+                if self.save_input_history(&entries, true).is_ok() {
+                    total += count;
+                    let _ = std::fs::remove_file(&file);
+                    info!(
+                        path = %file.display(),
+                        count,
+                        "Migrated legacy input history JSON file into SQLite muta.db and purged file"
+                    );
+                }
+            } else {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+
+        total
+    }
+
     // --- Legacy Flat-File Migration (ADR-0168) ---
 
     /// Migrate legacy session files (.json snapshots and .jsonl logs) from a sessions directory into SQLite muta.db,
@@ -1244,6 +1485,19 @@ pub enum PersistenceCommand {
         key: String,
         ack: oneshot::Sender<Result<bool>>,
     },
+    RecordInputHistory {
+        entry: muta_contracts::HistoryEntry,
+        dedup: bool,
+        ack: Option<oneshot::Sender<Result<()>>>,
+    },
+    SaveInputHistory {
+        entries: Vec<muta_contracts::HistoryEntry>,
+        dedup: bool,
+        ack: oneshot::Sender<Result<()>>,
+    },
+    ClearInputHistory {
+        ack: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Asynchronous handle for interacting with the single-writer PersistenceActor without blocking Tokio runtime.
@@ -1328,6 +1582,20 @@ impl PersistenceHandle {
                         }
                         PersistenceCommand::DeleteKV { key, ack } => {
                             let res = engine.delete_kv(&key);
+                            let _ = ack.send(res);
+                        }
+                        PersistenceCommand::RecordInputHistory { entry, dedup, ack } => {
+                            let res = engine.record_input_history(&entry, dedup);
+                            if let Some(ack) = ack {
+                                let _ = ack.send(res);
+                            }
+                        }
+                        PersistenceCommand::SaveInputHistory { entries, dedup, ack } => {
+                            let res = engine.save_input_history(&entries, dedup);
+                            let _ = ack.send(res);
+                        }
+                        PersistenceCommand::ClearInputHistory { ack } => {
+                            let res = engine.clear_input_history();
                             let _ = ack.send(res);
                         }
                     }
@@ -1577,6 +1845,64 @@ impl PersistenceHandle {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
+    /// Asynchronously record an input history entry (fire-and-forget).
+    pub fn try_record_input_history(&self, entry: muta_contracts::HistoryEntry, dedup: bool) {
+        let _ = self.tx.try_send(PersistenceCommand::RecordInputHistory {
+            entry,
+            dedup,
+            ack: None,
+        });
+    }
+
+    /// Record an input history entry, waiting for single-writer SQLite actor confirmation.
+    pub fn record_input_history_blocking(
+        &self,
+        entry: muta_contracts::HistoryEntry,
+        dedup: bool,
+    ) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .blocking_send(PersistenceCommand::RecordInputHistory {
+                entry,
+                dedup,
+                ack: Some(ack_tx),
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+    }
+
+    /// Save multiple input history entries synchronously, waiting for SQLite actor confirmation.
+    pub fn save_input_history_blocking(
+        &self,
+        entries: Vec<muta_contracts::HistoryEntry>,
+        dedup: bool,
+    ) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .blocking_send(PersistenceCommand::SaveInputHistory {
+                entries,
+                dedup,
+                ack: ack_tx,
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+    }
+
+    /// Clear all input history entries from SQLite.
+    pub fn clear_input_history_blocking(&self) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .blocking_send(PersistenceCommand::ClearInputHistory { ack: ack_tx })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+    }
+
     /// Open a lightweight read-only connection snapshot for querying.
     pub fn open_reader(&self) -> Result<DatabaseEngine> {
         DatabaseEngine::open(&self.db_path, self.blob_store.clone())
@@ -1824,5 +2150,86 @@ mod tests {
         // Idempotent: second call should be a no-op
         let second = engine.migrate_legacy_projects(&projects_dir);
         assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn test_input_history_crud_and_dedup() {
+        let engine = DatabaseEngine::open_in_memory(None).unwrap();
+
+        let e1 = muta_contracts::HistoryEntry::new(
+            "prompt 1".into(),
+            Some("sess-1".into()),
+            Some("/ws1".into()),
+            100,
+        );
+        let e2 = muta_contracts::HistoryEntry::new(
+            "prompt 2".into(),
+            Some("sess-1".into()),
+            Some("/ws1".into()),
+            200,
+        );
+
+        engine.record_input_history(&e1, true).unwrap();
+        engine.record_input_history(&e2, true).unwrap();
+
+        let loaded = engine.load_input_history(10).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text, "prompt 2");
+        assert_eq!(loaded[1].text, "prompt 1");
+
+        // Dedup = true: recording "prompt 1" again with newer timestamp moves it to top
+        let e1_new = muta_contracts::HistoryEntry::new(
+            "prompt 1".into(),
+            Some("sess-2".into()),
+            Some("/ws2".into()),
+            300,
+        );
+        engine.record_input_history(&e1_new, true).unwrap();
+
+        let loaded = engine.load_input_history(10).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text, "prompt 1");
+        assert_eq!(loaded[0].created_at_ms, 300);
+        assert_eq!(loaded[0].session_id.as_deref(), Some("sess-2"));
+        assert_eq!(loaded[1].text, "prompt 2");
+
+        // Batch save
+        let batch = vec![
+            muta_contracts::HistoryEntry::new("batch 1".into(), None, None, 400),
+            muta_contracts::HistoryEntry::new("batch 2".into(), None, None, 500),
+        ];
+        engine.save_input_history(&batch, true).unwrap();
+        let loaded = engine.load_input_history(10).unwrap();
+        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded[0].text, "batch 2");
+        assert_eq!(loaded[1].text, "batch 1");
+
+        // Clear input history
+        engine.clear_input_history().unwrap();
+        let loaded = engine.load_input_history(10).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_migrate_legacy_history_files() {
+        let dir = tempdir().unwrap();
+        let legacy_file = dir.path().join("history.json");
+        let entries = vec![
+            muta_contracts::HistoryEntry::new("prompt 1".into(), None, None, 1000),
+            muta_contracts::HistoryEntry::new("prompt 2".into(), None, None, 2000),
+        ];
+        std::fs::write(&legacy_file, serde_json::to_string(&entries).unwrap()).unwrap();
+        assert!(legacy_file.exists());
+
+        let engine = DatabaseEngine::open_in_memory(None).unwrap();
+        let content = std::fs::read_to_string(&legacy_file).unwrap();
+        let parsed: Vec<muta_contracts::HistoryEntry> = serde_json::from_str(&content).unwrap();
+        engine.save_input_history(&parsed, true).unwrap();
+        std::fs::remove_file(&legacy_file).unwrap();
+
+        assert!(!legacy_file.exists());
+        let loaded = engine.load_input_history(10).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text, "prompt 2");
     }
 }

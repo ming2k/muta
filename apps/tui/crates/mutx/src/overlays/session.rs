@@ -107,9 +107,7 @@ pub fn draw_sessions_modal(
             [FooterHint::key_always(crate::keymap::Key::ESC, "list")];
         let body = match session_detail {
             None => {
-                const SPINNER_FRAMES: [&str; 10] =
-                    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-                let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+                let spin = theme.glyphs.spinner_frame(spinner_phase);
                 vec![
                     Line::from(""),
                     Line::from(vec![
@@ -152,9 +150,7 @@ pub fn draw_sessions_modal(
 
     if sessions.is_empty() {
         let body = if sessions_loading {
-            const SPINNER_FRAMES: [&str; 10] =
-                ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+            let spin = theme.glyphs.spinner_frame(spinner_phase);
             vec![
                 Line::from(""),
                 Line::from(vec![

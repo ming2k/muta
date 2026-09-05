@@ -147,11 +147,11 @@ impl App {
     /// Seed [`Self::session_history_backfill`] with the **viewed
     /// transcript's** genuine chat prompts, so the inline ↑/↓ recall reflects
     /// the conversation the user is actually looking at rather than only what
-    /// this client's `history.json` happens to contain.
+    /// this client's database happens to contain.
     ///
     /// This is the resume path: `ConversationReplaced` hands the TUI another
     /// session's transcript, and prompts typed into that session by a
-    /// *different* client (or before this `history.json` existed) were never
+    /// *different* client (or before this session existed) were never
     /// recorded locally. Without the backfill, `↑` after a resume comes up
     /// empty even though the conversation visibly contains prompts. The
     /// initial startup transcript is backfilled the same way before the
@@ -166,8 +166,8 @@ impl App {
     /// row.
     ///
     /// The backfill is **derived state, never persisted**: transcript rows
-    /// already live in the session file (the durable source of truth,
-    /// ADR-0018), so writing them into `history.json` would duplicate the
+    /// already live in the session store (the durable source of truth),
+    /// so writing them into input history would duplicate the
     /// store and race the cross-process merge. Timestamps come from the
     /// transcript where available (`sent_at_ms`, falling back to `now_ms`
     /// for legacy rows so ordering stays stable).
@@ -220,8 +220,8 @@ impl App {
     /// right away rather than only on exit.
     ///
     /// `images` / `text_pastes` are the attachments staged behind the chips
-    /// in `entry` at send time. They are **not** persisted (history.json is
-    /// rebuildable cosmetic telemetry, never conversation data — ADR-0018)
+    /// in `entry` at send time. They are **not** persisted into SQLite (input history is
+    /// rebuildable cosmetic telemetry, never conversation data)
     /// but are cached in memory keyed by the entry's `(text, session_id)`
     /// identity, so the ↑/↓ and Ctrl+R recall paths can restore a just-sent
     /// or interrupted message's attachments instead of shipping a bare chip

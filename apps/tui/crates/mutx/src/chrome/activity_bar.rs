@@ -5,7 +5,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{
-    classify_liveness, dot_color, format_elapsed, spinner_glyph, truncate_for_bar,
+    classify_liveness, dot_color, format_elapsed, truncate_for_bar,
 };
 use crate::components::keycap::keycap_warn_span;
 use crate::keymap::Key;
@@ -47,7 +47,8 @@ pub fn draw_activity_bar(
         round_started_at.map(|started| format!(" [{}]", format_elapsed(started.elapsed())));
     let full_interrupt_width = UnicodeWidthStr::width("Esc Esc interrupt");
     let key_interrupt_width = UnicodeWidthStr::width("Esc Esc");
-    let prefix_width = UnicodeWidthStr::width(" ● ");
+    let dot = theme.glyphs.dot;
+    let prefix_width = UnicodeWidthStr::width(format!(" {dot} ").as_str());
     const MIN_STATUS_WIDTH: usize = 4;
     const MIN_TINY_STATUS_WIDTH: usize = 1;
     const SEGMENT_GAP: usize = 2;
@@ -129,7 +130,7 @@ pub fn draw_activity_bar(
     let glyph_style = Style::default().fg(glyph_color);
 
     let mut left_spans: Vec<Span<'static>> = Vec::with_capacity(6);
-    left_spans.push(Span::styled(format!(" {} ", spinner_glyph()), glyph_style));
+    left_spans.push(Span::styled(format!(" {} ", theme.glyphs.dot), glyph_style));
     left_spans.push(Span::styled(status_display, lead_style));
 
     match chosen_clause {

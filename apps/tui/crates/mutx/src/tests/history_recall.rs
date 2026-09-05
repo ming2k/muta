@@ -852,8 +852,8 @@ async fn record_input_history_skips_slash_commands_by_default() {
 }
 
 /// `App`'s test constructor keeps disk persistence off, so exercising the
-/// record path must never touch the *real* `history.json` under
-/// `$XDG_STATE_HOME` (regression: `record_input_history` used to merge
+/// record path must never touch the *real* database under
+/// `$XDG_DATA_HOME` (regression: `record_input_history` used to merge
 /// synthetic `prompt N` rows straight into the user's file). The write
 /// happens on a `spawn_blocking` thread, so poll briefly for a stray write
 /// to land.
@@ -864,8 +864,11 @@ async fn test_app_does_not_touch_disk_history() {
         !app.input_history_persist,
         "test-constructed App must default to no disk persistence"
     );
-    let path = crate::paths::get().history_file();
-    let before = std::fs::read(&path).ok();
+    let db_path = muta_persistence::paths::get().db_file();
+    let before_count = muta_persistence::db::DatabaseEngine::open(&db_path, None)
+        .and_then(|e| e.load_input_history(10_000))
+        .map(|entries| entries.len())
+        .unwrap_or(0);
 
     app.current_session_id = "session-a".to_string();
     for i in 0..5 {
@@ -873,12 +876,15 @@ async fn test_app_does_not_touch_disk_history() {
     }
 
     // Give any (buggy) spawned writer a moment, then assert the real history
-    // file is byte-for-byte unchanged (and not newly created).
+    // count is unchanged.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let after = std::fs::read(&path).ok();
+    let after_count = muta_persistence::db::DatabaseEngine::open(&db_path, None)
+        .and_then(|e| e.load_input_history(10_000))
+        .map(|entries| entries.len())
+        .unwrap_or(0);
     assert_eq!(
-        before, after,
-        "the real history file at {path:?} changed while running with persistence disabled"
+        before_count, after_count,
+        "the real sqlite database input_history changed while running with persistence disabled"
     );
 }
 

@@ -34,7 +34,7 @@ impl ColorSchemePreset {
 }
 
 /// Built-in palettes. Order is the UI order.
-pub const COLOR_SCHEMES: [ColorSchemePreset; 5] = [
+pub const COLOR_SCHEMES: [ColorSchemePreset; 7] = [
     ColorSchemePreset::static_preset("zen", "Zen", "Quiet charcoal with sage accents", false),
     ColorSchemePreset::static_preset(
         "midnight",
@@ -53,6 +53,18 @@ pub const COLOR_SCHEMES: [ColorSchemePreset; 5] = [
         "paper",
         "Paper",
         "Warm light surface for bright terminals",
+        false,
+    ),
+    ColorSchemePreset::static_preset(
+        "ansi16",
+        "ANSI 16",
+        "High-contrast 16-color ANSI palette for consoles",
+        false,
+    ),
+    ColorSchemePreset::static_preset(
+        "monochrome",
+        "Monochrome",
+        "High-contrast monochrome palette for DEC VT100 / getty",
         false,
     ),
 ];
@@ -188,6 +200,8 @@ pub struct Theme {
     pub keycap_label_fg: Color,
     pub keycap_accent_fg: Color,
     pub keycap_warn_fg: Color,
+    /// Typography and glyph set (ADR-0180).
+    pub glyphs: mutx_engine::GlyphSet,
 }
 
 impl Default for Theme {
@@ -240,6 +254,7 @@ impl Default for Theme {
             keycap_label_fg: DEFAULT_KEYCAP_LABEL_FG,
             keycap_accent_fg: DEFAULT_KEYCAP_ACCENT_FG,
             keycap_warn_fg: DEFAULT_KEYCAP_WARN_FG,
+            glyphs: mutx_engine::UNICODE_GLYPHS,
         }
     }
 }
@@ -249,6 +264,137 @@ impl Default for Theme {
 /// names, so the palette can be retuned in one place. The fields stay `pub`
 /// for `Theme::default()` construction; new rendering code should prefer these.
 impl Theme {
+    /// High-contrast 16-color ANSI theme for ECMA-48 terminals and Linux virtual console (ADR-0180).
+    pub fn ansi16() -> Self {
+        Self {
+            user_fg: Color::White,
+            error_fg: Color::LightRed,
+            system_fg: Color::Gray,
+            code_fg: Color::White,
+            code_bg: Color::Reset,
+            heading_fg: Color::LightYellow,
+            quote_fg: Color::Yellow,
+            dim_fg: Color::DarkGray,
+            selected_bg: Color::DarkGray,
+
+            app_bg: Color::Reset,
+            text: Color::White,
+            text_muted: Color::Gray,
+            text_hover: Color::LightYellow,
+            affordance_fg: Color::Yellow,
+            panel_bg: Color::Reset,
+            input_bg_active: Color::Reset,
+            input_bg_inactive: Color::Reset,
+            user_panel_bg: Color::Reset,
+            user_panel_bg_queued: Color::Reset,
+            element_bg: Color::Reset,
+            menu_bg: Color::Reset,
+            backdrop: Color::Reset,
+            modal_dim_factor: 1.0,
+            primary: Color::Cyan,
+            warning: Color::LightYellow,
+            success: Color::LightGreen,
+            info: Color::LightBlue,
+            diff_add_bg: Color::Reset,
+            diff_del_bg: Color::Reset,
+            diff_add_hl: Color::LightGreen,
+            diff_del_hl: Color::LightRed,
+            command_band_bg: Color::Reset,
+            command_band_bg_hover: Color::DarkGray,
+
+            caret_fg: Color::White,
+            input_selection_bg: Color::DarkGray,
+            input_placeholder_fg: Color::Gray,
+            crate_fg: Color::LightBlue,
+            crate_bg: Color::Reset,
+            keycap_fg: Color::White,
+            keycap_bg: Color::Reset,
+            keycap_label_fg: Color::Gray,
+            keycap_accent_fg: Color::LightGreen,
+            keycap_warn_fg: Color::LightYellow,
+            glyphs: mutx_engine::UNICODE_GLYPHS,
+        }
+    }
+
+    /// High-contrast monochrome theme for DEC VT100, physical serial lines, and getty sessions (ADR-0180).
+    /// All colors resolve to [`Color::Reset`] to prevent color escapes, with visual
+    /// hierarchy expressed strictly through reverse video, underline, and borders.
+    pub fn monochrome() -> Self {
+        Self {
+            user_fg: Color::Reset,
+            error_fg: Color::Reset,
+            system_fg: Color::Reset,
+            code_fg: Color::Reset,
+            code_bg: Color::Reset,
+            heading_fg: Color::Reset,
+            quote_fg: Color::Reset,
+            dim_fg: Color::Reset,
+            selected_bg: Color::Reset,
+
+            app_bg: Color::Reset,
+            text: Color::Reset,
+            text_muted: Color::Reset,
+            text_hover: Color::Reset,
+            affordance_fg: Color::Reset,
+            panel_bg: Color::Reset,
+            input_bg_active: Color::Reset,
+            input_bg_inactive: Color::Reset,
+            user_panel_bg: Color::Reset,
+            user_panel_bg_queued: Color::Reset,
+            element_bg: Color::Reset,
+            menu_bg: Color::Reset,
+            backdrop: Color::Reset,
+            modal_dim_factor: 1.0,
+            primary: Color::Reset,
+            warning: Color::Reset,
+            success: Color::Reset,
+            info: Color::Reset,
+            diff_add_bg: Color::Reset,
+            diff_del_bg: Color::Reset,
+            diff_add_hl: Color::Reset,
+            diff_del_hl: Color::Reset,
+            command_band_bg: Color::Reset,
+            command_band_bg_hover: Color::Reset,
+
+            caret_fg: Color::Reset,
+            input_selection_bg: Color::Reset,
+            input_placeholder_fg: Color::Reset,
+            crate_fg: Color::Reset,
+            crate_bg: Color::Reset,
+            keycap_fg: Color::Reset,
+            keycap_bg: Color::Reset,
+            keycap_label_fg: Color::Reset,
+            keycap_accent_fg: Color::Reset,
+            keycap_warn_fg: Color::Reset,
+            glyphs: mutx_engine::ASCII_GLYPHS,
+        }
+    }
+
+    /// Resolve theme with adaptive fallback to terminal capability profile when using default settings.
+    pub fn resolve_with_profile(
+        name: &str,
+        custom: &ColorSchemeConfig,
+        workspace: Option<&Path>,
+        profile: &mutx_engine::TerminalProfile,
+    ) -> Self {
+        let trimmed = name.trim().to_ascii_lowercase();
+        // If user explicitly chose a scheme other than default/zen, honor their choice.
+        let mut theme = if !trimmed.is_empty() && trimmed != "zen" && trimmed != "default" {
+            Self::from_color_scheme_with_workspace(name, custom, workspace)
+        } else {
+            // Adaptive default based on profile
+            match profile.color_standard {
+                mutx_engine::ColorStandard::Monochrome => Self::monochrome(),
+                mutx_engine::ColorStandard::Ansi16 => Self::ansi16(),
+                mutx_engine::ColorStandard::DirectColor => {
+                    Self::from_color_scheme_with_workspace(name, custom, workspace)
+                }
+            }
+        };
+        theme.glyphs = mutx_engine::GlyphSet::for_standard(profile.charset_standard);
+        theme
+    }
+
     /// Return all available color schemes: built-ins + custom theme files across workspace and user locations.
     pub fn available_color_schemes() -> Vec<ColorSchemePreset> {
         Self::available_color_schemes_with_workspace(None)
@@ -377,6 +523,8 @@ impl Theme {
                 warning: Color::Rgb(157, 105, 31),
                 error: Color::Rgb(177, 63, 58),
             }),
+            "ansi16" => Self::ansi16(),
+            "monochrome" | "mono" => Self::monochrome(),
             "custom" => Self::default(),
             "zen" => Self::default(),
             other => {
@@ -616,6 +764,7 @@ impl Theme {
             keycap_label_fg: mix(muted, text, 0.45),
             keycap_accent_fg: mix(accent, text, 0.25),
             keycap_warn_fg: mix(warning, text, 0.15),
+            glyphs: mutx_engine::UNICODE_GLYPHS,
         }
     }
 
@@ -1144,6 +1293,11 @@ hover_bg = "#282828"
         const MIN_STEP: f32 = 4.0;
         let custom = ColorSchemeConfig::default();
         for scheme in &COLOR_SCHEMES {
+            if scheme.id == "ansi16" || scheme.id == "monochrome" {
+                // ADR-0180: Console/Monochrome profiles anchor backgrounds to Reset
+                // and establish distinction via borders/reverse video rather than RGB luminance.
+                continue;
+            }
             let theme = Theme::from_color_scheme(&scheme.id, &custom);
             let active = theme.input_surface();
             let inactive = theme.input_surface_inactive();
@@ -1186,6 +1340,11 @@ hover_bg = "#282828"
         const MIN_STEP: f32 = 2.0;
         let custom = ColorSchemeConfig::default();
         for scheme in &COLOR_SCHEMES {
+            if scheme.id == "ansi16" || scheme.id == "monochrome" {
+                // ADR-0180: Console/Monochrome profiles anchor backgrounds to Reset
+                // and establish distinction via borders/reverse video rather than RGB luminance.
+                continue;
+            }
             let theme = Theme::from_color_scheme(&scheme.id, &custom);
             let idle = theme.command_surface();
             let hover = theme.command_surface_hover();
@@ -1290,5 +1449,35 @@ warn_fg = "#ff8800"
         assert_eq!(theme.keycap_label(), Color::Rgb(170, 170, 170));
         assert_eq!(theme.keycap_accent(), Color::Rgb(0, 255, 204));
         assert_eq!(theme.keycap_warn(), Color::Rgb(255, 136, 0));
+    }
+
+    #[test]
+    fn test_ansi16_and_monochrome_presets() {
+        let ansi = Theme::from_color_scheme("ansi16", &ColorSchemeConfig::default());
+        assert_eq!(ansi.app_bg, Color::Reset);
+        assert_eq!(ansi.text, Color::White);
+        assert_eq!(ansi.error_fg, Color::LightRed);
+
+        let mono = Theme::from_color_scheme("monochrome", &ColorSchemeConfig::default());
+        assert_eq!(mono.app_bg, Color::Reset);
+        assert_eq!(mono.text, Color::Reset);
+        assert_eq!(mono.error_fg, Color::Reset);
+    }
+
+    #[test]
+    fn test_resolve_with_profile_adapts_defaults() {
+        let vt100_prof = mutx_engine::TerminalProfile::dec_vt100_monochrome();
+        let theme = Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &vt100_prof);
+        assert_eq!(theme.app_bg, Color::Reset);
+        assert_eq!(theme.text, Color::Reset);
+
+        let linux_prof = mutx_engine::TerminalProfile::ecma48_ansi16();
+        let theme_linux = Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &linux_prof);
+        assert_eq!(theme_linux.app_bg, Color::Reset);
+        assert_eq!(theme_linux.text, Color::White);
+
+        // Explicit non-default choice is preserved
+        let theme_nord = Theme::resolve_with_profile("nord", &ColorSchemeConfig::default(), None, &vt100_prof);
+        assert_ne!(theme_nord.text, Color::Reset);
     }
 }

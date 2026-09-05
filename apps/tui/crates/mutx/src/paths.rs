@@ -38,11 +38,6 @@ impl MutxPaths {
     pub fn logo_file(&self) -> PathBuf {
         self.config_dir.join("logo.txt")
     }
-
-    /// Prompt input history: `$XDG_STATE_HOME/mutx/history.json`.
-    pub fn history_file(&self) -> PathBuf {
-        self.state_dir.join("history.json")
-    }
 }
 
 static PATHS: OnceLock<MutxPaths> = OnceLock::new();
