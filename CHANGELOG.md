@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.15] - 2026-09-07
+
+### Added
+
+- **Terminal capability profiles and adaptive degradation (ADR-0180).** Introduced standards-based
+  terminal profiles (`Modern`, `Standard`, `Ascii`, `Ghostty`, `Kitty`, `WezTerm`, `Itm2`) and adaptive
+  glyph and styling degradation in `mutx-engine`.
+
+### Changed
+
+- **Authoritative SQLite prompt input history (ADR-0168).** Added database schema v4 migration
+  introducing an authoritative `input_history` table in `muta-persistence` with session attribution,
+  text deduplication, cap pruning, and seamless migration from legacy JSON input history.
+
+
 ## [0.38.14] - 2026-09-07
 
 ### Changed
