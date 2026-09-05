@@ -10,11 +10,21 @@
 
 use async_trait::async_trait;
 use muta_contracts::{Tool, ToolOutput};
-use serde_json::json;
+use muta_tool_derive::ToolSchema;
+use serde::Deserialize;
 
 use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, resolve_workspace_path, workspace_base,
 };
+
+#[derive(ToolSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadImageArgs {
+    #[tool(
+        desc = "Path to the image file (PNG, JPEG, GIF, WebP); relative paths use the primary workspace"
+    )]
+    path: String,
+}
 
 /// Read an image file so the model can see it.
 ///
@@ -53,17 +63,11 @@ impl Tool for ReadImageTool {
         "read_image"
     }
     fn description(&self) -> &str {
-        "Read an image file (PNG, JPEG, GIF, WebP) to view its contents visually. \
-         Large images are automatically resized. Use `read_text` for text files."
+        "Read an image file (PNG, JPEG, GIF, WebP) to inspect visual content. \
+         Large images are automatically resized."
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Absolute or relative path to the image file" }
-            },
-            "required": ["path"]
-        })
+        ReadImageArgs::parameters_schema()
     }
     /// Vision-only: this tool feeds the model an image part, which a text-only
     /// model strips before the request hits the wire. The pool resolver drops
@@ -76,9 +80,9 @@ impl Tool for ReadImageTool {
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
-        let args: serde_json::Value =
+        let args: ReadImageArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let path = args["path"].as_str().ok_or("Missing 'path'")?;
+        let path = &args.path;
 
         // Validate the extension up front so a non-image path fails fast
         // without touching the filesystem, and a missing image fails with a

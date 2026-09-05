@@ -312,7 +312,7 @@ click_outside_dismiss = true
 expand_auto_scroll = false
 
 [default_expanded]
-edit_file = true
+edit_text = true
 execute_command = true
 thinking = false
 

@@ -32,7 +32,7 @@ impl FileOperations {
                             self.read.insert(p.to_string());
                         }
                     }
-                    "write_file" | "edit_file" => {
+                    "write_file" | "edit_text" => {
                         if let Some(p) = path
                             && !p.is_empty()
                         {
@@ -121,7 +121,7 @@ mod tests {
         let mut msg2 = Message::new(Role::Assistant, "I will edit a file");
         msg2.tool_calls = Some(vec![ToolCall::new(
             "call2",
-            "edit_file",
+            "edit_text",
             r#"{"path":"src/lib.rs"}"#,
         )]);
         tracker.extract_from_message(&msg2);

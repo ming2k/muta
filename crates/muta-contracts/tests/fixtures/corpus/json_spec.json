@@ -5,7 +5,7 @@
     "streaming": true,
     "tools": [
       {
-        "name": "edit_file",
+        "name": "edit_text",
         "description": "Replace a unique block of text with new_string in an existing file.",
         "parameters": {
           "type": "object",

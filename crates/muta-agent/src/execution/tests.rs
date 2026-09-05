@@ -1,7 +1,7 @@
 //! Comprehensive unit tests for Capability Seams and Middlewares.
 
 use super::*;
-use crate::tools::{EditFileTool, ListDirTool, ReadTextTool, WriteFileTool};
+use crate::tools::{EditTextTool, ListDirTool, ReadTextTool, WriteFileTool};
 use muta_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 use muta_contracts::{Tool, ToolOutput};
 use std::path::PathBuf;
@@ -111,8 +111,8 @@ async fn tools_running_on_in_memory_execution_environment() {
         other => panic!("expected Code output, got {:?}", other),
     }
 
-    // 3. EditFileTool edits file in memory
-    let edit_tool = EditFileTool::with_env(env.clone());
+    // 3. EditTextTool edits file in memory
+    let edit_tool = EditTextTool::with_env(env.clone());
     let edit_res = edit_tool
         .call_structured(r#"{"path":"lib.rs","old_string":"a + b","new_string":"a + b + 1"}"#)
         .await

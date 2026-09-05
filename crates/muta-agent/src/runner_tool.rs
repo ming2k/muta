@@ -1798,12 +1798,12 @@ mod tests {
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::ExecuteCommandTool::new(None)),
             std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
-            std::sync::Arc::new(crate::tools::EditFileTool::new(None)),
+            std::sync::Arc::new(crate::tools::EditTextTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             runner_code_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);
 
-        // RUNNER_CODE admits bash, write_file, edit_file, and the read tools; it
+        // RUNNER_CODE admits bash, write_file, edit_text, and the read tools; it
         // excludes the runner dispatch tool itself (recursion).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
@@ -1812,7 +1812,7 @@ mod tests {
         assert!(names.contains("read_text"));
         assert!(names.contains("run_command"));
         assert!(names.contains("write_file"));
-        assert!(names.contains("edit_file"));
+        assert!(names.contains("edit_text"));
         assert!(!names.contains("runner_code"), "recursion must be excluded");
         assert!(!names.contains("spawn_runner"));
 

@@ -9,7 +9,9 @@ use crate::tools::file_search::{
     build_file_walker, build_include_matcher, include_allows, resolve_search_root, search_limit,
     search_path_argument,
 };
-use crate::tools::helpers::{WorkspaceBase, env_from_root, execution_environment};
+use crate::tools::helpers::{
+    WorkspaceBase, deserialize_optional_string_or_vec, env_from_root, execution_environment,
+};
 
 /// Recursive file discovery over ripgrep-compatible ignore and glob rules.
 pub struct FindFilesTool {
@@ -31,15 +33,19 @@ impl FindFilesTool {
 #[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FindFilesArgs {
-    #[tool(desc = "Path globs relative to path; pass alternatives as separate array items (OR)")]
-    patterns: Vec<String>,
+    #[tool(
+        desc = "Path globs to match files (e.g. [\"*.rs\"], [\"src/**\"]). Alternatives are separate array items (OR). If omitted, defaults to [\"*\"] (matches all files)."
+    )]
+    #[serde(default, alias = "include", deserialize_with = "deserialize_optional_string_or_vec")]
+    patterns: Option<Vec<String>>,
     #[tool(desc = "Directory to search; relative paths use the primary workspace (default '.')")]
     path: Option<String>,
-    #[tool(desc = "Path globs to exclude from the result")]
+    #[tool(desc = "Path globs to exclude from the result (e.g. [\"target/**\", \"*.log\"])")]
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]
     exclude: Option<Vec<String>>,
-    #[tool(desc = "Optional maximum depth below path")]
+    #[tool(desc = "Optional maximum directory depth below path (>= 1)")]
     max_depth: Option<usize>,
-    #[tool(desc = "Maximum results (default 200)")]
+    #[tool(desc = "Maximum results cap (default 200)")]
     limit: Option<u64>,
 }
 
@@ -50,7 +56,7 @@ impl Tool for FindFilesTool {
     }
 
     fn description(&self) -> &str {
-        "Find files whose paths match one or more globs. Patterns are ORed; project ignore rules apply."
+        "Find files recursively by path glob patterns. Globs match file paths relative to path; alternatives are ORed. Project ignore rules (.gitignore) apply."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -64,12 +70,11 @@ impl Tool for FindFilesTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: FindFilesArgs = serde_json::from_str(arguments)
             .map_err(|error| format!("Invalid arguments: {error}"))?;
-        if args.patterns.is_empty() {
-            return Err("'patterns' must contain at least one glob".to_string());
-        }
         if args.max_depth == Some(0) {
             return Err("'max_depth' must be at least 1".to_string());
         }
+        let patterns = args.patterns.unwrap_or_default();
+        let has_patterns = !patterns.is_empty();
         let limit = search_limit(args.limit)?;
         let path = args.path.as_deref().unwrap_or(".");
         let exclude = args.exclude.unwrap_or_default();
@@ -87,7 +92,7 @@ impl Tool for FindFilesTool {
 
         // Include globs filter *after* the walker's project-ignore pruning, so
         // a whitelisting pattern (`*.log`) cannot resurrect a gitignored file.
-        let include = build_include_matcher(&search_root, &args.patterns, &exclude)?;
+        let include = build_include_matcher(&search_root, &patterns, &exclude)?;
         let walker = build_file_walker(&search_root, &exclude, args.max_depth)?.build();
         let output = tokio::task::spawn_blocking(move || {
             let mut results = Vec::new();
@@ -103,7 +108,7 @@ impl Tool for FindFilesTool {
                 if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_file()) {
                     continue;
                 }
-                if !include_allows(&include, true, &search_root, entry.path()) {
+                if !include_allows(&include, has_patterns, &search_root, entry.path()) {
                     continue;
                 }
                 let display = entry
@@ -184,6 +189,31 @@ mod tests {
         assert!(result.contains(".agents/settings.toml"));
         assert!(!result.contains("ignored.log"));
         assert!(!result.contains("target/generated.rs"));
+    }
+
+    #[tokio::test]
+    async fn defaults_to_all_files_when_patterns_omitted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("README.md"), "# Hello").unwrap();
+
+        let tool = FindFilesTool::new(Some(root.to_path_buf()));
+        let result = tool.call(r#"{"path":"."}"#).await.unwrap();
+
+        assert!(result.contains("src/main.rs"));
+        assert!(result.contains("README.md"));
+
+        // Single string pattern: "patterns": "*.rs"
+        let single = tool.call(r#"{"patterns":"*.rs"}"#).await.unwrap();
+        assert!(single.contains("src/main.rs"));
+        assert!(!single.contains("README.md"));
+
+        // Alias "include": ["*.rs"]
+        let alias = tool.call(r#"{"include":["*.rs"]}"#).await.unwrap();
+        assert!(alias.contains("src/main.rs"));
+        assert!(!alias.contains("README.md"));
     }
 
     #[tokio::test]

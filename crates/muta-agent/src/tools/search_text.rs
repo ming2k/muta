@@ -10,7 +10,9 @@ use crate::tools::file_search::{
     build_file_walker, build_include_matcher, include_allows, resolve_search_root, search_limit,
     search_path_argument,
 };
-use crate::tools::helpers::{WorkspaceBase, env_from_root, execution_environment};
+use crate::tools::helpers::{
+    WorkspaceBase, deserialize_optional_string_or_vec, env_from_root, execution_environment,
+};
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
 const SEARCH_MAX_BYTES: usize = 32 * 1024;
@@ -36,21 +38,27 @@ impl SearchTextTool {
 #[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchTextArgs {
-    #[tool(desc = "Exact text to search for, or regex pattern when regex is true")]
+    #[tool(
+        desc = "Exact text to search for (default), or regular expression when regex: true."
+    )]
     query: String,
     #[tool(
-        desc = "File or directory to search; relative paths use the primary workspace (default '.')"
+        desc = "Directory or file to search; relative paths use the primary workspace (default '.')"
     )]
     path: Option<String>,
-    #[tool(desc = "File globs relative to path; pass alternatives as separate array items (OR)")]
+    #[tool(
+        desc = "File path globs relative to path to include (e.g. [\"*.rs\"]). Alternatives are separate array items (OR)."
+    )]
+    #[serde(default, alias = "patterns", deserialize_with = "deserialize_optional_string_or_vec")]
     include: Option<Vec<String>>,
-    #[tool(desc = "File globs to exclude from the search")]
+    #[tool(desc = "File path globs to exclude from search (e.g. [\"target/**\", \"*.log\"]).")]
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]
     exclude: Option<Vec<String>>,
-    #[tool(desc = "Treat query as a regular expression instead of literal text (default false)")]
+    #[tool(desc = "Treat query as a regular expression instead of literal text (default false).")]
     regex: Option<bool>,
-    #[tool(desc = "Context lines around each match (default 0)")]
+    #[tool(desc = "Context lines around each match (default 0, max 10).")]
     context: Option<u64>,
-    #[tool(desc = "Maximum returned lines (default 200)")]
+    #[tool(desc = "Maximum returned matching lines (default 200).")]
     limit: Option<u64>,
 }
 
@@ -61,7 +69,7 @@ impl Tool for SearchTextTool {
     }
 
     fn description(&self) -> &str {
-        "Search text in files with exact text (default) or regex pattern. Returns path:line:content matches."
+        "Search file contents recursively for literal text (default) or regular expressions (when regex: true). Returns path:line:content matches."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -156,8 +164,15 @@ fn native_search(params: NativeSearchParams<'_>) -> Result<String, String> {
     } else {
         regex::escape(query)
     };
-    let regex = regex::Regex::new(&expression)
-        .map_err(|error| format!("Invalid regular expression: {error}"))?;
+    let regex = regex::Regex::new(&expression).map_err(|error| {
+        if regex {
+            format!(
+                "Invalid regular expression: {error}. If you intended to search for exact literal text with special characters, omit 'regex' or set 'regex': false."
+            )
+        } else {
+            format!("Invalid search expression: {error}")
+        }
+    })?;
     // Include globs filter after project-ignore pruning (see file_search.rs).
     let include_matcher = build_include_matcher(search_root, include, exclude)?;
     let walker = build_file_walker(search_root, exclude, None)?.build();
@@ -422,5 +437,47 @@ mod tests {
             .await
             .unwrap();
         assert!(res_unconfined.contains("outside.txt:1:secret_content_123"));
+    }
+
+    #[tokio::test]
+    async fn invalid_regex_returns_actionable_guidance() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let tool = SearchTextTool::new(Some(ws_dir.path().to_path_buf()));
+        let err = tool
+            .call(r#"{"query":"[invalid","regex":true}"#)
+            .await
+            .unwrap_err();
+        assert!(err.contains("Invalid regular expression:"), "{err}");
+        assert!(
+            err.contains("If you intended to search for exact literal text"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn supports_string_or_array_and_patterns_alias() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let root = ws_dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn hello() {}").unwrap();
+        std::fs::write(root.join("notes.txt"), "hello world").unwrap();
+
+        let tool = SearchTextTool::new(Some(root.to_path_buf()));
+
+        // Single string include: "include": "*.rs"
+        let res_single = tool
+            .call(r#"{"query":"hello","include":"*.rs"}"#)
+            .await
+            .unwrap();
+        assert!(res_single.contains("src/main.rs"));
+        assert!(!res_single.contains("notes.txt"));
+
+        // Alias "patterns": ["*.rs"]
+        let res_alias = tool
+            .call(r#"{"query":"hello","patterns":["*.rs"]}"#)
+            .await
+            .unwrap();
+        assert!(res_alias.contains("src/main.rs"));
+        assert!(!res_alias.contains("notes.txt"));
     }
 }

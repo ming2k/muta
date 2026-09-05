@@ -26,22 +26,21 @@ pub struct FindFilesPresenter;
 
 impl ToolPresenter for FindFilesPresenter {
     fn summary(&self, view: &ToolView) -> String {
-        let patterns = view
-            .args
-            .get("patterns")
-            .and_then(serde_json::Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let selection = match patterns {
-            [] => "files".to_string(),
-            [pattern] => pattern
-                .as_str()
-                .map(|pattern| truncate(pattern, 48))
-                .unwrap_or_else(|| "files".to_string()),
-            [first, rest @ ..] => first
-                .as_str()
-                .map(|pattern| format!("{} +{}", truncate(pattern, 36), rest.len()))
-                .unwrap_or_else(|| format!("{} patterns", patterns.len())),
+        let val = view.args.get("patterns").or_else(|| view.args.get("include"));
+        let selection = match val {
+            Some(serde_json::Value::String(s)) => truncate(s, 48),
+            Some(serde_json::Value::Array(patterns)) => match patterns.as_slice() {
+                [] => "files".to_string(),
+                [pattern] => pattern
+                    .as_str()
+                    .map(|pattern| truncate(pattern, 48))
+                    .unwrap_or_else(|| "files".to_string()),
+                [first, rest @ ..] => first
+                    .as_str()
+                    .map(|pattern| format!("{} +{}", truncate(pattern, 36), rest.len()))
+                    .unwrap_or_else(|| format!("{} patterns", patterns.len())),
+            },
+            _ => "files".to_string(),
         };
         let path = view.str("path").unwrap_or(".");
         if path == "." {

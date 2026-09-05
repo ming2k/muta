@@ -112,7 +112,7 @@ impl Phase {
             // Historical primary-stream labels; today superseded by direct
             // delta stamping but kept folding for resilience.
             "responding" => Self::Answering,
-            "finalizing response" => Self::Finalizing,
+            "finalizing response" | "saving response" => Self::Finalizing,
             // Permission / ask_user gate. Displayed with attention styling.
             "awaiting permission" | "awaiting user" => Self::AwaitingUser,
             // The bar's own canonical verb phrases (historically produced by
@@ -159,7 +159,7 @@ fn tool_verb(name: &str) -> ToolVerb {
         }
         "search_text" => ToolVerb::Searching,
         "search_web" => ToolVerb::WebSearching,
-        "write_file" | "edit_file" => ToolVerb::Editing,
+        "write_file" | "edit_text" => ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => ToolVerb::UpdatingTasks,
         "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => ToolVerb::Delegating,

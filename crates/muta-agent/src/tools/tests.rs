@@ -341,7 +341,7 @@ mod tests {
             ),
         );
 
-        // 1. list_dir
+        // list_dir
         let list_tool = ListDirTool::with_env(env.clone());
         let list_sibling = list_tool
             .call(&serde_json::json!({ "path": "../optics" }).to_string())
@@ -353,7 +353,7 @@ mod tests {
             .await;
         assert!(list_unadmitted.is_err());
 
-        // 2. find_files
+        // find_files
         let find_tool = FindFilesTool::with_env(env.clone());
         let find_sibling = find_tool
             .call(&serde_json::json!({ "path": "../optics", "patterns": ["*.rs"] }).to_string())
@@ -365,7 +365,7 @@ mod tests {
             .await;
         assert!(find_unadmitted.is_err());
 
-        // 3. search_text
+        // search_text
         let search_tool = SearchTextTool::with_env(env.clone());
         let search_sibling = search_tool
             .call(&serde_json::json!({ "path": "../optics", "query": "optics" }).to_string())
@@ -377,7 +377,7 @@ mod tests {
             .await;
         assert!(search_unadmitted.is_err());
 
-        // 4. read_text
+        // read_text
         let read_tool = ReadTextTool::with_env(env.clone());
         let read_sibling = read_tool
             .call(&serde_json::json!({ "path": "../optics/src/lib.rs" }).to_string())
@@ -389,7 +389,7 @@ mod tests {
             .await;
         assert!(read_unadmitted.is_err());
 
-        // 5. write_file
+        // write_file
         let write_tool = WriteFileTool::with_env(env.clone());
         let write_sibling = write_tool.call(&serde_json::json!({ "path": "../optics/src/new.rs", "content": "// new optics file" }).to_string()).await.unwrap();
         assert!(write_sibling.contains("new.rs"));
@@ -401,8 +401,8 @@ mod tests {
             .await;
         assert!(write_unadmitted.is_err());
 
-        // 6. edit_file
-        let edit_tool = EditFileTool::with_env(env.clone());
+        // edit_text
+        let edit_tool = EditTextTool::with_env(env.clone());
         let edit_sibling = edit_tool.call(&serde_json::json!({ "path": "../optics/src/lib.rs", "old_string": "pub fn optics() {}", "new_string": "pub fn optics_v2() {}" }).to_string()).await.unwrap();
         assert!(edit_sibling.contains("Edited"));
         assert_eq!(

@@ -17,7 +17,7 @@ a threshold:
 |------|-----------|-------------------|----------|
 | `Read` | Admitted by every profile | Bypassed | `read_text`, `find_files`, `search_text` |
 | `Execute` | Admitted only above a `Read` ceiling | Prompted unless a cached `Always` rule matches | `execute_command` |
-| `Write` (default) | Admitted only by a `Write` ceiling or a `write_paths` grant, then scoped by `WriteScope` | Prompted unless a cached `Always` rule matches | `write_file`, `edit_file` |
+| `Write` (default) | Admitted only by a `Write` ceiling or a `write_paths` grant, then scoped by `WriteScope` | Prompted unless a cached `Always` rule matches | `write_file`, `edit_text` |
 
 The broker prompts for any tool above `Read` (`Execute` or `Write`). Envoy
 admission is by capability axis (ceiling + `write_paths` grant); a write tool

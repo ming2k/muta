@@ -28,9 +28,11 @@ impl ListDirTool {
 #[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListDirArgs {
-    #[tool(desc = "Directory to list; relative paths use the primary workspace (default '.')")]
+    #[tool(
+        desc = "Directory to list immediate children of; relative paths use the primary workspace (default '.')"
+    )]
     path: Option<String>,
-    #[tool(desc = "Maximum entries (default 200)")]
+    #[tool(desc = "Maximum entries cap (default 200)")]
     limit: Option<u64>,
 }
 

@@ -2,7 +2,7 @@
 
 Read and mutate files and directory listings. `read_text`, `read_image`,
 `find_files`, `list_dir`, and `search_text` are `Read`; `write_file` and
-`edit_file` are `Write`. Source: `crates/muta-agent/src/tools/`.
+`edit_text` are `Write`. Source: `crates/muta-agent/src/tools/`.
 
 Relative paths resolve from the primary workspace. An absolute path is
 accepted only when it is inside the primary or an explicitly admitted
@@ -27,7 +27,7 @@ work without configuring `[workspace].additional_roots`.
 
 Reads an image file (PNG, JPEG, GIF, WebP) and delivers it inline so a
 vision-capable model can see it. Large images are auto-resized to a sensible
-resolution before sending. For plain-text files use `read_text` instead.
+resolution before sending.
 
 The image is returned as a structured `ToolOutput::Image` and delivered to the
 model out-of-band: the tool result message carries a short text placeholder,
@@ -43,22 +43,22 @@ works across kimi / GLM / OpenAI / Gemini.
 | `path` | string | yes | File path |
 | `content` | string | yes | Full content; overwrites |
 
-## `edit_file`
+## `edit_text`
 
 | Parameter | Type | Required | Notes |
 |-----------|------|----------|-------|
-| `path` | string | yes | File path |
-| `old_string` | string | yes | Must exist verbatim |
-| `new_string` | string | yes | Replacement text |
+| `path` | string | yes | Path to text file; relative paths use primary workspace |
+| `old_string` | string | yes | Exact verbatim text block to replace; must match uniquely |
+| `new_string` | string | yes | Replacement text to insert in place of `old_string` |
 
 ## `find_files`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `patterns` | string array | yes | — | Path globs relative to `path`; alternatives are separate array items (OR) |
-| `path` | string | no | `.` | Directory to search |
-| `exclude` | string array | no | `[]` | Path globs to exclude |
-| `max_depth` | integer | no | unlimited | Maximum depth below `path` |
+| `patterns` | string or string array | no | `["*"]` | Path globs relative to `path` (e.g. `["*.rs"]`); alternatives are ORed. Accepts `include` as alias. Defaults to all files if omitted |
+| `path` | string | no | `.` | Directory to search; relative paths use primary workspace |
+| `exclude` | string or string array | no | `[]` | Path globs to exclude (e.g. `["target/**"]`) |
+| `max_depth` | integer | no | unlimited | Maximum depth below `path` (>= 1) |
 | `limit` | integer | no | `200` | Result cap; maximum `1000` |
 
 Globs use ripgrep-compatible gitignore semantics. A slashless glob matches a
@@ -71,10 +71,10 @@ prunes repository metadata, dependency, and build-output directories.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `query` | string | yes | — | Exact text to search for, or regex pattern when `regex` is true |
-| `path` | string | no | `.` | File or directory to search |
-| `include` | string array | no | `[]` | File globs relative to `path`; alternatives are separate array items (OR) |
-| `exclude` | string array | no | `[]` | File globs to exclude |
+| `query` | string | yes | — | Exact text to search for (default), or regex pattern when `regex` is true |
+| `path` | string | no | `.` | Directory or file to search; relative paths use primary workspace |
+| `include` | string or string array | no | `[]` | File globs relative to `path` (e.g. `["*.rs"]`). Accepts `patterns` as alias |
+| `exclude` | string or string array | no | `[]` | File globs to exclude |
 | `regex` | boolean | no | `false` | Treat query as regular expression instead of literal text |
 | `context` | integer | no | `0` | Context lines per match; maximum `10` |
 | `limit` | integer | no | `200` | Returned-line cap; maximum `1000` |

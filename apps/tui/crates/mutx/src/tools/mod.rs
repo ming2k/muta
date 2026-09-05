@@ -16,7 +16,7 @@
 
 mod ask_user;
 mod diff;
-mod edit_file;
+mod edit_text;
 mod execute_command;
 mod fallback;
 mod meta;
@@ -194,8 +194,8 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "ask_user" => &ask_user::AskUserPresenter,
         "read_text" => &read_text::ReadPresenter,
         "read_image" => &read_image::ReadImagePresenter,
-        "edit_file" => &edit_file::EditPresenter,
-        "write_file" => &edit_file::WritePresenter,
+        "edit_text" => &edit_text::EditPresenter,
+        "write_file" => &edit_text::WritePresenter,
         "run_command" | "execute_command" | "bash" => &execute_command::ExecuteCommandPresenter,
         "find_files" => &search::FindFilesPresenter,
         "list_dir" => &search::ListDirPresenter,
@@ -267,7 +267,7 @@ pub fn diff_hunks_for(name: &str, arguments: &str) -> Vec<DiffHunk> {
     };
     let get = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or("");
     match name {
-        "edit_file" => diff::line_diff_hunks(get("old_string"), get("new_string"), 0),
+        "edit_text" => diff::line_diff_hunks(get("old_string"), get("new_string"), 0),
         "write_file" => diff::line_diff_hunks("", get("content"), 0),
         _ => Vec::new(),
     }
@@ -301,7 +301,7 @@ mod tests {
             "Read src/main.rs"
         );
         assert_eq!(
-            summary("edit_file", serde_json::json!({"path": "a.rs"})),
+            summary("edit_text", serde_json::json!({"path": "a.rs"})),
             "Edit a.rs"
         );
         assert_eq!(

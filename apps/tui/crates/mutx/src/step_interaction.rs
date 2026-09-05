@@ -87,7 +87,7 @@ pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
 ///   point and must be visible without an extra click.
 /// - **Cancelled** → collapsed: an aborted call reads as inert.
 /// - **Ok** → the per-tool default (`density` Comfortable mode, else the
-///   tool's `[tui.default_expanded]` entry): `edit_file` shows its diff;
+///   tool's `[tui.default_expanded]` entry): `edit_text` shows its diff;
 ///   `bash`/`read_text` and the rest stay collapsed.
 pub fn default_tool_expanded(
     status: ToolStepStatus,
@@ -186,10 +186,10 @@ mod tests {
 
     #[test]
     fn tool_ok_follows_per_tool_default_then_density() {
-        let cfg = config(&[("edit_file", true)]);
+        let cfg = config(&[("edit_text", true)]);
         assert!(default_tool_expanded(
             ToolStepStatus::Ok,
-            "edit_file",
+            "edit_text",
             &cfg,
             false
         ));

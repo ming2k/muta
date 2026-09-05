@@ -358,9 +358,9 @@ mod tests {
     #[test]
     fn unlisted_tool_falls_back_to_presenter_default() {
         let cfg = TuiConfig::default();
-        // edit_file has a built-in default of expanded; execute_command and
+        // edit_text has a built-in default of expanded; execute_command and
         // read_text collapse (their summaries carry the outcome).
-        assert!(tool_default_expanded(&cfg, "edit_file"));
+        assert!(tool_default_expanded(&cfg, "edit_text"));
         assert!(!tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
     }
@@ -368,11 +368,11 @@ mod tests {
     #[test]
     fn explicit_override_wins_over_presenter_default() {
         let cfg = config(&[
-            ("edit_file", false),
+            ("edit_text", false),
             ("execute_command", false),
             ("read_text", true),
         ]);
-        assert!(!tool_default_expanded(&cfg, "edit_file"));
+        assert!(!tool_default_expanded(&cfg, "edit_text"));
         assert!(!tool_default_expanded(&cfg, "execute_command"));
         assert!(tool_default_expanded(&cfg, "read_text"));
         // Still falls back for unlisted tools.
@@ -390,12 +390,12 @@ mod tests {
     fn parses_tui_table_from_toml() {
         let toml = r#"
 [default_expanded]
-edit_file = true
+edit_text = true
 execute_command = true
 thinking = true
 "#;
         let cfg: TuiConfig = toml::from_str(toml).expect("parses");
-        assert!(tool_default_expanded(&cfg, "edit_file"));
+        assert!(tool_default_expanded(&cfg, "edit_text"));
         assert!(tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
         assert!(thinking_default_expanded(&cfg));
@@ -480,7 +480,7 @@ bogus = "ctrl+z"
     fn empty_config_yields_defaults() {
         let cfg: TuiConfig = toml::from_str("").expect("empty parses");
         assert!(cfg.default_expanded.is_empty());
-        assert!(tool_default_expanded(&cfg, "edit_file"));
+        assert!(tool_default_expanded(&cfg, "edit_text"));
         assert!(!thinking_default_expanded(&cfg));
     }
 

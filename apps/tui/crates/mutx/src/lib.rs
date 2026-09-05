@@ -820,6 +820,16 @@ pub async fn run_tui(
                             // rides in the notice body; the transcript merge
                             // on resume renders the same row at its seam.
                             *provider_retry_clone.lock().await = None;
+                            chrome_updater.edit(|c| {
+                                c.phase = None;
+                                c.responding = false;
+                                c.current_turn = 0;
+                                c.round_started_at = None;
+                            });
+                            if !routes_to_side {
+                                *activity_clone.lock().await = None;
+                                ir_clone.store(false, Ordering::SeqCst);
+                            }
                             let at_ms = record.at_ms;
                             let mut msgs = buf.write().await;
                             msgs.retain(|m| !m.is_provider_retry());
@@ -966,14 +976,19 @@ pub async fn run_tui(
                             // phase regardless of which view is focused; only
                             // the primary also drives the displayed global
                             // activity state.
-                            let folded = Phase::classify(&status);
-                            chrome_updater.edit(|c| {
-                                c.phase = Some(folded.clone());
-                                c.responding = true;
-                            });
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(folded);
-                                ir_clone.store(true, Ordering::SeqCst);
+                            //
+                            // Stale in-flight activity events must not revive the bar
+                            // if the session harness is already idle (e.g. after interrupt).
+                            if !harness_clone.lock().await.loop_status.is_idle() {
+                                let folded = Phase::classify(&status);
+                                chrome_updater.edit(|c| {
+                                    c.phase = Some(folded.clone());
+                                    c.responding = true;
+                                });
+                                if !routes_to_side {
+                                    *activity_clone.lock().await = Some(folded);
+                                    ir_clone.store(true, Ordering::SeqCst);
+                                }
                             }
                         }
                         RoundEvent::TurnStarted { round, turn } => {

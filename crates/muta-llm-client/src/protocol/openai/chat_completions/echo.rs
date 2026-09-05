@@ -312,7 +312,7 @@ mod tests {
     fn drops_multi_argument_tool_call_mirror() {
         let (out, echo) = run_echo_filter(
             &[
-                "{\"tool\":\"edit_file\",\"arguments\":{\"path\":\"docs/adr/0001-tool-rendering-redesign.md\",\"old_string\":\"- Status: Accepted\",\"new_string\":\"- Status: Implemented\"}}",
+                "{\"tool\":\"edit_text\",\"arguments\":{\"path\":\"docs/adr/0001-tool-rendering-redesign.md\",\"old_string\":\"- Status: Accepted\",\"new_string\":\"- Status: Implemented\"}}",
                 "<|tool_calls_section_end|>",
             ],
             true,

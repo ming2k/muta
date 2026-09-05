@@ -362,9 +362,9 @@ fn search_text_expanded_renders_grouped_matches() {
 }
 
 #[test]
-fn edit_file_expanded_renders_diff() {
+fn edit_text_expanded_renders_diff() {
     let m = tool_step(
-        "edit_file",
+        "edit_text",
         r#"{"path":"a.rs","old_string":"let x = 1;","new_string":"let x = 2;"}"#,
         Some("Edited a.rs"),
         true,
@@ -373,9 +373,9 @@ fn edit_file_expanded_renders_diff() {
 }
 
 #[test]
-fn edit_file_prose_diff_suppresses_noisy_word_highlights() {
+fn edit_text_prose_diff_suppresses_noisy_word_highlights() {
     let m = tool_step(
-        "edit_file",
+        "edit_text",
         r#"{"path":"docs/explanation/tui.md","old_string":"Because the frame is a pure function of state, anything that changes state — a streamed token, a permission request, a mouse drag — shows up on the very next frame with no manual invalidation.","new_string":"Because the frame is a pure function of state, diff compares the back grid against the front grid and walks only the dirty rows from each row's dirty column."}"#,
         Some("Edited docs/explanation/tui.md"),
         true,
@@ -384,11 +384,11 @@ fn edit_file_prose_diff_suppresses_noisy_word_highlights() {
 }
 
 #[test]
-fn edit_file_multihunk_interleaves_changes() {
+fn edit_text_multihunk_interleaves_changes() {
     // Two separated single-token edits: the LCS diff must interleave
     // context/remove/add per hunk rather than all-remove-then-all-add.
     let m = tool_step(
-        "edit_file",
+        "edit_text",
         r#"{"path":"a.rs","old_string":"fn one() {\n    return 1;\n}\n\nfn two() {\n    return 2;\n}\n","new_string":"fn one() {\n    return 10;\n}\n\nfn two() {\n    return 20;\n}\n"}"#,
         Some("Edited a.rs"),
         true,
@@ -397,7 +397,7 @@ fn edit_file_multihunk_interleaves_changes() {
 }
 
 #[test]
-fn edit_file_distant_changes_render_explicit_hunks() {
+fn edit_text_distant_changes_render_explicit_hunks() {
     // Two changes separated by 10 context lines become two explicit hunks.
     // Each hunk owns a standard @@ range header; omitted source is represented
     // by the gap between hunks rather than a synthetic ellipsis row.
@@ -418,7 +418,7 @@ fn edit_file_distant_changes_render_explicit_hunks() {
         serde_json::to_string(old).unwrap(),
         serde_json::to_string(new).unwrap(),
     );
-    let m = tool_step("edit_file", &args, Some("Edited a.rs"), true);
+    let m = tool_step("edit_text", &args, Some("Edited a.rs"), true);
     insta::assert_snapshot!(render_grid(&m, 80, 40));
 }
 
@@ -456,11 +456,11 @@ fn execute_command_running_streams_live_preview() {
 }
 
 #[test]
-fn edit_file_diff_renders_from_structured_patch() {
+fn edit_text_diff_renders_from_structured_patch() {
     // The diff now comes from the ToolOutput::Patch payload (old/new), not
     // from re-parsing the tool arguments.
     let m = tool_step_structured(
-        "edit_file",
+        "edit_text",
         r#"{"path":"a.rs","old_string":"let x = 1;","new_string":"let x = 2;"}"#,
         muta_contracts::ToolOutput::Patch {
             path: "a.rs".into(),
@@ -477,7 +477,7 @@ fn edit_file_diff_renders_from_structured_patch() {
 #[test]
 fn failed_edit_renders_error_instead_of_intended_diff() {
     let m = tool_step_structured(
-        "edit_file",
+        "edit_text",
         r#"{"path":"a.rs","old_string":"let x = 1;","new_string":"let x = 2;"}"#,
         muta_contracts::ToolOutput::Error {
             message: "old_string was not found".into(),

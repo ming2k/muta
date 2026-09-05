@@ -72,7 +72,7 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
-| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `execute_command`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
+| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `execute_command`, `edit_text`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `MCP_SPECIALIST` | `envoy_mcp` tool | `Read` | none | Dynamic MCP tools in an isolated sandbox |
 
@@ -103,7 +103,7 @@ grant (ADR-0028) remain available for a future command-running or
 scoped-write role, but no built-in profile exercises them today.
 
 The one exception is `CODE`: a coding envoy needs the full edit surface
-(`execute_command` + `edit_file` + `write_file`), so it admits those tools by name. Like
+(`execute_command` + `edit_text` + `write_file`), so it admits those tools by name. Like
 every other built-in envoy it runs **delegated** — the delegation is the
 authorization, so the user does not re-approve each nested write/command; the
 principal reviews the envoy's handoff instead. Admission says *whether* a

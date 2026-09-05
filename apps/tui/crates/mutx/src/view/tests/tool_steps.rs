@@ -390,7 +390,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
         .collect();
     let mut m = TranscriptMessage::tool_step(
         "call_test",
-        "edit_file",
+        "edit_text",
         r#"{"path":"a.rs","old_string":"…","new_string":"…"}"#,
     );
     let structured = muta_contracts::ToolOutput::Patch {

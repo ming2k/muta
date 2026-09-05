@@ -104,7 +104,7 @@ pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
         }
         "search_text" => crate::phase::ToolVerb::Searching,
         "search_web" => crate::phase::ToolVerb::WebSearching,
-        "write_file" | "edit_file" => crate::phase::ToolVerb::Editing,
+        "write_file" | "edit_text" => crate::phase::ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => crate::phase::ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => {
             crate::phase::ToolVerb::UpdatingTasks

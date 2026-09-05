@@ -275,7 +275,7 @@ four turns:
 ```text
 round opens
   turn 1  read_text(parser.rs)   ← model inspects
-  turn 2  edit_file(parser.rs)   ← model applies the fix
+  turn 2  edit_text(parser.rs)   ← model applies the fix
   turn 3  read_text(parser.rs)   ← model verifies the result
   turn 4  "The bug was …"        ← final text, no tool call
 round ends

@@ -106,3 +106,71 @@ pub(crate) fn json_string(arguments: &str, key: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "*".to_string())
 }
+
+/// Deserialize either a single string or an array of strings into `Option<Vec<String>>`.
+///
+/// Models frequently supply `"patterns": "*.rs"` or `"include": "*.rs"` instead
+/// of wrapping a single item in an array. This provides robust parameter ergonomics
+/// without sacrificing type safety.
+pub(crate) fn deserialize_optional_string_or_vec<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVec {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or an array of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(vec![trimmed.to_string()]))
+            }
+        }
+
+        fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
+        where
+            S: serde::de::SeqAccess<'de>,
+        {
+            let mut vec = Vec::new();
+            while let Some(elem) = seq.next_element::<String>()? {
+                let trimmed = elem.trim();
+                if !trimmed.is_empty() {
+                    vec.push(trimmed.to_string());
+                }
+            }
+            if vec.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(vec))
+            }
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
+}

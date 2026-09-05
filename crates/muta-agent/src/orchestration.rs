@@ -1051,10 +1051,17 @@ pub async fn execute_round(
         });
         th
     };
-    session.replace_messages(round_history.clone()).await?;
     // Persist admission immediately. Mid-round crash recovery must not restore
     // the transcript from round N while leaving the session counter at N-1.
-    session.set_round_counter(admitted_round).await?;
+    session
+        .commit_turn(CommitTurn {
+            messages: &round_history,
+            round_counter: Some(admitted_round),
+            usage_records: &[],
+            retry_point: None,
+            round_interrupt: None,
+        })
+        .await?;
 
     // Session digest (ADR-0022 evolution): the first admitted user round
     // starts Chronicler work immediately — the opening request alone names
@@ -1099,6 +1106,8 @@ pub async fn execute_round(
                         messages: &snapshot,
                         round_counter: Some(agent.round_count()),
                         usage_records: usage_slice,
+                        retry_point: None,
+                        round_interrupt: None,
                     })
                     .await
             })
@@ -1324,47 +1333,61 @@ pub async fn execute_round(
     if session.id().await != admitted_session_id {
         return Err(HarnessError::Interrupted);
     }
-    let _ = tx.send(round_response(
-        &session_id,
-        RoundEvent::Activity("saving response".to_string()),
-    ));
-    session.replace_messages(round_history).await?;
-    persist_request_usage(&agent, &session, &session_id).await?;
-    // Publish from the final committed history on every terminal path. This
-    // reconciles the pre-wire estimate after interruption, tool cancellation,
-    // or response commit instead of leaving the meter anchored to a request
-    // shape that is no longer AI-visible.
-    send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
-    // The round reached its terminal path with the full history committed.
-    // Whatever stopped earlier no longer applies: a `/retry` resume that gets
-    // here *completed* the round, so the parked point is retired (ADR-0128).
-    // The phase-1 unsend already returned above; this is the natural-
-    // completion branch. Best-effort — a persist failure must not fail the
-    // round that already succeeded.
-    if let Err(error) = session.clear_retry_pending().await {
-        tracing::warn!(%error, "could not clear retry point after round completion");
+    // Only emit saving activity on natural completion. An interrupted or failed
+    // round must never re-arm the activity bar that was already idled.
+    if result.is_ok() {
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::Activity("saving response".to_string()),
+        ));
     }
-    let outcome = match result {
-        Ok(outcome) => outcome,
+
+    let (retry_point, outcome) = match result {
+        Ok(outcome) => (Some(None), Ok(outcome)),
         Err(error) => {
             // The round failed terminally with committed history — this is
             // exactly the "/retry me" state (ADR-0128). Park the resume point
             // so the user's `/retry` continues *this* round: same number,
             // turns onward from what was committed, history at the watermark
-            // the failed round durably left behind. Arming is unconditional
-            // here (it overwrites any stale point for an older round), and
-            // best-effort — a persist failure surfaces through the error
-            // path below, not by failing the bookkeeping.
+            // the failed round durably left behind.
             let point = muta_contracts::RetryPoint {
                 round: admitted_round,
                 turns_committed: streaming_round.committed_turns(),
-                history_watermark: session.model_window().await.len(),
+                history_watermark: round_history.len(),
                 paused_ms: agent.round_paused_ms(),
                 at_ms: unix_epoch_ms(),
             };
-            if let Err(persist_error) = session.arm_retry_pending(point).await {
-                tracing::warn!(%persist_error, "could not arm retry point");
-            }
+            (Some(Some(point)), Err(error))
+        }
+    };
+
+    let ledger = agent.token_ledger();
+    let usage_records = ledger
+        .as_ref()
+        .map(|ledger| ledger.records_for_session(&session_id));
+    let usage_slice = usage_records.as_deref().unwrap_or(&[]);
+
+    // Commit all terminal round state (messages, usage records, retry point)
+    // in a single atomic persistence transaction instead of multiple full-snapshot writes.
+    session
+        .commit_turn(CommitTurn {
+            messages: &round_history,
+            round_counter: None,
+            usage_records: usage_slice,
+            retry_point,
+            round_interrupt: None,
+        })
+        .await?;
+
+    // Publish from the final committed history on every terminal path. This
+    // reconciles the pre-wire estimate after interruption, tool cancellation,
+    // or response commit instead of leaving the meter anchored to a request
+    // shape that is no longer AI-visible.
+    send_context_projection(&tx, &session_id, &agent, &round_history);
+
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
             if matches!(error, HarnessError::Interrupted)
                 && (streamed_text.load(Ordering::SeqCst) || tool_activity.load(Ordering::SeqCst))
             {

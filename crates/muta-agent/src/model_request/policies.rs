@@ -83,7 +83,7 @@ impl SystemPromptSection for HostEnvironmentGuidance {
              {shell_info}\n\
              - Temp Access: read/write to the platform temp directory (`$TMPDIR`, `/tmp` on Unix) is always admitted \
                for scratch files — spill files, staging, probes — no additional roots required.\n\
-             - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`, `search_text`, `find_files`) \
+             - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_text`, `search_text`, `find_files`, `list_dir`) \
                over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`."
         ))
     }
@@ -253,13 +253,13 @@ impl SystemPromptSection for DelegationGuidance {
 /// separates it from the paragraphs above.
 struct FileEditingGuidance;
 
-const FILE_EDITING: &str = "\nWhen a dedicated tool exists for an operation, prefer it over \
-                            driving the same operation through the shell. This applies in \
-                            particular to creating or modifying files: use the file-editing \
-                            tools, not shell redirection (sed, echo >, tee, and the like). The \
-                            dedicated tools are atomic, diff-reviewable, and never leave a \
-                            half-written file behind if a turn is interrupted; a shell pipeline \
-                            is none of those.";
+const FILE_EDITING: &str = "\nWhen modifying existing files, prefer `edit_text` over `write_file` \
+                            to perform atomic, minimal diff replacements. Use `write_file` for \
+                            creating new files or complete overwrites. Never use shell \
+                            redirection (cat, sed, echo >, tee) to create or edit files — \
+                            the built-in file tools are atomic, diff-reviewable, and safe against \
+                            turn interruption. For `edit_text`, `old_string` must match verbatim \
+                            and uniquely — do not use globs or regexes in replacement text.";
 
 impl SystemPromptSection for FileEditingGuidance {
     fn id(&self) -> &'static str {
@@ -274,7 +274,7 @@ impl SystemPromptSection for FileEditingGuidance {
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
             .iter()
-            .any(|name| name == "write_file" || name == "edit_file")
+            .any(|name| name == "write_file" || name == "edit_text")
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(FILE_EDITING))

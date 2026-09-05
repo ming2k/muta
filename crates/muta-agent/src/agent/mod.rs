@@ -1412,14 +1412,14 @@ mod tests {
     fn turn_end_restore_keeps_round_end_disables() {
         let mut scoped = ScopedToolDisable::default();
         scoped.disable("execute_command", RestorePoint::TurnEnd);
-        scoped.disable("edit_file", RestorePoint::RoundEnd);
+        scoped.disable("edit_text", RestorePoint::RoundEnd);
         scoped.restore_turn_end();
         assert!(
             !scoped.contains("execute_command"),
             "TurnEnd disable must be restored at the ReAct-turn boundary"
         );
         assert!(
-            scoped.contains("edit_file"),
+            scoped.contains("edit_text"),
             "RoundEnd disable must survive the ReAct-turn boundary"
         );
     }

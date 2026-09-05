@@ -314,7 +314,7 @@ the title in the same language as the conversation.",
 /// Tools a coding runner may use: the generic read-only inspection tools
 /// (shared with [`RUNNER_EXPLORE`]) plus the workspace-mutating tools —
 /// `run_command` for
-/// running builds/tests/git, `edit_file` and `write_file` for code, and the
+/// running builds/tests/git, `edit_text` and `write_file` for code, and the
 /// `todo*` pair so a long delegation can track its own progress. Listed by
 /// name so adding a new side-effecting tool to the parent never silently
 /// widens this profile — the only tools a RUNNER_CODE runner can touch are the ones
@@ -331,7 +331,7 @@ const CODING_TOOLS: &[&str] = &[
     "search_web",
     // Workspace mutation — the code-editing surface.
     "run_command",
-    "edit_file",
+    "edit_text",
     "write_file",
     // Self-contained task tracking (the runner's own todo list, not the
     // parent's).
@@ -676,7 +676,7 @@ mod tests {
     }
 
     /// RUNNER_CODE is the write-capable coding role. It admits the full edit surface
-    /// (`execute_command`, `edit_file`, `write_file`) and the shared read-only
+    /// (`execute_command`, `edit_text`, `write_file`) and the shared read-only
     /// tools, but — like
     /// every runner — it still excludes recursion and control-flow escapes
     /// absolutely, and unlisted tools stay out.
@@ -685,7 +685,7 @@ mod tests {
         use crate::RUNNER_CODE;
         // Write/execute surface: admitted.
         assert!(RUNNER_CODE.tool_policy.admits(&make("run_command")));
-        assert!(RUNNER_CODE.tool_policy.admits(&make("edit_file")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("edit_text")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("write_file")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("write_todos")));
         // Shared read-only inspection: admitted.

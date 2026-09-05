@@ -518,7 +518,7 @@ pub trait Tool: Send + Sync {
     /// decide whether the call falls inside the agent's granted scope.
     ///
     /// Tools return a typed [`ScopeTarget`]: a file path for `write_file`/
-    /// `edit_file`, the command string for `bash`, etc. The scope gate
+    /// `edit_text`, the command string for `bash`, etc. The scope gate
     /// dispatches on the variant — `Path` targets are checked against the
     /// granted directory prefixes, `Command` targets against a command
     /// allowlist. [`ScopeTarget::Unspecified`] (the default) is admitted
@@ -695,7 +695,7 @@ pub trait Tool: Send + Sync {
 /// locatable target and is admitted without a scope check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeTarget {
-    /// A filesystem path the tool writes or reads (e.g. `write_file`, `edit_file`).
+    /// A filesystem path the tool writes or reads (e.g. `write_file`, `edit_text`).
     /// Checked against the scope's granted directory prefixes.
     Path(std::path::PathBuf),
     /// A shell command string (e.g. `bash`). Checked against the scope's command

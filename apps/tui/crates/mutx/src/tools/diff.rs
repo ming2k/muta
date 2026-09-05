@@ -1,4 +1,4 @@
-//! Line-level diff used to visualize `edit_file` / `write_file` changes.
+//! Line-level diff used to visualize `edit_text` / `write_file` changes.
 //!
 //! Backed by `similar`'s Myers line diff (so multi-hunk, interleaved edits
 //! render correctly rather than collapsing to all-removed-then-all-added).

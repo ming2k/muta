@@ -18,7 +18,7 @@
 //! - **Pre-dispatch**: it runs *before* tools execute, so a repeated call never
 //!   produces side effects or output. The model only ever sees the refusal.
 //! - **All tools**: covers the common doom-loop culprits — `read`,
-//!   `find_files`, `list_dir`, `search_text`, `bash`, `read_url`, `search_web`, `edit_file`,
+//!   `find_files`, `list_dir`, `search_text`, `bash`, `read_url`, `search_web`, `edit_text`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
 //! - **Threshold-gated (default 3, ADR-0148)**: one same-signature re-run per
 //!   window is tolerated — a transient retry, or re-running the same test
@@ -51,7 +51,7 @@ use crate::loop_guard::GuardAction;
 ///
 /// Kept as a sorted set so the [`covers`] lookup is O(log n).
 const WATCHED_TOOLS: &[&str] = &[
-    "edit_file",
+    "edit_text",
     "execute_command",
     "find_files",
     "list_dir",
@@ -82,7 +82,7 @@ pub(crate) fn covers(name: &str) -> bool {
 ///   A read to a different offset/limit represents legitimate forward paging
 ///   or section inspection and produces a distinct signature. Re-reading the
 ///   identical range on the same path collides and is blocked.
-/// - **Content-addressed mutations** (`edit_file`, `write_file`):
+/// - **Content-addressed mutations** (`edit_text`, `write_file`):
 ///   `name|path|content_hash` — the target file plus a stable 64-bit hash of
 ///   the payload (old/new for edits, content for writes; ADR-0148). Path-only
 ///   keying blocked the *second edit to the same file*, which is normal
@@ -112,9 +112,16 @@ pub fn doom_signature(name: &str, args: &str) -> String {
             .and_then(Value::as_str)
             .map(normalize_path_locator)
             .unwrap_or_else(|| ".".to_string());
+        let patterns = {
+            let s = normalized_string_array(&value, "patterns", false);
+            if s.is_empty() {
+                "*".to_string()
+            } else {
+                s
+            }
+        };
         return format!(
-            "{name}|{path}|include={}|exclude={}",
-            normalized_string_array(&value, "patterns", false),
+            "{name}|{path}|include={patterns}|exclude={}",
             normalized_string_array(&value, "exclude", false)
         );
     }
@@ -170,7 +177,7 @@ pub fn doom_signature(name: &str, args: &str) -> String {
     // Content-addressed mutations (ADR-0148): edits and writes key on path
     // *plus* a hash of the payload, so sequential distinct edits to one file
     // are different calls while an exact A→B→A payload thrash still collides.
-    if name == "edit_file" || name == "write_file" {
+    if name == "edit_text" || name == "write_file" {
         let path = value
             .get("path")
             .or_else(|| value.get("file_path"))
@@ -599,11 +606,11 @@ mod tests {
     fn exact_edit_thrash_collides_distinct_edits_do_not() {
         // Same payload twice (exact A→B→A thrash) → collides.
         let a = doom_signature(
-            "edit_file",
+            "edit_text",
             r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#,
         );
         let b = doom_signature(
-            "edit_file",
+            "edit_text",
             r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#,
         );
         assert_eq!(a, b, "an identical edit payload must collide with itself");
@@ -611,7 +618,7 @@ mod tests {
         // Same path, different payload (sequential distinct edits) → distinct
         // signatures, so the second edit to a file is not a "repeat" (ADR-0148).
         let c = doom_signature(
-            "edit_file",
+            "edit_text",
             r#"{"path":"a.rs","old_string":"y","new_string":"z"}"#,
         );
         assert_ne!(a, c, "distinct edits to one file must not collide");
@@ -619,12 +626,12 @@ mod tests {
         // A true A→B→A thrash re-issues the *identical* payload; that
         // collides even though it is the third edit to the same file.
         let d = doom_signature(
-            "edit_file",
+            "edit_text",
             r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#,
         );
         assert_ne!(a, d);
         let back = doom_signature(
-            "edit_file",
+            "edit_text",
             r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#,
         );
         assert_eq!(
@@ -756,6 +763,10 @@ mod tests {
             r#"{"path":"src/","patterns":["*.toml","*.rs"]}"#,
         );
         assert_eq!(a, b);
+
+        let omitted = doom_signature("find_files", r#"{"path":"./src"}"#);
+        let explicit = doom_signature("find_files", r#"{"path":"src","patterns":["*"]}"#);
+        assert_eq!(omitted, explicit);
     }
 
     #[test]

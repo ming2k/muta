@@ -5,11 +5,27 @@ use super::*;
 /// One unified turn commit for [`SessionStore::commit_turn`]. `messages` is
 /// the full current window (O(delta) against the durable prefix);
 /// `round_counter` is committed only when it differs; `usage_records` are
-/// upserted only where they changed.
+/// upserted only where they changed; `retry_point` arms or clears the retry
+/// affordance; `round_interrupt` records an interrupted outcome.
+#[derive(Debug, Clone)]
 pub struct CommitTurn<'a> {
     pub messages: &'a [Message],
     pub round_counter: Option<u64>,
     pub usage_records: &'a [muta_contracts::RequestUsageRecord],
+    pub retry_point: Option<Option<muta_contracts::RetryPoint>>,
+    pub round_interrupt: Option<muta_contracts::RoundInterrupt>,
+}
+
+impl<'a> CommitTurn<'a> {
+    pub fn new(messages: &'a [Message]) -> Self {
+        Self {
+            messages,
+            round_counter: None,
+            usage_records: &[],
+            retry_point: None,
+            round_interrupt: None,
+        }
+    }
 }
 
 impl SessionStore {
@@ -46,6 +62,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::RoundInterruptRecorded { record })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -75,6 +92,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::RoundInterruptsCleared {})?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -108,6 +126,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::RetryPendingRecorded { point })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -136,6 +155,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::RetryPendingCleared {})?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -163,6 +183,7 @@ impl SessionStore {
                 state.event_log.append(SessionEvent::MessagesReplaced {
                     messages: state.data.model_window.clone(),
                 })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -204,6 +225,7 @@ impl SessionStore {
                 state.event_log.append(SessionEvent::MessagesReplaced {
                     messages: state.data.model_window.clone(),
                 })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -452,7 +474,52 @@ impl SessionStore {
                 }
             }
 
+            // 4. Retry point (None = untouched, Some(None) = clear, Some(Some(point)) = arm).
+            if let Some(target) = commit.retry_point {
+                match target {
+                    Some(point) => {
+                        if state.data.retry_pending.as_ref() != Some(&point) {
+                            state.data.retry_pending = Some(point.clone());
+                            state.data.updated_at = unix_timestamp();
+                            ensure_event_log_started(&state.event_log, &state.data)?;
+                            state
+                                .event_log
+                                .append(SessionEvent::RetryPendingRecorded { point })?;
+                            dirty = true;
+                        }
+                    }
+                    None => {
+                        if state.data.retry_pending.is_some() {
+                            state.data.retry_pending = None;
+                            state.data.updated_at = unix_timestamp();
+                            ensure_event_log_started(&state.event_log, &state.data)?;
+                            state
+                                .event_log
+                                .append(SessionEvent::RetryPendingCleared {})?;
+                            dirty = true;
+                        }
+                    }
+                }
+            }
+
+            // 5. Round interrupt.
+            if let Some(record) = commit.round_interrupt {
+                let already = state.data.round_interrupts.iter().any(|existing| {
+                    existing.reason == record.reason && existing.round == record.round
+                });
+                if !already {
+                    state.data.round_interrupts.push(record.clone());
+                    state.data.updated_at = unix_timestamp();
+                    ensure_event_log_started(&state.event_log, &state.data)?;
+                    state
+                        .event_log
+                        .append(SessionEvent::RoundInterruptRecorded { record })?;
+                    dirty = true;
+                }
+            }
+
             if dirty {
+                state.data.applied_seq = state.event_log.high_seq();
                 let path = state.path.clone();
                 let data = state.data.clone();
                 persist = Persist::Snapshot { path, data };

@@ -1,6 +1,6 @@
-//! Presenters for `edit_file` and `write_file`.
+//! Presenters for `edit_text` and `write_file`.
 //!
-//! `edit_file` renders a red/green line diff (old vs new) in the expanded body.
+//! `edit_text` renders a red/green line diff (old vs new) in the expanded body.
 //! `write_file` is a full-file write — no "old" side to diff against — so it
 //! renders as a simple line-numbered code block. Both show a `+N -M` line-count
 //! suffix in the collapsed summary.
@@ -14,7 +14,7 @@ pub struct EditPresenter;
 impl ToolPresenter for EditPresenter {
     fn summary(&self, view: &ToolView) -> String {
         let Some(raw_path) = view.str("path") else {
-            return "Edit file".to_string();
+            return "Edit text".to_string();
         };
         let path = PathView::from_str(raw_path).format_text();
         match (view.str("old_string"), view.str("new_string")) {

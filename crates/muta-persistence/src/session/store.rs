@@ -365,11 +365,13 @@ impl SessionStore {
         blob_store: BlobStore,
     ) -> Result<(), String> {
         let _persist_guard = self.persist_gate.lock().await;
-        let log_path = path.with_extension("jsonl");
-        if log_path.exists() {
-            let event_log = EventLog::new(log_path);
-            if let Some(high) = event_log.high_seq() {
-                data.applied_seq = Some(high);
+        if data.applied_seq.is_none() {
+            let log_path = path.with_extension("jsonl");
+            if log_path.exists() {
+                let event_log = EventLog::new(log_path);
+                if let Some(high) = event_log.high_seq() {
+                    data.applied_seq = Some(high);
+                }
             }
         }
         offload_session_blobs(&mut data, &blob_store)?;

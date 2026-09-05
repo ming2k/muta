@@ -64,7 +64,7 @@ The architecture defines the Worker-Station Model (ADR-0167): strictly two **`Ag
 | **runner** | An isolated sub-agent spawned by a master to investigate or execute a sub-task; shares only the provider, running with fresh history and profile-filtered tools. |
 | **profile** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a runner's behavior. |
 | **`EXPLORE` profile** | Research role: pure read tools. Bound by the `runner` tool. |
-| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_file`/`write_file`). Runs delegated (autonomous) like built-in runners — delegation via `runner_code` is the authorization. |
+| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_text`/`write_file`). Runs delegated (autonomous) like built-in runners — delegation via `runner_code` is the authorization. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | Runners are not fire-and-forget: requests travel up to the master, replies travel down to the child. |
 

@@ -107,7 +107,7 @@ Default disclosure is a pure function of `(kind, lifecycle)`, evaluated by
 | Tool | `Failed` | Expanded | the error is the whole point |
 | Tool | `Denied` | Expanded | the denial message must be visible without an extra click |
 | Tool | `Cancelled` | Collapsed | an aborted call reads as inert |
-| Tool | `Ok` | per-tool `[tui.default_expanded]` entry, or `true` under Comfortable density | `edit_file` shows its diff; `execute_command` / `read_text` stay collapsed |
+| Tool | `Ok` | per-tool `[tui.default_expanded]` entry, or `true` under Comfortable density | `edit_text` shows its diff; `execute_command` / `read_text` stay collapsed |
 | Thinking | streaming | Collapsed (or `[tui.default_expanded] thinking`) | reasoning defaults to collapsed; opt in to auto-expand via config |
 | Thinking | finished | Unchanged | no auto-collapse — do not yank away content the user was reading |
 

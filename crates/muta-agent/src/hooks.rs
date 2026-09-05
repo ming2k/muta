@@ -689,7 +689,7 @@ mod tests {
         let reg = registry_of(vec![Arc::new(StubHook {
             kind: HookEventKind::TurnStart,
             outcome: HookOutcome::ScopeTools {
-                disable: vec!["execute_command".to_string(), "edit_file".to_string()],
+                disable: vec!["execute_command".to_string(), "edit_text".to_string()],
                 restore_at: RestorePoint::TurnEnd,
             },
         })]);
@@ -699,7 +699,7 @@ mod tests {
             side.scoped_disables,
             vec![
                 ("execute_command".to_string(), RestorePoint::TurnEnd),
-                ("edit_file".to_string(), RestorePoint::TurnEnd),
+                ("edit_text".to_string(), RestorePoint::TurnEnd),
             ]
         );
     }
@@ -762,7 +762,7 @@ mod tests {
     }
 
     /// The `PermissionRequest` matcher targets the tool seeking approval, so a
-    /// `execute_command`-only notification hook does not fire for an `edit_file` request.
+    /// `execute_command`-only notification hook does not fire for an `edit_text` request.
     #[tokio::test]
     async fn permission_request_matcher_targets_tool() {
         let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -785,7 +785,7 @@ mod tests {
         };
         let edit_req = muta_contracts::PermissionRequest {
             id: "p2".into(),
-            tool: "edit_file".into(),
+            tool: "edit_text".into(),
             label: "".into(),
             description: "".into(),
             arguments: "".into(),

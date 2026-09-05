@@ -301,7 +301,7 @@ fn command_row_layout_classifies_by_result_shape() {
         "permissions",
         "",
         Some(muta_contracts::CommandResult::PermissionList {
-            allowed: vec!["run_command".to_string(), "edit_file".to_string()],
+            allowed: vec!["run_command".to_string(), "edit_text".to_string()],
         }),
     );
     assert_eq!(
@@ -319,7 +319,7 @@ fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
         ToolVerb::Searching
     );
     assert_eq!(
-        Phase::Tool(event_loop::tool_verb_for("edit_file")).label(),
+        Phase::Tool(event_loop::tool_verb_for("edit_text")).label(),
         "making edits"
     );
     assert_eq!(

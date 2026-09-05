@@ -345,7 +345,7 @@ components:
               event:
                 PermissionRequest:
                   id: permission-123
-                  tool: edit_file
+                  tool: edit_text
                   label: Edit file
                   description: Modify a project file
                   arguments: '{"path":"README.md"}'

@@ -199,7 +199,7 @@ mid-message with the `@master:<role>` mention:
 |--------|-------|
 | `code` | The default developer master — full capabilities, unrestricted writes |
 | `architect` | Design and review focus — full read, writes retained but the persona steers toward analysis and written rationale before changes |
-| `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_file`, or `execute_command`) |
+| `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_text`, or `execute_command`) |
 | `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
 
 Unknown preset names are rejected with the list of valid presets.

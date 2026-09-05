@@ -1680,7 +1680,7 @@ async fn session_runtime_state_round_trips_through_disk() {
 
     let mut disabled = std::collections::HashSet::new();
     disabled.insert("execute_command".to_string());
-    disabled.insert("edit_file".to_string());
+    disabled.insert("edit_text".to_string());
     store.set_disabled_tools(disabled.clone()).await.unwrap();
     store.set_round_counter(42).await.unwrap();
 
@@ -2141,6 +2141,8 @@ async fn commit_turn_unifies_messages_counter_and_usage_in_one_event_batch() {
             messages: &turn,
             round_counter: Some(3),
             usage_records: std::slice::from_ref(&record),
+            retry_point: None,
+            round_interrupt: None,
         })
         .await
         .unwrap();
@@ -2161,6 +2163,8 @@ async fn commit_turn_unifies_messages_counter_and_usage_in_one_event_batch() {
             messages: &turn,
             round_counter: Some(3),
             usage_records: std::slice::from_ref(&record),
+            retry_point: None,
+            round_interrupt: None,
         })
         .await
         .unwrap();
@@ -2190,12 +2194,67 @@ async fn commit_turn_replaces_messages_when_same_length_but_content_changed() {
             messages: &edited,
             round_counter: None,
             usage_records: &[],
+            retry_point: None,
+            round_interrupt: None,
         })
         .await
         .unwrap();
 
     let fresh = SessionStore::for_path(path.clone());
     assert_eq!(fresh.model_window().await[0].content, "edited prompt");
+
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn commit_turn_unifies_retry_point_and_interrupt() {
+    let directory =
+        std::env::temp_dir().join(format!("muta-commit-turn-terminal-{}", uuid::Uuid::new_v4()));
+    let path = directory.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    let prompt = vec![Message::new(muta_contracts::Role::User, "run task")];
+
+    let point = muta_contracts::RetryPoint {
+        round: 1,
+        turns_committed: 1,
+        history_watermark: 1,
+        paused_ms: 0,
+        at_ms: 12345,
+    };
+    let interrupt = muta_contracts::RoundInterrupt {
+        reason: muta_contracts::RoundInterruptReason::User,
+        at_ms: 12345,
+        round: Some(1),
+        detail: None,
+    };
+
+    store
+        .commit_turn(CommitTurn {
+            messages: &prompt,
+            round_counter: Some(1),
+            usage_records: &[],
+            retry_point: Some(Some(point.clone())),
+            round_interrupt: Some(interrupt.clone()),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(store.retry_pending().await, Some(point));
+    assert_eq!(store.round_interrupts().await, vec![interrupt]);
+
+    // Clearing retry point in subsequent commit
+    store
+        .commit_turn(CommitTurn {
+            messages: &prompt,
+            round_counter: Some(1),
+            usage_records: &[],
+            retry_point: Some(None),
+            round_interrupt: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(store.retry_pending().await, None);
 
     let _ = fs::remove_dir_all(directory);
 }

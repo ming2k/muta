@@ -13,7 +13,7 @@ pub mod search;
 mod ssrf;
 
 mod ask_user;
-mod edit_file;
+mod edit_text;
 mod execute_command;
 mod file_search;
 mod find_files;
@@ -33,7 +33,7 @@ pub use syntax_guard::{SyntaxCheckResult, verify_syntax};
 // Re-export every tool struct at the module root so existing consumers
 // (`crate::tools::ReadTextTool`, etc.) keep resolving unchanged.
 pub use ask_user::AskUserTool;
-pub use edit_file::EditFileTool;
+pub use edit_text::EditTextTool;
 pub use execute_command::ExecuteCommandTool;
 pub use find_files::FindFilesTool;
 pub use list_dir::ListDirTool;

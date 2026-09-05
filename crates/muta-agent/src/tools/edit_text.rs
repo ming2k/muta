@@ -9,27 +9,32 @@ use crate::tools::helpers::{
 };
 
 #[derive(ToolSchema, Deserialize)]
-struct EditFileArgs {
-    #[tool(desc = "Path to the file")]
+#[serde(deny_unknown_fields)]
+struct EditTextArgs {
+    #[tool(
+        desc = "Path to the text file to modify; relative paths use the primary workspace"
+    )]
     path: String,
-    #[tool(desc = "The exact text to replace; must be unique in the file")]
+    #[tool(
+        desc = "The exact verbatim text to replace; must match uniquely in the file. Globs and regexes are NOT supported."
+    )]
     old_string: String,
-    #[tool(desc = "The replacement text")]
+    #[tool(desc = "The replacement text to insert in place of old_string")]
     new_string: String,
 }
 
-/// Apply an edit to a file (safer than write_file — requires old_string match).
+/// Apply a text edit to a file (safer than write_file — requires old_string match).
 ///
 /// Relative paths resolve against the session's workspace root (captured at
 /// factory time), not the daemon process's cwd — under the unified daemon
 /// (ADR-0096) those differ whenever the daemon was first spawned from another
 /// project, and an edit is exactly where that divergence does damage.
-pub struct EditFileTool {
+pub struct EditTextTool {
     pub(crate) root: WorkspaceBase,
     pub(crate) env: Option<std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>>,
 }
 
-impl EditFileTool {
+impl EditTextTool {
     pub fn new(root: WorkspaceBase) -> Self {
         Self { root, env: None }
     }
@@ -85,7 +90,7 @@ fn contextual_patch(
     } else {
         content[match_end..]
             .find('\n')
-            .map(|rel| match_end + rel + 1)
+            .map(|idx| match_end + idx + 1)
             .unwrap_or(content.len())
     };
     for _ in 0..DIFF_CONTEXT {
@@ -94,168 +99,190 @@ fn contextual_patch(
         }
         context_end = content[context_end..]
             .find('\n')
-            .map(|rel| context_end + rel + 1)
+            .map(|idx| context_end + idx + 1)
             .unwrap_or(content.len());
     }
 
+    let start_line = content[..context_start]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count()
+        + 1;
+
     let prefix = &content[context_start..match_offset];
     let suffix = &content[match_end..context_end];
-    let build = |replacement: &str| {
-        let mut snippet = String::with_capacity(prefix.len() + replacement.len() + suffix.len());
-        snippet.push_str(prefix);
-        snippet.push_str(replacement);
-        snippet.push_str(suffix);
-        snippet
-    };
-    let start_line = content[..context_start].matches('\n').count() + 1;
 
-    (build(old_str), build(new_str), start_line)
+    let old_ctx = format!("{prefix}{old_str}{suffix}");
+    let new_ctx = format!("{prefix}{new_str}{suffix}");
+
+    (old_ctx, new_ctx, start_line)
 }
 
-/// Count non-overlapping occurrences of `needle` in `haystack`.
-///
-/// An empty `needle` reports zero matches — an empty `old_string` is never a
-/// valid edit, and `str::matches("")` would otherwise enumerate every inter-char
-/// position and overflow.
+#[derive(Debug)]
+struct AppliedEdit {
+    new_content: String,
+    old_ctx: String,
+    new_ctx: String,
+    ctx_start: usize,
+}
+
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
     if needle.is_empty() {
         return 0;
     }
-    haystack.matches(needle).count()
+    let mut count = 0;
+    let mut cursor = 0;
+    while let Some(idx) = haystack[cursor..].find(needle) {
+        count += 1;
+        cursor += idx + needle.len();
+    }
+    count
 }
 
-/// The components needed to display and persist a successful edit.
-#[derive(Debug)]
-struct AppliedEdit {
-    old_ctx: String,
-    new_ctx: String,
-    ctx_start: usize,
-    new_content: String,
-}
-
-/// Find a **unique** match of `old` in `content`, build the contextual diff
-/// patch, and produce replacement content with exactly that one occurrence
-/// swapped for `new`.
-///
-/// Return value:
-/// - `Ok(Some(_))` — exactly one match; safe to apply.
-/// - `Ok(None)` — no match (caller may try a fallback or report not-found).
-/// - `Err(_)` — the match is *ambiguous* (`count > 1`). This is an error, never
-///   a silent global replace: an edit intended for one site must not rewrite
-///   every look-alike occurrence.
 fn apply_unique_edit(
     content: &str,
-    old: &str,
-    new: &str,
+    old_str: &str,
+    new_str: &str,
     path: &str,
 ) -> Result<Option<AppliedEdit>, String> {
-    match count_occurrences(content, old) {
-        0 => Ok(None),
-        1 => {
-            // `find` is guaranteed to return `Some` here (count is exactly 1),
-            // but guard with `let … else` so the function stays panic-free even
-            // if the invariant above is ever weakened.
-            let Some(offset) = content.find(old) else {
-                return Ok(None);
-            };
-            let (old_ctx, new_ctx, ctx_start) = contextual_patch(content, offset, old, new);
-            // Replace only this single occurrence by stitching the prefix, the
-            // new text, and the suffix back together — *not* `str::replace`,
-            // which would rewrite every occurrence.
-            let mut new_content = String::with_capacity(content.len() - old.len() + new.len());
-            new_content.push_str(&content[..offset]);
-            new_content.push_str(new);
-            new_content.push_str(&content[offset + old.len()..]);
-            Ok(Some(AppliedEdit {
-                old_ctx,
-                new_ctx,
-                ctx_start,
-                new_content,
-            }))
-        }
-        n => Err(format!(
-            "old_string matches {n} places in '{path}'. Add more surrounding context so the match is unique."
-        )),
+    let match_count = count_occurrences(content, old_str);
+    if match_count == 0 {
+        return Ok(None);
     }
+    if match_count > 1 {
+        let lines: Vec<usize> = content
+            .match_indices(old_str)
+            .map(|(offset, _)| content[..offset].matches('\n').count() + 1)
+            .collect();
+        let lines_str = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "`old_string` matches in {match_count} places in '{path}' (lines {lines_str}). \
+             It must match exactly once. Provide more surrounding lines to disambiguate."
+        ));
+    }
+
+    let match_offset = content
+        .find(old_str)
+        .expect("count_occurrences > 0 guarantees find succeeds");
+    let match_end = match_offset + old_str.len();
+
+    let mut new_content = String::with_capacity(content.len() + new_str.len() - old_str.len());
+    new_content.push_str(&content[..match_offset]);
+    new_content.push_str(new_str);
+    new_content.push_str(&content[match_end..]);
+
+    let (old_ctx, new_ctx, ctx_start) = contextual_patch(content, match_offset, old_str, new_str);
+    Ok(Some(AppliedEdit {
+        new_content,
+        old_ctx,
+        new_ctx,
+        ctx_start,
+    }))
 }
 
-/// Detailed diagnostic when `old_string` cannot be found in `content`.
-/// Provides actionable hints for whitespace mismatches, line divergence, or missing lines.
+/// Generate a helpful, diagnostic error message when `old_string` fails to match.
+///
+/// Checks common failure modes in order of specificity:
+/// 1. Whitespace mismatches (trailing spaces, tab vs space)
+/// 2. Multi-line prefix matched but diverged at a specific line
+/// 3. Zero matches with advice to re-read
 fn diagnose_edit_failure(content: &str, old_str: &str, path: &str) -> String {
+    let file_lines: Vec<&str> = content.lines().collect();
     let old_lines: Vec<&str> = old_str.lines().collect();
-    let content_lines: Vec<&str> = content.lines().collect();
 
-    if old_lines.is_empty() {
-        return format!("Could not find old_string in '{path}': old_string is empty.");
-    }
-
-    // 1. Check if trailing-whitespace trimmed version matches
-    let trimmed_old: Vec<&str> = old_lines.iter().map(|l| l.trim_end()).collect();
-    let trimmed_content: Vec<&str> = content_lines.iter().map(|l| l.trim_end()).collect();
-    let mut ws_matches = 0usize;
-    let mut ws_match_line = 0usize;
-    if !trimmed_old.is_empty() && trimmed_old.len() <= trimmed_content.len() {
-        for i in 0..=trimmed_content.len() - trimmed_old.len() {
-            if trimmed_content[i..i + trimmed_old.len()] == trimmed_old[..] {
-                ws_matches += 1;
-                ws_match_line = i + 1;
-            }
-        }
-    }
-    if ws_matches == 1 {
+    // Check 1: Trailing whitespace mismatch
+    let content_trimmed: String = file_lines
+        .iter()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let old_trimmed: String = old_lines
+        .iter()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content_trimmed.contains(&old_trimmed) && !content.contains(old_str) {
+        // Find which line has the mismatch
+        let trimmed_old_first = old_lines.first().map(|l| l.trim_end()).unwrap_or("");
+        let matching_line = file_lines
+            .iter()
+            .position(|l| l.trim_end() == trimmed_old_first)
+            .map(|idx| idx + 1)
+            .unwrap_or(1);
         return format!(
-            "Could not find exact match for `old_string` in '{path}', but found a match at line {ws_match_line} \
-             when ignoring trailing whitespace / line endings. Please check trailing whitespace or indentation around line {ws_match_line}."
+            "Could not find exact match for `old_string` in '{path}', but a match exists \
+             when ignoring trailing whitespace (around line {matching_line}). \
+             Check for trailing spaces or tabs in your `old_string`."
         );
     }
 
-    // 2. First-line anchor search & divergence detection
-    let first_line = old_lines[0].trim_end();
-    if !first_line.is_empty() {
-        let candidate_starts: Vec<usize> = content_lines
+    // Check 2: Multi-line divergence — find where the match starts breaking down
+    if old_lines.len() > 1 {
+        let first_old = old_lines[0];
+        // Find all lines in the file that match the first line of old_string
+        let candidate_starts: Vec<usize> = file_lines
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.trim_end() == first_line)
+            .filter(|(_, line)| **line == first_old)
             .map(|(idx, _)| idx)
             .collect();
 
         if candidate_starts.len() == 1 {
-            let start_idx = candidate_starts[0];
-            let mut match_count = 0usize;
-            while match_count < old_lines.len()
-                && start_idx + match_count < content_lines.len()
-                && content_lines[start_idx + match_count].trim_end()
-                    == old_lines[match_count].trim_end()
-            {
-                match_count += 1;
-            }
-            if match_count < old_lines.len() {
-                let diverge_old = old_lines[match_count];
-                let diverge_actual = if start_idx + match_count < content_lines.len() {
-                    content_lines[start_idx + match_count]
-                } else {
-                    "<end of file>"
-                };
-                return format!(
-                    "Could not find exact match for `old_string` in '{path}'. \
-                     Found matching start at line {} (first {} line{} matched), but diverged at line {}:\n\
-                     Expected: `{diverge_old}`\n\
-                     File has: `{diverge_actual}`\n\
-                     Please re-read '{path}' around line {} to get the latest content.",
-                    start_idx + 1,
-                    match_count,
-                    if match_count == 1 { "" } else { "s" },
-                    start_idx + match_count + 1,
-                    start_idx + 1
-                );
+            let start = candidate_starts[0];
+            // Walk forward to find the exact line that diverged
+            for (offset, old_line) in old_lines.iter().enumerate() {
+                let file_idx = start + offset;
+                if file_idx >= file_lines.len() {
+                    return format!(
+                        "Could not find exact match for `old_string` in '{path}'. \
+                         Match started at line {}, but `old_string` extends past the end of the file \
+                         (file has {} lines, `old_string` expected at least {}).",
+                        start + 1,
+                        file_lines.len(),
+                        file_idx + 1
+                    );
+                }
+                if file_lines[file_idx] != *old_line {
+                    let max_disp = 80;
+                    let exp = if old_line.len() > max_disp {
+                        format!("{}...", &old_line[..max_disp])
+                    } else {
+                        old_line.to_string()
+                    };
+                    let got = if file_lines[file_idx].len() > max_disp {
+                        format!("{}...", &file_lines[file_idx][..max_disp])
+                    } else {
+                        file_lines[file_idx].to_string()
+                    };
+                    return format!(
+                        "Could not find exact match for `old_string` in '{path}'. \
+                         Found matching start at line {} (first {} line{} matched), but diverged at line {}:\n\
+                         Expected: `{exp}`\n\
+                         File has: `{got}`\n\
+                         Please re-read '{path}' around line {} to get the latest content.",
+                        start + 1,
+                        offset,
+                        if offset == 1 { "" } else { "s" },
+                        file_idx + 1,
+                        file_idx + 1
+                    );
+                }
             }
         } else if candidate_starts.len() > 1 {
             let lines_str = candidate_starts
                 .iter()
-                .take(5)
                 .map(|idx| (idx + 1).to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let first_line = if first_old.len() > 60 {
+                format!("{}...", &first_old[..60])
+            } else {
+                first_old.to_string()
+            };
             return format!(
                 "Could not find exact match for `old_string` in '{path}'. \
                  The first line `{first_line}` appears multiple times (lines {lines_str}), \
@@ -271,15 +298,15 @@ fn diagnose_edit_failure(content: &str, old_str: &str, path: &str) -> String {
 }
 
 #[async_trait]
-impl Tool for EditFileTool {
+impl Tool for EditTextTool {
     fn name(&self) -> &str {
-        "edit_file"
+        "edit_text"
     }
     fn description(&self) -> &str {
-        "Replace a unique block of text (old_string) with new_string in an existing file. old_string must match exactly one location."
+        "Replace an exact, unique block of text (old_string) with new_string in a text file. old_string must match exactly one location verbatim."
     }
     fn parameters(&self) -> serde_json::Value {
-        EditFileArgs::parameters_schema()
+        EditTextArgs::parameters_schema()
     }
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
@@ -294,12 +321,12 @@ impl Tool for EditFileTool {
         let path = json_string(arguments, "path");
         Some(muta_contracts::ToolPermissionSubmission {
             hazard_level: muta_contracts::HazardLevel::FileModification,
-            label: format!("Edit file `{path}`"),
-            description: format!("Modifies content within file `{path}`."),
+            label: format!("Edit text in `{path}`"),
+            description: format!("Modifies text content within file `{path}`."),
             scope: path.clone(),
             payload: muta_contracts::ToolPermissionPayload::FileEdit {
                 paths: vec![path],
-                operation: "edit_file".to_string(),
+                operation: "edit_text".to_string(),
             },
         })
     }
@@ -308,7 +335,7 @@ impl Tool for EditFileTool {
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
-        let args: EditFileArgs =
+        let args: EditTextArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let path = &args.path;
         let old_str = &args.old_string;
@@ -368,7 +395,8 @@ impl Tool for EditFileTool {
         })
     }
 }
-muta_contracts::register_tool!(EditFileFactory => |ctx| EditFileTool {
+
+muta_contracts::register_tool!(EditTextFactory => |ctx| EditTextTool {
     root: workspace_base(ctx),
     env: Some(execution_environment(ctx)),
 });

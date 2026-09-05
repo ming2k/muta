@@ -455,7 +455,7 @@ mod tests {
             scope: "git status".to_string(),
         }));
         assert!(!store.is_always_allowed(&PermissionRule {
-            tool: "edit_file".to_string(),
+            tool: "edit_text".to_string(),
             scope: "*".to_string(),
         }));
     }
@@ -546,7 +546,7 @@ mod tests {
                 scope: "*".to_string(),
             },
             PermissionRuleConfig {
-                tool: "edit_file".to_string(),
+                tool: "edit_text".to_string(),
                 scope: "/src".to_string(),
             },
         ]);
@@ -558,7 +558,7 @@ mod tests {
                 scope: "*".to_string(),
             },
             PermissionRuleConfig {
-                tool: "edit_file".to_string(),
+                tool: "edit_text".to_string(),
                 scope: "/src".to_string(),
             },
         ]);

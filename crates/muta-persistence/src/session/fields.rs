@@ -40,6 +40,7 @@ impl SessionStore {
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::TodosSet { todos })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -78,6 +79,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::ScheduledJobsSet { jobs })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -123,6 +125,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::TitleSet { title, manual })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -168,6 +171,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::DigestSet { digest, anchor })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -206,6 +210,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::DisabledToolsSet { tools })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -237,6 +242,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::DelegatedSet { enabled })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -269,6 +275,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::RoundCounterSet { counter })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -345,6 +352,7 @@ impl SessionStore {
                         .event_log
                         .append(SessionEvent::RequestUsageUpsert { record })?;
                 }
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -385,6 +393,7 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::ProviderSelectionSet { selection })?;
+                state.data.applied_seq = state.event_log.high_seq();
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };

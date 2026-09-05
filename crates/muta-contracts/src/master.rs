@@ -195,7 +195,7 @@ pub enum MasterPresetId {
     /// and written design rationale before any change.
     Architect,
     /// Reviewer: read-only code review. Read/search/inspect tools only — no
-    /// `write_file`, `edit_file`, or `execute_command`. The persona is a meticulous
+    /// `write_file`, `edit_text`, or `execute_command`. The persona is a meticulous
     /// reviewer who reports findings and proposed diffs without applying them.
     Reviewer,
     /// Security auditor: read-only, command-confined. Read/search tools plus a
@@ -332,7 +332,7 @@ impl MasterPresetDelegation {
         "read_image",
         "search_text",
         "run_command",
-        "edit_file",
+        "edit_text",
         "write_file",
         "read_url",
         "search_web",
@@ -552,7 +552,7 @@ mod tests {
             panic!("reviewer must be scoped, not unrestricted");
         };
         assert!(!names.contains("write_file"));
-        assert!(!names.contains("edit_file"));
+        assert!(!names.contains("edit_text"));
         assert!(!names.contains("run_command"));
         assert!(names.contains("read_text"));
     }

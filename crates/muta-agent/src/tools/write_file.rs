@@ -9,10 +9,13 @@ use crate::tools::helpers::{
 };
 
 #[derive(ToolSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WriteFileArgs {
-    #[tool(desc = "Path to the file")]
+    #[tool(
+        desc = "Path to the file to create or overwrite; relative paths use the primary workspace"
+    )]
     path: String,
-    #[tool(desc = "Content to write")]
+    #[tool(desc = "The complete file content to write")]
     content: String,
 }
 
@@ -47,7 +50,7 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Create a new file or overwrite an existing file with the given content."
+        "Create a new file or completely overwrite an existing file with the given content."
     }
     fn parameters(&self) -> serde_json::Value {
         WriteFileArgs::parameters_schema()

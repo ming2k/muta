@@ -45,7 +45,7 @@ pub enum ToolFileAccessOperation {
     Search,
     /// Write/overwrite a file.
     Write,
-    /// Read-modify-write (e.g. `edit_file`). Mutating.
+    /// Read-modify-write (e.g. `edit_text`). Mutating.
     ReadWrite,
 }
 
@@ -159,7 +159,7 @@ impl ToolAccesses {
     pub fn write_tree(path: impl Into<String>) -> Self {
         Self::none().with_file(ToolFileAccessOperation::Write, path, true)
     }
-    /// Read-modify-write a single file (e.g. `edit_file`).
+    /// Read-modify-write a single file (e.g. `edit_text`).
     #[inline]
     pub fn read_write_file(path: impl Into<String>) -> Self {
         Self::none().with_file(ToolFileAccessOperation::ReadWrite, path, false)

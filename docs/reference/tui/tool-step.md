@@ -1,7 +1,7 @@
 # Tool step
 
 An [expandable step](expandable-step.md) for a tool call (`read_text`, `execute_command`,
-`edit_file`, …). It renders flat on the app background — no band, no section
+`edit_text`, …). It renders flat on the app background — no band, no section
 labels — like a [thinking step](thinking-step.md). The header alone summarizes
 the call (tool + key arguments + duration); expanding reveals the tool-specific
 content directly. Results are typed
@@ -52,7 +52,7 @@ session.
 | `execute_command` | `draw_execute_command_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. The `exit N` row is always painted when the code is known — `exit 0` is included, dimmed, so an expanded step closes with a diagnostic fact even on success. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. Long output is **middle-folded** (see [Long output folding](#long-output-folding)). |
 | `find_files`, `list_dir` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
 | `search_text` | `draw_matches_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
-| `edit_file`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
+| `edit_text`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
 | `read_text`, others | `draw_code_content` | Code block with line-number gutter on `code_bg` (the fallback for unrecognized tools). |
 
 Unknown / MCP tools (`arg_layout = KeyValue`) print their arguments as plain

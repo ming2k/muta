@@ -127,7 +127,7 @@ fn host_environment_guidance_renders_in_default_prompt() {
     assert!(
         messages[0]
             .content
-            .contains("ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`"),
+            .contains("ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_text`"),
         "system message must emphasize built-in tools"
     );
 }

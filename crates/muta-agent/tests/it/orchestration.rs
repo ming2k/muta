@@ -122,7 +122,7 @@ fn registry_collects_all_self_registered_tools() {
         "read_text",
         "read_image",
         "write_file",
-        "edit_file",
+        "edit_text",
         "search_text",
         "find_files",
         "ask_user",

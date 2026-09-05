@@ -216,7 +216,7 @@ messages: [
 tools: [<all schemas>]   ← same set, re-sent verbatim
 ```
 
-Response carries `tool_calls: [edit_file(...)]`. muta executes the
+Response carries `tool_calls: [edit_text(...)]`. muta executes the
 edit and appends the result.
 
 **Request 3** — history now contains two tool turns.
@@ -224,7 +224,7 @@ edit and appends the result.
 ```text
 messages: [
   ...,
-  {role: assistant, tool_calls: [{id: "call_2", function: {name: "edit_file", arguments: "..."}}]},
+  {role: assistant, tool_calls: [{id: "call_2", function: {name: "edit_text", arguments: "..."}}]},
   {role: tool,      tool_call_id: "call_2", content: "<edit applied>"}
 ],
 tools: [<all schemas>]

@@ -24,7 +24,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `read_text` | `Read` | `*` | [filesystem](filesystem.md) |
 | `read_image` | `Read` | `*` | [filesystem](filesystem.md) |
 | `write_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
-| `edit_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
+| `edit_text` | `Write` | `path` argument | [filesystem](filesystem.md) |
 | `find_files` | `Read` | `*` | [filesystem](filesystem.md) |
 | `list_dir` | `Read` | `*` | [filesystem](filesystem.md) |
 | `search_text` | `Read` | `*` | [filesystem](filesystem.md) |
@@ -40,7 +40,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `list_skills` | `Read` | `*` | [skills](skills.md) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |
 
-`permission_scope` defaults to `"*"`. Only `write_file`, `edit_file`, and
+`permission_scope` defaults to `"*"`. Only `write_file`, `edit_text`, and
 `execute_command` override it; their scope string is what a cached `Always` rule matches
 against.
 
