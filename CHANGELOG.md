@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.12] - 2026-09-07
+
+### Changed
+
+- **Tool modality orthogonality and `edit_text` renaming (ADR-0179).** Renamed `edit_file` to
+  `edit_text` across core capabilities, runner definitions, agent tool registrations, TUI
+  disclosure renderers, snapshot fixtures, and documentation to establish clear modality
+  boundaries (`read_text`/`write_file`/`edit_text` vs. `read_image`).
+
+
 ## [0.38.11] - 2026-09-07
 
 ### Added
@@ -6098,7 +6108,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.11...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.12...HEAD
+[0.38.12]: https://github.com/ming2k/muta/compare/v0.38.11...v0.38.12
 [0.38.11]: https://github.com/ming2k/muta/compare/v0.38.10...v0.38.11
 [0.38.10]: https://github.com/ming2k/muta/compare/v0.38.9...v0.38.10
 [0.38.9]: https://github.com/ming2k/muta/compare/v0.38.8...v0.38.9

@@ -8,7 +8,7 @@ default-members = ["crates/muta", "apps/tui/crates/mutx"]
 resolver = "2"
 
 [workspace.package]
-version = "0.38.11"
+version = "0.38.12"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
