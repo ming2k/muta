@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.16] - 2026-09-07
+
+### Refactored
+
+- **Consolidated SQLite SSOT state persistence.** Unified connection usage, usage stats,
+  route settings, and workspace security into authoritative SQLite storage with seamless
+  one-time legacy file migration and cleanup.
+- **TUI transcript layout and thinking summary refinements.** Streamlined turn band identity
+  component formatting and thinking progress notation in `mutx`.
+
+
 ## [0.38.15] - 2026-09-07
 
 ### Added
