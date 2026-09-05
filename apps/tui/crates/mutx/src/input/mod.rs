@@ -323,6 +323,7 @@ pub enum InputAction {
     Interrupt,
     /// Open the flat Models picker (`/models`, Ctrl+M) — the daily-driver
     /// model-switch surface.
+    OpenSessions,
     OpenModels,
     /// Open the Connections list (`/connections`) — the provider-instance
     /// management surface.
@@ -743,7 +744,8 @@ impl InputAction {
     pub fn is_text_modal_command(&self) -> bool {
         matches!(
             self,
-            InputAction::OpenModels
+            InputAction::OpenSessions
+                | InputAction::OpenModels
                 | InputAction::OpenConnections
                 | InputAction::OpenPermissions
                 | InputAction::OpenTools

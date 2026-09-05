@@ -1153,6 +1153,7 @@ fn text_modal_commands_resolve_and_consume_composer() {
     // history + transcript recording — so these must stay in sync with the
     // intercepted set in `process_event`.
     for (cmd, expected) in [
+        ("/sessions", InputAction::OpenSessions),
         ("/models", InputAction::OpenModels),
         ("/connections", InputAction::OpenConnections),
         ("/permissions", InputAction::OpenPermissions),

@@ -571,11 +571,13 @@ async fn process_one_event(
         && let Some(entry) = modal_cmd_history
     {
         let (name, args) = actions::split_command_word(&entry);
+        let mut msg = TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms());
+        msg.cancel_pending_command();
         runtime
             .messages
             .write()
             .await
-            .push(TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms()));
+            .push(msg);
         app.record_input_history(entry, Vec::new(), Vec::new());
     }
 

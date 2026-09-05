@@ -267,8 +267,9 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
         .cloned()
         .or_else(|| text_thought_sig.clone());
 
+    let sanitized_content = sanitize_assistant_content(&message.content);
     let mut parts =
-        text_and_image_parts(message.content, message.images.unwrap_or_default(), false);
+        text_and_image_parts(sanitized_content, message.images.unwrap_or_default(), false);
     if let Some(signature) = &text_thought_sig
         && let Some(part) = parts
             .iter_mut()
@@ -278,38 +279,48 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
     }
     if let Some(calls) = message.tool_calls {
         for call in calls {
+            call_names.insert(call.id.clone(), call.name.clone());
+            let mut function_call = json!({
+                "name": call.name,
+                "args": parse_json_object(&call.arguments),
+            });
+            if !call.id.is_empty() {
+                function_call["id"] = json!(call.id);
+            }
+            let mut part = json!({ "functionCall": function_call });
             let sig = thought_signatures
                 .get(&call.id)
                 .or_else(|| thought_signatures.get(&call.name))
                 .or(fallback_signature.as_ref());
             if let Some(signature) = sig {
-                call_names.insert(call.id.clone(), call.name.clone());
-                let mut function_call = json!({
-                    "name": call.name,
-                    "args": parse_json_object(&call.arguments),
-                });
-                if !call.id.is_empty() {
-                    function_call["id"] = json!(call.id);
-                }
-                let mut part = json!({ "functionCall": function_call });
                 part["thoughtSignature"] = json!(signature);
-                parts.push(part);
-            } else {
-                let args_display = if call.arguments.trim().is_empty() {
-                    "{}"
-                } else {
-                    call.arguments.trim()
-                };
-                parts.push(json!({
-                    "text": format!("[Called tool `{}` with arguments: {}]", call.name, args_display)
-                }));
             }
+            parts.push(part);
         }
     }
     if parts.is_empty() {
         parts.push(json!({ "text": "" }));
     }
     parts
+}
+
+fn sanitize_assistant_content(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with("[Called tool ") && trimmed.ends_with(']') {
+        return String::new();
+    }
+    let mut result = text.to_string();
+    while let Some(start) = result.find("[Called tool ") {
+        if let Some(end) = result[start..].find(']') {
+            let candidate = &result[start..=start + end];
+            if candidate.contains("with arguments:") {
+                result.replace_range(start..=start + end, "");
+                continue;
+            }
+        }
+        break;
+    }
+    result.trim().to_string()
 }
 
 fn text_thought_signature(message: &Message) -> Option<String> {
@@ -342,23 +353,15 @@ fn thought_signatures_by_call(message: &Message) -> HashMap<String, String> {
 
 fn tool_result_parts(message: Message, call_names: &HashMap<String, String>) -> Vec<Value> {
     let id = message.tool_call_id.unwrap_or_default();
-    if let Some(name) = call_names.get(&id).filter(|n| !n.is_empty()) {
-        let mut function_response = json!({
-            "name": name,
-            "response": tool_response_payload(&message.content),
-        });
-        if !id.is_empty() {
-            function_response["id"] = json!(id);
-        }
-        vec![json!({ "functionResponse": function_response })]
-    } else {
-        let text = if message.content.is_empty() {
-            "[Tool execution completed with empty output]".to_string()
-        } else {
-            message.content
-        };
-        vec![json!({ "text": text })]
+    let name = call_names.get(&id).cloned().unwrap_or_default();
+    let mut function_response = json!({
+        "name": name,
+        "response": tool_response_payload(&message.content),
+    });
+    if !id.is_empty() {
+        function_response["id"] = json!(id);
     }
+    vec![json!({ "functionResponse": function_response })]
 }
 
 fn text_and_image_parts(
@@ -945,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn downgrades_unsigned_tool_calls_to_structured_text() {
+    fn preserves_unsigned_tool_calls_as_structured_function_calls() {
         let call = muta_contracts::ToolCall {
             id: "call_foreign".to_string(),
             name: "write_todos".to_string(),
@@ -966,21 +969,45 @@ mod tests {
             test_body_input(None, false, None),
         );
 
-        // Assistant turn has text part for prose and structured text for tool call, NO functionCall
+        // Assistant turn preserves structured functionCall even without thought signature
         let model_parts = body["contents"][1]["parts"].as_array().unwrap();
         assert_eq!(model_parts.len(), 2);
         assert_eq!(model_parts[0]["text"], "Planning tasks");
-        assert_eq!(
-            model_parts[1]["text"],
-            "[Called tool `write_todos` with arguments: {\"items\":[{\"content\":\"design\",\"status\":\"in_progress\"}]}]"
-        );
-        assert!(model_parts[1].get("functionCall").is_none());
+        assert_eq!(model_parts[1]["functionCall"]["name"], "write_todos");
+        assert_eq!(model_parts[1]["functionCall"]["id"], "call_foreign");
+        assert!(model_parts[1].get("thoughtSignature").is_none());
 
-        // Tool result is merged with the following user prompt into a single user turn
+        // Tool result is a structured functionResponse, coalesced with the following user prompt
         assert_eq!(body["contents"][2]["role"], "user");
         let user_parts = body["contents"][2]["parts"].as_array().unwrap();
-        assert_eq!(user_parts[0]["text"], "Todo list updated");
+        assert_eq!(
+            user_parts[0]["functionResponse"]["name"],
+            "write_todos"
+        );
+        assert_eq!(
+            user_parts[0]["functionResponse"]["id"],
+            "call_foreign"
+        );
         assert_eq!(user_parts[1]["text"], "proceed");
+    }
+
+    #[test]
+    fn sanitizes_legacy_mimicked_tool_call_text_from_assistant_prose() {
+        let body = body(
+            vec![
+                Message::new(Role::User, "do something"),
+                Message::new(
+                    Role::Assistant,
+                    "[Called tool read_text with arguments: {\"limit\": 90, \"offset\": 100}]",
+                ),
+                Message::new(Role::User, "pls go on"),
+            ],
+            test_body_input(None, false, None),
+        );
+
+        let model_turn = &body["contents"][1];
+        let model_parts = model_turn["parts"].as_array().unwrap();
+        assert_eq!(model_parts[0]["text"], "");
     }
 
     #[test]

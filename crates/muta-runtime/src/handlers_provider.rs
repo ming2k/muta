@@ -1264,18 +1264,15 @@ pub async fn set_default_model(
     .await;
 }
 
-/// `AgentRequest::RefreshProviderModels` — run live model discovery for all
-/// discovery-enabled connections from upstream.
-pub async fn refresh_models(
+/// Apply the result of a completed model discovery run without blocking the session loop during network fetch.
+pub fn apply_model_discovery_outcome(
     config: &mut Config,
-    _agent: &Agent,
-    _provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ConnectionUsage,
-    session: Option<&SessionStore>,
+    outcome: catalog::DiscoveryOutcome,
+    session_id: Option<String>,
     user_initiated: bool,
 ) {
-    let outcome = catalog::discover_provider_models(user_initiated).await;
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
@@ -1290,10 +1287,9 @@ pub async fn refresh_models(
         ));
     }
 
-    if let Some(session) = session
+    if let Some(session_id) = session_id
         && user_initiated
     {
-        let session_id = session.id().await;
         let ack = if !outcome.failures.is_empty() && !outcome.changed {
             "Model refresh failed to reach upstream".to_string()
         } else if outcome.changed {
@@ -1312,6 +1308,32 @@ pub async fn refresh_models(
         config,
         provider_usage,
     )));
+}
+
+/// `AgentRequest::RefreshProviderModels` — run live model discovery for all
+/// discovery-enabled connections from upstream.
+pub async fn refresh_models(
+    config: &mut Config,
+    _agent: &Agent,
+    _provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    session: Option<&SessionStore>,
+    user_initiated: bool,
+) {
+    let outcome = catalog::discover_provider_models(user_initiated).await;
+    let session_id = match session {
+        Some(s) => Some(s.id().await),
+        None => None,
+    };
+    apply_model_discovery_outcome(
+        config,
+        resp_tx,
+        provider_usage,
+        outcome,
+        session_id,
+        user_initiated,
+    );
 }
 
 /// Mask an API key for safe display (e.g. `sk-12...abcd`).
@@ -1653,7 +1675,7 @@ mod tests {
         muta_persistence::paths::set_test_default(None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn query_connection_detail_sends_initial_and_background_detail() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
@@ -1702,6 +1724,57 @@ mod tests {
             }
             other => panic!("expected final ConnectionDetail, got {other:?}"),
         }
+
+        muta_persistence::paths::set_test_default(None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn apply_model_discovery_outcome_surfaces_warning_and_picker() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        let mut config = Config::default();
+        let mut usage = ConnectionUsage::default();
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let outcome = catalog::DiscoveryOutcome {
+            changed: false,
+            failures: vec![("gmain".to_string(), "network error".to_string())],
+        };
+
+        apply_model_discovery_outcome(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            outcome,
+            None,
+            false,
+        );
+
+        let warning = resp_rx.recv().await.expect("warning expected");
+        match warning {
+            AgentResponse::ConnectStatus(muta_contracts::ConnectStatus::DiscoveryWarning {
+                provider,
+                message,
+            }) => {
+                assert_eq!(provider, "gmain");
+                assert_eq!(message, "network error");
+            }
+            other => panic!("expected DiscoveryWarning, got {other:?}"),
+        }
+
+        let keys = resp_rx.recv().await.expect("keys expected");
+        assert!(matches!(keys, AgentResponse::ProviderKeys(_)));
+
+        let picker = resp_rx.recv().await.expect("picker expected");
+        assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
 
         muta_persistence::paths::set_test_default(None);
     }

@@ -301,6 +301,7 @@ fn resolve_enter(
         // Match on the trimmed text so a slash command typed with a trailing
         // space (e.g. `/models `) still hits the exact-match arm.
         let action = match text.trim() {
+            "/sessions" => InputAction::OpenSessions,
             "/models" => InputAction::OpenModels,
             "/connections" => InputAction::OpenConnections,
             "/permissions" => InputAction::OpenPermissions,

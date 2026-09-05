@@ -240,6 +240,12 @@ pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, Strin
 }
 
 pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
+    // The route's effective capabilities: the full ADR-0149 resolution
+    // (baseline ⊕ remote advertisement ⊕ user overrides). Surfaced so the
+    // frontend can gate image affordances on exactly what this route will
+    // actually accept — never a client-side re-resolution of the static
+    // registry, which cannot see the fitted overlay or per-route overrides.
+    let vision = channel.capabilities().vision;
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -258,6 +264,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 thinking: Some(thinking_on),
                 favorite: false,
                 last_used_ms: None,
+                vision,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -277,6 +284,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 thinking: None,
                 favorite: false,
                 last_used_ms: None,
+                vision,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -293,6 +301,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 thinking: None,
                 favorite: false,
                 last_used_ms: None,
+                vision,
             }
         }
         Transport::Google { effort, .. } => {
@@ -314,6 +323,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 thinking: None,
                 favorite: false,
                 last_used_ms: None,
+                vision,
             }
         }
     }
@@ -322,6 +332,72 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muta_contracts::PromptCacheCapabilities;
+
+    /// A minimal OpenAI-transport channel for `channel_model_info` tests.
+    fn openai_channel(model: &str, remote: Option<muta_contracts::RemoteModelMetadata>) -> Channel {
+        Channel {
+            id: "default".to_string(),
+            label: "default".to_string(),
+            transport: Transport::OpenAi {
+                base_url: "https://example.test/v1/chat/completions".to_string(),
+                client_profile: muta_contracts::ClientProfile::Native,
+                effort: Some(muta_contracts::effort::Effort::High),
+                dialect: muta_contracts::OpenAiChatDialect::Standard,
+            },
+            credentials: muta_contracts::static_credential(String::new()),
+            model: model.to_string(),
+            remote,
+            user_overrides: None,
+            prompt_cache: PromptCacheCapabilities::unsupported(),
+            prompt_cache_preference: Default::default(),
+        }
+    }
+
+    #[test]
+    fn channel_model_info_surfaces_route_vision_from_remote_metadata() {
+        // A model the static baseline does not know (a fresh relay model).
+        // The remote advertisement says it takes images; the info row must
+        // carry that so the frontend's image affordances unlock.
+        let remote = muta_contracts::RemoteModelMetadata {
+            vision: Some(true),
+            ..Default::default()
+        };
+        let info = channel_model_info(&openai_channel("omen-alpha", Some(remote)));
+        assert!(info.vision, "remote vision advertisement must surface");
+    }
+
+    #[test]
+    fn channel_model_info_vision_defaults_conservatively_without_remote() {
+        // No remote metadata and no baseline entry: unknown route resolves to
+        // the conservative fallback (vision: false).
+        let info = channel_model_info(&openai_channel("unknown-relay-model", None));
+        assert!(!info.vision);
+    }
+
+    #[test]
+    fn channel_model_info_user_override_beats_remote_vision() {
+        // ADR-0149 layer 1: the user's explicit `Some(false)` wins over the
+        // provider's advertised vision (e.g. a relay that strips images).
+        let remote = muta_contracts::RemoteModelMetadata {
+            vision: Some(true),
+            ..Default::default()
+        };
+        let mut channel = openai_channel("omen-alpha", Some(remote));
+        channel.user_overrides = Some(muta_contracts::CapabilityOverrides {
+            vision: Some(false),
+            ..Default::default()
+        });
+        assert!(!channel_model_info(&channel).vision);
+
+        // And the inverse: a forced-on override over a text-only baseline.
+        let mut channel = openai_channel("text-only-model", None);
+        channel.user_overrides = Some(muta_contracts::CapabilityOverrides {
+            vision: Some(true),
+            ..Default::default()
+        });
+        assert!(channel_model_info(&channel).vision);
+    }
 
     #[test]
     fn model_is_hidden_matches_exact_and_glob_case_insensitively() {

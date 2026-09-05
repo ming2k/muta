@@ -52,7 +52,41 @@ pub(crate) fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
             start = brace_at + 1;
         }
     }
-    None
+    parse_called_tool_fallback(text)
+}
+
+/// Parse fallback text formatted as `[Called tool <name> with arguments: <json>]`
+/// or `[Called tool `<name>` with arguments: <json>]`.
+fn parse_called_tool_fallback(text: &str) -> Option<ToolCall> {
+    let prefix = "[Called tool ";
+    let idx = text.find(prefix)?;
+    let rest = &text[idx + prefix.len()..];
+    let rest = rest.trim_start();
+    let (tool_name, rest) = if let Some(stripped) = rest.strip_prefix('`') {
+        let end_backtick = stripped.find('`')?;
+        (&stripped[..end_backtick], &stripped[end_backtick + 1..])
+    } else {
+        let end_space = rest.find(' ')?;
+        (&rest[..end_space], &rest[end_space..])
+    };
+    if tool_name.is_empty() {
+        return None;
+    }
+    let args_marker = "with arguments:";
+    let args_idx = rest.find(args_marker)?;
+    let args_slice = rest[args_idx + args_marker.len()..].trim_start();
+    let brace_start = args_slice.find('{')?;
+    let balanced_end = find_balanced_object(args_slice, brace_start)?;
+    let candidate = &args_slice[brace_start..=balanced_end];
+    if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+        Some(ToolCall {
+            id: format!("call_{}", uuid::Uuid::new_v4()),
+            name: tool_name.to_string(),
+            arguments: candidate.to_string(),
+        })
+    } else {
+        None
+    }
 }
 
 /// Promote a text-based (fallback) tool call onto the preceding assistant
@@ -200,5 +234,21 @@ mod tests {
 
         let empty = r#"{"other": 123}"#;
         assert_eq!(extract_partial_string_field(empty, "path"), None);
+    }
+
+    #[test]
+    fn parse_called_tool_fallback_parses_unquoted_and_quoted_tool_calls() {
+        let text1 = r#"[Called tool read_text with arguments: {"limit": 90, "offset": 100, "path": "/path/to/sync.rs"}]"#;
+        let call1 = parse_text_tool_call(text1).expect("should parse unquoted called tool");
+        assert_eq!(call1.name, "read_text");
+        assert_eq!(
+            call1.arguments,
+            r#"{"limit": 90, "offset": 100, "path": "/path/to/sync.rs"}"#
+        );
+
+        let text2 = r#"[Called tool `write_todos` with arguments: {"items": []}]"#;
+        let call2 = parse_text_tool_call(text2).expect("should parse backtick quoted called tool");
+        assert_eq!(call2.name, "write_todos");
+        assert_eq!(call2.arguments, r#"{"items": []}"#);
     }
 }

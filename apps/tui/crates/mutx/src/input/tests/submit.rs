@@ -60,6 +60,7 @@ fn enter_in_compose_while_busy_queues_follow_up_in_follow_up_mode() {
 #[test]
 fn enter_with_slash_command_dispatches_recognized_commands() {
     for (cmd, expected) in [
+        ("/sessions", InputAction::OpenSessions),
         ("/models", InputAction::OpenModels),
         ("/connections", InputAction::OpenConnections),
         ("/permissions", InputAction::OpenPermissions),

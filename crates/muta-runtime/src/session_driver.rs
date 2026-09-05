@@ -312,7 +312,13 @@ impl SessionDriver {
                 success: bool,
             },
         }
+        struct DiscoveryTaskResult {
+            outcome: catalog::DiscoveryOutcome,
+            user_initiated: bool,
+            session_id: Option<String>,
+        }
         let mut active_oauth_task: Option<tokio::task::JoinHandle<OAuthResult>> = None;
+        let mut active_discovery_task: Option<tokio::task::JoinHandle<DiscoveryTaskResult>> = None;
         let mut pending_oauth_authorization: Option<
             crate::handlers_provider::PendingOAuthAuthorization,
         > = None;
@@ -321,6 +327,26 @@ impl SessionDriver {
                 res_opt = req_rx.recv() => {
                     let Some(req) = res_opt else { break; };
                     req
+                }
+                discovery_res = async {
+                    if let Some(ref mut task) = active_discovery_task {
+                        task.await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    active_discovery_task = None;
+                    if let Ok(res) = discovery_res {
+                        crate::handlers_provider::apply_model_discovery_outcome(
+                            &mut config,
+                            &resp_tx,
+                            &mut provider_usage,
+                            res.outcome,
+                            res.session_id,
+                            res.user_initiated,
+                        );
+                    }
+                    continue;
                 }
                 oauth_res = async {
                     if let Some(ref mut task) = active_oauth_task {
@@ -660,16 +686,30 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::RefreshProviderModels { user_initiated } => {
-                    crate::handlers_provider::refresh_models(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
-                        Some(&session),
-                        user_initiated,
-                    )
-                    .await;
+                    if !user_initiated
+                        && active_discovery_task
+                            .as_ref()
+                            .is_some_and(|t| !t.is_finished())
+                    {
+                        // Background discovery already in flight, keep it running.
+                    } else {
+                        let session_id = if user_initiated {
+                            Some(session.id().await)
+                        } else {
+                            None
+                        };
+                        if let Some(task) = active_discovery_task.take() {
+                            task.abort();
+                        }
+                        active_discovery_task = Some(tokio::spawn(async move {
+                            let outcome = catalog::discover_provider_models(user_initiated).await;
+                            DiscoveryTaskResult {
+                                outcome,
+                                user_initiated,
+                                session_id,
+                            }
+                        }));
+                    }
                 }
                 AgentRequest::DeleteSession { id } => {
                     let session = session.clone();
@@ -1048,6 +1088,12 @@ impl SessionDriver {
                     ),
                 ));
             }
+        }
+        if let Some(task) = active_oauth_task.take() {
+            task.abort();
+        }
+        if let Some(task) = active_discovery_task.take() {
+            task.abort();
         }
     }
 }

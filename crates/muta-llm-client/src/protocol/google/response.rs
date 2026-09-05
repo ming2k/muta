@@ -184,12 +184,14 @@ pub fn stream_payload(payload: &str) -> StreamPayload {
     {
         let mut call_index = 0usize;
         for part in parts {
+            if let Some(signature) = thought_signature(part) {
+                if part.get("functionCall").is_none() {
+                    text_thought_signature = Some(signature);
+                }
+            }
             if let Some(text) = part.get("text").and_then(|text| text.as_str())
                 && !text.is_empty()
             {
-                if let Some(signature) = thought_signature(part) {
-                    text_thought_signature = Some(signature);
-                }
                 // Route reasoning summaries to ReasoningDelta so the harness
                 // surfaces them as a thinking trace, distinct from the answer.
                 if part_is_thought(part) {
@@ -209,6 +211,17 @@ pub fn stream_payload(payload: &str) -> StreamPayload {
                     arguments: call.arguments,
                 });
                 call_index += 1;
+            }
+        }
+    }
+    if text_thought_signature.is_none() {
+        if let Some(candidate) = root
+            .get("candidates")
+            .and_then(|candidates| candidates.as_array())
+            .and_then(|candidates| candidates.first())
+        {
+            if let Some(signature) = thought_signature(candidate) {
+                text_thought_signature = Some(signature);
             }
         }
     }

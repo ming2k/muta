@@ -993,7 +993,19 @@ favorite: boolean,
  * (recency-desc, most recently used first). `None`-defaulted so older
  * snapshots deserialize as "never used".
  */
-last_used_ms: number | null, };
+last_used_ms: number | null, 
+/**
+ * Effective image-input support for this route — the **full** ADR-0149
+ * capability resolution (user overrides over the remote advertisement
+ * over the static baseline), resolved daemon-side in
+ * `Channel::capabilities()`. Frontends gate image affordances (composer
+ * paste, vision-only tools) on this flag instead of re-resolving the
+ * model in their own process: the client's static registry cannot see
+ * the daemon's fitted-model overlay or per-route overrides, so a
+ * client-side resolution would disagree with what the daemon actually
+ * routes. `false`-defaulted so older snapshots gate conservatively.
+ */
+vision: boolean, };
 
 /**
  * One row of provider-picker state sent from the harness to the TUI. Carries

@@ -149,13 +149,9 @@ pub fn draw_sessions_modal(
     let body_width = f.body.width as usize;
 
     if sessions.is_empty() {
-        // Empty-state: a spinner + hint. Rendered centered directly (no list body).
-        const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
         let body = vec![Line::from(vec![
-            Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
             Span::styled(
-                "Loading sessions / No previous sessions yet.",
+                "No previous sessions in this project.",
                 Style::default().fg(theme.muted()),
             ),
         ])];

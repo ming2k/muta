@@ -81,8 +81,16 @@ impl Agent {
         // master's identity selection (unrestricted) composed with the
         // model's capability limits. `set_variant_selection` re-resolves once
         // the model's `[tool_variants]` selection is known and on every switch.
+        // The provider's capability snapshot (route-resolved, ADR-0149)
+        // overrides the static registry's vision flag — a fitted relay model
+        // the baseline does not know would otherwise lose its vision-gated
+        // tools at seed time.
         let agent_selection = muta_contracts::ToolSelection::unrestricted();
-        let seed_model = muta_contracts::resolve_model(&provider.model());
+        let capabilities = provider.model_capabilities();
+        let seed_model = muta_contracts::Model {
+            vision: capabilities.vision,
+            ..muta_contracts::resolve_model(&provider.model())
+        };
         let resolved_tools = Arc::new(std::sync::RwLock::new(toolset.resolve_for(
             &seed_model,
             &agent_selection,
@@ -210,7 +218,17 @@ impl Agent {
     /// every model/selection switch flow, so the schema sent to the provider and
     /// the dispatch table always reflect `agent_scope ∩ model_caps`.
     fn reresolve_tools(&self, model_variants: &muta_contracts::VariantSelection) {
-        let model = muta_contracts::resolve_model(&self.provider.model());
+        // The provider's own capability snapshot is the authority — it is the
+        // full ADR-0149 route resolution (`Channel::capabilities()`: baseline ⊕
+        // remote advertisement ⊕ user overrides). Resolving the model id
+        // through the static registry here would miss the fitted-model overlay
+        // and per-route overrides, and silently drop vision-gated tools (e.g.
+        // `read_image`) from a relay model that is in fact vision-capable.
+        let capabilities = self.provider.model_capabilities();
+        let model = muta_contracts::Model {
+            vision: capabilities.vision,
+            ..muta_contracts::resolve_model(&self.provider.model())
+        };
         let agent_selection = self
             .agent_selection
             .lock()

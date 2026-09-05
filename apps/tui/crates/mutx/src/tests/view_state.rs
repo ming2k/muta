@@ -52,8 +52,11 @@ fn composer_paste_still_chips_large_text_on_main_prompt() {
 fn composer_image_paste_rejected_when_model_lacks_vision() {
     // When the current model doesn't support vision, pasting an image on
     // the main prompt should show a failure toast and leave no attachment.
+    // No picker-snapshot row exists for the route, so the gate falls back to
+    // the in-process static registry (glm-5.2 baseline: vision: false).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.set_active_modal_for_test(Modal::None);
+    app.current_provider = "mock".to_string();
     app.current_model = "glm-5.2".to_string(); // vision: false
     app.input = String::new();
     app.cursor_position = 0;
@@ -86,8 +89,11 @@ fn composer_image_paste_rejected_when_model_lacks_vision() {
 fn composer_image_paste_accepted_when_model_has_vision() {
     // When the current model supports vision, pasting an image on the main
     // prompt should stage the attachment and insert an `[Image #N]` chip.
+    // No picker-snapshot row exists for the route, so the gate falls back to
+    // the in-process static registry (gpt-4o baseline: vision: true).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.set_active_modal_for_test(Modal::None);
+    app.current_provider = "mock".to_string();
     app.current_model = "gpt-4o".to_string(); // vision: true
     app.input = String::new();
     app.cursor_position = 0;
@@ -115,6 +121,111 @@ fn composer_image_paste_accepted_when_model_has_vision() {
         "vision-capable model should show a success toast"
     );
     assert!(app.copy_toast_until.is_some());
+}
+
+#[test]
+fn composer_image_paste_follows_picker_snapshot_vision() {
+    // The snapshot's per-route `vision` flag is the authority: it is the
+    // daemon-side ADR-0149 resolution the TUI's own process cannot reproduce
+    // (a fitted relay model like `omen-alpha` exists only in the daemon's
+    // overlay — the client's static registry would say `vision: false` and
+    // wrongly reject the paste).
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::None);
+    app.current_provider = "gogo".to_string();
+    app.current_model = "omen-alpha".to_string();
+    app.provider_picker.rows.push(muta_contracts::ProviderPickerRow {
+        id: "gogo".to_string(),
+        name: "OpenCode Go".to_string(),
+        model: "omen-alpha".to_string(),
+        models: vec!["omen-alpha".to_string()],
+        model_info: vec![muta_contracts::ProviderModelInfo {
+            model: "omen-alpha".to_string(),
+            protocol: "openai".to_string(),
+            effort: None,
+            thinking: None,
+            favorite: false,
+            last_used_ms: None,
+            vision: true,
+        }],
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        preset_id: "opencode-go".to_string(),
+        client_identity: Default::default(),
+        last_used_ms: None,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
+    });
+    app.input = String::new();
+    app.cursor_position = 0;
+
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Image {
+            data: vec![0x89, 0x50, 0x4e, 0x47],
+            mime: "image/png".to_string(),
+        },
+    );
+
+    assert_eq!(
+        app.pending_images.len(),
+        1,
+        "snapshot vision=true must unlock the paste even though the \
+         in-process registry does not know the model"
+    );
+    assert!(!app.copy_toast_failed);
+}
+
+#[test]
+fn composer_image_paste_snapshot_override_forces_off() {
+    // The inverse layer-1 direction: the user forced `vision: false` on a
+    // baseline-vision-capable model, so the snapshot must veto the paste even
+    // though the in-process registry says the model takes images.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::None);
+    app.current_provider = "mock".to_string();
+    app.current_model = "gpt-4o".to_string();
+    app.provider_picker.rows.push(muta_contracts::ProviderPickerRow {
+        id: "mock".to_string(),
+        name: "Mock".to_string(),
+        model: "gpt-4o".to_string(),
+        models: vec!["gpt-4o".to_string()],
+        model_info: vec![muta_contracts::ProviderModelInfo {
+            model: "gpt-4o".to_string(),
+            protocol: "openai".to_string(),
+            effort: None,
+            thinking: None,
+            favorite: false,
+            last_used_ms: None,
+            vision: false,
+        }],
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        preset_id: String::new(),
+        client_identity: Default::default(),
+        last_used_ms: None,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
+    });
+    app.input = String::new();
+    app.cursor_position = 0;
+
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Image {
+            data: vec![0x89, 0x50, 0x4e, 0x47],
+            mime: "image/png".to_string(),
+        },
+    );
+
+    assert!(
+        app.pending_images.is_empty(),
+        "snapshot vision=false (user override) must veto the paste even \
+         though the static baseline says vision=true"
+    );
+    assert!(app.copy_toast_failed);
 }
 
 #[test]

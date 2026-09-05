@@ -1612,6 +1612,17 @@ pub struct ProviderModelInfo {
     /// snapshots deserialize as "never used".
     #[serde(default)]
     pub last_used_ms: Option<u64>,
+    /// Effective image-input support for this route — the **full** ADR-0149
+    /// capability resolution (user overrides over the remote advertisement
+    /// over the static baseline), resolved daemon-side in
+    /// `Channel::capabilities()`. Frontends gate image affordances (composer
+    /// paste, vision-only tools) on this flag instead of re-resolving the
+    /// model in their own process: the client's static registry cannot see
+    /// the daemon's fitted-model overlay or per-route overrides, so a
+    /// client-side resolution would disagree with what the daemon actually
+    /// routes. `false`-defaulted so older snapshots gate conservatively.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// Full snapshot of provider-picker state: which provider is the current

@@ -15,6 +15,30 @@ use crate::clipboard::{self, ClipboardRead, CopyOutcome};
 use crate::composer_attachments::{image_chip, paste_chip, paste_line_count, should_chip_paste};
 use crate::{App, Modal};
 
+/// Whether the currently active model route accepts image input.
+///
+/// The authority is the **daemon-built picker snapshot**: its per-model
+/// `vision` flag is the full ADR-0149 resolution (user overrides ⊕ remote
+/// advertisement ⊕ baseline) computed on the route the daemon will actually
+/// serve. The TUI process has no fitted-model overlay of its own, so a
+/// client-side `resolve_model` can lag the daemon (a relay model like
+/// `omen-alpha` exists only in the daemon's overlay). When the snapshot has
+/// no entry for the active route, fall back to the in-process resolution —
+/// conservative for unknown ids (the fallback model says `vision: false`).
+pub(crate) fn active_model_supports_vision(app: &App) -> bool {
+    app.provider_picker
+        .rows
+        .iter()
+        .find(|row| row.id == app.current_provider)
+        .and_then(|row| {
+            row.model_info
+                .iter()
+                .find(|info| info.model == app.current_model)
+        })
+        .map(|info| info.vision)
+        .unwrap_or_else(|| resolve_model(&app.current_model).vision)
+}
+
 /// Bound on each clipboard operation. A stuck reader must never freeze the
 /// event loop's poll cadence.
 const CLIP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -82,10 +106,10 @@ pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
 fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
     match read {
         ClipboardRead::Image { data, mime } => {
-            // If the current model doesn't support vision, reject the image
-            // paste with a toast rather than silently dropping it — the user
-            // should know why their paste didn't take.
-            if !resolve_model(&app.current_model).vision {
+            // If the current model route doesn't accept image input, reject
+            // the paste with a toast rather than silently dropping it — the
+            // user should know why their paste didn't take.
+            if !active_model_supports_vision(app) {
                 app.copy_toast_message = format!(
                     "{} does not support images — paste ignored",
                     app.current_model,
@@ -191,7 +215,7 @@ fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
             skipped += 1;
             continue;
         };
-        if !resolve_model(&app.current_model).vision {
+        if !active_model_supports_vision(app) {
             vision_blocked = true;
             break;
         }

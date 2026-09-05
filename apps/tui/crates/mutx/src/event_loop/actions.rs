@@ -601,6 +601,14 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // than firing a stale confirmation.
             handle_esc_interrupt_with_runtime(app, runtime, false).await;
         }
+        input::InputAction::OpenSessions => {
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Sessions,
+                runtime,
+                viewed_session_id,
+            );
+        }
         input::InputAction::OpenModels => {
             enter_panel(
                 app,

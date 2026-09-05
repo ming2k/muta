@@ -784,6 +784,7 @@ mod tests {
             thinking: None,
             favorite: false,
             last_used_ms: None,
+            vision: false,
         }
     }
 
