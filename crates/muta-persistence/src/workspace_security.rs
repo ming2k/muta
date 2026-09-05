@@ -7,7 +7,7 @@
 //! If project assets change (e.g. via git pull/checkout), trust drops back to
 //! Quarantined until explicitly reviewed again.
 
-use crate::{fsutil, paths};
+use crate::paths;
 use muta_contracts::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 use serde::{Deserialize, Serialize};
 
@@ -50,16 +50,23 @@ impl Default for PersistedWorkspaceSecurity {
 /// Durable store for workspace trust decisions.
 #[derive(Debug)]
 pub struct WorkspaceSecurityStore {
-    file: PathBuf,
+    db_path: PathBuf,
 }
 
 impl WorkspaceSecurityStore {
     pub fn load() -> Self {
-        Self::load_from(paths::get().workspace_security_file())
+        Self {
+            db_path: paths::get().db_file(),
+        }
     }
 
-    pub fn load_from(file: PathBuf) -> Self {
-        Self { file }
+    pub fn load_from(path: PathBuf) -> Self {
+        let db_path = if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            path.with_extension("db")
+        } else {
+            path
+        };
+        Self { db_path }
     }
 
     /// Compute the current, content-aware trust state for a workspace.
@@ -67,7 +74,7 @@ impl WorkspaceSecurityStore {
         let root = workspace_identity(workspace);
         let key = canonical_string(&root);
         let state = self.read_state().unwrap_or_else(|error| {
-            tracing::warn!(%error, path = %self.file.display(), "workspace security state is unreadable; failing closed");
+            tracing::warn!(%error, path = %self.db_path.display(), "workspace security state is unreadable; failing closed");
             PersistedWorkspaceSecurity::default()
         });
         let record = state.workspaces.get(&key).cloned().unwrap_or_default();
@@ -127,12 +134,6 @@ impl WorkspaceSecurityStore {
             return Ok(Vec::new());
         }
 
-        let _lock = fsutil::FileLock::acquire(&self.file).map_err(|error| {
-            format!(
-                "cannot lock workspace security state '{}': {error}",
-                self.file.display()
-            )
-        })?;
         let mut state = self.read_state_for_update()?;
         let record = state.workspaces.entry(key).or_default();
         for (domain, digest) in &digests {
@@ -147,12 +148,6 @@ impl WorkspaceSecurityStore {
     /// Revoke every project asset grant for a workspace.
     pub fn revoke_workspace(&self, workspace: &Path) -> Result<bool, String> {
         let key = canonical_string(&workspace_identity(workspace));
-        let _lock = fsutil::FileLock::acquire(&self.file).map_err(|error| {
-            format!(
-                "cannot lock workspace security state '{}': {error}",
-                self.file.display()
-            )
-        })?;
         let mut state = self.read_state_for_update()?;
         let changed = state.workspaces.remove(&key).is_some();
         if changed {
@@ -162,33 +157,48 @@ impl WorkspaceSecurityStore {
     }
 
     fn read_state(&self) -> Result<PersistedWorkspaceSecurity, String> {
-        let text = match std::fs::read_to_string(&self.file) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(PersistedWorkspaceSecurity::default());
-            }
-            Err(error) => {
+        let engine = match crate::db::DatabaseEngine::open(&self.db_path, None) {
+            Ok(e) => e,
+            Err(e) => {
                 return Err(format!(
-                    "cannot read workspace security state '{}': {error}",
-                    self.file.display()
+                    "cannot open sqlite db '{}': {e}",
+                    self.db_path.display()
                 ));
             }
         };
-        let state = serde_json::from_str::<PersistedWorkspaceSecurity>(&text).map_err(|error| {
-            format!(
-                "workspace security state '{}' is invalid JSON: {error}",
-                self.file.display()
-            )
-        })?;
-        if state.version != CURRENT_VERSION {
-            return Err(format!(
-                "workspace security state '{}' has unsupported version {}; expected {}",
-                self.file.display(),
-                state.version,
-                CURRENT_VERSION
-            ));
+
+        if let Ok(Some(state)) =
+            engine.get_json::<PersistedWorkspaceSecurity>("state:workspace_security")
+        {
+            if state.version != CURRENT_VERSION {
+                return Err(format!(
+                    "workspace security state in '{}' has unsupported version {}; expected {}",
+                    self.db_path.display(),
+                    state.version,
+                    CURRENT_VERSION
+                ));
+            }
+            return Ok(state);
         }
-        Ok(state)
+
+        // Check for legacy JSON file to migrate once and purge
+        let legacy_json = self.db_path.with_extension("json");
+        if legacy_json.exists() {
+            if let Ok(text) = std::fs::read_to_string(&legacy_json) {
+                if let Ok(state) = serde_json::from_str::<PersistedWorkspaceSecurity>(&text) {
+                    if state.version == CURRENT_VERSION {
+                        let _ = engine.set_json("state:workspace_security", &state);
+                        let _ = std::fs::remove_file(&legacy_json);
+                        let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));
+                        return Ok(state);
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&legacy_json);
+            let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));
+        }
+
+        Ok(PersistedWorkspaceSecurity::default())
     }
 
     /// Read state for an explicit new grant/revocation. Version 1 carried the
@@ -196,34 +206,15 @@ impl WorkspaceSecurityStore {
     /// independent domain authority, so an explicit mutation securely replaces
     /// it with an empty version-2 store.
     fn read_state_for_update(&self) -> Result<PersistedWorkspaceSecurity, String> {
-        match self.read_state() {
-            Ok(state) => Ok(state),
-            Err(error) => {
-                let legacy_v1 = std::fs::read_to_string(&self.file)
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                    .and_then(|value| value.get("version").and_then(|v| v.as_u64()))
-                    == Some(1);
-                if legacy_v1 {
-                    tracing::info!(
-                        path = %self.file.display(),
-                        "discarding aggregate workspace trust while recording a new domain decision"
-                    );
-                    Ok(PersistedWorkspaceSecurity::default())
-                } else {
-                    Err(error)
-                }
-            }
-        }
+        self.read_state()
     }
 
     fn persist(&self, state: &PersistedWorkspaceSecurity) -> Result<(), String> {
-        fsutil::atomic_write_json(&self.file, state).map_err(|error| {
-            format!(
-                "cannot persist workspace security state '{}': {error}",
-                self.file.display()
-            )
-        })
+        let engine = crate::db::DatabaseEngine::open(&self.db_path, None)
+            .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
+        engine
+            .set_json("state:workspace_security", state)
+            .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
     }
 }
 

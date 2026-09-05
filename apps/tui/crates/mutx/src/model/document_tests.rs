@@ -954,7 +954,7 @@ fn notice_strips_terminal_controls_from_crlf_http_errors() {
     assert!(!n.raw.chars().any(|c| c.is_control() && c != '\n'));
 }
 
-/// Streaming thinking rows read as a live token count (`Thinking · N
+/// Streaming thinking rows read as a live token count (`Thinking  N
 /// tokens`), not an estimate; finished traces settle to the final line with
 /// the duration.
 #[test]
@@ -962,7 +962,7 @@ fn thinking_summary_sprays_tokens_then_settles() {
     // Short stream: exact per-token count.
     let streaming = TranscriptMessage::thinking("one two three four five");
     let summary = streaming.thinking_summary().unwrap();
-    assert!(summary.starts_with("Thinking · "), "got: {summary}");
+    assert!(summary.starts_with("Thinking  "), "got: {summary}");
     assert!(summary.ends_with(" tokens"), "got: {summary}");
     assert!(!summary.contains('~'), "no estimate tilde: {summary}");
 
@@ -973,7 +973,7 @@ fn thinking_summary_sprays_tokens_then_settles() {
     let shown = deep
         .thinking_summary()
         .unwrap()
-        .trim_start_matches("Thinking · ")
+        .trim_start_matches("Thinking  ")
         .trim_end_matches(" tokens")
         .replace(' ', "")
         .parse::<usize>()
@@ -989,10 +989,10 @@ fn thinking_summary_sprays_tokens_then_settles() {
     done.set_thinking_duration(2_400);
     let settled = done.thinking_summary().unwrap();
     assert!(
-        settled.starts_with(&format!("Thinking · {actual} tokens")),
+        settled.starts_with(&format!("Thinking  {actual} tokens")),
         "exact count when finished: {settled}"
     );
-    assert!(settled.ends_with("2.4s"), "humanized duration: {settled}");
+    assert!(settled.ends_with("(2.4s)"), "humanized duration: {settled}");
 }
 
 #[test]
@@ -1003,7 +1003,7 @@ fn thinking_summary_handles_structured_milestones() {
     let streaming_single = TranscriptMessage::thinking("**Planning architectural changes**\n\n");
     assert_eq!(
         streaming_single.thinking_summary().as_deref(),
-        Some("Thinking · Planning architectural changes")
+        Some("Thinking  Planning architectural changes")
     );
 
     // Live streaming updating to subsequent milestone heading
@@ -1012,7 +1012,7 @@ fn thinking_summary_handles_structured_milestones() {
     );
     assert_eq!(
         streaming_multi.thinking_summary().as_deref(),
-        Some("Thinking · Executing database migration")
+        Some("Thinking  Executing database migration")
     );
 
     // Helper functions verification
@@ -1034,10 +1034,10 @@ fn thinking_summary_handles_structured_milestones() {
     done_multi.set_thinking_duration(4_500);
     let summary = done_multi.thinking_summary().unwrap();
     assert!(
-        summary.starts_with("Thinking · 3 steps · "),
+        summary.starts_with("Thinking  3 steps  "),
         "got: {summary}"
     );
-    assert!(summary.ends_with("4.5s"), "got: {summary}");
+    assert!(summary.ends_with("(4.5s)"), "got: {summary}");
 
     // Finished trace with single milestone
     let mut done_single =
@@ -1045,6 +1045,6 @@ fn thinking_summary_handles_structured_milestones() {
     done_single.set_thinking_duration(1_200);
     assert_eq!(
         done_single.thinking_summary().as_deref(),
-        Some("Thinking · Planning architectural changes · 1.2s")
+        Some("Thinking  Planning architectural changes (1.2s)")
     );
 }

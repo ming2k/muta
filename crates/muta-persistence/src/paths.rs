@@ -165,14 +165,6 @@ impl Dirs {
         self.state_dir.join("web_connections.toml")
     }
 
-    /// `$XDG_STATE_HOME/muta/route_settings.json` — the user's per-route
-    /// reasoning overrides (ADR-0014 category: state, *not* cache; deleting
-    /// them loses user configuration no endpoint can re-derive). See
-    /// [`crate::route_settings::RouteSettingsStore`].
-    pub fn route_settings_file(&self) -> PathBuf {
-        self.state_dir.join("route_settings.json")
-    }
-
     /// Cached model discovery lists and capability metadata (`$XDG_CACHE_HOME/muta/models_discovery.json`).
     pub fn discovery_cache_file(&self) -> PathBuf {
         self.cache_dir.join("models_discovery.json")
@@ -223,20 +215,6 @@ impl Dirs {
         self.data_dir.join("commands")
     }
 
-    /// Per-model usage telemetry (`last_used`, use count) driving recency
-    /// ordering in the connection picker. Rebuildable: loss affects sort
-    /// order only, never configuration. Stored under `$XDG_STATE_HOME`.
-    pub fn connection_usage_file(&self) -> PathBuf {
-        self.state_dir.join("connection_usage.json")
-    }
-
-    /// Versioned workspace authority plus content-bound extension trust.
-    /// Loss safely returns both axes to their ungranted defaults; this is
-    /// program state, never user configuration.
-    pub fn workspace_security_file(&self) -> PathBuf {
-        self.state_dir.join("workspace_security.json")
-    }
-
     /// Per-project directory holding every session file. As of ADR-0018 each
     /// live `muta` instance pins its own `sessions/<id>.json` plus
     /// `sessions/<id>.jsonl` here, so concurrent instances never share a
@@ -284,24 +262,6 @@ impl Dirs {
     /// and by `Self::ensure` in tests.
     pub fn log_dir(&self) -> PathBuf {
         self.state_dir.join("log")
-    }
-
-    /// Cross-session usage statistics root (ADR-0122): the durable,
-    /// day-partitioned mirror of the token ledger. Sits at
-    /// `<data_dir>/usage` — a **sibling of [`Self::projects_dir`]**, never
-    /// inside a project bucket — so clearing session history (deleting
-    /// sessions or whole project buckets) can never touch it. One JSON file
-    /// per local day lives under `usage/daily/`.
-    pub fn usage_stats_dir(&self) -> PathBuf {
-        self.data_dir.join("usage")
-    }
-
-    /// One day's usage-statistics file: `usage/daily/<YYYY-MM-DD>.json`.
-    /// The day key is produced by [`muta_contracts::day_key_from_epoch_ms`].
-    pub fn usage_stats_day_file(&self, day: &str) -> PathBuf {
-        self.usage_stats_dir()
-            .join("daily")
-            .join(format!("{day}.json"))
     }
 
     // ---- helpers -----------------------------------------------------------

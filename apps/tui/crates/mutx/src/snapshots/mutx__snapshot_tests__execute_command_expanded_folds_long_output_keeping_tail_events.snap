@@ -2,7 +2,7 @@
 source: apps/tui/crates/mutx/src/snapshot_tests.rs
 expression: "render_grid(&m, 80, 40)"
 ---
-- Run cargo build (failed 0ms)
+- Run cargo (failed 0ms)
   $ cargo build
   line 1
   line 2

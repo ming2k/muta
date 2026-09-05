@@ -2186,9 +2186,9 @@ impl TranscriptMessage {
     /// context window.
     ///
     /// Live style: while the trace streams, unstructured traces count tokens up
-    /// as they arrive (`Thinking · 148 tokens`), reading like a filling meter.
+    /// as they arrive (`Thinking  148 tokens`), reading like a filling meter.
     /// A finished trace settles into its final form and appends the duration
-    /// (`Thinking · 1318 tokens · 2.4s` or `Thinking · 3 steps · 180 tokens · 2.4s`).
+    /// (`Thinking  1318 tokens (2.4s)` or `Thinking  3 steps  180 tokens (2.4s)`).
     pub fn thinking_summary(&self) -> Option<String> {
         /// Live-count floor applied while streaming (see method doc).
         const STREAM_COUNT_QUANTUM: usize = 25;
@@ -2212,7 +2212,7 @@ impl TranscriptMessage {
         Some(match duration_ms {
             None => {
                 if let Some(milestone) = active_milestone {
-                    format!("Thinking · {milestone}")
+                    format!("Thinking  {milestone}")
                 } else {
                     // Floor to the quantum once the count grows past the
                     // per-token regime so the number climbs in visible steps
@@ -2222,19 +2222,19 @@ impl TranscriptMessage {
                     } else {
                         tokens - tokens % STREAM_COUNT_QUANTUM
                     };
-                    format!("Thinking · {shown} tokens")
+                    format!("Thinking  {shown} tokens")
                 }
             }
             Some(ms) => {
                 let duration = duration_text(Some(*ms));
                 if milestones > 1 {
-                    format!("Thinking · {milestones} steps · {tokens} tokens · {duration}")
+                    format!("Thinking  {milestones} steps  {tokens} tokens ({duration})")
                 } else if milestones == 1
                     && let Some(milestone) = active_milestone
                 {
-                    format!("Thinking · {milestone} · {duration}")
+                    format!("Thinking  {milestone} ({duration})")
                 } else {
-                    format!("Thinking · {tokens} tokens · {duration}")
+                    format!("Thinking  {tokens} tokens ({duration})")
                 }
             }
         })

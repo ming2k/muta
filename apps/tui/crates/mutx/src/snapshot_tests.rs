@@ -1269,7 +1269,7 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         .expect("tool header must render");
 
     assert_eq!(
-        rows[turn_idx], "  > turn 7  claude-sonnet (high)",
+        rows[turn_idx], "  > turn 7  claude-sonnet high",
         "turn header renders anchor  model effort:\n{grid}"
     );
     assert_eq!(
@@ -1342,7 +1342,8 @@ fn turn_header_with_model_effort_and_timestamp() {
     assert!(
         rows[turn_idx].contains("> turn 13")
             && rows[turn_idx].contains("glm-5.3")
-            && rows[turn_idx].contains("(xhigh)")
+            && rows[turn_idx].contains("xhigh")
+            && !rows[turn_idx].contains("(xhigh)")
             && rows[turn_idx].contains(&time_label),
         "turn header renders anchor  model effort  time:\n{grid}"
     );

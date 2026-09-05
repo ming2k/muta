@@ -7,8 +7,8 @@ pub struct ExecuteCommandPresenter;
 impl ToolPresenter for ExecuteCommandPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("command")
-            .and_then(command_summary)
-            .map(|name| format!("Run {}", truncate(&name, 64)))
+            .and_then(extract_comm)
+            .map(|comm| format!("Run {}", truncate(&comm, 64)))
             .unwrap_or_else(|| "Run command".to_string())
     }
 
@@ -35,7 +35,6 @@ impl ToolPresenter for ExecuteCommandPresenter {
 ///
 /// Strips directory paths (`/usr/bin/`, `C:\tools\`), Windows file extensions (`.exe`, `.cmd`),
 /// and wrapper utilities (`sudo`, `env`, `nohup`).
-#[cfg(test)]
 pub fn extract_comm(command: &str) -> Option<String> {
     for words in shell_segments(command) {
         let mut words_iter = words.into_iter().skip_while(|word| is_assignment(word));
@@ -112,6 +111,7 @@ fn is_wrapper(comm: &str) -> bool {
 /// Surfaces the executable (`comm`) and key arguments (e.g. `Run python3 test.py`,
 /// `Run cargo test`) while skipping shell setup boilerplate (`cd ... &&`,
 /// variable assignments, wrapper utilities). Multi-line scripts use their first executable segment.
+#[cfg(test)]
 fn command_summary(command: &str) -> Option<String> {
     for words in shell_segments(command) {
         let mut words_iter = words.into_iter().skip_while(|word| is_assignment(word));

@@ -332,13 +332,13 @@ mod tests {
     }
 
     #[test]
-    fn execute_command_summary_includes_executable_and_args() {
+    fn execute_command_summary_uses_comm_name() {
         assert_eq!(
             summary(
                 "execute_command",
                 serde_json::json!({"command": "cargo build\nmore"})
             ),
-            "Run cargo build"
+            "Run cargo"
         );
     }
 

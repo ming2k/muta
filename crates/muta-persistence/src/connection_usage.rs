@@ -47,18 +47,32 @@ pub struct ConnectionUsage {
 }
 
 impl ConnectionUsage {
-    /// Load from SQLite database or fallback to the legacy state file.
+    /// Load from SQLite database (SSOT), with one-time migration and cleanup of any legacy state file.
     pub fn load() -> Self {
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&paths::get().db_file(), None)
-            && let Ok(Some(usage)) = engine.get_json::<Self>("state:connection_usage")
-        {
-            return usage;
+        let db_path = paths::get().db_file();
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
+            if let Ok(Some(usage)) = engine.get_json::<Self>("state:connection_usage") {
+                return usage;
+            }
+            let legacy_path = paths::get().state_dir.join("connection_usage.json");
+            if legacy_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&legacy_path)
+                    && let Ok(usage) = serde_json::from_str::<Self>(&content)
+                {
+                    let _ = engine.set_json("state:connection_usage", &usage);
+                    let _ = std::fs::remove_file(&legacy_path);
+                    let _ = std::fs::remove_file(
+                        paths::get().state_dir.join("connection_usage.json.lock"),
+                    );
+                    return usage;
+                }
+                let _ = std::fs::remove_file(&legacy_path);
+                let _ = std::fs::remove_file(
+                    paths::get().state_dir.join("connection_usage.json.lock"),
+                );
+            }
         }
-        let path = paths::get().connection_usage_file();
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&content).unwrap_or_default()
+        Self::default()
     }
 
     /// Record an activation of connection `id`. Bumps `last_used_ms` to now, and
@@ -89,7 +103,7 @@ impl ConnectionUsage {
         self.last_models.get(connection_id).map(|m| m.as_str())
     }
 
-    /// Persist atomically into SQLite (SSOT), with fallback to legacy file when DB unavailable.
+    /// Persist atomically into SQLite (SSOT).
     pub fn save(&self) -> Result<(), String> {
         let mut merged = ConnectionUsage::load();
         for (id, entry) in &self.connections {
@@ -112,19 +126,12 @@ impl ConnectionUsage {
                     .insert(connection_id.clone(), model.clone());
             }
         }
-        if crate::db::get_persistence_handle()
-            .set_json_blocking("state:connection_usage", &merged)
-            .is_ok()
-        {
-            return Ok(());
-        }
-        let path = paths::get().connection_usage_file();
-        let _lock = crate::fsutil::FileLock::acquire(&path)
-            .map_err(|e| format!("could not lock usage file: {e}"))?;
-        let json = serde_json::to_string_pretty(&merged)
-            .map_err(|e| format!("could not serialize usage store: {e}"))?;
-        crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
-            .map_err(|e| format!("could not persist usage store: {e}"))
+        let db_path = paths::get().db_file();
+        let engine = crate::db::DatabaseEngine::open(&db_path, None)
+            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
+        engine
+            .set_json("state:connection_usage", &merged)
+            .map_err(|e| format!("could not persist connection usage to sqlite: {e}"))
     }
 
     /// Remove a connection and its associated last_model pointer.
@@ -169,15 +176,14 @@ impl ConnectionUsage {
         changed
     }
 
-    /// Persist this usage state directly and atomically to disk without resurrecting pruned entries.
+    /// Persist this usage state directly and atomically to SQLite (SSOT).
     pub fn save_exact(&self) -> Result<(), String> {
-        let path = paths::get().connection_usage_file();
-        let _lock = crate::fsutil::FileLock::acquire(&path)
-            .map_err(|e| format!("could not lock usage file: {e}"))?;
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("could not serialize usage store: {e}"))?;
-        crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
-            .map_err(|e| format!("could not persist usage store: {e}"))
+        let db_path = paths::get().db_file();
+        let engine = crate::db::DatabaseEngine::open(&db_path, None)
+            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
+        engine
+            .set_json("state:connection_usage", self)
+            .map_err(|e| format!("could not persist usage store to sqlite: {e}"))
     }
 
     /// Recency (epoch ms) of connection `id`, or `0` if never activated.

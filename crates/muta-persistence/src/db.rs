@@ -992,6 +992,20 @@ impl DatabaseEngine {
         Ok(affected > 0)
     }
 
+    /// List keys with a given prefix, ordered descending.
+    pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        let pattern = format!("{prefix}%");
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key FROM kv_store WHERE key LIKE ?1 ORDER BY key DESC")?;
+        let rows = stmt.query_map(params![pattern], |row| row.get(0))?;
+        let mut keys = Vec::new();
+        for k in rows {
+            keys.push(k?);
+        }
+        Ok(keys)
+    }
+
     // --- FTS5 Full-Text History Search (proto.muta.v1.MutaService/SearchHistory) ---
 
     /// Perform BM25 full-text search across messages, optionally filtered by workspace root.

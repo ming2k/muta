@@ -21,8 +21,7 @@
 //! - **Unreadable days are non-fatal**: a corrupt/undecodable day file is
 //!   skipped with a warning — usage telemetry must never take the app down.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use muta_contracts::usage_stats::{
     UsageStatRecord, UsageStatsReport, aggregate_usage_records, day_key_from_epoch_ms,
@@ -30,7 +29,6 @@ use muta_contracts::usage_stats::{
 use muta_contracts::{RequestUsageKey, RequestUsageRecord, RequestUsageSource};
 use serde::{Deserialize, Serialize};
 
-use crate::fsutil::{FileLock, atomic_write_json};
 use crate::paths;
 
 /// How many day files the report reads (newest first) before aggregation.
@@ -75,44 +73,82 @@ impl UsageStatsStore {
     fn root(&self) -> PathBuf {
         self.root
             .clone()
-            .unwrap_or_else(|| paths::get().usage_stats_dir())
+            .unwrap_or_else(|| paths::get().data_dir.join("usage"))
+    }
+
+    fn db_path(&self) -> PathBuf {
+        if let Some(ref r) = self.root {
+            r.join("usage.db")
+        } else {
+            paths::get().db_file()
+        }
     }
 
     fn daily_dir(&self) -> PathBuf {
         self.root().join("daily")
     }
 
-    fn day_file(&self, day: &str) -> PathBuf {
-        if self.root.is_some() {
-            self.root().join("daily").join(format!("{day}.json"))
-        } else {
-            paths::get().usage_stats_day_file(day)
-        }
+    pub fn day_file(&self, day: &str) -> PathBuf {
+        let dir = self.daily_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("{day}.json"))
     }
 
-    /// Delete day files older than `RETAINED_DAYS` newest days. Best-effort
-    /// and cheap (a directory listing); called opportunistically from the
-    /// settle path so telemetry cannot grow unboundedly. Returns the number
-    /// of files removed.
+    fn read_day(&self, day: &str) -> DayFile {
+        let legacy = self.day_file(day);
+        if legacy.exists() {
+            if let Ok(content) = std::fs::read_to_string(&legacy) {
+                if let Ok(parsed) = serde_json::from_str::<DayFile>(&content) {
+                    if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
+                        let _ = engine.set_json(&format!("usage:day:{day}"), &parsed);
+                    }
+                    return parsed;
+                }
+            }
+            return DayFile::default();
+        }
+
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
+            let key = format!("usage:day:{day}");
+            if let Ok(Some(day_file)) = engine.get_json::<DayFile>(&key) {
+                return day_file;
+            }
+        }
+        DayFile::default()
+    }
+
+    fn persist_day(&self, day: &str, day_file: &DayFile) -> Result<(), String> {
+        let db_path = self.db_path();
+        let engine = crate::db::DatabaseEngine::open(&db_path, None)
+            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
+        engine
+            .set_json(&format!("usage:day:{day}"), day_file)
+            .map_err(|e| format!("could not persist usage day to sqlite: {e}"))
+    }
+
+    /// Delete day records older than `RETAINED_DAYS` newest days. Returns the number of days removed.
     pub fn prune_old_days(&self) -> usize {
         let days = self.list_days();
         if days.len() <= RETAINED_DAYS {
             return 0;
         }
+        let db_path = self.db_path();
+        let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) else {
+            return 0;
+        };
         let mut removed = 0;
         for day in days.into_iter().skip(RETAINED_DAYS) {
-            if std::fs::remove_file(self.day_file(&day)).is_ok() {
+            let key = format!("usage:day:{day}");
+            if engine.delete_kv(&key).unwrap_or(false) {
                 removed += 1;
             }
+            let _ = std::fs::remove_file(self.day_file(&day));
+            let _ = std::fs::remove_file(self.day_file(&day).with_extension("json.lock"));
         }
         removed
     }
 
-    /// Append one terminal request record to its day file. Idempotent per
-    /// [`RequestUsageKey`]; a reported replay upgrades an estimated record.
-    ///
-    /// `recorded_at_ms` decides the day bucket (local timezone); `project`
-    /// is the already-hashed project bucket name (empty = unknown).
+    /// Append one terminal request record to its day bucket in SQLite (SSOT).
     pub fn record(
         &self,
         recorded_at_ms: u64,
@@ -123,25 +159,21 @@ impl UsageStatsStore {
             return Ok(());
         }
         let day = day_key_from_epoch_ms(recorded_at_ms);
-        let path = self.day_file(&day);
-        let mut day_file = read_day_file(&path);
+        let mut day_file = self.read_day(&day);
         upsert_record(
             &mut day_file,
             UsageStatRecord {
-                day,
+                day: day.clone(),
                 recorded_at_ms,
                 project: project.to_string(),
                 record: record.clone(),
             },
         );
-        persist_day_file(&path, &day_file)
+        self.persist_day(&day, &day_file)
     }
 
-    /// Append many records at once (batch flush). Each lands in its own day
-    /// bucket; the whole batch shares one lock acquisition per distinct day
-    /// file.
+    /// Append many records at once (batch flush).
     pub fn record_batch(&self, entries: &[(u64, &str, RequestUsageRecord)]) -> Result<(), String> {
-        // Group by day so each day file is loaded, mutated, and written once.
         let mut by_day: std::collections::BTreeMap<String, Vec<UsageStatRecord>> =
             std::collections::BTreeMap::new();
         for (recorded_at_ms, project, record) in entries {
@@ -160,32 +192,26 @@ impl UsageStatsStore {
                 });
         }
         for (day, records) in by_day {
-            let path = self.day_file(&day);
-            let mut day_file = read_day_file(&path);
+            let mut day_file = self.read_day(&day);
             for entry in records {
                 upsert_record(&mut day_file, entry);
             }
-            persist_day_file(&path, &day_file)?;
+            self.persist_day(&day, &day_file)?;
         }
         Ok(())
     }
 
-    /// Every record across the report window, oldest day first. Corrupt day
-    /// files are skipped with a warning.
+    /// Every record across the report window, oldest day first.
     pub fn all_records(&self) -> Vec<UsageStatRecord> {
         let mut days = self.list_days();
-        // Newest first from `list_days`; the report wants oldest first.
         days.reverse();
-        // Bound the read window to the newest `REPORT_DAY_WINDOW` days so a
-        // multi-year store cannot make a `/usage` query unbounded.
         if days.len() > REPORT_DAY_WINDOW {
             let start = days.len() - REPORT_DAY_WINDOW;
             days.drain(..start);
         }
         let mut out = Vec::new();
         for day in days {
-            let path = self.day_file(&day);
-            out.extend(read_day_file(&path).records);
+            out.extend(self.read_day(&day).records);
         }
         out
     }
@@ -195,68 +221,49 @@ impl UsageStatsStore {
         aggregate_usage_records(&self.all_records(), event_cap)
     }
 
-    /// Day keys present on disk, newest first. Files that do not match the
-    /// `YYYY-MM-DD.json` naming are ignored.
+    /// Day keys present in SQLite (and any legacy disk cache), newest first.
     fn list_days(&self) -> Vec<String> {
-        let Ok(entries) = std::fs::read_dir(self.daily_dir()) else {
-            return Vec::new();
-        };
-        let mut days: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
-            .filter_map(|entry| {
-                entry
-                    .path()
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .map(|stem| stem.to_string())
-            })
-            .filter(|stem| {
-                stem.len() == 10
-                    && stem.as_bytes()[4] == b'-'
-                    && stem.as_bytes()[7] == b'-'
-                    && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-            })
-            .collect();
+        let db_path = self.db_path();
+        let mut days = Vec::new();
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
+            if let Ok(keys) = engine.list_kv_keys_with_prefix("usage:day:") {
+                for key in keys {
+                    if let Some(day) = key.strip_prefix("usage:day:") {
+                        if day.len() == 10
+                            && day.as_bytes()[4] == b'-'
+                            && day.as_bytes()[7] == b'-'
+                            && day.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                        {
+                            days.push(day.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let daily = self.daily_dir();
+        if daily.exists() {
+            if let Ok(entries) = std::fs::read_dir(&daily) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|e| e == "json") {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            if stem.len() == 10
+                                && stem.as_bytes()[4] == b'-'
+                                && stem.as_bytes()[7] == b'-'
+                                && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                                && !days.contains(&stem.to_string())
+                            {
+                                days.push(stem.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         days.sort();
         days.reverse();
         days
     }
-}
-
-/// Load a day file. Missing file → empty; corrupt file → empty (with a
-/// warning) — usage telemetry must never crash the app.
-fn read_day_file(path: &Path) -> DayFile {
-    let mut file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return DayFile::default(),
-    };
-    let mut content = String::new();
-    if file.read_to_string(&mut content).is_err() {
-        return DayFile::default();
-    }
-    match serde_json::from_str(&content) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "skipping unreadable usage-stats day file"
-            );
-            DayFile::default()
-        }
-    }
-}
-
-/// Write a day file under its companion lock and synchronize with SQLite.
-fn persist_day_file(path: &Path, day_file: &DayFile) -> Result<(), String> {
-    let _lock = FileLock::acquire(path).map_err(|e| e.to_string())?;
-    atomic_write_json(path, &day_file)?;
-    if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
-        let _ = crate::db::get_persistence_handle()
-            .set_json_blocking(&format!("usage:day:{file_name}"), day_file);
-    }
-    Ok(())
 }
 
 /// Insert-or-upgrade one record. Same-key replay is idempotent; a reported
