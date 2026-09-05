@@ -25,22 +25,15 @@ impl SessionStore {
         self.state.lock().await.data.todos.clone()
     }
 
-    /// Replace the task list. Persists both the snapshot and the event log so
-    /// resume restores the same list (and so per-item history is retained in
-    /// the log).
+    /// Replace the task list.
     pub async fn set_todos(&self, todos: muta_contracts::TodoList) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.todos = todos.clone();
+            state.data.todos = todos;
             state.data.updated_at = unix_timestamp();
-            // The guard reads the post-mutation state: a non-empty list makes
-            // the session substantive and persists; clearing the list on a
-            // never-persisted empty session stays in memory.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state.event_log.append(SessionEvent::TodosSet { todos })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -68,18 +61,11 @@ impl SessionStore {
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.scheduled_jobs = jobs.clone();
+            state.data.scheduled_jobs = jobs;
             state.data.updated_at = unix_timestamp();
-            // Adding at least one job is a substantive action that persists the
-            // session (the post-mutation state is non-empty); clearing the
-            // schedule on a never-persisted empty session stays in memory.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::ScheduledJobsSet { jobs })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -107,25 +93,16 @@ impl SessionStore {
     /// Replace the session title. `manual = true` marks a user-set title
     /// (`/title <text>`) that AI generation will not overwrite; the AI runner
     /// and on-demand refresh always pass `false`. Pass `title = None` with
-    /// `manual = false` to clear. Persists both the snapshot and the event log
-    /// so resume restores the same title.
+    /// `manual = false` to clear.
     pub async fn set_title(&self, title: Option<String>, manual: bool) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.title = title.clone();
+            state.data.title = title;
             state.data.title_manual = manual;
             state.data.updated_at = unix_timestamp();
-            // An empty, never-persisted session stays unpersisted even when a
-            // title is set: a session with a title but no messages is still
-            // empty content, and writing it would surface it in the picker as
-            // empty-session litter.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::TitleSet { title, manual })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -149,8 +126,7 @@ impl SessionStore {
 
     /// Replace the session digest together with the transcript anchor it
     /// was generated at (the refresh throttle's watermark). `digest = None`
-    /// clears both. Persists the snapshot and event log so resume restores
-    /// the same digest.
+    /// clears both.
     pub async fn set_digest(
         &self,
         digest: Option<muta_contracts::SessionDigest>,
@@ -158,20 +134,12 @@ impl SessionStore {
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.digest = digest.clone();
-            state.data.digest_anchor = digest.as_ref().map(|_| anchor);
+            state.data.digest = digest;
+            state.data.digest_anchor = if state.data.digest.is_some() { Some(anchor) } else { None };
             state.data.updated_at = unix_timestamp();
-            // Like `set_title`: an empty, never-persisted session stays
-            // unpersisted — a digest with no messages is empty-content
-            // litter. The first-request trigger runs after the round's
-            // messages are admitted, so in practice content already exists.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::DigestSet { digest, anchor })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -200,17 +168,11 @@ impl SessionStore {
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.disabled_tools = tools.clone();
+            state.data.disabled_tools = tools;
             state.data.updated_at = unix_timestamp();
-            // A non-empty mask is substantive and persists; an empty mask on a
-            // never-persisted empty session stays in memory.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::DisabledToolsSet { tools })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -238,11 +200,7 @@ impl SessionStore {
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::DelegatedSet { enabled })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -267,15 +225,9 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.round_counter = counter;
             state.data.updated_at = unix_timestamp();
-            // A non-zero counter marks a started round and persists; writing 0
-            // to a never-persisted empty session stays in memory.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::RoundCounterSet { counter })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -293,12 +245,7 @@ impl SessionStore {
 
     /// Replace the session's request ledger. Callers pass records already
     /// scoped to the active session; the store validates that boundary before
-    /// appending the snapshot event.
-    ///
-    /// The diff is computed through a key→record index built once per call
-    /// (`O((n+m) log n)`); the previous nested scans (`any`-inside-`any`
-    /// plus a `find` per record) made every post-round persist quadratic in
-    /// the session's lifetime request count.
+    /// updating.
     pub async fn set_request_usage_records(
         &self,
         records: Vec<muta_contracts::RequestUsageRecord>,
@@ -311,8 +258,6 @@ impl SessionStore {
             {
                 return Err("request usage record belongs to another session".to_string());
             }
-            // Index the incoming set once; every membership test below is a
-            // lookup instead of a rescan.
             let incoming: std::collections::BTreeMap<
                 &muta_contracts::RequestUsageKey,
                 &muta_contracts::RequestUsageRecord,
@@ -328,31 +273,11 @@ impl SessionStore {
             if state.data.request_usage_records == records {
                 return Ok(());
             }
-            let existing: std::collections::BTreeMap<
-                &muta_contracts::RequestUsageKey,
-                &muta_contracts::RequestUsageRecord,
-            > = state
-                .data
-                .request_usage_records
-                .iter()
-                .map(|r| (&r.key, r))
-                .collect();
-            let changed = records
-                .iter()
-                .filter(|record| existing.get(&record.key) != Some(record))
-                .cloned()
-                .collect::<Vec<_>>();
-            state.data.request_usage_records = records.clone();
+            state.data.request_usage_records = records;
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                for record in changed {
-                    state
-                        .event_log
-                        .append(SessionEvent::RequestUsageUpsert { record })?;
-                }
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -369,31 +294,19 @@ impl SessionStore {
         self.state.lock().await.data.provider_selection.clone()
     }
 
-    /// Replace the session-scoped provider + model pin (C6). Persists both the
-    /// snapshot and the event log so resume restores the session's own provider
-    /// instead of the global default. This is the single write path for the
-    /// per-session provider override; the `/models` switch handler calls it
-    /// instead of mutating `config.toml`'s selection, so one session switching
-    /// provider/model never affects another.
-    ///
-    /// A provider pin on an otherwise-empty, never-yet-persisted session is
-    /// **not** persisted (the `empty_unpersisted` guard): such a session has no
-    /// real content, so writing it would leave empty-session litter behind.
+    /// Replace the session-scoped provider + model pin (C6). Persists to SQLite
+    /// so resume restores the session's own provider instead of the global default.
     pub async fn set_provider_selection(
         &self,
         selection: Option<ProviderSelection>,
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.provider_selection = selection.clone();
+            state.data.provider_selection = selection;
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
-                ensure_event_log_started(&state.event_log, &state.data)?;
-                state
-                    .event_log
-                    .append(SessionEvent::ProviderSelectionSet { selection })?;
-                state.data.applied_seq = state.event_log.high_seq();
+                state.defer_persist = false;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };

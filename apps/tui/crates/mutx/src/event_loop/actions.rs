@@ -1143,6 +1143,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     .min(app.sessions_overview.len().saturating_sub(1)),
             ) {
                 let id = session.id.clone();
+                let short_id = crate::session::short_session_id(&id);
                 app.hide_active_panel();
                 app.modal_index = 0;
                 // A session was chosen from the startup picker, so a
@@ -1150,6 +1151,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 // `/sessions` modals should behave as ordinary
                 // transient overlays (Esc = dismiss, not quit).
                 app.startup_overlay = crate::StartupOverlay::None;
+                app.switching_session = Some(short_id.clone());
+                *runtime.switching_session.lock().await = Some(short_id);
+                app.messages.clear();
+                app.scroll = 0;
                 let _ = app
                     .tx
                     .send(AgentRequest::SlashCommand(format!("/sessions {}", id)));

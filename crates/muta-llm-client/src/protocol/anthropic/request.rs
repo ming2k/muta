@@ -393,13 +393,13 @@ pub fn message_obj(m: Message) -> Value {
             // we have reasoning text AND its server-assigned signature.
             if let Some(reasoning) = m.reasoning_content.as_ref()
                 && !reasoning.is_empty()
+                && let Some(sig) = thinking_signature_of(&m)
             {
-                let signature = thinking_signature_of(&m);
-                let mut block = json!({"type":"thinking","thinking": reasoning});
-                if let Some(sig) = signature {
-                    block["signature"] = json!(sig);
-                }
-                blocks.push(block);
+                blocks.push(json!({
+                    "type": "thinking",
+                    "thinking": reasoning,
+                    "signature": sig,
+                }));
             }
             if !m.content.is_empty() {
                 blocks.push(json!({"type":"text","text": m.content}));

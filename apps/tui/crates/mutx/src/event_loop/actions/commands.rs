@@ -213,6 +213,17 @@ pub(crate) async fn handle_send_slash(
     // transcript keeps one row per command, live and after resume alike.
     // The invocation is still recorded in input history for ↑/Ctrl+R recall.
     let (cmd_name, cmd_args) = split_command_word(&cmd);
+    if (cmd_name == "sessions" || cmd_name == "resume" || cmd_name == "session")
+        && !cmd_args.trim().is_empty()
+        && !cmd_args.trim().starts_with("list")
+    {
+        let target = cmd_args.trim().split_whitespace().next().unwrap_or(cmd_args.trim());
+        let short_id = crate::session::short_session_id(target);
+        app.switching_session = Some(short_id.clone());
+        *runtime.switching_session.lock().await = Some(short_id);
+        app.messages.clear();
+        app.scroll = 0;
+    }
     runtime
         .messages
         .write()

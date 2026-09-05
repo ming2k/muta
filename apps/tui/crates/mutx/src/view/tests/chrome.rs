@@ -250,6 +250,7 @@ fn redesigned_components_render_without_panicking() {
                 session_info_detail: false,
                 session_detail: None,
                 session_info_scroll: &mut 0,
+                sessions_loading: false,
             },
             &theme,
             &selection,

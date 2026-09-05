@@ -246,7 +246,7 @@ fn effective_logo(user_logo: Option<&[String]>) -> Vec<&str> {
 /// The app shell selects the variant; the view layer owns the copy and
 /// styling. This keeps the policy (when to nudge) in the shell and the
 /// presentation (what the nudge looks like) in the renderer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum EmptyStateGuidance {
     /// The rotating tour: the help carousel alone. The default — a calm
     /// landing strip that teaches one durable capability at a time instead
@@ -258,6 +258,8 @@ pub enum EmptyStateGuidance {
     /// nowhere. This is a real setup blocker, not onboarding — it clears the
     /// moment a keyed provider exists.
     NeedsProvider,
+    /// A prior session is currently being loaded / resumed.
+    LoadingSession(String),
 }
 
 impl EmptyStateGuidance {
@@ -280,6 +282,7 @@ fn guidance_line_count(guidance: EmptyStateGuidance) -> usize {
         // already teaches "send a message or /")
         EmptyStateGuidance::Tour => CAROUSEL_LINES,
         EmptyStateGuidance::NeedsProvider => 2, // blocker + action
+        EmptyStateGuidance::LoadingSession(_) => 1,
     }
 }
 
@@ -340,6 +343,13 @@ fn guidance_section(
                 Span::styled("Run ", muted),
                 Span::styled("/connections", info),
                 Span::styled(" to set one up.", muted),
+            ]),
+        ],
+        EmptyStateGuidance::LoadingSession(ref id) => vec![
+            Line::from(vec![
+                Span::styled("Loading session ", muted),
+                Span::styled(id.clone(), info),
+                Span::styled("…", muted),
             ]),
         ],
     }
@@ -460,6 +470,33 @@ mod tests {
                 &theme,
             );
         });
+    }
+
+    #[test]
+    fn empty_state_renders_loading_session_guidance() {
+        let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+        let theme = Theme::default();
+        terminal.draw(|f| {
+            draw_empty_state(
+                f,
+                f.area(),
+                None,
+                EmptyStateGuidance::LoadingSession("7c405d7e".to_string()),
+                0,
+                &theme,
+            );
+        });
+        let output: String = terminal
+            .buffer()
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            output.contains("Loading session 7c405d7e…"),
+            "must render loading session indicator: {output}"
+        );
     }
 
     #[test]

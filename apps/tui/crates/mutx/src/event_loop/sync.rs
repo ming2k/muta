@@ -193,6 +193,7 @@ pub(crate) async fn sync_runtime_state_to_app(
         let rev = runtime.sessions_overview_rev.load(Ordering::Acquire);
         if rev != *sessions_overview_rev_seen {
             app.sessions_overview = runtime.sessions_overview.lock().await.clone();
+            app.sessions_loading = false;
             *sessions_overview_rev_seen = rev;
         }
     }
@@ -427,6 +428,10 @@ pub(crate) async fn sync_transcripts_and_session(
     if app.current_session_id != viewed_session_id {
         app.current_session_id = viewed_session_id.clone();
         app.on_viewed_session_changed();
+        app.switching_session = None;
+        *runtime.switching_session.lock().await = None;
+    } else {
+        app.switching_session = runtime.switching_session.lock().await.clone();
     }
 
     let backfill_from = app.session_history_backfill_cursor;

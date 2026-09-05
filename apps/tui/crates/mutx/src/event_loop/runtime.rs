@@ -118,6 +118,7 @@ pub struct UiRuntime {
     pub provider_picker: Arc<Mutex<ProviderPickerSnapshot>>,
     pub sessions_overview: Arc<Mutex<Vec<SessionOverview>>>,
     pub sessions_overview_rev: Arc<std::sync::atomic::AtomicU64>,
+    pub switching_session: Arc<Mutex<Option<String>>>,
     pub session_detail: Arc<Mutex<Option<muta_contracts::SessionDetail>>>,
     pub connection_detail: Arc<Mutex<Option<muta_contracts::ConnectionDetail>>>,
     #[allow(dead_code)]
@@ -183,6 +184,7 @@ impl UiRuntime {
             provider_picker: Arc::new(Mutex::new(Default::default())),
             sessions_overview: Arc::new(Mutex::new(Vec::new())),
             sessions_overview_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            switching_session: Arc::new(Mutex::new(None)),
             session_detail: Arc::new(Mutex::new(None)),
             connection_detail: Arc::new(Mutex::new(None)),
             session_tree: Arc::new(Mutex::new(None)),

@@ -687,6 +687,10 @@ pub struct App {
     pub question_modal_follow: bool,
     /// Rows shown in the sessions picker (`/sessions` or `mutx attach`).
     pub sessions_overview: Vec<SessionOverview>,
+    /// Whether the sessions modal is currently querying the sessions list.
+    pub sessions_loading: bool,
+    /// When switching sessions, holds the short id of the target session being loaded.
+    pub switching_session: Option<String>,
     /// Live monitor snapshot for the `/host` daemon control panel
     /// (ADR-0096), mirrored from `UiRuntime::host_sessions` each frame.
     pub host_sessions: Vec<muta_contracts::MonitoredSession>,

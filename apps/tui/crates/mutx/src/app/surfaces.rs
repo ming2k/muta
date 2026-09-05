@@ -429,6 +429,7 @@ impl App {
             }
         }
         if id == crate::surfaces::PanelId::Sessions {
+            self.sessions_loading = false;
             self.session_info_detail = false;
             self.session_detail = None;
             self.session_info_scroll = 0;
@@ -547,7 +548,7 @@ impl App {
                 self.queue_modal_follow = true;
             }
             PanelId::Sessions => {
-                self.sessions_overview.clear();
+                self.sessions_loading = true;
                 self.session_info_detail = false;
                 self.session_detail = None;
                 self.session_info_scroll = 0;

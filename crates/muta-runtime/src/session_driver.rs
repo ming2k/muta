@@ -390,9 +390,6 @@ impl SessionDriver {
                 }
             };
             let pre_session_id = session.id().await;
-            let pre_projection = agent
-                .estimate_next_request_tokens(&session.model_window().await)
-                .total_tokens;
             let pre_provider = agent.provider.provider_id();
             let pre_model = agent.provider.model();
             // Requests that own the round lifecycle close their own activity
@@ -406,6 +403,7 @@ impl SessionDriver {
             // back to the authoritative harness state — see the reconcile
             // below the match and ADR-0091/0110.
             let reconcile_activity = needs_activity_reconcile(&req, &lifecycle).await;
+            let may_mutate_context = request_may_mutate_context(&req);
             match req {
                 AgentRequest::Interrupt => {
                     crate::handlers_permission::interrupt(&agent, &session, &resp_tx, &lifecycle)
@@ -1052,12 +1050,12 @@ impl SessionDriver {
                 .await;
             }
 
-            // Compare against the post-dispatch projection and only re-publish
-            // when the AI-visible context changed.
+            // Re-publish a session-scoped projection only when the AI-visible
+            // context actually changed this request (session switch, `/new`,
+            // `/compact`, provider/tool/skill change, …). Control-plane commands
+            // (like `/delegate`, `/help`, UI queries) never compute token estimates,
+            // keeping the driver event loop zero-stall.
             let post_session_id = session.id().await;
-            let post_projection = agent
-                .estimate_next_request_tokens(&session.model_window().await)
-                .total_tokens;
             let provider_or_model_changed =
                 pre_provider != agent.provider.provider_id() || pre_model != agent.provider.model();
             let session_changed = post_session_id != pre_session_id;
@@ -1070,14 +1068,10 @@ impl SessionDriver {
                 agent.restore_round_count(session.round_counter().await);
             }
 
-            // Re-publish a session-scoped projection only when the AI-visible
-            // context actually changed this request (session switch, `/new`,
-            // `/compact`, provider/tool/skill change, …). Comparing the pre-
-            // and post-dispatch estimates — rather than enumerating request
-            // variants — keeps a non-driving command echo (or any no-op
-            // request) from overwriting a fresh provider-reported context
-            // anchor with the lower local estimate.
-            if session_changed || provider_or_model_changed || post_projection != pre_projection {
+            if session_changed || provider_or_model_changed || may_mutate_context {
+                let post_projection = agent
+                    .estimate_next_request_tokens(&session.model_window().await)
+                    .total_tokens;
                 let _ = resp_tx.send(round_response(
                     &post_session_id,
                     muta_contracts::RoundEvent::ContextTokens(
@@ -1095,6 +1089,31 @@ impl SessionDriver {
         if let Some(task) = active_discovery_task.take() {
             task.abort();
         }
+    }
+}
+
+/// Whether `req` may mutate the conversation context window or loaded capabilities.
+fn request_may_mutate_context(req: &AgentRequest) -> bool {
+    match req {
+        AgentRequest::SlashCommand(cmd) => {
+            let name = cmd.trim().split_whitespace().next().unwrap_or("");
+            matches!(
+                name,
+                "/compact"
+                    | "/new"
+                    | "/clear"
+                    | "/resume"
+                    | "/session"
+                    | "/fork"
+                    | "/retry"
+                    | "/unsend"
+                    | "/undo"
+                    | "/skills"
+                    | "/tools"
+                    | "/mcp"
+            )
+        }
+        _ => false,
     }
 }
 

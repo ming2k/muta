@@ -189,6 +189,13 @@ impl EventLog {
     /// and discarded without being stored, so a fresh snapshot with an empty
     /// tail pays only the sequential read cost, not the per-event allocation.
     pub fn load_since(&self, watermark: Option<u64>) -> Result<Vec<EventEnvelope>, String> {
+        if let Some(w) = watermark {
+            if let Some(high) = self.high_seq() {
+                if high <= w {
+                    return Ok(Vec::new());
+                }
+            }
+        }
         let file = match File::open(&self.path) {
             Ok(f) => f,
             Err(_) => return Ok(Vec::new()),

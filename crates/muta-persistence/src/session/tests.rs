@@ -2,6 +2,7 @@
 //! compaction pipeline.
 
 use super::*;
+use crate::events::EventLog;
 use muta_contracts::async_trait;
 
 /// process env vars) cannot run in parallel. We serialise them through
@@ -518,22 +519,15 @@ async fn list_filters_and_prunes_empty_sessions_on_disk() {
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
 
-    // Create an empty session snapshot and event log directly on disk
-    let empty_session_path = directory.join("empty-archived.json");
-    let empty_session_jsonl = directory.join("empty-archived.jsonl");
+    // Create an empty session in SQLite
     let empty_data = SessionData {
         id: "empty-archived".to_string(),
         project_root: directory.clone(),
         ..Default::default()
     };
-    fs::write(
-        &empty_session_path,
-        serde_json::to_string(&empty_data).unwrap(),
-    )
-    .unwrap();
-    fs::write(&empty_session_jsonl, "").unwrap();
+    store.persist_archive(&empty_data).unwrap();
 
-    // And create a substantive session
+    // And create a substantive session in SQLite
     let substantive = SessionData {
         id: "real-session".to_string(),
         project_root: directory.clone(),
@@ -545,16 +539,6 @@ async fn list_filters_and_prunes_empty_sessions_on_disk() {
     let sessions = store.list().await.unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "real-session");
-
-    // The empty archived file should have been pruned from disk
-    assert!(
-        !empty_session_path.exists(),
-        "empty session file on disk must be pruned"
-    );
-    assert!(
-        !empty_session_jsonl.exists(),
-        "empty session jsonl file on disk must be pruned"
-    );
 
     let _ = fs::remove_dir_all(directory);
 }
@@ -1729,19 +1713,19 @@ async fn delegated_posture_round_trips_through_disk() {
     let reloaded = SessionStore::for_path(path.clone());
     assert!(!reloaded.delegated().await);
 
-    // A same-value write is a no-op, not an event (log stays quiet).
-    let events_before = {
+    // A same-value write is a no-op.
+    let updated_at_before = {
         let state = reloaded.state.lock().await;
-        state.event_log.load().map(|e| e.len()).unwrap_or(0)
+        state.data.updated_at
     };
     reloaded.set_delegated(false).await.unwrap();
-    let events_after = {
+    let updated_at_after = {
         let state = reloaded.state.lock().await;
-        state.event_log.load().map(|e| e.len()).unwrap_or(0)
+        state.data.updated_at
     };
     assert_eq!(
-        events_before, events_after,
-        "idempotent posture writes append no events"
+        updated_at_before, updated_at_after,
+        "idempotent posture writes are no-op"
     );
 
     let _ = fs::remove_dir_all(directory);
@@ -1857,11 +1841,8 @@ async fn startup_new_session_can_resume_most_recent_cache() {
 async fn snapshot_fast_path_replays_only_the_tail_on_lag() {
     // The snapshot fast path (C5): a checksum-valid snapshot with an
     // `applied_seq` watermark is authoritative for its folded range, and
-    // only log events *after* the watermark are replayed. The
-    // operationally important case is a lagging snapshot — a crash mid-turn
-    // left `append_turn`'s `MessagesAppended` event in the log but the
-    // snapshot still at the previous round boundary. The tail replay must
-    // recover it. This is the "log authoritative for the tail" contract.
+    // Under SQLite SSOT, turns appended via append_turn persist directly
+    // and reload cleanly.
     let directory =
         std::env::temp_dir().join(format!("muta-fastpath-lag-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
@@ -1872,24 +1853,14 @@ async fn snapshot_fast_path_replays_only_the_tail_on_lag() {
         .await
         .unwrap();
 
-    // Simulate a mid-turn crash: append an event the snapshot has NOT
-    // folded (its watermark still points at the replace above).
-    {
-        let state = store.state.lock().await;
-        state
-            .event_log
-            .append(SessionEvent::MessagesAppended {
-                messages: vec![Message::new(
-                    muta_contracts::Role::Assistant,
-                    "recovered tail",
-                )],
-            })
-            .unwrap();
-        // Deliberately do NOT persist the snapshot, so its watermark lags.
-    }
+    store
+        .append_turn(&[
+            Message::new(muta_contracts::Role::User, "first"),
+            Message::new(muta_contracts::Role::Assistant, "recovered tail"),
+        ])
+        .await
+        .unwrap();
 
-    // Re-open: the snapshot is checksum-valid but lags by one event. The
-    // fast path must replay the tail and surface the appended message.
     let reloaded = SessionStore::for_path(path.clone());
     assert_eq!(reloaded.id().await, first_id);
     let messages = reloaded.model_window().await;
@@ -2697,7 +2668,6 @@ async fn concurrent_multi_session_turn_commits_succeed_without_database_locked()
     let mut handles = Vec::new();
     for session_idx in 0..10 {
         let path = directory.join(format!("session_{session_idx}.json"));
-        let event_log = EventLog::new(path.with_extension("jsonl"));
         let data = SessionData {
             id: format!("session_{session_idx}"),
             project_root: directory.clone(),
@@ -2711,7 +2681,6 @@ async fn concurrent_multi_session_turn_commits_succeed_without_database_locked()
             writer: writer.clone(),
             state: Mutex::new(SessionState {
                 path,
-                event_log,
                 data,
                 defer_persist: false,
             }),

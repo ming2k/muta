@@ -597,7 +597,7 @@ fn assistant_message_replays_signed_thinking_block() {
 }
 
 #[test]
-fn assistant_message_replays_unsigned_thinking_without_signature() {
+fn assistant_message_omits_unsigned_thinking_without_signature() {
     let prior = Message {
         role: Role::Assistant,
         content: "x".to_string(),
@@ -606,13 +606,10 @@ fn assistant_message_replays_unsigned_thinking_without_signature() {
         ..Message::new(Role::Assistant, "")
     };
     let wire = request::message_obj(prior);
-    let block = &wire["content"][0];
-    assert_eq!(block["type"], "thinking");
-    assert_eq!(block["thinking"], "hmm");
-    assert!(
-        block.get("signature").is_none(),
-        "no signature key when none was captured"
-    );
+    let blocks = wire["content"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[0]["text"], "x");
 }
 
 #[test]

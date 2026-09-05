@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 2;
+pub const CURRENT_DB_VERSION: u32 = 3;
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -155,6 +155,15 @@ const MIGRATIONS: &[Migration] = &[Migration {
         -- Add full serialized SessionData JSON column for SQLite Single-Source-of-Truth
         ALTER TABLE sessions ADD COLUMN data TEXT;
     "#,
+}, Migration {
+    version: 3,
+    sql: r#"
+        -- Add indexed summary columns for sub-millisecond session listing
+        ALTER TABLE sessions ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN last_user_prompt TEXT;
+        ALTER TABLE sessions ADD COLUMN digest TEXT;
+        CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_ms DESC);
+    "#,
 }];
 
 /// Run all outstanding migrations in a single transactional loop.
@@ -174,6 +183,44 @@ fn migrate_schema(conn: &mut Connection) -> Result<()> {
                 "Applying SQLite schema migration"
             );
             tx.execute_batch(migration.sql)?;
+
+            if migration.version == 3 {
+                let mut stmt = tx.prepare(
+                    "SELECT id, data FROM sessions WHERE data IS NOT NULL",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                let mut updates = Vec::new();
+                for item in rows {
+                    let (id, data_str) = item?;
+                    if let Ok(probe) = serde_json::from_str::<FastSummaryProbe>(&data_str) {
+                        let count = probe.model_window.len() + probe.archived_transcript.len();
+                        let last_prompt = probe
+                            .model_window
+                            .iter()
+                            .rev()
+                            .chain(probe.archived_transcript.iter().rev())
+                            .find(|m| {
+                                let is_echo = m
+                                    .origin
+                                    .as_ref()
+                                    .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
+                                m.role == muta_contracts::Role::User && !m.hidden && !is_echo
+                            })
+                            .map(|m| m.content.clone());
+                        let digest_json = probe.digest.as_ref().and_then(|d| serde_json::to_string(d).ok());
+                        updates.push((id, count as i64, last_prompt, digest_json));
+                    }
+                }
+                drop(stmt);
+                let mut update_stmt = tx.prepare(
+                    "UPDATE sessions SET msg_count = ?1, last_user_prompt = ?2, digest = ?3 WHERE id = ?4",
+                )?;
+                for (id, count, last_prompt, digest_json) in updates {
+                    update_stmt.execute(params![count, last_prompt, digest_json, id])?;
+                }
+            }
         }
     }
 
@@ -202,6 +249,12 @@ pub struct SessionRecord {
     pub project_root: String,
     #[serde(default)]
     pub data: Option<String>,
+    #[serde(default)]
+    pub msg_count: i64,
+    #[serde(default)]
+    pub last_user_prompt: Option<String>,
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 /// Materialized message record in SQLite.
@@ -263,6 +316,9 @@ fn map_session_row(row: &Row) -> Result<SessionRecord> {
         updated_at_ms: row.get(6)?,
         project_root: row.get(7)?,
         data: row.get(8)?,
+        msg_count: row.get(9)?,
+        last_user_prompt: row.get(10)?,
+        digest: row.get(11)?,
     })
 }
 
@@ -284,6 +340,7 @@ pub struct DatabaseEngine {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct FastSummaryProbe {
     #[serde(default)]
     title: Option<String>,
@@ -340,8 +397,8 @@ impl DatabaseEngine {
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO sessions (id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO sessions (id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 fork_kind = excluded.fork_kind,
@@ -349,7 +406,10 @@ impl DatabaseEngine {
                 title_manual = excluded.title_manual,
                 updated_at_ms = excluded.updated_at_ms,
                 project_root = excluded.project_root,
-                data = excluded.data;
+                data = excluded.data,
+                msg_count = excluded.msg_count,
+                last_user_prompt = excluded.last_user_prompt,
+                digest = excluded.digest;
             "#,
             params![
                 session.id,
@@ -361,6 +421,9 @@ impl DatabaseEngine {
                 session.updated_at_ms,
                 session.project_root,
                 session.data,
+                session.msg_count,
+                session.last_user_prompt,
+                session.digest,
             ],
         )?;
         Ok(())
@@ -370,7 +433,7 @@ impl DatabaseEngine {
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
                 params![session_id],
                 map_session_row,
             )
@@ -382,7 +445,7 @@ impl DatabaseEngine {
         let mut sessions = Vec::new();
         if let Some(root) = project_root {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data \
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest \
                  FROM sessions WHERE project_root = ?1 ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map(params![root], map_session_row)?;
@@ -391,7 +454,7 @@ impl DatabaseEngine {
             }
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data \
+                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest \
                  FROM sessions ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map([], map_session_row)?;
@@ -421,6 +484,13 @@ impl DatabaseEngine {
         let serialized_data = serde_json::to_string(data)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
+        let digest_str = data
+            .digest
+            .as_ref()
+            .and_then(|d| serde_json::to_string(d).ok());
+        let last_prompt = crate::session::last_effective_prompt_from_data(data);
+        let msg_count = (data.model_window.len() + data.archived_transcript.len()) as i64;
+
         let session_rec = SessionRecord {
             id: data.id.clone(),
             parent_id: data.parent_id.clone(),
@@ -431,6 +501,9 @@ impl DatabaseEngine {
             updated_at_ms: data.updated_at as i64,
             project_root: data.project_root.to_string_lossy().into_owned(),
             data: Some(serialized_data),
+            msg_count,
+            last_user_prompt: last_prompt,
+            digest: digest_str,
         };
 
         // Execute in transaction
@@ -534,27 +607,18 @@ impl DatabaseEngine {
     ) -> Result<Vec<crate::session::SessionSummary>> {
         let sql = r#"
             SELECT
-                s.id,
-                s.parent_id,
-                s.fork_kind,
-                s.title,
-                s.created_at_ms,
-                s.updated_at_ms,
-                COALESCE(m.msg_count, 0) AS msg_count,
-                (
-                    SELECT content FROM messages
-                    WHERE session_id = s.id AND role = 'user'
-                    ORDER BY seq DESC LIMIT 1
-                ) AS last_user_prompt,
-                s.data
-            FROM sessions s
-            LEFT JOIN (
-                SELECT session_id, COUNT(*) AS msg_count
-                FROM messages
-                GROUP BY session_id
-            ) m ON m.session_id = s.id
-            WHERE (?1 IS NULL OR s.project_root = ?1)
-            ORDER BY s.updated_at_ms DESC;
+                id,
+                parent_id,
+                fork_kind,
+                title,
+                created_at_ms,
+                updated_at_ms,
+                msg_count,
+                last_user_prompt,
+                digest
+            FROM sessions
+            WHERE (?1 IS NULL OR project_root = ?1)
+            ORDER BY updated_at_ms DESC;
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;
@@ -567,7 +631,7 @@ impl DatabaseEngine {
             let updated_at_ms: i64 = row.get(5)?;
             let msg_count: i64 = row.get(6)?;
             let last_user_prompt: Option<String> = row.get(7)?;
-            let data_json: Option<String> = row.get(8)?;
+            let digest_json: Option<String> = row.get(8)?;
             Ok((
                 id,
                 parent_id,
@@ -577,7 +641,7 @@ impl DatabaseEngine {
                 updated_at_ms,
                 msg_count,
                 last_user_prompt,
-                data_json,
+                digest_json,
             ))
         })?;
 
@@ -590,9 +654,9 @@ impl DatabaseEngine {
                 title,
                 created_at_ms,
                 updated_at_ms,
-                sql_msg_count,
+                msg_count,
                 last_user_prompt,
-                data_json,
+                digest_json,
             ) = item?;
 
             let fork_kind = match fork_str.as_str() {
@@ -601,56 +665,20 @@ impl DatabaseEngine {
                 _ => muta_contracts::SessionForkKind::Trunk,
             };
 
-            let probe_opt = data_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<FastSummaryProbe>(raw).ok());
-
-            let final_msg_count = if sql_msg_count > 0 {
-                sql_msg_count as usize
-            } else if let Some(ref probe) = probe_opt {
-                probe.model_window.len() + probe.archived_transcript.len()
-            } else {
-                0
-            };
-
+            let final_msg_count = msg_count.max(0) as usize;
             if final_msg_count == 0 && id != active_id {
                 continue;
             }
 
-            let overview = if let Some(t) = title
-                .as_deref()
-                .or_else(|| probe_opt.as_ref().and_then(|p| p.title.as_deref()))
-                .filter(|t| !t.trim().is_empty())
-            {
+            let overview = if let Some(t) = title.as_deref().filter(|t| !t.trim().is_empty()) {
                 crate::session::truncate_preview(t, 64)
-            } else if let Some(ref probe) = probe_opt {
-                let last_prompt = probe
-                    .model_window
-                    .iter()
-                    .rev()
-                    .chain(probe.archived_transcript.iter().rev())
-                    .find(|m| {
-                        let is_echo = m
-                            .origin
-                            .as_ref()
-                            .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
-                        m.role == muta_contracts::Role::User && !m.hidden && !is_echo
-                    })
-                    .map(|m| &m.content);
-                if let Some(prompt) = last_prompt.filter(|p| !p.trim().is_empty()) {
-                    crate::session::truncate_preview(prompt, 64)
-                } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
-                    crate::session::truncate_preview(prompt, 64)
-                } else {
-                    "(empty session)".to_string()
-                }
             } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
                 crate::session::truncate_preview(prompt, 64)
             } else {
                 "(empty session)".to_string()
             };
 
-            let digest = probe_opt.and_then(|p| p.digest);
+            let digest = digest_json.and_then(|raw| serde_json::from_str(&raw).ok());
             let active = id == active_id;
 
             summaries.push(crate::session::SessionSummary {
@@ -1115,6 +1143,7 @@ impl DatabaseEngine {
                         .unwrap_or_else(|| project_root.to_path_buf())
                         .to_string_lossy()
                         .into_owned();
+                    let msg_count = (snap.model_window.len() + snap.archived_transcript.len()) as i64;
                     let record = SessionRecord {
                         id: snap.id.clone(),
                         parent_id: snap.parent_id,
@@ -1125,6 +1154,9 @@ impl DatabaseEngine {
                         updated_at_ms: snap.updated_at.map(|t| t as i64).unwrap_or(0),
                         project_root: project_root_str,
                         data: Some(raw_json.clone()),
+                        msg_count,
+                        last_user_prompt: None,
+                        digest: None,
                     };
 
                     if self.upsert_session(&record).is_ok() {
@@ -1342,8 +1374,14 @@ impl PersistenceHandle {
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
         };
 
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(run_blocking)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(run_blocking)
+            } else {
+                std::thread::spawn(run_blocking)
+                    .join()
+                    .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+            }
         } else {
             run_blocking()
         }
@@ -1500,8 +1538,14 @@ impl PersistenceHandle {
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
         };
 
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(run_blocking)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(run_blocking)
+            } else {
+                std::thread::spawn(run_blocking)
+                    .join()
+                    .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+            }
         } else {
             run_blocking()
         }
@@ -1578,6 +1622,9 @@ mod tests {
             updated_at_ms: 1000,
             project_root: "/workspace/project".into(),
             data: None,
+            msg_count: 0,
+            last_user_prompt: None,
+            digest: None,
         };
 
         engine.upsert_session(&session).unwrap();
@@ -1614,6 +1661,9 @@ mod tests {
             updated_at_ms: 1000,
             project_root: "/workspace/rust-code".into(),
             data: None,
+            msg_count: 0,
+            last_user_prompt: None,
+            digest: None,
         };
         engine.upsert_session(&session).unwrap();
 
@@ -1657,6 +1707,9 @@ mod tests {
             updated_at_ms: 1000,
             project_root: "/workspace/cas".into(),
             data: None,
+            msg_count: 0,
+            last_user_prompt: None,
+            digest: None,
         };
         engine.upsert_session(&session).unwrap();
 
@@ -1700,6 +1753,9 @@ mod tests {
             updated_at_ms: 2000,
             project_root: "/workspace/async".into(),
             data: None,
+            msg_count: 0,
+            last_user_prompt: None,
+            digest: None,
         };
 
         handle.upsert_session(session.clone()).await.unwrap();

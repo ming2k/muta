@@ -55,6 +55,7 @@ pub struct SessionsModalProps<'a> {
     pub session_info_detail: bool,
     pub session_detail: Option<&'a muta_contracts::SessionDetail>,
     pub session_info_scroll: &'a mut usize,
+    pub sessions_loading: bool,
 }
 
 /// Draw the Sessions picker modal.
@@ -75,6 +76,7 @@ pub fn draw_sessions_modal(
         session_info_detail,
         session_detail,
         session_info_scroll,
+        sessions_loading,
     } = props;
     let area = modal_area(frame, FixedModalSpec::SESSIONS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -149,12 +151,28 @@ pub fn draw_sessions_modal(
     let body_width = f.body.width as usize;
 
     if sessions.is_empty() {
-        let body = vec![Line::from(vec![
-            Span::styled(
-                "No previous sessions in this project.",
-                Style::default().fg(theme.muted()),
-            ),
-        ])];
+        let body = if sessions_loading {
+            const SPINNER_FRAMES: [&str; 10] =
+                ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+                    Span::styled(
+                        "Loading sessions…",
+                        Style::default().fg(theme.muted()),
+                    ),
+                ]),
+            ]
+        } else {
+            vec![Line::from(vec![
+                Span::styled(
+                    "No previous sessions in this project.",
+                    Style::default().fg(theme.muted()),
+                ),
+            ])]
+        };
         render_centered_body(frame, f.body, body);
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, &list_footer_hints, &list_extra, theme);
@@ -310,4 +328,98 @@ fn detail_body(detail: &muta_contracts::SessionDetail, theme: &Theme) -> Vec<Lin
         ))),
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mutx_engine::TestTerminal;
+
+    #[test]
+    fn sessions_modal_shows_loading_spinner_while_fetching() {
+        let theme = Theme::default();
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::default();
+        let mut scroll = 0;
+        let mut info_scroll = 0;
+
+        let mut term = TestTerminal::new(80, 24);
+        term.draw(|frame| {
+            draw_sessions_modal(
+                frame,
+                SessionsModalProps {
+                    sessions: &[],
+                    selected: 0,
+                    scroll: &mut scroll,
+                    follow: false,
+                    startup_picker: false,
+                    spinner_phase: 0,
+                    session_info_detail: false,
+                    session_detail: None,
+                    session_info_scroll: &mut info_scroll,
+                    sessions_loading: true,
+                },
+                &theme,
+                &selection,
+                &mut layout_map,
+            );
+        });
+
+        let output: String = term
+            .buffer()
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            output.contains("Loading sessions…"),
+            "must show loading indicator while sessions_loading=true: {output}"
+        );
+        assert!(
+            !output.contains("No previous sessions"),
+            "must NOT mislead with no previous sessions while loading: {output}"
+        );
+    }
+
+    #[test]
+    fn sessions_modal_shows_empty_message_only_after_loading_finishes() {
+        let theme = Theme::default();
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::default();
+        let mut scroll = 0;
+        let mut info_scroll = 0;
+
+        let mut term = TestTerminal::new(80, 24);
+        term.draw(|frame| {
+            draw_sessions_modal(
+                frame,
+                SessionsModalProps {
+                    sessions: &[],
+                    selected: 0,
+                    scroll: &mut scroll,
+                    follow: false,
+                    startup_picker: false,
+                    spinner_phase: 0,
+                    session_info_detail: false,
+                    session_detail: None,
+                    session_info_scroll: &mut info_scroll,
+                    sessions_loading: false,
+                },
+                &theme,
+                &selection,
+                &mut layout_map,
+            );
+        });
+
+        let output: String = term
+            .buffer()
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output.contains("No previous sessions in this project."));
+        assert!(!output.contains("Loading sessions…"));
+    }
 }

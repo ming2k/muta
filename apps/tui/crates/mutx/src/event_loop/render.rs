@@ -63,6 +63,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 session_info_detail: app.session_info_detail,
                 session_detail: app.session_detail.as_ref(),
                 session_info_scroll: &mut app.session_info_scroll,
+                sessions_loading: app.sessions_loading,
             },
             &app.theme,
             &app.selection,
@@ -104,10 +105,14 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .pending_permission
         .is_some()
         .then_some(crate::phase::Phase::AwaitingUser);
-    let status = display_status(
-        app.loop_status,
-        gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
-    );
+    let status = if let Some(ref target) = app.switching_session {
+        format!("loading session {target}…")
+    } else {
+        display_status(
+            app.loop_status,
+            gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
+        )
+    };
     // Transport-setback clause: rides beside the master label (never in its
     // slot), counting down while a provider retry backs off.
     let backoff_clause = app
@@ -243,7 +248,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .iter()
         .any(|row| row.key_ready || app.key_status.get(&row.id).copied().unwrap_or(true))
         || app.provider_picker.rows.is_empty();
-    let guidance = if has_keyed_provider {
+    let guidance = if let Some(ref target) = app.switching_session {
+        view::EmptyStateGuidance::LoadingSession(target.clone())
+    } else if has_keyed_provider {
         view::EmptyStateGuidance::Tour
     } else {
         view::EmptyStateGuidance::NeedsProvider
@@ -316,6 +323,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 workspace: &app.current_workspace,
                 delegated: app.delegated,
                 unconfined: app.unconfined,
+                switching_target: app.switching_session.as_deref(),
             }),
             todos: app.todos.as_ref(),
             // View-scoped: the elapsed-timer origin belongs to the viewed
@@ -952,6 +960,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 session_info_detail: app.session_info_detail,
                 session_detail: app.session_detail.as_ref(),
                 session_info_scroll: &mut app.session_info_scroll,
+                sessions_loading: app.sessions_loading,
             },
             &app.theme,
             &app.selection,

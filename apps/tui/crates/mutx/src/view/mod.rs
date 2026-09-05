@@ -738,7 +738,7 @@ pub fn draw_transcript(
             frame,
             transcript_area,
             logo,
-            guidance,
+            guidance.clone(),
             carousel_index,
             theme,
         );

@@ -441,6 +441,8 @@ pub async fn run_tui(
     let sessions_overview_clone = sessions_overview.clone();
     let sessions_overview_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let sessions_overview_rev_clone = sessions_overview_rev.clone();
+    let switching_session = Arc::new(Mutex::new(None::<String>));
+    let switching_session_clone = switching_session.clone();
     let session_detail = Arc::new(tokio::sync::Mutex::new(
         None::<muta_contracts::SessionDetail>,
     ));
@@ -917,6 +919,7 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::CommandResult { name, args, result } => {
+                            *switching_session_clone.lock().await = None;
                             // A typed slash-command result (ADR-0091): settle
                             // the pending command component in place — one
                             // row owns both the input and the output
@@ -1865,6 +1868,18 @@ pub async fn run_tui(
                                 ir_clone.store(false, Ordering::SeqCst);
                                 *activity_clone.lock().await = None;
                             }
+                            chrome_updater.edit(|c| {
+                                c.phase = None;
+                                c.responding = false;
+                                c.current_turn = 0;
+                                c.round_started_at = None;
+                            });
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::HarnessState {
+                                    session_id: session_id.clone(),
+                                    idle: true,
+                                },
+                            );
                         }
                         RoundEvent::BackgroundJobStarted(info) => {
                             let mut msgs = buf.write().await;
@@ -2011,6 +2026,7 @@ pub async fn run_tui(
                     commands,
                     round_interrupts,
                 } => {
+                    *switching_session_clone.lock().await = None;
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
                     rebuilt =
                         merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
@@ -2186,6 +2202,7 @@ pub async fn run_tui(
                     }
                 }
                 AgentResponse::Error(msg) => {
+                    *switching_session_clone.lock().await = None;
                     let mut msgs = messages_clone.write().await;
                     push_local_notice(&mut msgs, NoticeSeverity::Error, msg);
                 }
@@ -2363,6 +2380,8 @@ pub async fn run_tui(
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        sessions_loading: false,
+        switching_session: None,
         host_sessions: Vec::new(),
         host_scroll: 0,
         host_modal_follow: true,
@@ -2534,6 +2553,7 @@ pub async fn run_tui(
             provider_picker,
             sessions_overview,
             sessions_overview_rev,
+            switching_session,
             session_detail,
             connection_detail,
             session_tree,

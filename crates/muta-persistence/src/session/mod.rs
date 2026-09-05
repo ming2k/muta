@@ -26,7 +26,9 @@
 //! checkpoints; it also drives the one-shot legacy layout migrations.
 
 use crate::blobs::BlobStore;
-use crate::events::{EventLog, SessionEvent};
+use crate::events::SessionEvent;
+#[cfg(test)]
+use crate::events::EventLog;
 use crate::paths;
 use muta_contracts::{
     InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, estimate_tokens,
@@ -455,6 +457,13 @@ pub(crate) fn write_session_file(
     let mut data = data.clone();
     offload_session_blobs(&mut data, blob_store)?;
     data.checksum = Some(compute_checksum(&data)?);
+    if let Some(parent) = path.parent() {
+        let db_path = parent.join("muta.db");
+        let _ = persist_to(&db_path, &data, blob_store);
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone())) {
+            let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
+        }
+    }
     crate::fsutil::atomic_write_json(path, &data)
 }
 
@@ -508,22 +517,6 @@ fn load_message_blobs(message: &mut Message, blob_store: &BlobStore) -> Result<(
         for child in children.iter_mut() {
             load_message_blobs(child, blob_store)?;
         }
-    }
-    Ok(())
-}
-
-/// Emit a [`SessionEvent::Started`] event if the log is currently empty.
-/// Every session must begin with this event so replay reconstructs the id,
-/// parent link, and timestamps.
-fn ensure_event_log_started(event_log: &EventLog, data: &SessionData) -> Result<(), String> {
-    if event_log.is_empty() {
-        event_log.append(SessionEvent::Started {
-            id: data.id.clone(),
-            parent_id: data.parent_id.clone(),
-            created_at: data.created_at,
-            project_root: data.project_root.clone(),
-            schema_version: data.schema_version,
-        })?;
     }
     Ok(())
 }
@@ -808,10 +801,7 @@ pub struct SessionSummary {
 pub(crate) struct SessionState {
     /// Absolute path of this session's snapshot: `<sessions_dir>/<id>.json`.
     path: PathBuf,
-    /// This session's append-only event log at `<sessions_dir>/<id>.jsonl`.
-    event_log: EventLog,
-    /// In-memory session, authoritative between writes; the event log is the
-    /// durable authority across restarts.
+    /// In-memory session, authoritative between writes.
     data: SessionData,
     /// `true` only for a **fresh** primary session (`pin_fresh`): defer the
     /// first durable write until the session gains user-facing content, so
@@ -923,16 +913,6 @@ fn load_or_seed(
     // 1. Primary path: load directly from SQLite (SSOT)
     if let Some(ref engine) = engine_opt {
         if let Ok(Some(mut data)) = engine.load_session_full(target_id) {
-            if let Some(path) = legacy_file {
-                let event_log_path = path.with_extension("jsonl");
-                let event_log = EventLog::new(event_log_path);
-                if let Ok(tail) = event_log.load_since(data.applied_seq) {
-                    if !tail.is_empty() {
-                        apply_events(&mut data, &tail);
-                        let _ = persist_to(db_path, &data, blob_store);
-                    }
-                }
-            }
             if let Err(error) = load_session_blobs(&mut data, blob_store) {
                 tracing::warn!(error = %error, "could not load session blobs from sqlite");
             }
@@ -943,67 +923,23 @@ fn load_or_seed(
         }
     }
 
-    // 2. Legacy fallback: import from disk .json/.jsonl if present
+    // 2. Legacy fallback: import from disk .json if present
     if let Some(path) = legacy_file {
-        let event_log_path = path.with_extension("jsonl");
-        let event_log = EventLog::new(event_log_path.to_path_buf());
-        let log_seeded = !event_log.is_empty();
-
-        if log_seeded
-            && let Ok(snapshot) = load_snapshot(path)
-            && let Some(watermark) = snapshot.applied_seq
-            && verify_checksum(&snapshot).is_ok()
-        {
-            let tail = event_log.load_since(Some(watermark)).unwrap_or_default();
-            let mut data = snapshot;
-            if !tail.is_empty() {
-                apply_events(&mut data, &tail);
-            }
-            if let Err(error) = load_session_blobs(&mut data, blob_store) {
-                tracing::warn!(error = %error, "could not load session blobs");
-            }
-            if data.schema_version < CURRENT_SCHEMA_VERSION {
-                data = migrate_session_data(data);
-            }
-            let _ = persist_to(db_path, &data, blob_store);
-            if let Some(ref engine) = engine_opt {
-                let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
-            }
-            return data;
-        }
-
-        if log_seeded
-            && let Ok(envelopes) = event_log.load()
-            && !envelopes.is_empty()
-        {
-            let mut data = SessionData::default();
-            apply_events(&mut data, &envelopes);
-            if let Err(error) = load_session_blobs(&mut data, blob_store) {
-                tracing::warn!(error = %error, "could not load session blobs from event log");
-            }
-            if data.schema_version < CURRENT_SCHEMA_VERSION {
-                data = migrate_session_data(data);
-            }
-            let _ = persist_to(db_path, &data, blob_store);
-            if let Some(ref engine) = engine_opt {
-                let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
-            }
-            return data;
-        }
-
         if path.exists() {
-            if let Ok(mut data) = load_snapshot(path) {
-                if let Err(error) = load_session_blobs(&mut data, blob_store) {
-                    tracing::warn!(error = %error, "could not load session blobs from snapshot");
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(mut data) = serde_json::from_str::<SessionData>(&content) {
+                    if let Err(error) = load_session_blobs(&mut data, blob_store) {
+                        tracing::warn!(error = %error, "could not load session blobs from snapshot");
+                    }
+                    if data.schema_version < CURRENT_SCHEMA_VERSION {
+                        data = migrate_session_data(data);
+                    }
+                    let _ = persist_to(db_path, &data, blob_store);
+                    if let Some(ref engine) = engine_opt {
+                        let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
+                    }
+                    return data;
                 }
-                if data.schema_version < CURRENT_SCHEMA_VERSION {
-                    data = migrate_session_data(data);
-                }
-                let _ = persist_to(db_path, &data, blob_store);
-                if let Some(ref engine) = engine_opt {
-                    let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
-                }
-                return data;
             }
         }
     }
@@ -1028,16 +964,6 @@ fn load_or_seed(
         project_root: project_root.to_path_buf(),
         ..Default::default()
     }
-}
-
-/// Deserialise the snapshot JSON at `path` into a [`SessionData`], rehydrating
-/// no blobs (the caller does that once after deciding which path produced the
-/// data). Returns `Err` for a missing or unparseable file so the caller can
-/// fall through to full replay.
-fn load_snapshot(path: &Path) -> Result<SessionData, String> {
-    let content = fs::read_to_string(path).map_err(|e| format!("could not read snapshot: {e}"))?;
-    serde_json::from_str::<SessionData>(&content)
-        .map_err(|e| format!("could not parse snapshot: {e}"))
 }
 
 /// A dormant session with armed scheduled work, discovered on disk by

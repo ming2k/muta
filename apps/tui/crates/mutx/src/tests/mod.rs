@@ -209,6 +209,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        sessions_loading: false,
+        switching_session: None,
         host_sessions: Vec::new(),
         host_scroll: 0,
         host_modal_follow: true,

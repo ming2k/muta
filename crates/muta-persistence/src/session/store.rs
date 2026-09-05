@@ -20,11 +20,7 @@ impl SessionStore {
         }
         let blob_store = BlobStore::new(dirs.blobs_dir());
 
-        // ADR-0168: Automated one-time migration of legacy flat files
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone())) {
-            let _ = engine.migrate_legacy_projects(&dirs.projects_dir());
-        }
-
+        // ADR-0168: All session state is stored authoritatively in SQLite (muta.db)
         Self::pin_fresh(project_root, sessions_dir, db_path, blob_store)
     }
 
@@ -42,13 +38,11 @@ impl SessionStore {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        let event_log_path = path.with_extension("jsonl");
         let project_root = sessions_dir.clone();
         let db_path = sessions_dir.join("muta.db");
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
         let id_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("default");
         let data = load_or_seed(&db_path, id_stem, &blob_store, &project_root, Some(&path));
-        let event_log = EventLog::new(event_log_path);
         let defer_persist = !path.exists() && data.is_user_facing_empty();
         let writer = if db_path == paths::get().db_file() {
             crate::db::get_persistence_handle()
@@ -63,7 +57,6 @@ impl SessionStore {
             writer,
             state: Mutex::new(SessionState {
                 path,
-                event_log,
                 data,
                 defer_persist,
             }),
@@ -83,7 +76,6 @@ impl SessionStore {
     ) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
-        let event_log = EventLog::new(path.with_extension("jsonl"));
         let data = SessionData {
             id,
             project_root: project_root.clone(),
@@ -102,7 +94,6 @@ impl SessionStore {
             writer,
             state: Mutex::new(SessionState {
                 path,
-                event_log,
                 data,
                 // Fresh primary session: defer until it gains real content.
                 defer_persist: true,
@@ -141,35 +132,23 @@ impl SessionStore {
     /// deferred (fresh primary) session — an explicitly pinned store
     /// (`defer_persist == false`) always persists.
     pub(crate) fn should_skip_persist(state: &SessionState) -> bool {
-        state.defer_persist && !state.path.exists() && state.data.is_user_facing_empty()
+        state.defer_persist && state.data.is_user_facing_empty()
     }
 
-    /// Start a brand-new session and repoint this store at it. The previous
-    /// session's file is left intact on disk (it was already persisted on
-    /// every mutation) and stays reachable through [`Self::list`] /
-    /// [`Self::resume`]. Returns the new session id.
-    ///
-    /// Under ADR-0018 this no longer mutates a shared "active" file: it simply
-    /// mints a new `sessions/<id>.{json,jsonl}` and switches this process to
-    /// writing it, so a concurrent instance cannot clobber the previous
-    /// session.
+    /// Start a brand-new session and repoint this store at it.
     pub async fn reset(&self) -> Result<String, String> {
         let project_root = self.project_root.clone();
         let mut state = self.state.lock().await;
         let sessions_dir = self.sessions_dir.clone();
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
-        let event_log = EventLog::new(path.with_extension("jsonl"));
         let data = SessionData {
+            id: id.clone(),
             project_root,
             ..Default::default()
         };
         state.path = path;
-        state.event_log = event_log;
         state.data = data;
-        // Fresh again: defer until the new session gains content. Do not
-        // persist an empty snapshot or event log — a session that never gains
-        // content leaves no empty-file litter (see ADR-0018).
         state.defer_persist = true;
         Ok(id)
     }
@@ -189,17 +168,7 @@ impl SessionStore {
         Ok(self.state.lock().await.data.id.clone())
     }
 
-    /// Switch this store to an existing session file by id (or 4+-char hex
-    /// prefix). The session's state is reloaded from its own event log (the
-    /// durable authority), so `open` always reflects the latest on-disk
-    /// content — even if another process wrote it.
-    ///
-    /// The resolve → load → swap is performed under a single held lock so two
-    /// concurrent `open`/`reset` calls cannot interleave and drop each other's
-    /// repoint (the previous implementation released the lock between resolve
-    /// and swap, a lost-update TOCTOU window). The blocking `load_or_seed` runs
-    /// on a `spawn_blocking` thread, but the lock guard is awaited across it,
-    /// so the critical section stays atomic.
+    /// Switch this store to an existing session by id (or 4+-char hex prefix).
     pub async fn open(&self, id: &str) -> Result<(), String> {
         let mut state = self.state.lock().await;
         let (resolved, path) = self.resolve_session(id, &state)?;
@@ -218,7 +187,6 @@ impl SessionStore {
         .await
         .map_err(|e| format!("session open task failed: {e}"))?;
         state.path = path;
-        state.event_log = EventLog::new(state.path.with_extension("jsonl"));
         state.data = data;
         state.defer_persist = false;
         Ok(())
@@ -307,17 +275,11 @@ impl SessionStore {
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
         let db_path = self.db_path.clone();
-        let sessions_dir = self.sessions_dir.clone();
-        let project_root = self.project_root.clone();
         let project_root_str = self.project_root.to_string_lossy().into_owned();
         let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
             let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
                 .map_err(|e| e.to_string())?;
-            // If any legacy flat files are present, migrate and purge them once (ADR-0168)
-            if sessions_dir.exists() {
-                let _ = engine.migrate_legacy_sessions_dir(&sessions_dir, &project_root);
-            }
             engine
                 .list_session_summaries(Some(&project_root_str), &active_id)
                 .map_err(|e| e.to_string())
@@ -348,32 +310,13 @@ impl SessionStore {
     }
 
     /// Run the snapshot persistence off the async runtime.
-    ///
-    /// `persist_to` does blocking filesystem I/O (write the JSON snapshot,
-    /// `fsync`, hash + spill large tool payloads to the blob store). Doing that
-    /// work while holding the session `Mutex` blocks the async executor for the
-    /// duration of every `fsync` (commonly 5–50 ms, far worse over NFS / slow
-    /// disks), which stalls every concurrent reader and writer. Instead the
-    /// caller mutates the in-memory `data` under the lock, clones the
-    /// snapshot and path, drops the guard, and hands the blocking work to
-    /// `spawn_blocking` so it runs on a dedicated thread and never pins the
-    /// executor.
     pub(crate) async fn persist_off_runtime(
         &self,
-        path: PathBuf,
+        _path: PathBuf,
         mut data: SessionData,
         blob_store: BlobStore,
     ) -> Result<(), String> {
         let _persist_guard = self.persist_gate.lock().await;
-        if data.applied_seq.is_none() {
-            let log_path = path.with_extension("jsonl");
-            if log_path.exists() {
-                let event_log = EventLog::new(log_path);
-                if let Some(high) = event_log.high_seq() {
-                    data.applied_seq = Some(high);
-                }
-            }
-        }
         offload_session_blobs(&mut data, &blob_store)?;
         data.checksum = Some(compute_checksum(&data)?);
         self.writer
@@ -423,23 +366,6 @@ impl SessionStore {
             }
         }
 
-        // Fallback to scanning legacy sessions directory
-        if matches.is_empty() && self.sessions_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&self.sessions_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                        continue;
-                    }
-                    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    if stem.starts_with(input) && !matches.iter().any(|(id, _)| id == stem) {
-                        matches.push((stem.to_string(), path));
-                    }
-                }
-            }
-        }
         match matches.as_slice() {
             [(id, path)] => Ok((id.clone(), path.clone())),
             [] => Err(format!("No session matches '{}'.", input)),

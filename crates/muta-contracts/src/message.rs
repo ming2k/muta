@@ -144,7 +144,7 @@ pub enum InjectionKind {
     UntrustedDirective,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 // Every `Option` field here skips serialization when `None`, so the key is
 // absent on the wire (never an explicit `null`) — hence `?: T`, not `?: T | null`.
 #[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]

@@ -135,6 +135,8 @@ pub(crate) struct SessionHead<'a> {
     /// `true` while the session runs in unconfined filesystem access mode
     /// (`/jail off`). Shown as a warning-toned `UNCONFINED` tag on the right.
     pub unconfined: bool,
+    /// When switching to another session, holds the target session id.
+    pub switching_target: Option<&'a str>,
 }
 
 struct HeaderContent {
@@ -180,9 +182,14 @@ pub(crate) fn draw_view_header(
             if head.unconfined {
                 action.push_str("UNCONFINED ");
             }
+            let tag = if let Some(target) = head.switching_target {
+                format!("{} (loading…)", target)
+            } else {
+                id_tail(head.session_id)
+            };
             HeaderContent {
                 title: " SESSION ",
-                tag: id_tail(head.session_id),
+                tag,
                 badge: String::new(),
                 primary: head.workspace.to_string(),
                 meta: String::new(),
@@ -819,6 +826,7 @@ mod tests {
             workspace: "~/projects/xx",
             delegated: true,
             unconfined: false,
+            switching_target: None,
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
@@ -831,6 +839,22 @@ mod tests {
     }
 
     #[test]
+    fn session_header_shows_switching_target_loading() {
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "~/projects/xx",
+            delegated: false,
+            unconfined: false,
+            switching_target: Some("7c405d7e"),
+        };
+        let row = rendered_row(80, ViewHeader::Session(&head));
+        assert!(
+            row.contains("7c405d7e (loading…)"),
+            "must show target loading in header tag: {row}"
+        );
+    }
+
+    #[test]
     fn header_band_paints_the_full_row_width() {
         let theme = Theme::default();
         let head = SessionHead {
@@ -838,6 +862,7 @@ mod tests {
             workspace: "~/projects/xx",
             delegated: true,
             unconfined: false,
+            switching_target: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(60, 1);
         terminal.draw(|frame| {

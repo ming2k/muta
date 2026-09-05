@@ -39,6 +39,16 @@ pub(crate) enum HintState {
     Completion,
 }
 
+/// Short session id prefix (up to 8 characters) for compact display.
+pub fn short_session_id(id: &str) -> String {
+    let clean = id.trim();
+    if clean.len() <= 8 {
+        clean.to_string()
+    } else {
+        clean[..8].to_string()
+    }
+}
+
 /// The chat surface's live chords for a run state — the single origin for the
 /// composer hint row. Every chord returned here is resolvable by
 /// [`resolve_chat_surface_key`] in that state (asserted by tests).

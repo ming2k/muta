@@ -45,6 +45,7 @@ fn render_full_view(
                     workspace: "~/projects/xx",
                     delegated: false,
                     unconfined: false,
+                    switching_target: None,
                 }),
                 todos: None,
                 round_started_at: None,
