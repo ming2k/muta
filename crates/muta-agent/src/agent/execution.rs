@@ -593,6 +593,12 @@ impl Agent {
         }
 
         if call.name == "ask_user" {
+            if !self.execution_policy().allow_human_interaction {
+                return ToolOutput::Text(
+                    "ask_user is forbidden by ExecutionPolicy: delegated child agents operating in ephemeral scratchpads cannot directly interact with the human user. Report findings or blockers to your parent agent."
+                        .to_string(),
+                );
+            }
             if self.delegated() {
                 return ToolOutput::Text(
                     "ask_user is unavailable: this session is running in Delegated mode and no human \

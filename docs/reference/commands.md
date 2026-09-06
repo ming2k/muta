@@ -18,8 +18,8 @@ Project and user-defined commands are covered under
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/delegate [on\|off]` | Toggle delegated autonomous execution mode (aliases: `/auto`, `/yolo`) |
-| `/unconfined [on\|off]` | Toggle workspace filesystem confinement (unconfined file access) for this session (aliases: `/jail`, `/escape`) |
-| `/master <code\|architect\|reviewer\|security>` | Switch the master preset — changes persona and capability scope |
+| `/unconfine [on\|off]` | Toggle workspace filesystem confinement (unconfined file access) for this session (aliases: `/unconfined`, `/jail`, `/escape`) |
+| `/role <code\|architect\|reviewer\|security>` | Switch the agent role preset — changes persona and capability scope (alias: `/master`) |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
@@ -183,26 +183,23 @@ apply immediately and persist in the `[tui]` table of `config.toml`.
 
 When on, the agent is granted full delegation: tool executions and file modifications are automatically approved without prompting, and ambiguity questions (`ask_user`) are resolved self-reliantly by the model. Dangerous command hard denies (such as root-level destructive commands) remain blocked. The posture is persisted on the session: a daemon crash, kill, upgrade, or reboot reopens the session in the same posture.
 
-### `/master`
+### `/role`
 
 | Form | Effect |
 |------|--------|
-| `/master <role>` | Switch the active master preset (persona + capability scope) |
-| `/master` | List the available presets and the current one |
+| `/role <role>` | Switch the active agent role preset (persona + capability scope) (alias: `/master`) |
+| `/role` | List the available presets and the current one |
 
-Switches the session's master preset at runtime (ADR-0053, renamed by
-ADR-0144). Each preset is a value over the product's base identity — the
-mission/persona shifts, the product identity stays. It can also be triggered
-mid-message with the `@master:<role>` mention:
+Switches the session's agent preset at runtime (ADR-0053, updated by ADR-0144 and ADR-0183). Each preset is a value over the product's base identity — the mission/persona shifts, the product identity stays. It can also be triggered mid-message with the `@role:<role>` or `@master:<role>` mention:
 
 | Preset | Scope |
 |--------|-------|
-| `code` | The default developer master — full capabilities, unrestricted writes |
+| `code` | The default developer agent — full capabilities, unrestricted writes |
 | `architect` | Design and review focus — full read, writes retained but the persona steers toward analysis and written rationale before changes |
 | `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_text`, or `execute_command`) |
 | `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
 
-Unknown preset names are rejected with the list of valid presets.
+Unknown preset names are rejected with the list of valid presets. Legacy `/master` calls are transparently accepted as aliases.
 
 ### `/btw`
 

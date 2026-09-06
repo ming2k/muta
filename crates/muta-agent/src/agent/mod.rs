@@ -149,8 +149,8 @@ pub use muta_contracts::RequestTokenEstimate;
 /// [`InputReply`] arrives (or `None` on cancel/turn-end).
 pub struct Agent {
     pub provider: Arc<dyn Provider>,
-    /// Archetype / kind of this agent (Master, Runner).
-    kind: std::sync::RwLock<muta_contracts::AgentKind>,
+    /// Execution policy governing this agent's runtime posture, delegation limits, and depth (ADR-0183).
+    execution_policy: std::sync::RwLock<muta_contracts::ExecutionPolicy>,
     /// Global/Session tool pool for declarative tool resolution.
     pool: Arc<std::sync::RwLock<muta_contracts::ToolPool>>,
     /// The full capability set: every tool keyed by capability, with all its

@@ -22,8 +22,7 @@ use mutx_engine::{
 use super::common::truncate_ellipsis;
 use crate::fuzzy::FuzzyMatch;
 use crate::primitives::{
-    ElevationContainer, FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keyvocab, render_body,
-    render_modal_footer_with_more,
+    ElevationContainer, SCROLL_EDGE_MARGIN, contrast_fg, render_body,
 };
 use crate::view::Theme;
 
@@ -98,10 +97,9 @@ pub fn draw_history_panel(
     let room_above = area_top;
     let row_count = ranked.len().max(1) as u16;
     let desired_rows = row_count.min(HISTORY_PANEL_MAX_ROWS);
-    // +1 header (title), +1 footer (origin strip + key hints), +2 composer
-    // chrome (the full panel-bg top/bottom padding rows the panel shares with
-    // the composer below it).
-    const CHROME_ROWS: u16 = 4;
+    // +1 header (title), +2 composer chrome (the full panel-bg top/bottom padding
+    // rows the panel shares with the composer below it).
+    const CHROME_ROWS: u16 = 3;
     let desired_h = desired_rows.saturating_add(CHROME_ROWS);
     let panel_h = desired_h.min(room_above);
     if panel_h == 0 {
@@ -128,8 +126,7 @@ pub fn draw_history_panel(
     // Header row: title + live query echo + counts. Sits just inside the top
     // transition row, full width (no left-accent column to inset around).
     let header_rect = Rect::new(inner.x, inner.y + 1, inner_w, 1);
-    let footer_rect = Rect::new(inner.x, inner.y + inner.height.saturating_sub(2), inner_w, 1);
-    // Body sits between header and footer.
+    // Body sits below header and fills the remaining height above bottom transition.
     let body_rect = if inner.height >= CHROME_ROWS {
         Rect::new(
             inner.x,
@@ -169,10 +166,6 @@ pub fn draw_history_panel(
         );
     }
 
-    // Footer: the key hints strip (right-aligned). The selected row's origin
-    // strip was removed as redundant — see [`draw_footer`].
-    draw_footer(frame, footer_rect, theme);
-
     Some(area)
 }
 
@@ -195,22 +188,6 @@ fn draw_header(frame: &mut Frame, rect: Rect, total: usize, shown: usize, theme:
         )
     };
     frame.render_widget(Paragraph::new(Line::from(vec![title, count])), rect);
-}
-
-/// Footer: the key hints strip (right-aligned). The selected row's origin
-/// (workspace · session · time) used to trail on the left, but that line was
-/// redundant noise — the prompt text itself is the entry, and the row numbers
-/// already anchor selection — so it was removed. When the `?` keymap page is
-/// open the caller draws its own footer, so this is only the normal-mode strip.
-fn draw_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
-    let hints: [FooterHint; 5] = [
-        FooterHint::secondary("type", "filter"),
-        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::key_primary(crate::keymap::Key::ENTER, "insert"),
-        FooterHint::key_always(crate::keymap::Key::CTRL_U, "clear input"),
-        FooterHint::key_always(crate::keymap::Key::ESC, "close"),
-    ];
-    render_modal_footer_with_more(frame, rect, &hints, &[], theme);
 }
 
 /// Build the one-line-per-entry fuzzy list body. Multi-line entries are

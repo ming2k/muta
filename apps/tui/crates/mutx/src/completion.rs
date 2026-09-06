@@ -227,7 +227,7 @@ impl App {
     /// Implements Two-Tier Completion (ADR-0162):
     /// - Tier 1: Zero-latency synchronous execution for slash and harness commands.
     /// - Tier 2: Path mentions and dynamic queries with SWR (Stale-While-Revalidate) cache retention.
-    pub fn completions(&mut self) -> Vec<Completion> {
+    pub fn completions(&self) -> Vec<Completion> {
         let cursor = self.cursor_position;
 
         // Tier 1: Synchronous zero-latency matching for slash and harness commands (ADR-0162)

@@ -1038,3 +1038,228 @@ fn recall_queued_at_targets_selected_index_not_newest() {
     // untouched.
     assert!(app.recall_queued_at("session-a", 0).is_none());
 }
+
+#[test]
+fn test_delete_selected_history_entry_and_cascade() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-test".to_string();
+
+    // 1. Setup 3 history entries
+    app.input_history = vec![
+        muta_contracts::HistoryEntry::new("first entry".into(), Some("session-test".into()), None, 100),
+        muta_contracts::HistoryEntry::new("target entry".into(), Some("session-test".into()), None, 200),
+        muta_contracts::HistoryEntry::new("third entry".into(), Some("session-test".into()), None, 300),
+    ];
+    // Backfill has target entry
+    app.session_history_backfill = vec![
+        muta_contracts::HistoryEntry::new("target entry".into(), Some("session-test".into()), None, 200),
+        muta_contracts::HistoryEntry::new("other backfill".into(), Some("session-test".into()), None, 250),
+    ];
+    // Attachments has target entry
+    let identity = ("target entry".to_string(), Some("session-test".to_string()));
+    app.history_attachments.insert(
+        identity.clone(),
+        crate::app::HistoryAttachments {
+            images: vec![],
+            text_pastes: vec!["some paste".into()],
+        },
+    );
+    app.history_attachments_order.push_back(identity.clone());
+
+    // History order newest first: "third entry" (idx 2), "target entry" (idx 1), "first entry" (idx 0).
+    // Let's select row 1 ("target entry")
+    app.modal_index = 1;
+    let removed = app.delete_selected_history_entry();
+    assert!(removed.is_some());
+    let removed = removed.unwrap();
+    assert_eq!(removed.text, "target entry");
+
+    // Verify removed from input_history
+    assert_eq!(app.input_history.len(), 2);
+    assert!(!app.input_history.iter().any(|e| e.text == "target entry"));
+
+    // Verify pruned from session_history_backfill
+    assert_eq!(app.session_history_backfill.len(), 1);
+    assert_eq!(app.session_history_backfill[0].text, "other backfill");
+
+    // Verify pruned from history_attachments and order
+    assert!(!app.history_attachments.contains_key(&identity));
+    assert!(!app.history_attachments_order.iter().any(|k| k == &identity));
+
+    // Verify modal_index clamped
+    assert_eq!(app.modal_index, 1);
+
+    // Delete remaining entries
+    app.delete_selected_history_entry();
+    assert_eq!(app.input_history.len(), 1);
+    app.delete_selected_history_entry();
+    assert_eq!(app.input_history.len(), 0);
+    assert_eq!(app.modal_index, 0);
+
+    // Deleting from empty history is a safe no-op
+    assert!(app.delete_selected_history_entry().is_none());
+}
+
+#[test]
+fn test_shift_delete_and_bare_delete_dispatch() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use crate::keymap::Key;
+    use crate::modal_keys::resolve_modal_key;
+
+    let c = crate::input::InputContext::default();
+
+    // Shift+Delete in HistorySearch resolves to HistoryDeleteSelected
+    let shift_del = Key::SHIFT_DELETE;
+    let action = resolve_modal_key(crate::Modal::HistorySearch, shift_del, &c);
+    assert_eq!(action, Some(crate::input::InputAction::HistoryDeleteSelected));
+
+    // Bare Delete in HistorySearch falls through to None (text engine DeleteForward)
+    let bare_del = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Delete,
+    };
+    let action = resolve_modal_key(crate::Modal::HistorySearch, bare_del, &c);
+    assert_eq!(action, None);
+}
+
+#[test]
+fn test_composer_hints_history_search_density() {
+    use crate::components::composer_hints::{hint_row_parts, ComposeTarget, ActionDensity};
+    use crate::view::Theme;
+
+    let theme = Theme::default();
+    let key = crate::keymap::Key::TAB;
+
+    // Full density: includes close, navigate, delete, insert
+    let (left, right) = hint_row_parts(false, ActionDensity::Full, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let left_str: String = left.iter().map(|s| s.content.as_ref()).collect();
+    let right_str: String = right.iter().map(|s| s.content.as_ref()).collect();
+    assert!(left_str.contains("close"));
+    assert!(left_str.contains("navigate"));
+    assert!(left_str.contains("delete"));
+    assert!(left_str.contains("⇧Del"));
+    assert!(right_str.contains("Tab"));
+    assert!(right_str.contains("Enter"));
+    assert!(right_str.contains("insert"));
+
+    // Compact density: drops navigate and Tab
+    let (left_c, right_c) = hint_row_parts(false, ActionDensity::Compact, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let left_c_str: String = left_c.iter().map(|s| s.content.as_ref()).collect();
+    let right_c_str: String = right_c.iter().map(|s| s.content.as_ref()).collect();
+    assert!(left_c_str.contains("close"));
+    assert!(!left_c_str.contains("navigate"));
+    assert!(left_c_str.contains("delete"));
+    assert!(!right_c_str.contains("Tab"));
+    assert!(right_c_str.contains("Enter"));
+
+    // Tiny density: drops delete as well, only close and Enter insert
+    let (left_t, right_t) = hint_row_parts(false, ActionDensity::Tiny, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let left_t_str: String = left_t.iter().map(|s| s.content.as_ref()).collect();
+    let right_t_str: String = right_t.iter().map(|s| s.content.as_ref()).collect();
+    assert!(left_t_str.contains("close"));
+    assert!(!left_t_str.contains("delete"));
+    assert!(!left_t_str.contains("navigate"));
+    assert!(right_t_str.contains("Enter"));
+}
+
+#[tokio::test]
+async fn test_ctrl_c_in_history_search() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::sync::mpsc;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_panel(crate::surfaces::PanelId::HistorySearch);
+    assert_eq!(app.active_modal(), crate::Modal::HistorySearch);
+
+    // Case 1: Filter query is non-empty -> Ctrl+C clears the filter and resets cursor
+    app.input = "my search query".to_string();
+    app.set_cursor(5);
+    app.modal_index = 2;
+
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(AtomicUsize::new(0));
+
+    crate::event_loop::handle_ctrl_c(
+        &mut app,
+        "test-session",
+        &copy_tx,
+        &copy_pending,
+    );
+
+    // Modal remains open, input cleared, modal_index reset
+    assert_eq!(app.active_modal(), crate::Modal::HistorySearch);
+    assert_eq!(app.input, "");
+    assert_eq!(app.modal_index, 0);
+
+    // Case 2: Filter query is empty -> Ctrl+C dismisses history modal
+    crate::event_loop::handle_ctrl_c(
+        &mut app,
+        "test-session",
+        &copy_tx,
+        &copy_pending,
+    );
+
+    // Modal dismissed
+    assert_ne!(app.active_modal(), crate::Modal::HistorySearch);
+}
+
+#[test]
+fn test_history_ranking_prefers_exact_word_over_scattered_and_applies_recency() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "live-session".to_string();
+
+    let hour_ms = 3_600_000;
+    let base_time = 1_000_000_000;
+
+    app.input_history = vec![
+        // Scattered acronym initials across sentence: "all dogs run in the park" (ts: newest!)
+        muta_contracts::HistoryEntry::new(
+            "all dogs run in the park".into(),
+            Some("other-session".into()),
+            None,
+            base_time + 5 * hour_ms,
+        ),
+        // Exact whole word "adr", but typed 4 hours ago in other session
+        muta_contracts::HistoryEntry::new(
+            "let's write the adr".into(),
+            Some("other-session".into()),
+            None,
+            base_time + 1 * hour_ms,
+        ),
+        // Word prefix "adroit approach"
+        muta_contracts::HistoryEntry::new(
+            "adroit approach to problems".into(),
+            Some("other-session".into()),
+            None,
+            base_time + 2 * hour_ms,
+        ),
+        // Exact whole word "adr" typed recently in CURRENT session
+        muta_contracts::HistoryEntry::new(
+            "review the adr now".into(),
+            Some("live-session".into()),
+            None,
+            base_time + 5 * hour_ms,
+        ),
+    ];
+
+    app.input = "adr".to_string();
+    let rows = app.history_rows();
+    assert_eq!(rows.len(), 4, "all 4 match the subsequence 'adr'");
+
+    // Row 0: "review the adr now" (exact word + current session + newest)
+    assert_eq!(app.input_history[rows[0].0].text, "review the adr now");
+
+    // Row 1: "let's write the adr" (exact word, older)
+    assert_eq!(app.input_history[rows[1].0].text, "let's write the adr");
+
+    // Row 2: "adroit approach to problems" (word prefix)
+    assert_eq!(app.input_history[rows[2].0].text, "adroit approach to problems");
+
+    // Row 3: "all dogs run in the park" (scattered acronym, MUST be lowest rank despite newer timestamp!)
+    assert_eq!(app.input_history[rows[3].0].text, "all dogs run in the park");
+
+    // Verify exact word scores strictly higher than scattered acronym
+    assert!(rows[0].1.score > rows[3].1.score);
+    assert!(rows[1].1.score > rows[3].1.score);
+}

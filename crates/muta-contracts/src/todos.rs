@@ -143,6 +143,9 @@ impl Default for TodoList {
 }
 
 impl TodoList {
+    /// Maximum capacity of a todo list.
+    pub const MAX_CAPACITY: usize = MAX_TODOS;
+
     pub fn new() -> Self {
         Self::default()
     }

@@ -89,8 +89,8 @@ impl ToolPolicy {
     /// runner resolution applies this as a post-filter. See
     /// [`RunnerPreset::resolve_tools`].
     pub fn admits_runtime(&self, tool: &dyn Tool) -> bool {
-        // Recursion is unconditionally forbidden in runners.
-        if tool.spawns_runner() {
+        // Recursion is unconditionally forbidden in child sub-agents.
+        if tool.spawns_subagent() || tool.spawns_runner() {
             return false;
         }
         // Control-flow tools (e.g. the abort/exit escape hatch) are
@@ -440,6 +440,14 @@ questions of the user; focus strictly on skill discovery and instruction synthes
     delegated: true,
     allow_model_stdin: false,
 };
+
+impl RunnerPreset {
+    pub const EXPLORE: Self = RUNNER_EXPLORE;
+    pub const CODE: Self = RUNNER_CODE;
+    pub const TITLE: Self = RUNNER_TITLE;
+    pub const MCP_SPECIALIST: Self = RUNNER_MCP_SPECIALIST;
+    pub const SKILL: Self = RUNNER_SKILL;
+}
 
 /// The pool of runner presets available for master delegation.
 #[derive(Debug, Clone, Copy, Default)]

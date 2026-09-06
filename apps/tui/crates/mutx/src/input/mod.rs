@@ -589,6 +589,10 @@ pub enum InputAction {
     /// The message is not sent — the user can edit and press Enter again to ship
     /// it.
     HistoryInsert,
+    /// Delete the focused entry in the Ctrl+R history modal (Shift+Delete):
+    /// permanently remove it from in-memory history, drop from SQLite, and
+    /// clamp modal selection.
+    HistoryDeleteSelected,
     /// Enter the model picker's search sub-layer (`/` in browse mode): start
     /// borrowing the composer line as a live fuzzy query and re-rank the list.
     ModelEnterSearch,

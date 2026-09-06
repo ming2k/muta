@@ -270,11 +270,22 @@ pub(crate) fn handle_ctrl_c(
         app.drag.cell_info.as_ref(),
     ) {
         clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
-    } else if app.active_modal() == Modal::HistorySearch {
-        // Cancel the history modal via the shared dismiss verb: the
-        // per-view draft is handed back and the sub-flags cleared
-        // (ADR-0139).
-        app.dismiss_surface();
+    } else if app.active_composer_extension()
+        == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
+    {
+        if !app.input.is_empty() {
+            // Clear current search filter, reset caret and selection, and keep
+            // the history search panel open to show the full list.
+            app.input.clear();
+            app.set_cursor(0);
+            app.input_scroll = 0;
+            app.modal_index = 0;
+            app.history_modal_follow = true;
+        } else {
+            // Filter query already empty: user intends to dismiss history search
+            // and restore their parked composer draft (ADR-0139).
+            app.dismiss_surface();
+        }
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
         && app.active_modal() == Modal::Sessions
     {
@@ -312,18 +323,17 @@ pub(crate) fn handle_ctrl_c(
         // window (the "press Ctrl+C again to exit" toast), the
         // second exits the whole TUI.
         if app.host_prompting && !app.input.is_empty() {
-            // Same two-press shape as the composer: with text in
-            // the dashboard's inline prompt, the first Ctrl+C
-            // clears it (and arms), the second quits.
+            // First Ctrl+C clears the staged text. Clearing does not
+            // arm quit, avoiding accidental exits on rapid clear gestures.
             app.input.clear();
             app.set_cursor(0);
+            app.arm_ctrl_c(None);
             show_local_toast(
                 app,
-                "input cleared — Ctrl+C again to exit",
+                "input cleared",
                 false,
-                App::CTRL_C_ARM_WINDOW,
+                std::time::Duration::from_millis(1500),
             );
-            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         } else if app.ctrl_c_armed() {
             tracing::info!(reason = "dashboard_ctrl_c_double_press", "app exiting");
             if app.startup_overlay == crate::StartupOverlay::Dashboard
@@ -342,6 +352,7 @@ pub(crate) fn handle_ctrl_c(
         } else {
             // Arm the real 2s window in which a second Ctrl+C
             // quits (the toast renders over the dashboard).
+            app.copy_toast_until = None;
             app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         }
     } else if app.active_modal() != Modal::None && app.active_sheet().is_none() {
@@ -360,20 +371,10 @@ pub(crate) fn handle_ctrl_c(
         app.exit_side_view();
         let _ = app.tx.send(AgentRequest::ExitSideView);
     } else if !app.input.is_empty() {
-        // Ctrl+C is purely a compose-level action: copy,
-        // close overlay, clear, or quit. It never interrupts a
-        // running turn — only double-Esc does — so a task in
-        // flight is left untouched here and the input is
-        // cleared instead. Clearing the input also arms the
-        // quit window so
-        // the chain is exactly two presses total (clear,
-        // then quit). The combined toast says both what
-        // just happened and what the next Ctrl+C will do,
-        // removing the old "silent clear → user can't tell
-        // if the next press will quit or do something else"
-        // ambiguity. Pending-image reminders skip their
-        // per-frame refresh while the quit window is armed
-        // so this toast keeps the floor.
+        // Ctrl+C clears the composer text.
+        // Clearing text consumes this shortcut and does NOT arm
+        // the quit window. If the user wants to exit, they must
+        // press Ctrl+C twice with an empty input.
         app.input.clear();
         app.set_cursor(0);
         app.input_scroll = 0;
@@ -381,13 +382,13 @@ pub(crate) fn handle_ctrl_c(
         app.clear_history_draft();
         app.pending_images.clear();
         app.pending_text_pastes.clear();
+        app.arm_ctrl_c(None);
         show_local_toast(
             app,
-            "input cleared — Ctrl+C again to exit",
+            "input cleared",
             false,
-            App::CTRL_C_ARM_WINDOW,
+            std::time::Duration::from_millis(1500),
         );
-        app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
     } else if app.ctrl_c_armed() {
         // Double Ctrl+C inside the conversation is a quit intent — same
         // client-declared session end as `/exit` (ADR-0112), unlike the
@@ -397,7 +398,9 @@ pub(crate) fn handle_ctrl_c(
         return ActionFlow::Exit;
     } else {
         // Arm a real 2s window (wall-clock) in which a second Ctrl+C
-        // quits.
+        // quits. Clear any transient informational toast so the armed
+        // confirmation shows immediately.
+        app.copy_toast_until = None;
         app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
     }
     ActionFlow::Handled

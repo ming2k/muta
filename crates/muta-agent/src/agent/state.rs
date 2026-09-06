@@ -118,7 +118,7 @@ impl Agent {
 
         Self {
             provider,
-            kind: std::sync::RwLock::new(muta_contracts::AgentKind::Master),
+            execution_policy: std::sync::RwLock::new(muta_contracts::ExecutionPolicy::root_default()),
             pool,
             toolset,
             resolved_tools,
@@ -657,7 +657,7 @@ impl Agent {
         &self.additional_workspace_roots
     }
 
-    pub(crate) fn workspace_root(&self) -> Option<std::path::PathBuf> {
+    pub fn workspace_root(&self) -> Option<std::path::PathBuf> {
         self.permissions.project_root()
     }
 
@@ -802,5 +802,10 @@ impl Agent {
     /// Access the harness cognitive pipeline for out-of-band typed execution.
     pub fn cognitive(&self) -> crate::cognitive::CognitivePipeline {
         crate::cognitive::CognitivePipeline::new(self.provider.clone())
+    }
+
+    /// Access the Spatiotemporal Aspect Engine governing lifecycle phases (ADR-0183).
+    pub fn aspects(&self) -> crate::aspects::AspectEngine {
+        crate::aspects::AspectEngine::new(self.cognitive())
     }
 }

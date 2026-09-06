@@ -256,7 +256,7 @@ mod unconfined_arg_tests {
 
     #[test]
     fn enable_forms() {
-        for s in ["on", "true", "1", "enable", "enabled", "unconfined", "escape"] {
+        for s in ["on", "true", "1", "enable", "enabled", "unconfine", "unconfined", "escape"] {
             assert_eq!(parse_unconfined_arg(s), Ok(Some(true)), "failed on {s:?}");
         }
     }
@@ -269,6 +269,7 @@ mod unconfined_arg_tests {
             "0",
             "disable",
             "disabled",
+            "confine",
             "confined",
             "jail",
         ] {

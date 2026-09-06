@@ -1409,7 +1409,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
         .expect("turn header must render");
     let thinking_idx = rows
         .iter()
-        .position(|row| row.contains("Thinking"))
+        .position(|row| row.contains("Thinking") || row.contains("Thought"))
         .expect("thinking summary must render");
     let tool_idx: Vec<usize> = rows
         .iter()

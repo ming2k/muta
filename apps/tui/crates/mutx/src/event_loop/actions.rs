@@ -235,6 +235,18 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         host::cancel_kill_confirm(app);
     }
 
+    // While the Ctrl+C quit window is armed, any user action other than
+    // Ctrl+C cancels the armed state so subsequent typing or interaction
+    // does not inadvertently exit the program.
+    if app.ctrl_c_armed()
+        && !matches!(
+            action,
+            input::InputAction::CtrlC | input::InputAction::None
+        )
+    {
+        app.arm_ctrl_c(None);
+    }
+
     match action {
         input::InputAction::None => {}
         input::InputAction::TerminalResized => {
@@ -718,6 +730,13 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.completion_dismissed = true;
             app.modal_index = 0;
             app.show_chat_surface();
+        }
+        input::InputAction::HistoryDeleteSelected => {
+            if app.active_composer_extension()
+                == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
+            {
+                app.delete_selected_history_entry();
+            }
         }
         input::InputAction::OpenHelp => {
             enter_panel(

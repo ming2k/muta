@@ -36,6 +36,8 @@ pub mod keyvocab {
     pub const SPACE: &str = "Space";
     pub const SHIFT_TAB: &str = "⇧Tab";
     pub const SHIFT_ENTER: &str = "⇧Enter";
+    pub const SHIFT_DELETE: &str = "⇧Del";
+    pub const DELETE: &str = "Del";
 }
 
 /// The compact token for a core [`KeyCode`] in lowercase chord notation.
@@ -85,6 +87,7 @@ pub const fn chord_token(code: KeyCode) -> &'static str {
         KeyCode::Enter => "enter",
         KeyCode::Tab => "tab",
         KeyCode::BackTab => "shift+tab",
+        KeyCode::Delete => "del",
         KeyCode::Backspace => "backspace",
         KeyCode::Esc => "esc",
         KeyCode::Up => "↑",
@@ -151,6 +154,7 @@ pub const fn display_token(code: KeyCode) -> &'static str {
         KeyCode::Enter => "Enter",
         KeyCode::Tab => "Tab",
         KeyCode::BackTab => keyvocab::SHIFT_TAB,
+        KeyCode::Delete => keyvocab::DELETE,
         KeyCode::Backspace => "Backspace",
         KeyCode::Esc => "Esc",
         KeyCode::Up => keyvocab::UP,
@@ -217,6 +221,14 @@ impl Key {
     pub const DOWN: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Down,
+    };
+    pub const DELETE: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::Delete,
+    };
+    pub const SHIFT_DELETE: Key = Key {
+        modifiers: KeyModifiers::SHIFT,
+        code: KeyCode::Delete,
     };
     pub const PAGE_UP: Key = Key {
         modifiers: KeyModifiers::NONE,
@@ -328,6 +340,13 @@ impl Key {
         Self { modifiers, code }
     }
 
+    pub const fn shift_code(code: KeyCode) -> Self {
+        Self {
+            modifiers: KeyModifiers::SHIFT,
+            code,
+        }
+    }
+
     pub const fn chord(&self) -> &'static str {
         let ctrl = self.modifiers.contains(KeyModifiers::CONTROL);
         let alt = self.modifiers.contains(KeyModifiers::ALT);
@@ -415,6 +434,7 @@ impl Key {
         } else if shift {
             match self.code {
                 KeyCode::Tab | KeyCode::BackTab => "shift+tab",
+                KeyCode::Delete => "shift+delete",
                 _ => chord_token(self.code),
             }
         } else if cmd {
@@ -514,6 +534,7 @@ impl Key {
         } else if shift {
             match self.code {
                 KeyCode::Tab | KeyCode::BackTab => keyvocab::SHIFT_TAB,
+                KeyCode::Delete => keyvocab::SHIFT_DELETE,
                 _ => display_token(self.code),
             }
         } else if cmd {
@@ -1174,7 +1195,7 @@ pub fn find_by_slash(slash: &str) -> Option<&'static CommandSpec> {
 /// Which side of a hint row a chord is advertised on: navigation (left) or the
 /// primary action (right).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HintSide {
+pub enum HintSide {
     Nav,
     Action,
 }
@@ -1184,10 +1205,58 @@ pub(crate) enum HintSide {
 /// exactly the chords a scheme's `live_*_hints` returns, and the tests pin
 /// them to the resolver so a hint can never advertise a dead shortcut.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LiveHint {
+pub struct LiveHint {
     pub key: Key,
     pub label: &'static str,
     pub side: HintSide,
+    pub glyph: Option<&'static str>,
+}
+
+impl LiveHint {
+    pub const fn nav(key: Key, label: &'static str) -> Self {
+        Self {
+            key,
+            label,
+            side: HintSide::Nav,
+            glyph: None,
+        }
+    }
+
+    pub const fn nav_glyph(key: Key, glyph: &'static str, label: &'static str) -> Self {
+        Self {
+            key,
+            label,
+            side: HintSide::Nav,
+            glyph: Some(glyph),
+        }
+    }
+
+    pub const fn action(key: Key, label: &'static str) -> Self {
+        Self {
+            key,
+            label,
+            side: HintSide::Action,
+            glyph: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub const fn action_glyph(key: Key, glyph: &'static str, label: &'static str) -> Self {
+        Self {
+            key,
+            label,
+            side: HintSide::Action,
+            glyph: Some(glyph),
+        }
+    }
+
+    pub fn display_key(&self) -> &'static str {
+        if let Some(glyph) = self.glyph {
+            glyph
+        } else {
+            self.key.display()
+        }
+    }
 }
 
 /// The canonical global chords a user may remap via the `[keybindings]`

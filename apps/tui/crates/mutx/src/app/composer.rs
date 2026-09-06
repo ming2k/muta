@@ -416,7 +416,9 @@ impl App {
             // composer IS its filter input, so the composer (not a modal
             // field) owns the caret while this surface is open. This is why
             // `HistorySearch` is deliberately absent from `Modal::owns_caret`.
-            if self.active_modal() == Modal::HistorySearch {
+            if self.active_composer_extension()
+                == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
+            {
                 return if self.in_runner_view() {
                     CaretOwner::None
                 } else {
@@ -545,6 +547,46 @@ impl App {
         // the popup doesn't flash until the next real edit.
         self.suggestion_index = None;
         self.completion_dismissed = true;
+    }
+
+    /// The currently active [`ComposerExtensionKind`], if any.
+    ///
+    /// Floating overlays that attach directly to the Composer (History Search,
+    /// Slash Commands, Mention completions) are extensions of the composer surface,
+    /// borrowing its text buffer and projecting their candidates without self-contained footers.
+    pub fn active_composer_extension(&self) -> Option<crate::composer_extension::ComposerExtensionKind> {
+        if self.active_modal() == Modal::HistorySearch {
+            return Some(crate::composer_extension::ComposerExtensionKind::HistorySearch);
+        }
+        if self.active_modal() == Modal::None && !self.completion_dismissed {
+            match self.completion_kind() {
+                crate::completion::CompletionKind::Slash => {
+                    let completions = self.completions();
+                    let exact_match = completions.iter().any(|c| {
+                        c.replace_start == 0 && c.replace_end == self.input.len() && c.label == self.input
+                    });
+                    if !completions.is_empty() && !exact_match {
+                        Some(crate::composer_extension::ComposerExtensionKind::SlashCompletion)
+                    } else {
+                        None
+                    }
+                }
+                crate::completion::CompletionKind::Path => {
+                    let completions = self.completions();
+                    let exact_match = completions.iter().any(|c| {
+                        c.replace_start == 0 && c.replace_end == self.input.len() && c.label == self.input
+                    });
+                    if !completions.is_empty() && !exact_match {
+                        Some(crate::composer_extension::ComposerExtensionKind::PathCompletion)
+                    } else {
+                        None
+                    }
+                }
+                crate::completion::CompletionKind::None => None,
+            }
+        } else {
+            None
+        }
     }
 
     /// Whether this view borrows the composer line and therefore owns a

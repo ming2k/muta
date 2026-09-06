@@ -415,6 +415,17 @@ pub trait Provider: Send + Sync {
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
+
+    /// Compatibility aliases that can resolve to this tool during dispatch.
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Whether this tool matches the requested dispatch name.
+    fn matches_name(&self, requested: &str) -> bool {
+        self.name() == requested || self.aliases().contains(&requested)
+    }
+
     fn description(&self) -> &str;
     fn parameters(&self) -> serde_json::Value;
 
@@ -445,10 +456,12 @@ pub trait Tool: Send + Sync {
         false
     }
 
-    /// Whether invoking this tool spawns a nested agent. Runner profiles
-    /// exclude these unconditionally to prevent unbounded recursion — the
-    /// outermost dispatch tool (`task`) and wrappers around it
-    /// (`verify_plan_execution`) override to `true`. See ADR-0011.
+    /// Whether invoking this tool spawns a nested sub-agent (ADR-0183).
+    fn spawns_subagent(&self) -> bool {
+        self.spawns_runner()
+    }
+
+    /// Whether invoking this tool spawns a nested agent (legacy name, superseded by [`Self::spawns_subagent`]).
     fn spawns_runner(&self) -> bool {
         false
     }

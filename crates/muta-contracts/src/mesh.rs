@@ -56,9 +56,19 @@ impl MeshAddress {
         Self::new(MeshStation::Session, s.clone(), s)
     }
 
+    /// Canonical root session agent address (ADR-0183).
+    pub fn session_root(session: impl Into<String>) -> Self {
+        Self::master(session)
+    }
+
     /// Runner address for a subordinate within a session.
     pub fn runner(session: impl Into<String>, agent: impl Into<String>) -> Self {
         Self::new(MeshStation::Subtask, session, agent)
+    }
+
+    /// Canonical sub-agent address for a subordinate within a session (ADR-0183).
+    pub fn subagent(session: impl Into<String>, agent: impl Into<String>) -> Self {
+        Self::runner(session, agent)
     }
 
     /// The address of this agent's parent in the mesh (same session, one

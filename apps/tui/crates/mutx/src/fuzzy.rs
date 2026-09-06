@@ -26,10 +26,15 @@ pub struct FuzzyMatch {
     pub positions: Vec<usize>,
 }
 
-const BONUS_BOUNDARY: i64 = 50;
-const BONUS_CONSECUTIVE: i64 = 30;
+const BONUS_EXACT_FULL: i64 = 500;
+const BONUS_EXACT_WORD: i64 = 300;
+const BONUS_WORD_PREFIX: i64 = 150;
+const BONUS_CONTIGUOUS_SUBSTRING: i64 = 80;
+const BONUS_BOUNDARY: i64 = 40;
+const BONUS_CONSECUTIVE: i64 = 40;
 const BONUS_CASE_MATCH: i64 = 10;
-const PENALTY_GAP: i64 = 1;
+const PENALTY_GAP: i64 = 3;
+const PENALTY_SCATTER_SPAN: i64 = 2;
 const NEG: i64 = i64::MIN / 4;
 
 /// True if the transition `prev → cur` is a word boundary: at the start of
@@ -46,6 +51,23 @@ fn is_word_boundary(prev: Option<char>, cur: char) -> bool {
                     && cur.is_uppercase()
                     && p.is_alphabetic()
                     && cur.is_alphabetic())
+        }
+    }
+}
+
+/// True if the transition `cur → next` ends a word boundary: at the end of
+/// the haystack, just before whitespace or punctuation, or at a lower→upper
+/// camelCase transition.
+fn is_right_boundary(cur: char, next: Option<char>) -> bool {
+    match next {
+        None => true,
+        Some(n) => {
+            n.is_whitespace()
+                || !n.is_alphanumeric()
+                || (cur.is_lowercase()
+                    && n.is_uppercase()
+                    && cur.is_alphabetic()
+                    && n.is_alphabetic())
         }
     }
 }
@@ -188,6 +210,43 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<FuzzyMatch> {
     positions.reverse();
     debug_assert_eq!(positions.len(), n_len);
 
+    // Multi-tier structural scoring bonuses (Industry Gold Standard):
+    // Tier 0: Exact full string match
+    // Tier 1: Exact whole-word match (bounded by whitespace/punctuation)
+    // Tier 2: Word prefix match (needle starts a word)
+    // Tier 3: Contiguous substring match (needle appears contiguous mid-word)
+    // Tier 4: Scattered subsequence (penalized proportionally to scatter span)
+    let is_contiguous = positions.windows(2).all(|w| w[1] == w[0] + 1);
+    let first_pos = *positions.first().unwrap_or(&0);
+    let last_pos = *positions.last().unwrap_or(&0);
+
+    let left_boundary = first_pos == 0 || is_word_boundary(Some(h[first_pos - 1]), h[first_pos]);
+    let next_char = if last_pos + 1 < h_len { Some(h[last_pos + 1]) } else { None };
+    let right_boundary = is_right_boundary(h[last_pos], next_char);
+
+    if is_contiguous {
+        if left_boundary && right_boundary {
+            if positions.len() == h_len {
+                best_score = best_score.saturating_add(BONUS_EXACT_FULL);
+            } else {
+                best_score = best_score.saturating_add(BONUS_EXACT_WORD);
+            }
+        } else if left_boundary {
+            best_score = best_score.saturating_add(BONUS_WORD_PREFIX);
+        } else {
+            best_score = best_score.saturating_add(BONUS_CONTIGUOUS_SUBSTRING);
+        }
+    } else {
+        let span = last_pos.saturating_sub(first_pos) + 1;
+        let excess_span = span.saturating_sub(n_len);
+        let scatter_penalty = (excess_span as i64).saturating_mul(PENALTY_SCATTER_SPAN);
+        best_score = best_score.saturating_sub(scatter_penalty);
+    }
+
+    // Compactness penalty: slight penalty for extremely long haystacks to favor compact prompts
+    let compactness_penalty = ((h_len.saturating_sub(n_len)) / 10).min(30) as i64;
+    best_score = best_score.saturating_sub(compactness_penalty);
+
     Some(FuzzyMatch {
         score: best_score,
         positions,
@@ -297,24 +356,36 @@ mod tests {
         }
     }
 
-    /// rank() + sort_by_score() filters out non-matches and orders by score,
-    /// preserving input order on ties (stable).
+    /// rank() + sort_by_score() filters out non-matches and orders by score.
+    /// Exact whole-word ("a cat") outranks word-prefix ("catalog"), which outranks
+    /// mid-word substring ("scatter").
     #[test]
     fn rank_and_sort_by_score_orders_results() {
-        // "scatter" matches `cat` mid-word (no boundary bonus) so it scores
-        // strictly lower than the boundary-at-start matches in "catalog" and
-        // "a cat", which themselves tie. Placed first in the input so the
-        // sort is actually exercised.
         let items = vec!["scatter", "catalog", "a cat"];
         let mut ranked = rank(&items, "cat");
         sort_by_score(&mut ranked);
         assert_eq!(ranked.len(), 3);
-        // catalog and "a cat" tie at the boundary-boosted score; stable sort
-        // keeps their input order (catalog before "a cat").
-        assert_eq!(ranked[0].0, 1); // catalog
-        assert_eq!(ranked[1].0, 2); // a cat
+        // "a cat" (exact word) ranks first
+        assert_eq!(ranked[0].0, 2); // a cat
+        // "catalog" (word prefix) ranks second
+        assert_eq!(ranked[1].0, 1); // catalog
+        // "scatter" (mid-word substring) ranks third
         assert_eq!(ranked[2].0, 0); // scatter
-        assert!(ranked[0].1.score > ranked[2].1.score);
+        assert!(ranked[0].1.score > ranked[1].1.score);
+        assert!(ranked[1].1.score > ranked[2].1.score);
+    }
+
+    /// Exact whole word matches must strictly beat scattered initials across words (e.g. "adr").
+    #[test]
+    fn exact_word_beats_scattered_acronym() {
+        let exact = fuzzy_match("let's write the adr", "adr").unwrap();
+        let prefix = fuzzy_match("adroit solution", "adr").unwrap();
+        let substring = fuzzy_match("padre", "adr").unwrap();
+        let scattered = fuzzy_match("all dogs run in the park", "adr").unwrap();
+
+        assert!(exact.score > prefix.score, "exact word must beat prefix");
+        assert!(prefix.score > substring.score, "prefix must beat substring");
+        assert!(substring.score > scattered.score, "substring must beat scattered acronym");
     }
 
     /// Empty query in rank() returns every item, unhighlighted.

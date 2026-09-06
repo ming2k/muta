@@ -988,6 +988,17 @@ pub async fn execute_round(
         }
     }
 
+    // Phase 1: Pre-flight Aspect Evaluation (ADR-0183)
+    if !input.hidden && !input.is_retry() {
+        let pre_flight = agent.aspects().evaluate_pre_flight(&input.prompt, false).await;
+        tracing::debug!(
+            tier = ?pre_flight.tier,
+            thinking = pre_flight.enable_thinking,
+            complexity = pre_flight.estimated_complexity,
+            "Spatiotemporal Aspect: Pre-flight evaluated"
+        );
+    }
+
     // The prompt is now admitted. Bump exactly once before request assembly so
     // hooks, token accounting, todos, and emitted positions share one round
     // number. A prompt rejected by UserPromptSubmit never opens a round.
@@ -1031,6 +1042,20 @@ pub async fn execute_round(
         window[..watermark].to_vec()
     } else {
         let mut th = session.model_window().await;
+        // Phase 2: Turn-Intake Aspect Evaluation (ADR-0183)
+        if !input.hidden {
+            if let Some(reminder) = agent
+                .aspects()
+                .evaluate_turn_intake(agent.workspace_root().as_deref())
+                .await
+            {
+                tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
+                th.push(crate::conversation_context::hidden_user(
+                    InjectionKind::SystemReminder,
+                    format!("<system-reminder>\n{reminder}\n</system-reminder>"),
+                ));
+            }
+        }
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
         } else {

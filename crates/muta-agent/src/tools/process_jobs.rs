@@ -1,4 +1,4 @@
-//! Built-in tools for inspecting and controlling background processes and sub-runners.
+//! Built-in tools for inspecting and controlling background processes and sub-agents.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -16,7 +16,7 @@ fn background_service(ctx: &ToolContext) -> Option<Arc<dyn BackgroundJobService>
 
 #[derive(ToolSchema, Deserialize)]
 struct ProcessPollArgs {
-    #[tool(desc = "The job ID returned when the background command or runner was spawned.")]
+    #[tool(desc = "The job ID returned when the background command or sub-agent was spawned.")]
     job_id: String,
 }
 
@@ -37,7 +37,7 @@ impl Tool for ProcessPollTool {
     }
 
     fn description(&self) -> &str {
-        "Check the status, runtime, and latest output line of a background process or sub-runner job."
+        "Check the status, runtime, and latest output line of a background process or sub-agent job."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -169,7 +169,7 @@ impl Tool for ProcessKillTool {
     }
 
     fn description(&self) -> &str {
-        "Terminate an active background process or sub-runner job."
+        "Terminate an active background process or sub-agent job."
     }
 
     fn parameters(&self) -> serde_json::Value {

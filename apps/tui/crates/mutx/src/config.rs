@@ -197,6 +197,20 @@ pub fn save_history(
     Ok(())
 }
 
+/// Delete a prompt input history record from SQLite muta.db (authoritative SSOT).
+pub fn delete_history_entry(
+    text: &str,
+    created_at_ms: u64,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let db_path = muta_persistence::paths::get().db_file();
+    let engine = muta_persistence::db::DatabaseEngine::open(&db_path, None)
+        .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
+    let count = engine
+        .delete_input_history_entry(text, created_at_ms)
+        .map_err(|e| format!("could not delete input history entry from sqlite: {e}"))?;
+    Ok(count)
+}
+
 /// Discover all candidate theme directories across project workspace and user configuration roots.
 pub fn candidate_theme_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();

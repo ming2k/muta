@@ -261,7 +261,7 @@ impl Tool for HypervisorInstructSessionTool {
     }
 
     fn description(&self) -> &str {
-        "Send top-down instructions or steering guidance from the Hypervisor to a session Master over the agent mesh network."
+        "Send top-down instructions or steering guidance from the Hypervisor to a session agent over the agent mesh network."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -274,7 +274,7 @@ impl Tool for HypervisorInstructSessionTool {
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "The directive or guidance for the session Master"
+                    "description": "The directive or guidance for the session agent"
                 }
             },
             "required": ["session_id", "instruction"]
@@ -357,7 +357,7 @@ impl Tool for HypervisorCoordinateDebugTool {
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "Optional alignment directive to broadcast to all participating session Masters"
+                    "description": "Optional alignment directive to broadcast to all participating session agents"
                 }
             }
         })

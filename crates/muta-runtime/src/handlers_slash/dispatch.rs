@@ -167,7 +167,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::DelegatedChanged(enabled),
             ));
         }
-        Some(BuiltinCmd::Unconfined) => {
+        Some(BuiltinCmd::Unconfine) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
             let next = match parse_unconfined_arg(&arg) {
                 Ok(next) => next,
@@ -176,7 +176,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     return;
                 }
             };
-            // A bare `/unconfined` (`None`) toggles the current state.
+            // A bare `/unconfine` (`None`) toggles the current state.
             let next_unconfined = next.unwrap_or_else(|| !shared_unconfined.is_unconfined());
             shared_unconfined.set_unconfined(next_unconfined);
 
@@ -213,15 +213,15 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::UnconfinedChanged(next_unconfined),
             ));
         }
-        Some(BuiltinCmd::Master) => {
-            // /master <role> — switch the live master role (plan §3.3).
+        Some(BuiltinCmd::Role) => {
+            // /role <role> — switch the live agent role (ADR-0183).
             // Resolves the role onto the current identity, applies the
             // resulting profile (identity preamble, capability scope, operation
             // boundary), and surfaces a confirmation. With no argument, lists
             // the available roles.
             match parts.get(1) {
                 None | Some(&"") => {
-                    let roles: Vec<&'static str> = muta_contracts::MasterPresetId::ALL
+                    let roles: Vec<&'static str> = muta_contracts::AgentPresetId::ALL
                         .iter()
                         .map(|r| r.as_str())
                         .collect();
@@ -231,14 +231,14 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         name,
                         args,
                         CommandResult::Text(format!(
-                            "Available master roles: {}. Usage: `/master <role>` or \
-                             mention `@master:<role>` in a message.",
+                            "Available agent roles: {}. Usage: `/role <role>` or \
+                             mention `@role:<role>` in a message.",
                             roles.join(", ")
                         )),
                     )
                     .await;
                 }
-                Some(role) => match agent.apply_master_role(role) {
+                Some(role) => match agent.apply_role(role) {
                     Some(resolved) => {
                         let _ = session.set_delegated(agent.delegated()).await;
                         let _ = resp_tx.send(round_response(
@@ -251,7 +251,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             name,
                             args,
                             CommandResult::Text(format!(
-                                "Master role switched to `{}` — {}. The next response will \
+                                "Agent role switched to `{}` — {}. The next response will \
                                  speak with this role's perspective and capability scope.",
                                 resolved.as_str(),
                                 resolved.description()
@@ -266,9 +266,9 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             name,
                             args,
                             format!(
-                                "Unknown master role `{}`. Available roles: {}.",
+                                "Unknown agent role `{}`. Available roles: {}.",
                                 role,
-                                muta_contracts::MasterPresetId::ALL
+                                muta_contracts::AgentPresetId::ALL
                                     .iter()
                                     .map(|r| r.as_str())
                                     .collect::<Vec<_>>()

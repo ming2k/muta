@@ -6,12 +6,12 @@
 //! session reuses the primary agent's identity via `Agent::identity()`,
 //! so it never asks the server to name a product.
 
-use muta_contracts::{AgentIdentity, MasterPreset};
+use muta_contracts::{AgentIdentity, AgentPreset, MasterPreset};
 
 /// The product's default instance name. A self-reference anchor the model
 /// uses in the system prompt (intro line, responding when called by name).
 /// Not "the master's name" — the role ("code") is carried by
-/// [`MasterPreset::name`].
+/// [`AgentPreset::name`].
 const MUTA_NAME: &str = "muta";
 
 /// What this CLI's agent is for.
@@ -22,18 +22,15 @@ pub fn muta_identity() -> AgentIdentity {
     AgentIdentity::new(MUTA_NAME, MUTA_MISSION)
 }
 
-/// The built-in **coding master** profile (ADR-0053): the declarative
-/// form of the role this binary historically assembled inline. Bound via
-/// `agent.apply_master_profile(&master_code())` after construction.
-///
-/// Scope and operation boundary are unrestricted (a coding master may
-/// use every capability and write anywhere in the workspace) and the
-/// runtime config is the default — the binary still overlays the live
-/// `[master]` config table afterwards so per-installation knobs win.
-/// A future `muta-quant` binary brings its own `MasterPreset` value
-/// instead of forking the server.
+/// The built-in **coding agent** profile (ADR-0183): the declarative
+/// form of the role this binary historically assembled inline.
+pub fn agent_code() -> AgentPreset {
+    AgentPreset::with_identity("code", muta_identity())
+}
+
+/// Legacy alias for [`agent_code`].
 pub fn master_code() -> MasterPreset {
-    MasterPreset::with_identity("code", muta_identity())
+    agent_code()
 }
 
 /// The daemon has no terminal or browser clipboard of its own. Clipboard

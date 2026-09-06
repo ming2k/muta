@@ -94,7 +94,10 @@ pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
 pub mod agent_kind;
+pub mod agent_preset;
+pub mod aspects;
 pub mod cognitive;
+pub mod execution_policy;
 pub mod hazard;
 pub use hazard::*;
 pub mod job;
@@ -102,10 +105,17 @@ pub mod master;
 pub mod mesh;
 pub mod runner;
 pub use agent_kind::{AgentKind, MeshStation};
-pub use cognitive::{
-    CognitiveModelPreference, CognitiveTask, SessionDigest, SessionDigestInput, SessionDigestTask,
-    StreamLoopChannel, StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
+pub use agent_preset::{
+    AgentPreset, AgentPresetId, AgentRuntimeConfig, DelegationPolicy,
 };
+pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
+pub use cognitive::{
+    CognitiveModelPreference, CognitiveTask, EnvironmentReminderOutput, EnvironmentSensorInput,
+    EnvironmentSensorTask, ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput,
+    PreFlightRouterTask, SessionDigest, SessionDigestInput, SessionDigestTask, StreamLoopChannel,
+    StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
+};
+pub use execution_policy::{ContextLifecycle, ExecutionPolicy, PolicyViolation};
 pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
 pub mod history;
 pub mod human_request;
@@ -216,7 +226,7 @@ pub use pressure::{
     prune_tool_results,
 };
 pub use secret::SecretString;
-pub use session_title::{TITLE_MAX_LEN, clean_title};
+pub use session_title::{SessionTitle, TITLE_MAX_LEN, clean_title};
 pub use skills_config::SkillsConfig;
 /// The BPE token counter ([`crate::tokenizer`], ADR-0117) under the name the
 /// heuristic estimator used to own: token prediction is BPE now, and callers

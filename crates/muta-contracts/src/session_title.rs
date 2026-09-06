@@ -24,6 +24,19 @@
 /// row stays bounded regardless of what the model returns.
 pub const TITLE_MAX_LEN: usize = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionTitle;
+
+impl SessionTitle {
+    /// Maximum character length of a generated title.
+    pub const MAX_LEN: usize = TITLE_MAX_LEN;
+
+    /// Clean a raw model title output.
+    pub fn clean(raw: &str) -> Option<String> {
+        clean_title(raw)
+    }
+}
+
 /// Turn a model's raw title response into a valid title string, or `None` when
 /// there is nothing usable.
 ///

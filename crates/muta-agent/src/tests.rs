@@ -2480,6 +2480,61 @@ async fn delegated_reclaims_ask_user_and_short_circuits_stale_calls() {
 }
 
 #[tokio::test]
+async fn execution_policy_blocks_ask_user_for_child_agents() {
+    let ask_args = serde_json::json!({
+        "questions": [{
+            "header": "choice",
+            "question": "Which option?",
+            "options": [
+                { "label": "A (Recommended)", "description": "Option A" },
+                { "label": "B", "description": "Option B" }
+            ],
+            "multi_select": false
+        }]
+    });
+    let agent = Arc::new(Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            turn(&[("c1", "ask_user", &ask_args.to_string())]),
+            text_turn("proceeded autonomously"),
+        ])),
+        vec![Arc::new(crate::tools::AskUserTool)],
+        crate::AgentIdentity::default(),
+    ));
+
+    // Configure as a child agent with allow_human_interaction = false
+    let child_policy = muta_contracts::ExecutionPolicy {
+        depth: 1,
+        max_depth: 1,
+        allow_human_interaction: false,
+        lifecycle: muta_contracts::ContextLifecycle::EphemeralScratchpad,
+        tool_policy: None,
+        max_children_budget: 0,
+    };
+    agent.set_execution_policy(child_policy);
+
+    let mut messages = vec![Message::new(Role::User, "run task")];
+    let mut events = Vec::new();
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |event| {
+            events.push(event);
+        })
+        .await;
+
+    assert_eq!(outcome.unwrap().message.content, "proceeded autonomously");
+    let lines = transcript(&events);
+    assert!(
+        !lines.iter().any(|line| line.starts_with("user-question")),
+        "ask_user must never prompt the human when allow_human_interaction is false"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.starts_with("tool-result ask_user") && line.contains("forbidden by ExecutionPolicy")
+        }),
+        "tool result should contain ExecutionPolicy rejection: {lines:?}"
+    );
+}
+
+#[tokio::test]
 async fn delegated_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),

@@ -60,7 +60,41 @@ pub(crate) enum ComposeTarget {
     HistorySearch,
 }
 
-/// Derive the compose target from current state.
+/// Derive the compose target from current state and active composer extension.
+pub(crate) fn compose_target_for_extension(
+    busy: bool,
+    send_mode: Option<crate::app::ComposerSendMode>,
+    is_slash: bool,
+    extension: Option<crate::composer_extension::ComposerExtensionKind>,
+) -> ComposeTarget {
+    match extension {
+        Some(crate::composer_extension::ComposerExtensionKind::HistorySearch) => {
+            ComposeTarget::HistorySearch
+        }
+        Some(crate::composer_extension::ComposerExtensionKind::SlashCompletion) => {
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Slash,
+            }
+        }
+        Some(crate::composer_extension::ComposerExtensionKind::PathCompletion) => {
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Path,
+            }
+        }
+        None => {
+            if busy {
+                ComposeTarget::Running(send_mode.unwrap_or_default())
+            } else if is_slash {
+                ComposeTarget::Command
+            } else {
+                ComposeTarget::Prompt
+            }
+        }
+    }
+}
+
+/// Derive the compose target from current state (legacy adapter forwarding to [`compose_target_for_extension`]).
+#[allow(dead_code)]
 pub(crate) fn compose_target(
     busy: bool,
     send_mode: Option<crate::app::ComposerSendMode>,
@@ -68,20 +102,20 @@ pub(crate) fn compose_target(
     completion_active: Option<crate::completion::CompletionKind>,
     is_history_search: bool,
 ) -> ComposeTarget {
-    if is_history_search {
-        return ComposeTarget::HistorySearch;
-    }
-    if let Some(kind) = completion_active {
-        return ComposeTarget::Completion { kind };
-    }
-    if busy {
-        return ComposeTarget::Running(send_mode.unwrap_or_default());
-    }
-    if is_slash {
-        ComposeTarget::Command
+    let ext = if is_history_search {
+        Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
     } else {
-        ComposeTarget::Prompt
-    }
+        match completion_active {
+            Some(crate::completion::CompletionKind::Slash) => {
+                Some(crate::composer_extension::ComposerExtensionKind::SlashCompletion)
+            }
+            Some(crate::completion::CompletionKind::Path) => {
+                Some(crate::composer_extension::ComposerExtensionKind::PathCompletion)
+            }
+            _ => None,
+        }
+    };
+    compose_target_for_extension(busy, send_mode, is_slash, ext)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -128,7 +162,7 @@ pub(crate) fn hint_row_parts(
 
     // HistorySearch is a modal whose keys are owned by its own scheme
     // (`modal_keys::live_history_hints`, ADR-0172); this row renders exactly
-    // those chords.
+    // those chords with adaptive density.
     if target == ComposeTarget::HistorySearch {
         let hints = live_history_hints();
         let mut left: Vec<Span<'static>> = Vec::new();
@@ -136,7 +170,17 @@ pub(crate) fn hint_row_parts(
             if h.side != HintSide::Nav {
                 continue;
             }
-            left.push(Span::styled(h.key.display(), key_style));
+            if tiny && h.key != crate::keymap::Key::ESC {
+                continue;
+            }
+            if compact && h.label == "navigate" {
+                // Drop navigate in compact mode to preserve delete and close
+                continue;
+            }
+            if !left.is_empty() {
+                left.push(Span::styled("   ", hint_style));
+            }
+            left.push(Span::styled(h.display_key(), key_style));
             left.push(Span::styled(format!(" {}", h.label), hint_style));
         }
         let actions: Vec<&LiveHint> = hints
@@ -144,17 +188,27 @@ pub(crate) fn hint_row_parts(
             .filter(|h| h.side == HintSide::Action)
             .collect();
         let mut right: Vec<Span<'static>> = Vec::new();
-        for (i, h) in actions.iter().enumerate() {
-            if i > 0 {
-                right.push(Span::styled(" / ", hint_style));
+        if compact || tiny {
+            if let Some(last) = actions.last() {
+                right.push(Span::styled(last.display_key(), key_style));
+                right.push(Span::styled(
+                    format!(" {}", last.label),
+                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+                ));
             }
-            right.push(Span::styled(h.key.display(), key_style));
-        }
-        if let Some(last) = actions.last() {
-            right.push(Span::styled(
-                format!(" {}", last.label),
-                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
-            ));
+        } else {
+            for (i, h) in actions.iter().enumerate() {
+                if i > 0 {
+                    right.push(Span::styled(" / ", hint_style));
+                }
+                right.push(Span::styled(h.display_key(), key_style));
+            }
+            if let Some(last) = actions.last() {
+                right.push(Span::styled(
+                    format!(" {}", last.label),
+                    verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+                ));
+            }
         }
         return (left, right);
     }
@@ -195,7 +249,7 @@ pub(crate) fn hint_row_parts(
             if !left.is_empty() {
                 left.push(Span::styled("   ", hint_style));
             }
-            left.push(Span::styled(h.key.display(), key_style));
+            left.push(Span::styled(h.display_key(), key_style));
             left.push(Span::styled(format!(" {}", h.label), hint_style));
         }
     }
@@ -212,7 +266,7 @@ pub(crate) fn hint_row_parts(
         if i > 0 {
             right.push(Span::styled(" / ", hint_style));
         }
-        right.push(Span::styled(h.key.display(), key_style));
+        right.push(Span::styled(h.display_key(), key_style));
     }
     if let Some(last) = actions.last() {
         right.push(Span::styled(format!(" {}", last.label), action_label_style));

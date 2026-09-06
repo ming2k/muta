@@ -27,7 +27,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::input::{InputAction, InputContext};
-use crate::keymap::{HintSide, LiveHint};
+use crate::keymap::LiveHint;
 
 /// Run states the composer hint row advertises. (HistorySearch is a modal and
 /// stays out of the chat scheme until that modal owns its own.)
@@ -62,51 +62,19 @@ pub(crate) fn live_chat_hints(
 ) -> Vec<LiveHint> {
     use crate::keymap::Key;
     let hints: &[LiveHint] = match state {
-        HintState::Idle | HintState::Command => &[LiveHint {
-            key: Key::ENTER,
-            label: "send",
-            side: HintSide::Action,
-        }],
+        HintState::Idle | HintState::Command => &[LiveHint::action(Key::ENTER, "send")],
         HintState::Running(crate::app::ComposerSendMode::Steer) => &[
-            LiveHint {
-                key: toggle_mode_key,
-                label: "follow-up mode",
-                side: HintSide::Nav,
-            },
-            LiveHint {
-                key: Key::ENTER,
-                label: "send steer",
-                side: HintSide::Action,
-            },
+            LiveHint::nav(toggle_mode_key, "follow-up mode"),
+            LiveHint::action(Key::ENTER, "send steer"),
         ],
         HintState::Running(crate::app::ComposerSendMode::FollowUp) => &[
-            LiveHint {
-                key: toggle_mode_key,
-                label: "steer mode",
-                side: HintSide::Nav,
-            },
-            LiveHint {
-                key: Key::ENTER,
-                label: "queue follow-up",
-                side: HintSide::Action,
-            },
+            LiveHint::nav(toggle_mode_key, "steer mode"),
+            LiveHint::action(Key::ENTER, "queue follow-up"),
         ],
         HintState::Completion => &[
-            LiveHint {
-                key: Key::ESC,
-                label: "dismiss",
-                side: HintSide::Nav,
-            },
-            LiveHint {
-                key: Key::TAB,
-                label: "select",
-                side: HintSide::Action,
-            },
-            LiveHint {
-                key: Key::ENTER,
-                label: "select",
-                side: HintSide::Action,
-            },
+            LiveHint::nav(Key::ESC, "dismiss"),
+            LiveHint::action(Key::TAB, "select"),
+            LiveHint::action(Key::ENTER, "select"),
         ],
     };
     hints.to_vec()

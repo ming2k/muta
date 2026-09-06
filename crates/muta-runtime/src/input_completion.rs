@@ -887,9 +887,9 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, vec!["/debug trace off"]);
 
-        // /master offers 4 roles
+        // /role offers 4 roles
         let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(16, "/master ".into(), 8).await
+            engine.complete(16, "/role ".into(), 6).await
         else {
             panic!("unexpected response")
         };
@@ -897,10 +897,10 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "/master code",
-                "/master architect",
-                "/master reviewer",
-                "/master security"
+                "/role code",
+                "/role architect",
+                "/role reviewer",
+                "/role security"
             ]
         );
     }

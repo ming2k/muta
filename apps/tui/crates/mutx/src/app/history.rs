@@ -52,10 +52,52 @@ impl App {
                 })
                 .collect();
         }
+        let max_ts = order
+            .first()
+            .and_then(|&i| self.input_history.get(i))
+            .map(|e| e.created_at_ms)
+            .unwrap_or(0);
+
         // `rank` returns indices into `texts`; map them back to the original
         // `input_history` indices via `order`. The matched char positions are
         // indices into the entry text itself, so they need no remap.
         let mut ranked = fuzzy::rank(&texts, &self.input);
+
+        // Blend in recency decay and current session affinity (Industry Gold Standard)
+        for (ti, m) in &mut ranked {
+            let orig_idx = order[*ti];
+            if let Some(entry) = self.input_history.get(orig_idx) {
+                // 1. Recency bonus: smooth decay based on age relative to newest item
+                if max_ts > 0 && entry.created_at_ms > 0 {
+                    let age_ms = max_ts.saturating_sub(entry.created_at_ms);
+                    const HOUR_MS: u64 = 3_600_000;
+                    const DAY_MS: u64 = 86_400_000;
+                    const WEEK_MS: u64 = 7 * DAY_MS;
+                    const MONTH_MS: u64 = 30 * DAY_MS;
+
+                    let recency_bonus = if age_ms < HOUR_MS {
+                        40
+                    } else if age_ms < DAY_MS {
+                        25
+                    } else if age_ms < WEEK_MS {
+                        15
+                    } else if age_ms < MONTH_MS {
+                        5
+                    } else {
+                        0
+                    };
+                    m.score = m.score.saturating_add(recency_bonus);
+                }
+
+                // 2. In-session affinity: items sent in this exact conversation have high contextual relevance
+                if !self.current_session_id.is_empty()
+                    && entry.session_id.as_deref() == Some(self.current_session_id.as_str())
+                {
+                    m.score = m.score.saturating_add(20);
+                }
+            }
+        }
+
         fuzzy::sort_by_score(&mut ranked);
         ranked.into_iter().map(|(ti, m)| (order[ti], m)).collect()
     }
@@ -523,5 +565,46 @@ impl App {
         self.model_search = false;
         self.model_scroll = 0;
         self.model_modal_follow = true;
+    }
+
+    /// Delete an entry from input history at `orig_idx` (an index into [`App::input_history`]),
+    /// cascading to SQLite persistence, session backfill, and attachment cache.
+    pub fn delete_history_entry_at(&mut self, orig_idx: usize) -> Option<muta_contracts::HistoryEntry> {
+        if orig_idx >= self.input_history.len() {
+            return None;
+        }
+        let removed = self.input_history.remove(orig_idx);
+        // Cascade 1: Prune matching text from current session's backfill
+        self.session_history_backfill.retain(|e| e.text != removed.text);
+        // Cascade 2: Remove cached attachments
+        let identity = (removed.text.clone(), removed.session_id.clone());
+        self.history_attachments.remove(&identity);
+        self.history_attachments_order.retain(|k| k != &identity);
+        // Cascade 3: Invalidate on-disk SQLite record off-thread
+        if self.input_history_persist {
+            let text = removed.text.clone();
+            let created_at_ms = removed.created_at_ms;
+            tokio::task::spawn_blocking(move || {
+                let _ = crate::config::delete_history_entry(&text, created_at_ms);
+            });
+        }
+        Some(removed)
+    }
+
+    /// Delete the currently selected entry in the Ctrl+R history panel, adjusting
+    /// selection and follow states.
+    pub fn delete_selected_history_entry(&mut self) -> Option<muta_contracts::HistoryEntry> {
+        let ranked = self.history_rows();
+        let pick = ranked.get(self.modal_index).or_else(|| ranked.first());
+        let Some(&(orig_idx, _)) = pick else {
+            return None;
+        };
+        let removed = self.delete_history_entry_at(orig_idx);
+        let new_len = self.history_rows().len();
+        if self.modal_index >= new_len {
+            self.modal_index = new_len.saturating_sub(1);
+        }
+        self.history_modal_follow = true;
+        removed
     }
 }

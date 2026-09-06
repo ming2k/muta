@@ -1254,6 +1254,24 @@ impl DatabaseEngine {
         Ok(())
     }
 
+    /// Delete a specific prompt history record by text and timestamp.
+    /// If `created_at_ms` is non-zero, matches both text and timestamp;
+    /// otherwise falls back to text match. Returns the number of deleted rows.
+    pub fn delete_input_history_entry(&self, text: &str, created_at_ms: u64) -> Result<usize> {
+        let deleted = if created_at_ms > 0 {
+            self.conn.execute(
+                "DELETE FROM input_history WHERE text = ?1 AND created_at_ms = ?2",
+                params![text, created_at_ms as i64],
+            )?
+        } else {
+            self.conn.execute(
+                "DELETE FROM input_history WHERE text = ?1",
+                params![text],
+            )?
+        };
+        Ok(deleted)
+    }
+
     /// Migrate legacy history.json files into SQLite and purge them from disk.
     pub fn migrate_legacy_input_history(&self) -> usize {
         let mut candidates = Vec::new();
@@ -1512,6 +1530,11 @@ pub enum PersistenceCommand {
     ClearInputHistory {
         ack: oneshot::Sender<Result<()>>,
     },
+    DeleteInputHistoryEntry {
+        text: String,
+        created_at_ms: u64,
+        ack: Option<oneshot::Sender<Result<usize>>>,
+    },
 }
 
 /// Asynchronous handle for interacting with the single-writer PersistenceActor without blocking Tokio runtime.
@@ -1611,6 +1634,12 @@ impl PersistenceHandle {
                         PersistenceCommand::ClearInputHistory { ack } => {
                             let res = engine.clear_input_history();
                             let _ = ack.send(res);
+                        }
+                        PersistenceCommand::DeleteInputHistoryEntry { text, created_at_ms, ack } => {
+                            let res = engine.delete_input_history_entry(&text, created_at_ms);
+                            if let Some(ack) = ack {
+                                let _ = ack.send(res);
+                            }
                         }
                     }
                 }
@@ -1917,6 +1946,30 @@ impl PersistenceHandle {
             .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
     }
 
+    /// Best-effort asynchronous delete of an input history record by text and timestamp.
+    pub fn try_delete_input_history_entry(&self, text: String, created_at_ms: u64) {
+        let _ = self.tx.try_send(PersistenceCommand::DeleteInputHistoryEntry {
+            text,
+            created_at_ms,
+            ack: None,
+        });
+    }
+
+    /// Synchronously delete an input history entry by text and timestamp.
+    pub fn delete_input_history_entry_blocking(&self, text: &str, created_at_ms: u64) -> Result<usize> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .blocking_send(PersistenceCommand::DeleteInputHistoryEntry {
+                text: text.to_string(),
+                created_at_ms,
+                ack: Some(ack_tx),
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+    }
+
     /// Open a lightweight read-only connection snapshot for querying.
     pub fn open_reader(&self) -> Result<DatabaseEngine> {
         DatabaseEngine::open(&self.db_path, self.blob_store.clone())
@@ -2217,6 +2270,13 @@ mod tests {
         assert_eq!(loaded.len(), 4);
         assert_eq!(loaded[0].text, "batch 2");
         assert_eq!(loaded[1].text, "batch 1");
+
+        // Delete single entry by text and timestamp
+        let deleted = engine.delete_input_history_entry("batch 1", 400).unwrap();
+        assert_eq!(deleted, 1);
+        let loaded = engine.load_input_history(10).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert!(!loaded.iter().any(|e| e.text == "batch 1"));
 
         // Clear input history
         engine.clear_input_history().unwrap();

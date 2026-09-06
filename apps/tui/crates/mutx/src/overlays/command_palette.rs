@@ -51,6 +51,7 @@ fn humanize_command_name(name: &str) -> String {
         "/compact" => "Compact Conversation".to_string(),
         "/new" => "New Session".to_string(),
         "/delegate" => "Delegate Mode".to_string(),
+        "/unconfine" => "Workspace Confinement".to_string(),
         "/unconfined" => "Workspace Confinement".to_string(),
         "/jail" => "Workspace Confinement (legacy alias)".to_string(),
         "/master" => "Master Agent Role".to_string(),

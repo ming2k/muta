@@ -2177,18 +2177,15 @@ impl TranscriptMessage {
     /// Human-readable summary for the reasoning trace (always one line).
     ///
     /// For models reporting structured thought milestones/outlines (e.g. GPT-5.6
-    /// Sol, ChatGPT Responses `reasoning_summary_text`), this dynamically extracts
-    /// the active milestone header while streaming (`Thinking · Planning…`) and
-    /// reports the completed milestone steps once finished.
+    /// Sol, ChatGPT Responses `reasoning_summary_text`, Claude thinking headings),
+    /// this dynamically extracts the active milestone header while streaming
+    /// (`Thinking through the security architecture components`) and reports the
+    /// completed milestone state once finished (`Thought through the security architecture components (1.2s)`
+    /// or `Thought through 3 steps  180 tokens (2.4s)`).
     ///
     /// For models with raw unstructured chain-of-thought, it reports **tokens**
     /// (ADR-0120) — the unit of what this thinking block costs against the
-    /// context window.
-    ///
-    /// Live style: while the trace streams, unstructured traces count tokens up
-    /// as they arrive (`Thinking  148 tokens`), reading like a filling meter.
-    /// A finished trace settles into its final form and appends the duration
-    /// (`Thinking  1318 tokens (2.4s)` or `Thinking  3 steps  180 tokens (2.4s)`).
+    /// context window (`Thinking  148 tokens` while streaming, `Thought  1318 tokens (2.4s)` settled).
     pub fn thinking_summary(&self) -> Option<String> {
         /// Live-count floor applied while streaming (see method doc).
         const STREAM_COUNT_QUANTUM: usize = 25;
@@ -2212,7 +2209,8 @@ impl TranscriptMessage {
         Some(match duration_ms {
             None => {
                 if let Some(milestone) = active_milestone {
-                    format!("Thinking  {milestone}")
+                    let topic = normalize_thinking_topic(&milestone);
+                    format!("Thinking through {topic}")
                 } else {
                     // Floor to the quantum once the count grows past the
                     // per-token regime so the number climbs in visible steps
@@ -2228,13 +2226,14 @@ impl TranscriptMessage {
             Some(ms) => {
                 let duration = duration_text(Some(*ms));
                 if milestones > 1 {
-                    format!("Thinking  {milestones} steps  {tokens} tokens ({duration})")
+                    format!("Thought through {milestones} steps  {tokens} tokens ({duration})")
                 } else if milestones == 1
                     && let Some(milestone) = active_milestone
                 {
-                    format!("Thinking  {milestone} ({duration})")
+                    let topic = normalize_thinking_topic(&milestone);
+                    format!("Thought through {topic} ({duration})")
                 } else {
-                    format!("Thinking  {tokens} tokens ({duration})")
+                    format!("Thought  {tokens} tokens ({duration})")
                 }
             }
         })
@@ -2507,6 +2506,109 @@ pub fn extract_active_milestone(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Canonical normalization for thinking milestone topics.
+///
+/// Strips redundant action participles (e.g. "Deconstructing", "Analyzing",
+/// "Evaluating"), normalizes casing while preserving acronyms and mixed-case
+/// identifiers (API, SQL, OAuth, macOS), and ensures natural grammatical flow
+/// after "Thinking through" / "Thought through".
+pub fn normalize_thinking_topic(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches(':').trim();
+    if trimmed.is_empty() {
+        return "the solution".to_string();
+    }
+
+    // Strip trailing ellipsis or punctuation
+    let topic = trimmed.trim_end_matches(|c: char| c == '.' || c == '…' || c == ':').trim();
+
+    // Redundant participle prefixes that models prepend to milestone headings
+    const REDUNDANT_PREFIXES: &[&str] = &[
+        "deconstructing ",
+        "analyzing ",
+        "evaluating ",
+        "inspecting ",
+        "reviewing ",
+        "mapping out ",
+        "breaking down ",
+        "thinking about ",
+        "thinking through ",
+        "working on ",
+        "looking into ",
+        "investigating ",
+        "exploring ",
+        "examining ",
+        "considering ",
+        "understanding ",
+        "identifying ",
+        "determining ",
+        "formulating ",
+        "planning ",
+        "executing ",
+        "validating ",
+        "verifying ",
+        "checking ",
+    ];
+
+    let mut stripped = topic;
+    for prefix in REDUNDANT_PREFIXES {
+        if stripped.len() > prefix.len()
+            && stripped[..prefix.len()].eq_ignore_ascii_case(prefix)
+        {
+            let candidate = stripped[prefix.len()..].trim();
+            if !candidate.is_empty() {
+                stripped = candidate;
+                break;
+            }
+        }
+    }
+
+    let words: Vec<&str> = stripped.split_whitespace().collect();
+    if words.is_empty() {
+        return "the solution".to_string();
+    }
+
+    let mut normalized_words = Vec::with_capacity(words.len());
+    for (i, word) in words.iter().enumerate() {
+        let is_acronym = word.len() > 1
+            && word.chars().any(|c| c.is_alphabetic())
+            && word.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
+        let has_internal_caps = word.chars().skip(1).any(|c| c.is_uppercase());
+
+        if is_acronym || has_internal_caps {
+            normalized_words.push(word.to_string());
+        } else if i == 0 {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                let lower = first.to_lowercase().to_string() + chars.as_str();
+                normalized_words.push(lower);
+            }
+        } else {
+            let is_capitalized = word.chars().next().map_or(false, |c| c.is_uppercase());
+            let is_all_caps = word.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
+            if is_capitalized && !is_all_caps {
+                normalized_words.push(word.to_lowercase());
+            } else {
+                normalized_words.push(word.to_string());
+            }
+        }
+    }
+
+    let joined = normalized_words.join(" ");
+
+    const NO_THE_STARTERS: &[&str] = &[
+        "the", "a", "an", "this", "that", "these", "those",
+        "how", "why", "what", "where", "when", "which", "whether",
+        "all", "each", "every", "some", "any", "step", "phase",
+    ];
+
+    let first_word_lower = normalized_words[0].to_lowercase();
+    if NO_THE_STARTERS.contains(&first_word_lower.as_str()) {
+        joined
+    } else {
+        format!("the {joined}")
+    }
 }
 
 /// Count distinct milestone/heading sections in reasoning content.

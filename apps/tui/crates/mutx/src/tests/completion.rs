@@ -683,8 +683,8 @@ fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
 }
 
 /// The dashboard's inline prompt (`p` / `n`) borrows the composer buffer.
-/// Ctrl+C with text staged there clears it first — the same two-press
-/// shape as the conversation composer — and only then arms toward quit.
+/// Ctrl+C with text staged there clears it first without arming quit;
+/// exiting requires two additional presses on an empty prompt.
 #[test]
 fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     use std::sync::atomic::Ordering;
@@ -699,16 +699,82 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
+    // First press: clears staged text, does NOT arm quit
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.input.is_empty(), "the staged task text is cleared");
-    assert!(app.ctrl_c_armed(), "clearing arms the quit window");
+    assert!(!app.ctrl_c_armed(), "clearing text does not arm the quit window");
+    assert_eq!(app.copy_toast_message, "input cleared");
     assert_eq!(app.active_modal(), Modal::Host, "the dashboard stays open");
     assert!(app.host_prompting, "the prompt itself stays mounted");
 
-    // Second press (input now empty) quits.
+    // Second press (input now empty): arms quit window
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert!(app.ctrl_c_armed(), "first press with empty input arms the quit window");
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Third press: inside armed window quits
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.should_quit.load(Ordering::SeqCst));
     assert_eq!(app.active_modal(), Modal::Host);
+}
+
+#[test]
+fn ctrl_c_at_composer_clears_text_without_arming_then_double_press_quits() {
+    use crate::event_loop::actions::ActionFlow;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    app.input = "draft query text".to_string();
+    app.cursor_position = app.input.chars().count();
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // First Ctrl+C: clears input only; does NOT arm quit.
+    let flow = super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert_eq!(flow, ActionFlow::Handled);
+    assert!(app.input.is_empty(), "input was cleared");
+    assert!(!app.ctrl_c_armed(), "clearing text must not arm quit");
+    assert_eq!(app.copy_toast_message, "input cleared");
+
+    // Second Ctrl+C: now input is empty, so this arms quit confirmation.
+    let flow = super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert_eq!(flow, ActionFlow::Handled);
+    assert!(app.ctrl_c_armed(), "press on empty input arms quit window");
+    assert!(app.copy_toast_until.is_none(), "copy toast cleared when armed");
+
+    // Third Ctrl+C: inside armed window -> ends session / exits.
+    let flow = super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    assert_eq!(flow, ActionFlow::Exit);
+    assert!(
+        matches!(rx.try_recv(), Ok(AgentRequest::EndSession)),
+        "double Ctrl+C ends the session"
+    );
+}
+
+#[tokio::test]
+async fn ctrl_c_armed_cancelled_by_other_action() {
+    use crate::event_loop::UiRuntime;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, _rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    let runtime = UiRuntime::minimal_for_test();
+
+    // Arm Ctrl+C
+    app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
+    assert!(app.ctrl_c_armed());
+
+    // Dispatch a non-CtrlC action, e.g. ScrollUp
+    crate::event_loop::actions::dispatch_action_for_test(
+        &mut app,
+        &runtime,
+        crate::input::InputAction::ScrollUp,
+        "test-session",
+    ).await;
+
+    // Must be disarmed
+    assert!(!app.ctrl_c_armed(), "typing or moving cursor must disarm quit");
 }
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a

@@ -184,7 +184,7 @@ impl ToolManager {
         self.installed()
             .into_iter()
             .filter(|s| s.tool.is_available())
-            .find(|s| s.tool.name() == name)
+            .find(|s| s.tool.matches_name(name))
     }
 
     /// Is `name` disabled by *either* mask? Name-level and uniform across all

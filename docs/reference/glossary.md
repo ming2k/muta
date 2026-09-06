@@ -31,17 +31,18 @@ the pre-ADR-0047 convention, which older documents may still use. See
 | **uncapped agentic loop** | Distinct tool calls and autonomous iterations are uncapped; context compaction is the backstop. [ADR-0009](../adr/0009-uncapped-agentic-loop.md) |
 | **hidden user message** | A message that steers the model but is not rendered in the visible transcript (implicit skill body, hook-injected context). |
 
-## Roles
+## Roles and Architecture
 
-The architecture defines the Worker-Station Model (ADR-0167): strictly two **`AgentKind`** archetypes (**`Master`** & **`Runner`**) placed into host stations (**`Hypervisor`**, **`Session`**, **`Subtask`**), with out-of-band **`CognitivePipeline`** utilities for the Agent Harness.
+The architecture defines the Homogeneous Agent Model (ADR-0183): a single unified **`Agent`** entity governed by **`ExecutionPolicy`** (depth bounds, recursion limits, human-interaction posture) with composable sub-agent delegation (`spawn_agent`), out-of-band **`CognitivePipeline`** utilities, and a 5-phase Spatiotemporal Aspect Engine.
 
 | Term | Definition |
 |------|------------|
-| **agent** | Umbrella term for an autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). |
-| **master** | The primary cognitive driving brain archetype (full Agentic loop, tool authority, intent reasoning). Places into Session stations as conversation brains or into Daemon station as the Hypervisor coordinator. |
-| **runner** | A bounded sub-agent worker archetype spawned by a master (via `runner_explore` or `runner_code` tools) with fresh context, scoped tools, and single-task lifecycles. |
-| **hypervisor** | The singleton daemon-level governance station (staffed by a Master agent) orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md) |
-| **cognitive pipeline** | Harness-internal, stateless, zero-tool typed LLM execution pipeline (`CognitiveTask`: stream repetition detection, working memory digest, session titling). Zero-tool, fail-open. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md) |
+| **agent** | The sole autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Runs a full ReAct loop, intent reasoning, and tool dispatch. |
+| **root agent** | The top-level agent (`depth = 0`, formerly "master") directly interacting with the user, bound to the session, holding human interaction authority and sub-agent delegation rights. |
+| **sub-agent / child agent** | An isolated agent (`depth > 0`, formerly "runner") spawned by a parent agent via `spawn_agent` / `delegate_code` with fresh context, scoped tools, and single-task lifecycle. |
+| **hypervisor** | The singleton daemon-level governance station (staffed by an Agent in root posture) orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md), [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
+| **cognitive pipeline** | Harness-internal, stateless, zero-tool typed LLM execution pipeline (`CognitiveTask`: stream repetition detection, working memory digest, session titling, pre-flight routing). Zero-tool, fail-open. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
+| **spatiotemporal aspect engine** | The 5-phase deterministic lifecycle hook engine (PreFlight, TurnIntake, InFlightStream, ToolGating, RoundEol) protecting against trajectory derailment. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
 
 ## Scheduling
 
@@ -57,16 +58,16 @@ The architecture defines the Worker-Station Model (ADR-0167): strictly two **`Ag
 | **todo list** | The single source of truth for remaining work, shared with `todo`/`todo_update`, shown in the Activity modal, and persisted across restarts. The model populates it directly; there is no longer a plan tool that seeds it. [ADR-0020](../adr/0020-unified-task-list.md) |
 | **stop-gate** | The round-exit forcing function: any `Stop` hooks. It is the only gate that can refuse a round ending and force one more turn. [Harness architecture](../explanation/agent-design/harness.md) |
 
-## Runners
+## Sub-Agents and Delegation
 
 | Term | Definition |
 |------|------------|
-| **runner** | An isolated sub-agent spawned by a master to investigate or execute a sub-task; shares only the provider, running with fresh history and profile-filtered tools. |
-| **profile** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a runner's behavior. |
-| **`EXPLORE` profile** | Research role: pure read tools. Bound by the `runner` tool. |
-| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_text`/`write_file`). Runs delegated (autonomous) like built-in runners — delegation via `runner_code` is the authorization. |
+| **sub-agent** | An isolated child agent spawned by a parent agent to investigate or execute a sub-task; shares only the provider, running with fresh history and policy-filtered tools. |
+| **profile / preset** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a sub-agent's behavior. |
+| **`EXPLORE` profile** | Research role: pure read tools. Bound by `spawn_agent` (`role = "explore"`). |
+| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_text`/`write_file`). Runs delegated (autonomous) — delegation via `delegate_code` is the authorization. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
-| **full-duplex** | Runners are not fire-and-forget: requests travel up to the master, replies travel down to the child. |
+| **full-duplex** | Sub-agents are not fire-and-forget: requests travel up to the parent agent, replies travel down to the child. |
 
 ## Tools and capabilities
 

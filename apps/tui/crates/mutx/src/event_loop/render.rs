@@ -513,32 +513,15 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // still immutable; the result is an owned value the composer can
             // consume after taking its mutable borrows.
             let busy = app.running_sessions.contains(viewed_session_id);
-            let is_history_search = app.active_modal() == Modal::HistorySearch;
-            let completion_active = if app.active_modal() == Modal::None
-                && !app.completion_dismissed
-                && app.completion_kind() != CompletionKind::None
-            {
-                let completions = app.completions();
-                let exact_match = completions.iter().any(|c| {
-                    c.replace_start == 0 && c.replace_end == app.input.len() && c.label == app.input
-                });
-                if !completions.is_empty() && !exact_match {
-                    Some(app.completion_kind())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let active_extension = app.active_composer_extension();
             let composer_hints = {
-                use crate::components::composer_hints::{ComposerHints, compose_target};
+                use crate::components::composer_hints::{ComposerHints, compose_target_for_extension};
                 ComposerHints {
-                    compose_target: compose_target(
+                    compose_target: compose_target_for_extension(
                         busy,
                         Some(app.composer_send_mode),
                         slash_len.is_some() || app.input.starts_with('/'),
-                        completion_active,
-                        is_history_search,
+                        active_extension,
                     ),
                     can_retry: !busy && viewed_chrome.can_retry,
                     toggle_mode_key: app
@@ -1276,8 +1259,14 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         }
     }
 
-    // Copy toast
-    if app.copy_toast_until.is_some() {
+    // Urgent confirmation toasts (Esc interrupt confirmation or Ctrl+C quit confirmation)
+    // take precedence over informational toasts (copy, command acknowledgment)
+    // so active safety prompts are never obscured.
+    if app.esc_armed() {
+        view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
+    } else if app.ctrl_c_armed() {
+        view::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
+    } else if app.copy_toast_until.is_some() {
         view::draw_copy_toast(
             f,
             &app.copy_toast_message,
@@ -1286,25 +1275,14 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         );
     } else if app.notice_toast_until.is_some() {
         // A toast-surfaced command acknowledgment (e.g.
-        // `/delegate on`). Rendered only when no copy toast is
-        // showing, since the two share the same top-right slot.
+        // `/delegate on`). Rendered only when no higher-priority toast is
+        // showing, since they share the same top-right slot.
         view::draw_notice_toast(
             f,
             &app.notice_toast_message,
             app.notice_toast_severity,
             &app.theme,
         );
-    } else if app.ctrl_c_armed() {
-        // The copy toast and the armed toast render at the same
-        // screen position, so only one shows at a time. The
-        // clearing-input path surfaces the armed state through the
-        // copy toast itself ("input cleared — Ctrl+C again to
-        // exit"); once it expires, the standalone armed toast
-        // takes over for the remainder of the quit window.
-        view::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
-    }
-    if app.esc_armed() {
-        view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     }
 
     app.layout_map = layout_map;

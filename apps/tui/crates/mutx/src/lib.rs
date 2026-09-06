@@ -30,6 +30,7 @@ pub mod clipboard;
 pub mod clipboard_ops;
 pub mod completion;
 pub mod composer_attachments;
+pub mod composer_extension;
 pub mod config;
 mod event_loop;
 pub mod input;

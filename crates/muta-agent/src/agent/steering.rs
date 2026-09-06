@@ -159,19 +159,58 @@ impl Agent {
     /// `from_toolset`. A role whose identity should differ per instance composes
     /// [`muta_contracts::MasterPreset::with_identity`] before construction.
     ///
-    /// The archetype / kind of this agent (Master, Runner).
+    /// The archetype / kind of this agent, derived purely from its [`ExecutionPolicy`] (ADR-0183).
     pub fn kind(&self) -> muta_contracts::AgentKind {
-        self.kind
-            .read()
-            .map(|t| *t)
-            .unwrap_or(muta_contracts::AgentKind::Master)
+        if self.is_root() {
+            muta_contracts::AgentKind::Master
+        } else {
+            muta_contracts::AgentKind::Runner
+        }
     }
 
-    /// Set this agent's archetype / kind.
+    /// Set this agent's archetype posture. Updates [`ExecutionPolicy`] accordingly.
     pub fn set_kind(&self, kind: muta_contracts::AgentKind) {
-        if let Ok(mut guard) = self.kind.write() {
-            *guard = kind;
+        let mut policy = self.execution_policy();
+        match kind {
+            muta_contracts::AgentKind::Master => {
+                policy.depth = 0;
+                policy.allow_human_interaction = true;
+                policy.lifecycle = muta_contracts::ContextLifecycle::DurableSession;
+            }
+            muta_contracts::AgentKind::Runner => {
+                if policy.depth == 0 {
+                    policy.depth = 1;
+                }
+                policy.allow_human_interaction = false;
+                policy.lifecycle = muta_contracts::ContextLifecycle::EphemeralScratchpad;
+            }
         }
+        self.set_execution_policy(policy);
+    }
+
+    /// Execution policy governing this agent's runtime posture, delegation limits, and depth (ADR-0183).
+    pub fn execution_policy(&self) -> muta_contracts::ExecutionPolicy {
+        self.execution_policy
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_else(|_| muta_contracts::ExecutionPolicy::root_default())
+    }
+
+    /// Set this agent's execution policy.
+    pub fn set_execution_policy(&self, policy: muta_contracts::ExecutionPolicy) {
+        if let Ok(mut guard) = self.execution_policy.write() {
+            *guard = policy;
+        }
+    }
+
+    /// Whether this agent is the root node of the delegation tree.
+    pub fn is_root(&self) -> bool {
+        self.execution_policy().is_root()
+    }
+
+    /// Whether this agent is permitted to spawn sub-agents.
+    pub fn can_spawn_subagent(&self) -> bool {
+        self.execution_policy().can_spawn_subagent()
     }
 
     /// Shared handle to the agent's tool pool.
@@ -188,25 +227,28 @@ impl Agent {
 
     /// Apply a master preset delegation (e.g. Developer vs Code Analyst)
     /// to adjust declared tool availability.
-    pub fn apply_master_delegation(&self, delegation: &muta_contracts::MasterPresetDelegation) {
+    /// Apply an agent delegation policy (ADR-0183).
+    pub fn apply_delegation(&self, delegation: &muta_contracts::DelegationPolicy) {
         self.set_agent_selection(delegation.selection());
     }
 
-    /// Apply a declarative master preset.
-    pub fn apply_master_preset(&self, preset: &muta_contracts::MasterPreset) {
-        self.apply_master_profile(preset);
+    /// Legacy alias for [`Self::apply_delegation`].
+    pub fn apply_master_delegation(&self, delegation: &muta_contracts::MasterPresetDelegation) {
+        self.apply_delegation(delegation);
     }
 
-    /// Idempotent over defaults: a profile built with
-    /// [`muta_contracts::MasterPreset::with_identity`] (no further narrowing)
-    /// reproduces the agent constructor's built-in values, so binding it is a
-    /// no-op for an already-default agent.
-    pub fn apply_master_profile(&self, profile: &muta_contracts::MasterPreset) {
-        // Identity is now live-mutable (plan §3.3): applying a profile re-rolls
-        // the system-prompt preamble too, so `/master architect` changes the
-        // persona the model speaks with on the very next request. Previously
-        // identity was immutable past construction; the role-switch feature
-        // requires it to track the active profile.
+    /// Apply a declarative agent preset (ADR-0183).
+    pub fn apply_preset(&self, preset: &muta_contracts::AgentPreset) {
+        self.apply_profile(preset);
+    }
+
+    /// Legacy alias for [`Self::apply_preset`].
+    pub fn apply_master_preset(&self, preset: &muta_contracts::MasterPreset) {
+        self.apply_preset(preset);
+    }
+
+    /// Idempotent over defaults: applies an [`muta_contracts::AgentPreset`] (ADR-0183).
+    pub fn apply_profile(&self, profile: &muta_contracts::AgentPreset) {
         self.set_identity(profile.identity.clone());
         self.set_agent_selection(profile.agent_selection.clone());
         self.set_operation_scope(profile.operation_scope.clone());
@@ -217,35 +259,30 @@ impl Agent {
         self.set_delegated(profile.delegated);
     }
 
+    /// Legacy alias for [`Self::apply_profile`].
+    pub fn apply_master_profile(&self, profile: &muta_contracts::MasterPreset) {
+        self.apply_profile(profile);
+    }
+
     /// Replace this agent's identity (name + mission, or a persona override).
-    /// Feeds the system-prompt preamble, so the next request reflects the new
-    /// identity without rebuilding the agent. The master-role switch
-    /// (`/master`, `@master:`) uses this to change personas live; an
-    /// embedding may also call it directly to re-persona a reused agent.
     pub fn set_identity(&self, identity: AgentIdentity) {
         if let Ok(mut guard) = self.identity.write() {
             *guard = identity;
         }
     }
 
-    /// Switch the live agent into a named master role (plan §3.3). Resolves
-    /// `role` (case-insensitive, alias-tolerant) to a [`MasterPresetId`],
-    /// composes it onto the current identity, and applies the resulting
-    /// profile. Returns the resolved role on success, or `None` when `role`
-    /// does not name a known role (so the caller can surface the available
-    /// names). Used by both the `/master` command and the `@master:`
-    /// inline directive.
-    ///
-    /// The role is composed onto the **current** identity snapshot, so a
-    /// sequence of switches (`code` → `architect` → `reviewer`) each preserve
-    /// the product name ("muta") rather than drifting toward the previous
-    /// role's mission.
-    pub fn apply_master_role(&self, role: &str) -> Option<muta_contracts::MasterPresetId> {
-        let resolved = muta_contracts::MasterPresetId::parse(role)?;
+    /// Switch the live agent into a named role (ADR-0183).
+    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentPresetId> {
+        let resolved = muta_contracts::AgentPresetId::parse(role)?;
         let base = self.identity();
-        let profile = muta_contracts::MasterPreset::for_role(resolved, &base);
-        self.apply_master_profile(&profile);
+        let profile = muta_contracts::AgentPreset::for_role(resolved, &base);
+        self.apply_profile(&profile);
         Some(resolved)
+    }
+
+    /// Legacy alias for [`Self::apply_role`].
+    pub fn apply_master_role(&self, role: &str) -> Option<muta_contracts::MasterPresetId> {
+        self.apply_role(role)
     }
 
     /// Snapshot of this agent's operation boundary. Used by the `execute_tool`

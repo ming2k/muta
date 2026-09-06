@@ -15,7 +15,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::input::{InputAction, InputContext, OauthCopyTarget};
-use crate::keymap::{HintSide, LiveHint};
+use crate::keymap::LiveHint;
 
 /// Resolve a key a modal owns. `None` falls through to the shared layer
 /// (which handles list navigation, text insertion into the borrowed composer
@@ -124,9 +124,12 @@ pub(crate) fn resolve_modal_key(
 /// the composer and close, `↑`/`↓` walk the list. While the search sub-layer
 /// is active, printable keys and Backspace edit the borrowed composer line via
 /// the shared editing layer (`edits_input_field`).
-fn resolve_history_search_key(key: crate::keymap::Key) -> Option<InputAction> {
+pub(crate) fn resolve_history_search_key(key: crate::keymap::Key) -> Option<InputAction> {
     match key.code {
         KeyCode::Esc => Some(InputAction::CloseModal),
+        KeyCode::Delete if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(InputAction::HistoryDeleteSelected)
+        }
         KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
             Some(InputAction::HistoryInsert)
         }
@@ -175,24 +178,20 @@ fn resolve_view_switcher_key(key: crate::keymap::Key) -> Option<InputAction> {
 /// The history modal's hint row (single origin for the composer's history
 /// hint): every chord advertised here is handled by
 /// [`resolve_history_search_key`].
+const HISTORY_HINTS: &[LiveHint] = &[
+    LiveHint::nav(crate::keymap::Key::ESC, "close"),
+    LiveHint::nav_glyph(
+        crate::keymap::Key::UP,
+        crate::keymap::keyvocab::ARROWS_UD,
+        "navigate",
+    ),
+    LiveHint::nav(crate::keymap::Key::SHIFT_DELETE, "delete"),
+    LiveHint::action(crate::keymap::Key::TAB, "insert"),
+    LiveHint::action(crate::keymap::Key::ENTER, "insert"),
+];
+
 pub(crate) fn live_history_hints() -> &'static [LiveHint] {
-    &[
-        LiveHint {
-            key: crate::keymap::Key::ESC,
-            label: "close",
-            side: HintSide::Nav,
-        },
-        LiveHint {
-            key: crate::keymap::Key::TAB,
-            label: "insert",
-            side: HintSide::Action,
-        },
-        LiveHint {
-            key: crate::keymap::Key::ENTER,
-            label: "insert",
-            side: HintSide::Action,
-        },
-    ]
+    HISTORY_HINTS
 }
 
 /// Question sheet: `space` toggles the selection (unless the free-text

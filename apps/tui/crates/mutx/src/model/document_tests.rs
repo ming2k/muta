@@ -989,7 +989,7 @@ fn thinking_summary_sprays_tokens_then_settles() {
     done.set_thinking_duration(2_400);
     let settled = done.thinking_summary().unwrap();
     assert!(
-        settled.starts_with(&format!("Thinking  {actual} tokens")),
+        settled.starts_with(&format!("Thought  {actual} tokens")),
         "exact count when finished: {settled}"
     );
     assert!(settled.ends_with("(2.4s)"), "humanized duration: {settled}");
@@ -999,11 +999,11 @@ fn thinking_summary_sprays_tokens_then_settles() {
 fn thinking_summary_handles_structured_milestones() {
     use super::{count_milestones, extract_active_milestone};
 
-    // Live streaming with a single milestone heading
+    // Live streaming with a single milestone heading: normalizes with "Thinking through"
     let streaming_single = TranscriptMessage::thinking("**Planning architectural changes**\n\n");
     assert_eq!(
         streaming_single.thinking_summary().as_deref(),
-        Some("Thinking  Planning architectural changes")
+        Some("Thinking through the architectural changes")
     );
 
     // Live streaming updating to subsequent milestone heading
@@ -1012,7 +1012,16 @@ fn thinking_summary_handles_structured_milestones() {
     );
     assert_eq!(
         streaming_multi.thinking_summary().as_deref(),
-        Some("Thinking  Executing database migration")
+        Some("Thinking through the database migration")
+    );
+
+    // Flagship case: "Deconstructing Security Architecture Components"
+    let streaming_flagship = TranscriptMessage::thinking(
+        "**Deconstructing Security Architecture Components**\n\nAnalyzing system boundaries...",
+    );
+    assert_eq!(
+        streaming_flagship.thinking_summary().as_deref(),
+        Some("Thinking through the security architecture components")
     );
 
     // Helper functions verification
@@ -1034,7 +1043,7 @@ fn thinking_summary_handles_structured_milestones() {
     done_multi.set_thinking_duration(4_500);
     let summary = done_multi.thinking_summary().unwrap();
     assert!(
-        summary.starts_with("Thinking  3 steps  "),
+        summary.starts_with("Thought through 3 steps  "),
         "got: {summary}"
     );
     assert!(summary.ends_with("(4.5s)"), "got: {summary}");
@@ -1045,6 +1054,58 @@ fn thinking_summary_handles_structured_milestones() {
     done_single.set_thinking_duration(1_200);
     assert_eq!(
         done_single.thinking_summary().as_deref(),
-        Some("Thinking  Planning architectural changes (1.2s)")
+        Some("Thought through the architectural changes (1.2s)")
+    );
+
+    // Flagship case finished (even with 0ms duration)
+    let mut done_flagship = TranscriptMessage::thinking(
+        "**Deconstructing Security Architecture Components**\n\nAnalyzed boundaries.",
+    );
+    done_flagship.set_thinking_duration(0);
+    assert_eq!(
+        done_flagship.thinking_summary().as_deref(),
+        Some("Thought through the security architecture components (0ms)")
+    );
+}
+
+#[test]
+fn normalize_thinking_topic_edge_cases() {
+    use super::normalize_thinking_topic;
+
+    assert_eq!(
+        normalize_thinking_topic("Deconstructing Security Architecture Components"),
+        "the security architecture components"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Planning architectural changes"),
+        "the architectural changes"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Executing database migration"),
+        "the database migration"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Validating test suite"),
+        "the test suite"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Analyzing OAuth 2.0 PKCE flow"),
+        "the OAuth 2.0 PKCE flow"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Reviewing SQL query performance"),
+        "the SQL query performance"
+    );
+    assert_eq!(
+        normalize_thinking_topic("How to handle concurrency"),
+        "how to handle concurrency"
+    );
+    assert_eq!(
+        normalize_thinking_topic("Why cache invalidation fails"),
+        "why cache invalidation fails"
+    );
+    assert_eq!(
+        normalize_thinking_topic("The authentication pipeline"),
+        "the authentication pipeline"
     );
 }

@@ -129,9 +129,11 @@ pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 pub mod inflight;
 pub use inflight::Inflight;
 mod dispatch_pipeline;
+pub mod agent_slot;
 pub mod master_slot;
+pub mod subagent_tool;
 pub mod runner_tool;
-pub use master_slot::MasterSlot;
+pub use agent_slot::{AgentSlot, MasterSlot};
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;
@@ -141,6 +143,8 @@ mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;
 pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
+pub mod aspects;
+pub use aspects::AspectEngine;
 pub mod cognitive;
 pub mod session_digest;
 mod shell_input;
@@ -163,7 +167,7 @@ pub use model_request::system_prompt::{
     SystemPromptSection,
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
-pub use runner_tool::{RunnerRegistry, RunnerTool};
+pub use subagent_tool::{RunnerRegistry, RunnerTool, SubAgentRegistry, SubAgentTool};
 
 #[cfg(test)]
 mod tests;

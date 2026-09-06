@@ -54,7 +54,7 @@ pub enum CommandCategory {
     Model,
     Config,
     Tools,
-    Master,
+    Agent,
     Automation,
     Project,
     System,
@@ -68,7 +68,7 @@ impl CommandCategory {
             Self::Model => "Model",
             Self::Config => "Config",
             Self::Tools => "Tools",
-            Self::Master => "Master",
+            Self::Agent => "Agent",
             Self::Automation => "Automation",
             Self::Project => "Project",
             Self::System => "System",
@@ -259,26 +259,26 @@ define_builtin_commands! {
             ("off", "Return to interactive confirmation mode"),
         ],
     },
-    Unconfined = "/unconfined" : {
+    Unconfine = "/unconfine" : {
         summary: "Toggle workspace filesystem confinement (unconfined file access)",
-        usage: ["/unconfined", "/unconfined on", "/unconfined off"],
+        usage: ["/unconfine", "/unconfine on", "/unconfine off"],
         examples: [
-            ("/unconfined on", "Enable unconfined file access (bypass workspace boundaries)"),
-            ("/unconfined off", "Disable unconfined access (confine file tools to workspace)"),
+            ("/unconfine on", "Enable unconfined file access (bypass workspace boundaries)"),
+            ("/unconfine off", "Disable unconfined access (confine file tools to workspace)"),
         ],
-        intent_keywords: ["unconfined", "confinement", "jail", "escape", "sandbox"],
+        intent_keywords: ["unconfine", "unconfined", "confinement", "jail", "escape", "sandbox"],
         category: Automation,
         subcommands: [
             ("on", "Enable unconfined access (allow full host filesystem access)"),
             ("off", "Disable unconfined access (confine to workspace)"),
         ],
     },
-    Master = "/master" : {
-        summary: "Switch master agent persona and role",
-        usage: ["/master", "/master [code|architect|reviewer|security]"],
-        examples: [("/master architect", "Switch to system design & analysis focus"), ("/master reviewer", "Read-only code review mode")],
-        intent_keywords: ["master", "role", "persona", "mode", "identity", "architect", "reviewer", "security", "switch-role"],
-        category: Master,
+    Role = "/role" : {
+        summary: "Switch agent persona and role",
+        usage: ["/role", "/role [code|architect|reviewer|security]"],
+        examples: [("/role architect", "Switch to system design & analysis focus"), ("/role reviewer", "Read-only code review mode")],
+        intent_keywords: ["role", "persona", "preset", "mode", "identity", "architect", "reviewer", "security", "switch-role", "master"],
+        category: Agent,
     },
     Search = "/search" : {
         summary: "Semantic search over session history",
@@ -505,8 +505,10 @@ impl BuiltinCmd {
             "/config" => Some(BuiltinCmd::Settings),
             // `/yolo`, `/auto`, `/autopilot` are aliases for `/delegate` (delegated autonomous execution).
             "/yolo" | "/auto" | "/autopilot" => Some(BuiltinCmd::Delegate),
-            // `/jail`, `/escape` are aliases for `/unconfined` (workspace confinement bypass).
-            "/jail" | "/escape" => Some(BuiltinCmd::Unconfined),
+            // `/unconfined`, `/jail`, `/escape` are aliases for `/unconfine` (workspace confinement bypass).
+            "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Unconfine),
+            // `/master` and `/preset` are legacy aliases for `/role` (ADR-0183).
+            "/master" | "/preset" => Some(BuiltinCmd::Role),
             _ => None,
         }
     }
@@ -650,8 +652,11 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/yolo", "/delegate"),
             ("/auto", "/delegate"),
             ("/autopilot", "/delegate"),
-            ("/jail", "/unconfined"),
-            ("/escape", "/unconfined"),
+            ("/unconfined", "/unconfine"),
+            ("/jail", "/unconfine"),
+            ("/escape", "/unconfine"),
+            ("/master", "/role"),
+            ("/preset", "/role"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

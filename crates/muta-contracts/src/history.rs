@@ -48,6 +48,9 @@ pub struct HistoryEntry {
 }
 
 impl HistoryEntry {
+    /// Cap on the number of history entries kept on disk.
+    pub const CAP: usize = HISTORY_CAP;
+
     /// Build a new entry with the given origin, stamped "now".
     pub fn new(
         text: String,
