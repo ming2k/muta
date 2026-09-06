@@ -1,9 +1,9 @@
 //! Presenters for `edit_text` and `write_file`.
 //!
 //! `edit_text` renders a red/green line diff (old vs new) in the expanded body.
-//! `write_file` is a full-file write — no "old" side to diff against — so it
-//! renders as a simple line-numbered code block. Both show a `+N -M` line-count
-//! suffix in the collapsed summary.
+//! `write_file` renders a full-file insertion diff (all added lines in green,
+//! Git/GitHub style) in the expanded body. Both default to expanded and show a
+//! line-count suffix in the collapsed summary.
 
 use super::diff::line_diff_counts;
 use super::{ResultKind, ToolPresenter, ToolView};
@@ -53,6 +53,29 @@ impl ToolPresenter for WritePresenter {
     }
 
     fn result_kind(&self) -> ResultKind {
-        ResultKind::Code
+        ResultKind::Diff
+    }
+
+    fn default_expanded(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_presenter_defaults_and_diff_kind() {
+        let presenter = EditPresenter;
+        assert_eq!(presenter.result_kind(), ResultKind::Diff);
+        assert!(presenter.default_expanded());
+    }
+
+    #[test]
+    fn write_presenter_defaults_and_diff_kind() {
+        let presenter = WritePresenter;
+        assert_eq!(presenter.result_kind(), ResultKind::Diff);
+        assert!(presenter.default_expanded());
     }
 }

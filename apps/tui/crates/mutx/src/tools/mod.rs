@@ -26,7 +26,7 @@ mod search;
 mod web;
 
 pub(crate) use diff::DiffCache;
-pub use diff::{DiffHunk, DiffOp};
+pub use diff::{DiffFrag, DiffHunk, DiffOp};
 
 use mutx_engine::Color;
 use serde_json::Value;

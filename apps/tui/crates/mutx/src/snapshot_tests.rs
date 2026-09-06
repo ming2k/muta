@@ -493,6 +493,48 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
     assert!(!rendered.contains("+ let x = 2;"));
 }
 
+#[test]
+fn write_file_expanded_renders_diff_with_additions() {
+    let m = tool_step_structured(
+        "write_file",
+        r#"{"path":"src/lib.rs","content":"pub fn hello() -> &'static str {\n    \"world\"\n}"}"#,
+        muta_contracts::ToolOutput::Patch {
+            path: "src/lib.rs".into(),
+            op: muta_contracts::PatchOp::Create,
+            old: String::new(),
+            new: "pub fn hello() -> &'static str {\n    \"world\"\n}".into(),
+            start_line: 0,
+        },
+        true,
+    );
+    let rendered = render_grid(&m, 80, 20);
+
+    assert!(rendered.contains("Write src/lib.rs +3"));
+    assert!(rendered.contains("+ pub fn hello() -> &'static str {"));
+    assert!(rendered.contains("+     \"world\""));
+    assert!(rendered.contains("+ }"));
+    assert!(rendered.contains("@@ -0,0 +1,3 @@"));
+    // Every added line has the green diff_add_bg (#121F16) across its full row width.
+    assert!(rendered.contains("#121F16"));
+}
+
+#[test]
+fn write_file_legacy_arguments_renders_diff() {
+    let m = tool_step(
+        "write_file",
+        r#"{"path":"src/main.rs","content":"fn main() {\n    println!(\"hi\");\n}"}"#,
+        Some("Wrote src/main.rs"),
+        true,
+    );
+    let rendered = render_grid(&m, 80, 20);
+
+    assert!(rendered.contains("Write src/main.rs +3"));
+    assert!(rendered.contains("+ fn main() {"));
+    assert!(rendered.contains("+     println!(\"hi\");"));
+    assert!(rendered.contains("+ }"));
+    assert!(rendered.contains("@@ -0,0 +1,3 @@"));
+}
+
 // Tool-step batch spacing (ADR-0001, layout-owned boundaries)
 //
 // Known same-turn tool steps stack flush regardless of disclosure state. The

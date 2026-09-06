@@ -354,9 +354,10 @@ mod tests {
     #[test]
     fn unlisted_tool_falls_back_to_presenter_default() {
         let cfg = TuiConfig::default();
-        // edit_text has a built-in default of expanded; execute_command and
+        // edit_text and write_file have a built-in default of expanded; execute_command and
         // read_text collapse (their summaries carry the outcome).
         assert!(tool_default_expanded(&cfg, "edit_text"));
+        assert!(tool_default_expanded(&cfg, "write_file"));
         assert!(!tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
     }
@@ -477,6 +478,7 @@ bogus = "ctrl+z"
         let cfg: TuiConfig = toml::from_str("").expect("empty parses");
         assert!(cfg.default_expanded.is_empty());
         assert!(tool_default_expanded(&cfg, "edit_text"));
+        assert!(tool_default_expanded(&cfg, "write_file"));
         assert!(!thinking_default_expanded(&cfg));
     }
 

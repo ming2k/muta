@@ -128,6 +128,7 @@ pub(crate) fn draw_code_content(
     content: &str,
     start_line: usize,
     language: Option<&str>,
+    syntax_lang: crate::syntax::Language,
     selection: &SelectionState,
     indent: usize,
     inner_w: usize,
@@ -169,8 +170,16 @@ pub(crate) fn draw_code_content(
         ctx.paint(line);
     }
 
+    let parsed_lang = syntax_lang;
+
     for (line_idx, (line_start_byte, logical_line)) in logical_lines.iter().enumerate() {
         let wrapped = nonempty_wrapped(wrap_text(logical_line, wrap_width));
+        let syntax_spans = if parsed_lang != crate::syntax::Language::Plain {
+            crate::syntax::tokenize_line(logical_line, parsed_lang)
+        } else {
+            Vec::new()
+        };
+
         for (wrap_idx, wl) in wrapped.iter().enumerate() {
             let gutter = if wrap_idx == 0 {
                 format!("{:>width$}", first_line + line_idx, width = gutter_width)
@@ -184,19 +193,37 @@ pub(crate) fn draw_code_content(
                 end_byte: line_start_byte + wl.end_byte,
             };
 
-            let line = code_gutter_line(CodeGutterParams {
-                left_bar: Color::Reset,
-                left_indent,
-                gutter: &gutter,
-                gutter_gap,
-                code_bg,
-                gutter_fg: ctx.theme.dim(),
-                text: &wl.text,
-                selected: line_selection(sel_range, &block_wl),
-                code_fg: ctx.theme.code_text(),
-                selected_bg: ctx.theme.selected(),
-                full_width: ctx.full_width,
-            });
+            let line = if parsed_lang == crate::syntax::Language::Plain {
+                code_gutter_line(CodeGutterParams {
+                    left_bar: Color::Reset,
+                    left_indent,
+                    gutter: &gutter,
+                    gutter_gap,
+                    code_bg,
+                    gutter_fg: ctx.theme.dim(),
+                    text: &wl.text,
+                    selected: line_selection(sel_range, &block_wl),
+                    code_fg: ctx.theme.code_text(),
+                    selected_bg: ctx.theme.selected(),
+                    full_width: ctx.full_width,
+                })
+            } else {
+                code_gutter_line_syntax(
+                    left_indent,
+                    &gutter,
+                    gutter_gap,
+                    code_bg,
+                    ctx.theme.dim(),
+                    logical_line,
+                    &syntax_spans,
+                    wl.start_byte,
+                    wl.end_byte,
+                    line_selection(sel_range, &block_wl),
+                    ctx.theme.selected(),
+                    ctx.full_width,
+                    ctx.theme,
+                )
+            };
             ctx.paint_text_row(line, mi, block_idx, &block_wl, gutter_indent as u16, &[]);
         }
     }
@@ -1138,13 +1165,10 @@ pub(crate) fn draw_tool_result(
             // `start_line` carries the read `offset` so an offset snippet
             // numbers from its true file line. `lang` is surfaced as a
             // language-tag line so the block matches the markdown code band.
-            // `Patch::new` handles the `write_file` case: a full-file write
-            // rendered as a simple code block with line numbers (no diff
-            // gutter — there is no "old" side).
             // Legacy/restored steps without a payload fall back to the
             // flattened `output` string with `start_line = 0` (slice-relative
             // 1-based numbering).
-            let (content, start_line, lang) = match structured {
+            let (content, start_line, explicit_lang) = match structured {
                 Some(muta_contracts::ToolOutput::Code {
                     text,
                     start_line,
@@ -1156,8 +1180,21 @@ pub(crate) fn draw_tool_result(
                 }) => (new.as_str(), *start_line, None),
                 _ => (output, 0, None),
             };
+            let syntax_lang = explicit_lang
+                .map(crate::syntax::Language::from_path)
+                .or_else(|| {
+                    serde_json::from_str::<serde_json::Value>(arguments)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("path")
+                                .and_then(|p| p.as_str())
+                                .map(crate::syntax::Language::from_path)
+                        })
+                })
+                .unwrap_or(crate::syntax::Language::Plain);
+
             draw_code_content(
-                ctx, mi, block_idx, content, start_line, lang, selection, indent, inner_w,
+                ctx, mi, block_idx, content, start_line, explicit_lang, syntax_lang, selection, indent, inner_w,
             )
         }
         ResultKind::Diff => {
@@ -1165,6 +1202,20 @@ pub(crate) fn draw_tool_result(
             // fall back to argument-derived rows only for legacy/restored
             // completed steps. Both paths are cached by stable message id and
             // exact source, so animation frames never repeat Myers/word diffing.
+            let path_buf: Option<String> = match structured {
+                Some(muta_contracts::ToolOutput::Patch { .. }) => None,
+                _ => serde_json::from_str::<serde_json::Value>(arguments)
+                    .ok()
+                    .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(|s| s.to_string())),
+            };
+            let path_ref = match structured {
+                Some(muta_contracts::ToolOutput::Patch { path, .. }) => Some(path.as_str()),
+                _ => path_buf.as_deref(),
+            };
+            let lang = path_ref
+                .map(crate::syntax::Language::from_path)
+                .unwrap_or(crate::syntax::Language::Plain);
+
             let hunks = match structured {
                 Some(muta_contracts::ToolOutput::Patch {
                     old,
@@ -1174,7 +1225,7 @@ pub(crate) fn draw_tool_result(
                 }) => diff_cache.patch(message_id, old, new, *start_line),
                 _ => diff_cache.legacy_arguments(message_id, name, arguments),
             };
-            draw_diff_content(ctx, hunks.as_ref(), indent, inner_w);
+            draw_diff_content(ctx, hunks.as_ref(), indent, inner_w, lang);
         }
         ResultKind::Checklist => {
             draw_checklist_content(
@@ -1251,6 +1302,7 @@ pub(crate) fn draw_diff_content(
     hunks: &[DiffHunk],
     indent: usize,
     inner_w: usize,
+    lang: crate::syntax::Language,
 ) {
     if hunks.is_empty() {
         return;
@@ -1283,17 +1335,24 @@ pub(crate) fn draw_diff_content(
     let info_fg = ctx.theme.info();
 
     for hunk in hunks {
-        let hunk_header = hunk.header();
+        let range_header = hunk.range_header();
         {
             let pad = Style::default().bg(code_bg);
-            let hh_len = hunk_header.len();
             let mut spans: Vec<Span<'static>> = vec![
                 Span::styled(" ".repeat(indent), pad),
                 Span::styled(" ".repeat(gutter_cols), pad),
                 Span::styled("  ", Style::default().bg(code_bg)),
-                Span::styled(hunk_header, Style::default().bg(code_bg).fg(info_fg)),
+                Span::styled(range_header.clone(), Style::default().bg(code_bg).fg(info_fg)),
             ];
-            let used = indent + gutter_cols + sign_w + hh_len;
+            let mut used = indent + gutter_cols + sign_w + range_header.len();
+            if let Some(hint) = &hunk.hint {
+                spans.push(Span::styled(" ", Style::default().bg(code_bg)));
+                spans.push(Span::styled(
+                    hint.clone(),
+                    Style::default().bg(code_bg).fg(ctx.theme.muted()),
+                ));
+                used += 1 + hint.chars().count();
+            }
             spans.push(Span::styled(
                 padded_tail(ctx.full_width, used),
                 Style::default().bg(code_bg),
@@ -1312,7 +1371,7 @@ pub(crate) fn draw_diff_content(
 
             let full = line.text();
             let wrapped = nonempty_wrapped(wrap_text(&full, text_w));
-            let highlight_frags = wrapped.len() <= 1;
+            let syntax_spans = crate::syntax::tokenize_line(&full, lang);
 
             let (first_old, first_new) = match line.op {
                 DiffOp::Context => (fmt_no(line.old_no, gutter_w), fmt_no(line.new_no, gutter_w)),
@@ -1350,18 +1409,23 @@ pub(crate) fn draw_diff_content(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ];
-                if highlight_frags && !is_cont {
-                    for frag in &line.frags {
-                        let style = if frag.changed {
-                            Style::default()
-                                .bg(hi_bg)
-                                .fg(base_fg)
-                                .add_modifier(Modifier::BOLD)
+                let projected = project_syntax_diff_frags(&full, &line.frags, &syntax_spans, wl.start_byte, wl.end_byte);
+                if !projected.is_empty() {
+                    for slice in projected {
+                        let token_fg = if lang == crate::syntax::Language::Plain {
+                            base_fg
                         } else {
-                            Style::default().bg(row_bg).fg(base_fg)
+                            ctx.theme.syntax_color(slice.kind)
                         };
-                        let frag_text = frag.text.trim_end_matches('\n');
-                        spans.push(Span::styled(frag_text.to_string(), style));
+                        let bg = if slice.changed { hi_bg } else { row_bg };
+                        let mut style = Style::default().bg(bg).fg(token_fg);
+                        if slice.changed {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if slice.kind == crate::syntax::SyntaxKind::Comment {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
+                        spans.push(Span::styled(slice.text.to_string(), style));
                     }
                 } else {
                     spans.push(Span::styled(
@@ -1384,4 +1448,216 @@ fn fmt_no(no: Option<usize>, width: usize) -> String {
         Some(n) => format!("{:>width$}", n, width = width),
         None => format!("{:>width$}", "", width = width),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HighlightedSlice<'a> {
+    pub text: &'a str,
+    pub kind: crate::syntax::SyntaxKind,
+    pub changed: bool,
+}
+
+/// Project syntax tokens and word-diff frags onto a wrapped slice covering
+/// byte range `[start_byte..end_byte)`.
+///
+/// Implements orthogonal two-layer rendering:
+/// - Layer 1 (AST / Lexical Syntax): Token foreground color (Keyword, Type, Function, etc.)
+/// - Layer 2 (Diff Topology): Delta background tint (Add, Remove, Word-level highlight)
+///
+/// Ensures both layers blend seamlessly without degradation across wrapped continuation rows.
+pub(crate) fn project_syntax_diff_frags<'a>(
+    full: &'a str,
+    frags: &[crate::tools::DiffFrag],
+    syntax_spans: &[crate::syntax::SyntaxSpan],
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<HighlightedSlice<'a>> {
+    let mut result = Vec::new();
+    if start_byte >= end_byte || full.is_empty() {
+        return result;
+    }
+
+    let mut points = Vec::with_capacity(frags.len() * 2 + syntax_spans.len() * 2 + 2);
+    points.push(start_byte);
+    points.push(end_byte);
+
+    let mut curr_frag_byte = 0;
+    let mut frag_ranges = Vec::with_capacity(frags.len());
+    for frag in frags {
+        let f_start = curr_frag_byte;
+        let f_end = curr_frag_byte + frag.text.len();
+        curr_frag_byte = f_end;
+        frag_ranges.push((f_start, f_end, frag.changed));
+
+        if f_start > start_byte && f_start < end_byte {
+            points.push(f_start);
+        }
+        if f_end > start_byte && f_end < end_byte {
+            points.push(f_end);
+        }
+    }
+
+    for span in syntax_spans {
+        if span.start_byte > start_byte && span.start_byte < end_byte {
+            points.push(span.start_byte);
+        }
+        if span.end_byte > start_byte && span.end_byte < end_byte {
+            points.push(span.end_byte);
+        }
+    }
+
+    points.sort_unstable();
+    points.dedup();
+
+    for pair in points.windows(2) {
+        let seg_start = pair[0];
+        let seg_end = pair[1];
+        if seg_start >= seg_end {
+            continue;
+        }
+
+        if !full.is_char_boundary(seg_start) || !full.is_char_boundary(seg_end) {
+            continue;
+        }
+
+        let slice = &full[seg_start..seg_end];
+        let clean = slice.trim_end_matches('\n').trim_end_matches('\r');
+        if clean.is_empty() {
+            continue;
+        }
+
+        let changed = frag_ranges
+            .iter()
+            .find(|(fs, fe, _)| *fs <= seg_start && seg_start < *fe)
+            .map(|(_, _, ch)| *ch)
+            .unwrap_or(false);
+
+        let kind = syntax_spans
+            .iter()
+            .find(|s| s.start_byte <= seg_start && seg_start < s.end_byte)
+            .map(|s| s.kind)
+            .unwrap_or(crate::syntax::SyntaxKind::Plain);
+
+        result.push(HighlightedSlice {
+            text: clean,
+            kind,
+            changed,
+        });
+    }
+
+    result
+}
+
+/// Project a diff line's word-level fragments onto a wrapped slice covering
+/// byte range `[start_byte..end_byte)`.
+#[cfg(test)]
+pub(crate) fn project_frags_to_wrapped<'a>(
+    full: &'a str,
+    frags: &'a [crate::tools::DiffFrag],
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<(&'a str, bool)> {
+    let empty_syntax = Vec::new();
+    project_syntax_diff_frags(full, frags, &empty_syntax, start_byte, end_byte)
+        .into_iter()
+        .map(|s| (s.text, s.changed))
+        .collect()
+}
+
+/// Project syntax tokens onto a wrapped slice of text covering `start_byte..end_byte`.
+pub(crate) fn project_syntax_slice<'a>(
+    full: &'a str,
+    syntax_spans: &[crate::syntax::SyntaxSpan],
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<(&'a str, crate::syntax::SyntaxKind)> {
+    let mut result = Vec::new();
+    if start_byte >= end_byte || full.is_empty() {
+        return result;
+    }
+
+    let mut points = Vec::with_capacity(syntax_spans.len() * 2 + 2);
+    points.push(start_byte);
+    points.push(end_byte);
+
+    for span in syntax_spans {
+        if span.start_byte > start_byte && span.start_byte < end_byte {
+            points.push(span.start_byte);
+        }
+        if span.end_byte > start_byte && span.end_byte < end_byte {
+            points.push(span.end_byte);
+        }
+    }
+
+    points.sort_unstable();
+    points.dedup();
+
+    for pair in points.windows(2) {
+        let seg_start = pair[0];
+        let seg_end = pair[1];
+        if seg_start >= seg_end || !full.is_char_boundary(seg_start) || !full.is_char_boundary(seg_end) {
+            continue;
+        }
+
+        let slice = &full[seg_start..seg_end];
+        let clean = slice.trim_end_matches('\n').trim_end_matches('\r');
+        if clean.is_empty() {
+            continue;
+        }
+
+        let kind = syntax_spans
+            .iter()
+            .find(|s| s.start_byte <= seg_start && seg_start < s.end_byte)
+            .map(|s| s.kind)
+            .unwrap_or(crate::syntax::SyntaxKind::Plain);
+
+        result.push((clean, kind));
+    }
+
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn code_gutter_line_syntax(
+    left_indent: usize,
+    gutter: &str,
+    gutter_gap: usize,
+    code_bg: Color,
+    gutter_fg: Color,
+    full_line: &str,
+    syntax_spans: &[crate::syntax::SyntaxSpan],
+    start_byte: usize,
+    end_byte: usize,
+    _selected: Option<(usize, usize)>,
+    _selected_bg: Color,
+    full_width: usize,
+    theme: &crate::Theme,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    let prefix = left_indent + 1 + gutter.len() + gutter_gap;
+
+    spans.push(Span::styled(" ".repeat(left_indent), Style::default().bg(code_bg)));
+    spans.push(Span::styled(" ", Style::default().bg(code_bg)));
+    spans.push(Span::styled(gutter.to_string(), Style::default().bg(code_bg).fg(gutter_fg)));
+    spans.push(Span::styled(" ".repeat(gutter_gap), Style::default().bg(code_bg)));
+
+    let projected = project_syntax_slice(full_line, syntax_spans, start_byte, end_byte);
+
+    for (token_text, kind) in projected {
+        let token_fg = theme.syntax_color(kind);
+        let mut style = Style::default().bg(code_bg).fg(token_fg);
+        if kind == crate::syntax::SyntaxKind::Comment {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        spans.push(Span::styled(token_text.to_string(), style));
+    }
+
+    let row_slice_len = if end_byte >= start_byte && full_line.is_char_boundary(start_byte) && full_line.is_char_boundary(end_byte) {
+        full_line[start_byte..end_byte].trim_end_matches('\n').trim_end_matches('\r').len()
+    } else {
+        0
+    };
+    let used = prefix + row_slice_len;
+    spans.push(Span::styled(padded_tail(full_width, used), Style::default().bg(code_bg)));
+    Line::from(spans)
 }

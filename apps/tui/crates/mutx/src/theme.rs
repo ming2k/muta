@@ -909,6 +909,23 @@ impl Theme {
         self.info
     }
 
+    /// Resolve semantic syntax token to theme color.
+    pub fn syntax_color(&self, kind: crate::syntax::SyntaxKind) -> Color {
+        use crate::syntax::SyntaxKind;
+        match kind {
+            SyntaxKind::Keyword => self.brand(),
+            SyntaxKind::Type => self.info(),
+            SyntaxKind::Function => self.warn(),
+            SyntaxKind::String => self.warn(),
+            SyntaxKind::Number => self.ok(),
+            SyntaxKind::Comment => self.muted(),
+            SyntaxKind::Constant => self.brand(),
+            SyntaxKind::Operator => self.info(),
+            SyntaxKind::Punctuation => self.muted(),
+            SyntaxKind::Plain => self.code_text(),
+        }
+    }
+
     // Attachment chips
     // Paste chips (`[Pasted text #N +M lines (size)]`) and image chips
     // (`[Image #N (size)]`) are the composer's identifiers for staged

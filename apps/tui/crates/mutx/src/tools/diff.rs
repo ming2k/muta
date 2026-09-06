@@ -79,16 +79,29 @@ pub struct DiffHunk {
     pub new_start: usize,
     pub new_count: usize,
     pub lines: Vec<DiffLine>,
+    /// Optional function/class/scope header for the hunk (standard Git unified diff convention).
+    pub hint: Option<String>,
 }
 
 impl DiffHunk {
-    /// Standard unified-diff hunk header.
-    pub fn header(&self) -> String {
+    /// Standard unified-diff range header without scope hint.
+    pub fn range_header(&self) -> String {
         format!(
             "@@ -{} +{} @@",
             format_hunk_range(self.old_start, self.old_count),
             format_hunk_range(self.new_start, self.new_count),
         )
+    }
+
+    /// Full unified-diff hunk header, including scope hint if present.
+    #[allow(dead_code)]
+    pub fn header(&self) -> String {
+        let range = self.range_header();
+        if let Some(hint) = &self.hint {
+            format!("{range} {hint}")
+        } else {
+            range
+        }
     }
 }
 
@@ -327,15 +340,18 @@ pub fn line_diff(old: &str, new: &str, line_offset: usize) -> Vec<DiffLine> {
 
 /// Default amount of unchanged source context on each side of a hunk.
 /// This matches Git's unified-diff default (`-U3`).
-const DIFF_CONTEXT_LINES: usize = 3;
+pub const DEFAULT_DIFF_CONTEXT_LINES: usize = 3;
 
-/// Build explicit Git-style hunks. `similar` owns the grouping semantics, so
-/// leading/trailing unchanged regions are absent and every returned hunk has
-/// authoritative old/new ranges, including zero-length sides for pure
-/// insertions and deletions.
-pub fn line_diff_hunks(old: &str, new: &str, line_offset: usize) -> Vec<DiffHunk> {
+/// Build explicit Git-style hunks with configurable context lines and scope hint detection.
+pub fn line_diff_hunks_with_context(
+    old: &str,
+    new: &str,
+    line_offset: usize,
+    context_lines: usize,
+) -> Vec<DiffHunk> {
     let diff = TextDiff::from_lines(old, new);
-    diff.grouped_ops(DIFF_CONTEXT_LINES)
+    let old_lines: Vec<&str> = old.split('\n').collect();
+    diff.grouped_ops(context_lines)
         .into_iter()
         .filter_map(|ops| {
             // `grouped_ops` never yields empty groups; guard defensively so the
@@ -344,15 +360,74 @@ pub fn line_diff_hunks(old: &str, new: &str, line_offset: usize) -> Vec<DiffHunk
             let last = rest.last().unwrap_or(first);
             let old_range = first.old_range().start..last.old_range().end;
             let new_range = first.new_range().start..last.new_range().end;
+
+            // Find first change line (Delete/Replace) or fallback to insertion point
+            let change_start = ops
+                .iter()
+                .find(|op| matches!(op, SimilarDiffOp::Delete { .. } | SimilarDiffOp::Replace { .. }))
+                .map(|op| op.old_range().start)
+                .unwrap_or(old_range.start);
+
+            let hint = find_hunk_scope_hint(&old_lines, change_start);
             Some(DiffHunk {
                 old_start: display_hunk_start(old_range.start, old_range.len(), line_offset),
                 old_count: old_range.len(),
                 new_start: display_hunk_start(new_range.start, new_range.len(), line_offset),
                 new_count: new_range.len(),
                 lines: lines_for_ops(&diff, &ops, line_offset),
+                hint,
             })
         })
         .collect()
+}
+
+/// Build explicit Git-style hunks with default 3 lines of context.
+pub fn line_diff_hunks(old: &str, new: &str, line_offset: usize) -> Vec<DiffHunk> {
+    line_diff_hunks_with_context(old, new, line_offset, DEFAULT_DIFF_CONTEXT_LINES)
+}
+
+/// Find the enclosing function, class, or scope declaration for a hunk.
+/// Scans backward from `start_line_idx` in `old_lines`.
+fn find_hunk_scope_hint(old_lines: &[&str], start_line_idx: usize) -> Option<String> {
+    if old_lines.is_empty() {
+        return None;
+    }
+    let limit = start_line_idx.min(old_lines.len());
+    for line in old_lines[..limit].iter().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
+            continue;
+        }
+
+        if is_scope_declaration(trimmed) {
+            let clean = trimmed.trim_end_matches('{').trim();
+            if !clean.is_empty() {
+                return Some(clean.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_scope_declaration(line: &str) -> bool {
+    let kw_prefixes = [
+        "fn ", "pub fn ", "pub(crate) fn ", "async fn ", "pub async fn ",
+        "impl ", "struct ", "pub struct ", "enum ", "pub enum ", "trait ", "pub trait ",
+        "def ", "async def ", "class ",
+        "function ", "export function ", "export default ", "export class ",
+        "func ", "type ",
+    ];
+    for prefix in &kw_prefixes {
+        if line.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Convert a zero-based range start to unified-diff display semantics.
@@ -638,5 +713,26 @@ mod tests {
 
         assert_eq!(hunks.len(), 1);
         assert_eq!(hunks[0].header(), "@@ -15,3 +15,3 @@");
+    }
+
+    #[test]
+    fn hunk_header_detects_enclosing_function_scope_hint() {
+        let old = "pub fn calculate(val: i32) -> i32 {\n    let a = 1;\n    let b = val * 2;\n    return b;\n}\n";
+        let new = "pub fn calculate(val: i32) -> i32 {\n    let a = 1;\n    let b = val * 10;\n    return b;\n}\n";
+        let hunks = line_diff_hunks(old, new, 0);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].hint.as_deref(), Some("pub fn calculate(val: i32) -> i32"));
+        assert_eq!(hunks[0].header(), "@@ -1,5 +1,5 @@ pub fn calculate(val: i32) -> i32");
+    }
+
+    #[test]
+    fn hunk_with_custom_context_lines() {
+        let old = "l1\nl2\nl3\nl4\nl5\nCHANGE\nl7\nl8\nl9\nl10\nl11";
+        let new = "l1\nl2\nl3\nl4\nl5\nchange\nl7\nl8\nl9\nl10\nl11";
+
+        let hunks_3 = line_diff_hunks_with_context(old, new, 0, 3);
+        let hunks_5 = line_diff_hunks_with_context(old, new, 0, 5);
+        assert!(hunks_5[0].lines.len() > hunks_3[0].lines.len());
     }
 }

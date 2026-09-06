@@ -42,6 +42,7 @@ mod pre_attach;
 pub mod question_model;
 pub(crate) use pre_attach::{PreAttachDecision, PreAttachSignal, PreAttachState};
 mod step_interaction;
+pub mod syntax;
 mod terminal;
 mod transcript;
 pub mod trust_gate;
