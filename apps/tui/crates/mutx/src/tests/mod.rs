@@ -456,6 +456,7 @@ async fn console_dispatch(app: &mut App, line: &str, create_when_bare: bool) {
 }
 
 mod completion;
+mod elevation_pipeline;
 mod history_recall;
 mod input;
 mod modal;

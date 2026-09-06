@@ -55,7 +55,7 @@ pub fn draw_provider_delete_confirm(
     let panel_rows: u16 = 9;
     let area = centered_rect_h(48, panel_rows, frame.area());
 
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     if let Some(h) = f.header {
         frame.render_widget(

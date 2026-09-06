@@ -242,10 +242,14 @@ pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, Strin
 pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
     // The route's effective capabilities: the full ADR-0149 resolution
     // (baseline ⊕ remote advertisement ⊕ user overrides). Surfaced so the
-    // frontend can gate image affordances on exactly what this route will
-    // actually accept — never a client-side re-resolution of the static
-    // registry, which cannot see the fitted overlay or per-route overrides.
-    let vision = channel.capabilities().vision;
+    // frontend can gate image affordances, context meters, and telemetry on
+    // exactly what this route will actually accept (ADR-0182) — never a
+    // client-side re-resolution of the static registry, which cannot see the
+    // fitted overlay or per-route overrides.
+    let caps = channel.capabilities();
+    let vision = caps.vision;
+    let context_window = caps.context_window;
+    let max_output_tokens = caps.max_output_tokens;
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -265,6 +269,8 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 favorite: false,
                 last_used_ms: None,
                 vision,
+                context_window,
+                max_output_tokens,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -285,6 +291,8 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 favorite: false,
                 last_used_ms: None,
                 vision,
+                context_window,
+                max_output_tokens,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -302,6 +310,8 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 favorite: false,
                 last_used_ms: None,
                 vision,
+                context_window,
+                max_output_tokens,
             }
         }
         Transport::Google { effort, .. } => {
@@ -324,6 +334,8 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 favorite: false,
                 last_used_ms: None,
                 vision,
+                context_window,
+                max_output_tokens,
             }
         }
     }
@@ -397,6 +409,36 @@ mod tests {
             ..Default::default()
         });
         assert!(channel_model_info(&channel).vision);
+    }
+
+    #[test]
+    fn channel_model_info_surfaces_route_context_window_from_remote_metadata() {
+        // ADR-0182: Discovered models (like glm-5.3 on opencode-go) carry their
+        // remote context_window via ADR-0149 resolution into the picker snapshot.
+        let remote = muta_contracts::RemoteModelMetadata {
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(131_072),
+            ..Default::default()
+        };
+        let info = channel_model_info(&openai_channel("glm-5.3", Some(remote)));
+        assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output_tokens, Some(131_072));
+    }
+
+    #[test]
+    fn channel_model_info_user_override_beats_remote_context_window() {
+        // ADR-0149 layer 1: user override takes precedence over remote metadata.
+        let remote = muta_contracts::RemoteModelMetadata {
+            context_window: Some(1_000_000),
+            ..Default::default()
+        };
+        let mut channel = openai_channel("glm-5.3", Some(remote));
+        channel.user_overrides = Some(muta_contracts::CapabilityOverrides {
+            context_window: Some(64_000),
+            ..Default::default()
+        });
+        let info = channel_model_info(&channel);
+        assert_eq!(info.context_window, 64_000);
     }
 
     #[test]

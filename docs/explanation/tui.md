@@ -195,8 +195,37 @@ same way. The reference page
 [TUI architecture](../reference/tui/architecture.md) maps every module to
 its layer.
 
+### Terminal capability profiles and responsive pipeline (ADR-0180, ADR-0181)
+
+The TUI operates across extreme terminal environments: from modern TrueColor
+emulators (`COLORTERM=truecolor`) to constrained Linux Virtual Terminals
+(`TERM=linux`) and serial recovery consoles (`TERM=vt100` / `/dev/ttyS*`).
+
+Presentation follows an authoritative, unidirectional pipeline:
+1. **Capability Discovery (Engine Layer):** `mutx-engine::TerminalProfile`
+   identifies color depth (`DirectColor`, `Ansi16`, `Monochrome`), character set
+   (`Utf8` vs `Ascii`), and protocol support (Mode 2026, mouse capture).
+2. **Visual Elevation Archetype:** The profile dictates the elevation archetype:
+   - *Chromatic (DirectColor):* Hierarchy relies on subtle luminance deltas
+     between background fills (`app_bg` -> `surface` -> `code_bg`), incurring
+     zero structural padding or border overhead.
+   - *Structured (Monochrome / Linux VT):* Background tints are unavailable or
+     coarse; hierarchy is expressed strictly through explicit ASCII/CP437
+     borders, indentation, and DEC VT100 standard **reverse video (`SGR 7`)**
+     for interaction focus.
+3. **Spatial Cost Deduction:** Structured elevation consumes physical space
+   (2 columns, 2 rows for framed panels). This cost is deducted before
+   geometry calculation: `effective_rect = raw_rect - spatial_cost`.
+4. **Responsive Layout Tier:** Responsive layout evaluates against
+   `effective_rect.width`: `LayoutTier::from_effective_width` chooses
+   `Wide` (>= 90 cols, dual-pane Master-Detail) vs `Compact` (< 90 cols,
+   vertical stack).
+5. **Declarative Painting:** View components render into the resulting inner
+   bounds via declarative `ElevationContainer` primitives, with zero ad-hoc
+   capability branches in application views.
+
 This is why the two channels below can run freely: the producer writes the
-document model the view renders, and the view never needs to know how that
+model the view renders, and the view never needs to know how that
 model got there.
 
 ## Two channels: streaming producer, frame consumer

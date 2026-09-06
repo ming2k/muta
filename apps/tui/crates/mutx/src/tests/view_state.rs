@@ -147,6 +147,8 @@ fn composer_image_paste_follows_picker_snapshot_vision() {
             favorite: false,
             last_used_ms: None,
             vision: true,
+            context_window: 128_000,
+            max_output_tokens: None,
         }],
         builtin: true,
         protocol: String::new(),
@@ -178,6 +180,48 @@ fn composer_image_paste_follows_picker_snapshot_vision() {
 }
 
 #[test]
+fn active_model_context_window_follows_picker_snapshot_for_relay_models() {
+    // ADR-0182: The snapshot's per-route `context_window` is the authority.
+    // A relay model like `glm-5.3` discovered on `opencode-go` has no static
+    // baseline in the TUI client process. The client must not fall back to 0.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::None);
+    app.current_provider = "opencode-go".to_string();
+    app.current_model = "glm-5.3".to_string();
+    app.provider_picker.rows.push(muta_contracts::ProviderPickerRow {
+        id: "opencode-go".to_string(),
+        name: "OpenCode Go".to_string(),
+        model: "glm-5.3".to_string(),
+        models: vec!["glm-5.3".to_string()],
+        model_info: vec![muta_contracts::ProviderModelInfo {
+            model: "glm-5.3".to_string(),
+            protocol: "openai".to_string(),
+            effort: None,
+            thinking: None,
+            favorite: false,
+            last_used_ms: None,
+            vision: false,
+            context_window: 1_000_000,
+            max_output_tokens: Some(131_072),
+        }],
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        preset_id: "opencode-go".to_string(),
+        client_identity: Default::default(),
+        last_used_ms: None,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
+    });
+
+    assert_eq!(
+        app.active_model_context_window(),
+        1_000_000,
+        "active_model_context_window must resolve 1M tokens from snapshot for discovered model"
+    );
+}
+
+#[test]
 fn composer_image_paste_snapshot_override_forces_off() {
     // The inverse layer-1 direction: the user forced `vision: false` on a
     // baseline-vision-capable model, so the snapshot must veto the paste even
@@ -199,6 +243,8 @@ fn composer_image_paste_snapshot_override_forces_off() {
             favorite: false,
             last_used_ms: None,
             vision: false,
+            context_window: 128_000,
+            max_output_tokens: None,
         }],
         builtin: true,
         protocol: String::new(),

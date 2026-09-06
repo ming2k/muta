@@ -35,7 +35,9 @@ use mutx_engine::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::primitives::{LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll, viewport_rect};
+use crate::primitives::{
+    ElevationContainer, LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll, viewport_rect,
+};
 use crate::view::Theme;
 
 /// Which zone of the dashboard currently owns the keyboard.
@@ -193,7 +195,7 @@ pub fn draw_dashboard(
         frame.area(),
     );
     let area = viewport_rect(frame);
-    let tier = LayoutTier::from_width(area.width);
+    let tier = LayoutTier::from_rect(area, theme.elevation);
 
     let entries = dock_entries(rows);
     let selected = selected.min(entries.len().saturating_sub(1));
@@ -435,10 +437,8 @@ fn draw_dock(
             let is_selected = idx == selected;
             if is_selected {
                 frame.render_widget(Clear, cell);
-                frame.render_widget(
-                    RtBlock::default().style(Style::default().bg(theme.raised())),
-                    cell,
-                );
+                let style = theme.selection_style(true);
+                frame.render_widget(RtBlock::default().style(style), cell);
             }
             let line = dock_card_line(
                 entry,
@@ -539,7 +539,13 @@ fn dock_card_line(
         Span::styled("  ".to_string(), Style::default()),
         Span::styled(format!("{status:<15}"), status_style(row.status, theme)),
     ];
-    Line::from(spans)
+    let mut line = Line::from(spans);
+    if is_selected && theme.elevation.is_structured() {
+        for span in &mut line.spans {
+            span.style = span.style.add_modifier(Modifier::REVERSE);
+        }
+    }
+    line
 }
 
 /// The dock's coarse status vocabulary: running vs. done, with the blocked
@@ -633,21 +639,18 @@ fn inset_panel(
     focused: bool,
     theme: &Theme,
 ) -> (Rect, Rect) {
-    frame.render_widget(
-        RtBlock::default().style(Style::default().bg(theme.panel())),
-        area,
-    );
-    // Title row at the top of the panel.
+    let inner = ElevationContainer::panel()
+        .focused(focused)
+        .render(frame, area, theme);
+    // Title row at the top of the panel inner area.
     let title_rect = Rect {
-        x: area.x + 1,
-        y: area.y,
-        width: area.width.saturating_sub(1),
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
         height: 1,
     };
     let title_style = if focused {
-        Style::default()
-            .fg(theme.brand())
-            .add_modifier(Modifier::BOLD)
+        theme.focus_style(true)
     } else {
         Style::default().fg(theme.muted())
     };
@@ -657,10 +660,10 @@ fn inset_panel(
     );
     // Body: everything below the title, inset one cell on each side.
     let body = Rect {
-        x: area.x + 1,
-        y: area.y + 1,
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(1),
+        x: inner.x + 1,
+        y: inner.y + 1,
+        width: inner.width.saturating_sub(2),
+        height: inner.height.saturating_sub(1),
     };
     (area, body)
 }
@@ -967,10 +970,7 @@ pub fn draw_session_preview(
     let area = crate::primitives::centered_rect(70, 75, frame.area());
     // Occlude the dashboard beneath and paint the panel.
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        RtBlock::default().style(Style::default().bg(theme.panel())),
-        area,
-    );
+    let inner = ElevationContainer::overlay().render(frame, area, theme);
 
     // Vertical chrome: title / gap / body / gap / footer-hint.
     let chunks = Layout::default()
@@ -982,7 +982,7 @@ pub fn draw_session_preview(
             Constraint::Length(1),
             Constraint::Length(1),
         ])
-        .split(area);
+        .split(inner);
     let title = chunks[0];
     let body = chunks[2];
     let footer = chunks[4];
@@ -1738,5 +1738,27 @@ mod tests {
         assert_eq!(LayoutTier::from_width(90), LayoutTier::Wide);
         assert_eq!(LayoutTier::from_width(89), LayoutTier::Compact);
         assert_eq!(LayoutTier::from_width(60), LayoutTier::Compact);
+    }
+
+    #[test]
+    fn responsive_layout_tier_adapts_to_elevation_archetype() {
+        use mutx_engine::{ElevationArchetype, Rect};
+        let rect_90 = Rect::new(0, 0, 90, 24);
+        // Under Chromatic (TrueColor), 90 columns has 0 cost -> 90 effective -> Wide
+        assert_eq!(
+            LayoutTier::from_rect(rect_90, ElevationArchetype::Chromatic),
+            LayoutTier::Wide
+        );
+        // Under Structured (Mono/Linux VT), 2 cols border cost -> 88 effective -> Compact
+        assert_eq!(
+            LayoutTier::from_rect(rect_90, ElevationArchetype::Structured),
+            LayoutTier::Compact
+        );
+        // Under Structured with 92 columns -> 90 effective -> Wide
+        let rect_92 = Rect::new(0, 0, 92, 24);
+        assert_eq!(
+            LayoutTier::from_rect(rect_92, ElevationArchetype::Structured),
+            LayoutTier::Wide
+        );
     }
 }

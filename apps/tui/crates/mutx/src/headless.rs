@@ -11,6 +11,7 @@ pub async fn run_headless(
     json: bool,
     project_override: Option<PathBuf>,
     delegated: bool,
+    unconfined: bool,
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -60,9 +61,15 @@ pub async fn run_headless(
             muta_contracts::human_request::HumanChannelPosture::Autonomous
         });
     }
+    let init_options = muta_contracts::SessionInitOptions::new(delegated, unconfined);
+    let action = AttachAction::New(if init_options.is_default() {
+        None
+    } else {
+        Some(init_options)
+    });
     let handshake = match &transport {
-        Transport::Remote(daemon) => daemon.connect(AttachAction::New).await?,
-        Transport::Local(info) => client::connect(info, AttachAction::New).await?,
+        Transport::Remote(daemon) => daemon.connect(action.clone()).await?,
+        Transport::Local(info) => client::connect(info, action).await?,
     };
     let (tx, mut rx, session_id, _round_counter, _history, provider, model) = match handshake {
         Handshake::Attached {
@@ -88,10 +95,6 @@ pub async fn run_headless(
             return Err("unexpected session pick list when creating fresh headless session".into());
         }
     };
-
-    if delegated {
-        let _ = tx.send(AgentRequest::SlashCommand("/delegate on".to_string()));
-    }
 
     if json {
         let init_event = serde_json::json!({

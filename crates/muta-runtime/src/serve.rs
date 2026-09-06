@@ -734,9 +734,16 @@ async fn run_control(
             listeners.cancel();
             return Ok(());
         }
-        ControlRequest::CreateSession { project, prompt } => {
+        ControlRequest::CreateSession {
+            project,
+            prompt,
+            init_options,
+        } => {
             match registry
-                .create_session(std::path::PathBuf::from(&project))
+                .create_session_with_options(
+                    std::path::PathBuf::from(&project),
+                    init_options.unwrap_or_default(),
+                )
                 .await
             {
                 Ok(id) => {
@@ -877,7 +884,7 @@ async fn handle_wire_stream(
         AttachAction::Control(request) => {
             return run_control(wire_sink, registry, gate, listeners, request).await;
         }
-        AttachAction::New | AttachAction::Attach(_) | AttachAction::Picker => {}
+        AttachAction::New(_) | AttachAction::Attach(_) | AttachAction::Picker => {}
     }
     // The caller's project scopes creation / lazy resume (ADR-0096). Attach
     // clients declare their working directory in the Select frame's optional
@@ -1551,7 +1558,7 @@ mod tests {
     #[test]
     fn attach_action_roundtrips() {
         assert_eq!(
-            serde_json::to_string(&AttachAction::New).unwrap(),
+            serde_json::to_string(&AttachAction::New(None)).unwrap(),
             "\"new\""
         );
         assert_eq!(

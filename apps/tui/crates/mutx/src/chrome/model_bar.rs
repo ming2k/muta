@@ -20,6 +20,7 @@ pub struct ModelBarView<'a> {
     pub provider_name: Option<&'a str>,
     pub reasoning_effort: Option<&'a str>,
     pub context_tokens: Option<usize>,
+    pub context_window: usize,
     pub last_turn_tps: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
 }
@@ -32,6 +33,7 @@ impl<'a> Default for ModelBarView<'a> {
             provider_name: None,
             reasoning_effort: None,
             context_tokens: None,
+            context_window: 0,
             last_turn_tps: None,
             ignition_elapsed_ms: None,
         }
@@ -106,6 +108,7 @@ pub fn draw_model_bar(
         provider_name,
         reasoning_effort,
         context_tokens,
+        context_window,
         last_turn_tps,
         ignition_elapsed_ms,
     } = view;
@@ -114,7 +117,11 @@ pub fn draw_model_bar(
     let full_w = rect.width as usize;
     let inner = MODEL_BAR_INNER_PADDING;
 
-    let context_max = crate::providers::model_context_window(current_model);
+    let context_max = if context_window > 0 {
+        context_window
+    } else {
+        muta_contracts::model::resolve(current_model).context_window
+    };
 
     let (model_label, model_style) = if current_model.is_empty() {
         (

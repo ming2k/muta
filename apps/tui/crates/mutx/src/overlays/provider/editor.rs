@@ -262,7 +262,7 @@ pub fn draw_model_editor(
     let body_rows = show_key as u16 + effort_rows + thinking.is_some() as u16 + overrides_rows;
     let desired = body_rows + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     let child_title = format!("Edit {title}");
     let header = breadcrumb_parts("Models", &child_title);
@@ -466,7 +466,7 @@ pub fn draw_preset_chooser(
     scroll: &mut usize,
 ) -> mutx_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     let header = hierarchical_breadcrumb(
         &["Connections", "Add preset connection"],
@@ -560,7 +560,7 @@ pub fn draw_custom_provider_editor(
     let geometry = ContentModalSpec::CUSTOM_PROVIDER;
     let desired = (fields.len() as u16) + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     const LABEL_W: usize = 9;
     let body_width = f.body.width as usize;

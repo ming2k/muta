@@ -768,15 +768,15 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Quit,
         label: "Quit Muta",
-        hint: "Ctrl+C / Ctrl+Q",
+        hint: "Ctrl+C",
         category: CommandCategory::Global,
         scope: Scope::Global,
-        bindings: &[Key::CTRL_C, Key::CTRL_Q],
+        bindings: &[Key::CTRL_C],
         slash: Some("/exit"),
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Dangerous,
-        description: "Exit application gracefully (Ctrl+C twice or Ctrl+Q)",
+        description: "Exit application gracefully (Ctrl+C twice)",
     },
     CommandSpec {
         id: CommandId::CopySelection,
@@ -1217,7 +1217,7 @@ fn canonical_global_key(key: Key) -> Option<CommandId> {
         Some(CommandId::OpenActiveConnectionDetail)
     } else if key == Key::ESC {
         Some(CommandId::CancelOrBack)
-    } else if key == Key::CTRL_C || key == Key::CTRL_Q {
+    } else if key == Key::CTRL_C {
         Some(CommandId::Quit)
     } else if key == Key::CTRL_SHIFT_C || key == Key::CMD_C {
         Some(CommandId::CopySelection)
@@ -1566,7 +1566,7 @@ mod tests {
             resolve_global_key(Key::CTRL_C),
             Some(CommandId::Quit)
         );
-        assert_eq!(resolve_global_key(Key::CTRL_Q), Some(CommandId::Quit));
+        assert_eq!(resolve_global_key(Key::CTRL_Q), None);
         assert_eq!(
             resolve_global_key(Key::CTRL_SHIFT_C),
             Some(CommandId::CopySelection)

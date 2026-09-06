@@ -79,7 +79,7 @@ pub fn draw_sessions_modal(
         sessions_loading,
     } = props;
     let area = modal_area(frame, FixedModalSpec::SESSIONS);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     // Destructive delete: custom band 70 so it outlives plain secondaries
     // (it is a one-key destructive action the user must be able to find).

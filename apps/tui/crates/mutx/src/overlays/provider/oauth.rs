@@ -99,7 +99,7 @@ pub fn draw_oauth_pending(
     let desired =
         estimated_rows.max(raw_lines.len() as u16) + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     if let Some(map) = hit_map {
         map.set_oauth_modal_rect(area);

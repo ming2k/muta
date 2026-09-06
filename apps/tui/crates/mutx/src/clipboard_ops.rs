@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use muta_contracts::{ImagePart, resolve_model};
+use muta_contracts::ImagePart;
 
 use crate::clipboard::{self, ClipboardRead, CopyOutcome};
 use crate::composer_attachments::{image_chip, paste_chip, paste_line_count, should_chip_paste};
@@ -17,26 +17,11 @@ use crate::{App, Modal};
 
 /// Whether the currently active model route accepts image input.
 ///
-/// The authority is the **daemon-built picker snapshot**: its per-model
-/// `vision` flag is the full ADR-0149 resolution (user overrides ⊕ remote
-/// advertisement ⊕ baseline) computed on the route the daemon will actually
-/// serve. The TUI process has no fitted-model overlay of its own, so a
-/// client-side `resolve_model` can lag the daemon (a relay model like
-/// `omen-alpha` exists only in the daemon's overlay). When the snapshot has
-/// no entry for the active route, fall back to the in-process resolution —
-/// conservative for unknown ids (the fallback model says `vision: false`).
+/// The authority is the **daemon-built picker snapshot** (ADR-0182): its
+/// per-model `vision` flag is the full ADR-0149 resolution computed on the
+/// route the daemon will actually serve.
 pub(crate) fn active_model_supports_vision(app: &App) -> bool {
-    app.provider_picker
-        .rows
-        .iter()
-        .find(|row| row.id == app.current_provider)
-        .and_then(|row| {
-            row.model_info
-                .iter()
-                .find(|info| info.model == app.current_model)
-        })
-        .map(|info| info.vision)
-        .unwrap_or_else(|| resolve_model(&app.current_model).vision)
+    app.active_model_supports_vision()
 }
 
 /// Bound on each clipboard operation. A stuck reader must never freeze the

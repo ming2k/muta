@@ -238,9 +238,12 @@ impl SessionRegistry {
         declared: bool,
     ) -> ResolveOutcome {
         match action {
-            AttachAction::New => {
-                self.create_session_outcome(caller_project.to_path_buf())
-                    .await
+            AttachAction::New(options) => {
+                self.create_session_outcome(
+                    caller_project.to_path_buf(),
+                    options.unwrap_or_default(),
+                )
+                .await
             }
             AttachAction::Attach(None) => self.resolve_auto(caller_project, declared).await,
             AttachAction::Attach(Some(id)) => self.resolve_id(&id, caller_project).await,
@@ -252,6 +255,7 @@ impl SessionRegistry {
                 .assemble_hosted(
                     crate::startup::SessionStart::Picker,
                     caller_project.to_path_buf(),
+                    muta_contracts::SessionInitOptions::default(),
                 )
                 .await
                 .map(ResolveOutcome::Welcome)
@@ -277,8 +281,18 @@ impl SessionRegistry {
     /// Control plane (ADR-0096): create a session for `project` and return
     /// its id. The session is daemon-held; no client is attached yet.
     pub async fn create_session(&self, project: PathBuf) -> Result<String, String> {
+        self.create_session_with_options(project, muta_contracts::SessionInitOptions::default())
+            .await
+    }
+
+    /// Control plane: create a session for `project` with explicit initial posture options.
+    pub async fn create_session_with_options(
+        &self,
+        project: PathBuf,
+        options: muta_contracts::SessionInitOptions,
+    ) -> Result<String, String> {
         let bound = self
-            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project, options)
             .await
             .map_err(|e| match e {
                 AssembleErr::NoHost => "this host cannot create sessions".to_string(),
@@ -287,9 +301,13 @@ impl SessionRegistry {
         Ok(bound.session.id().await)
     }
 
-    async fn create_session_outcome(&self, project: PathBuf) -> ResolveOutcome {
+    async fn create_session_outcome(
+        &self,
+        project: PathBuf,
+        options: muta_contracts::SessionInitOptions,
+    ) -> ResolveOutcome {
         match self
-            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project, options)
             .await
         {
             Ok(b) => ResolveOutcome::Welcome(b),
@@ -828,8 +846,11 @@ impl SessionRegistry {
         match map.len() {
             0 => {
                 drop(map);
-                self.create_session_outcome(caller_project.to_path_buf())
-                    .await
+                self.create_session_outcome(
+                    caller_project.to_path_buf(),
+                    muta_contracts::SessionInitOptions::default(),
+                )
+                .await
             }
             1 => {
                 // The one hosted session belongs to a *different* project
@@ -877,6 +898,7 @@ impl SessionRegistry {
             .assemble_hosted(
                 crate::startup::SessionStart::Resume(id.to_string()),
                 caller_project.to_path_buf(),
+                muta_contracts::SessionInitOptions::default(),
             )
             .await
         {
@@ -929,6 +951,7 @@ impl SessionRegistry {
                 .assemble_hosted(
                     crate::startup::SessionStart::Resume(entry.session_id.clone()),
                     entry.project_root.clone(),
+                    muta_contracts::SessionInitOptions::default(),
                 )
                 .await
             {
@@ -955,6 +978,7 @@ impl SessionRegistry {
         &self,
         startup: crate::startup::SessionStart,
         project_root: PathBuf,
+        init_options: muta_contracts::SessionInitOptions,
     ) -> Result<BoundSession, AssembleErr> {
         let HostParams {
             identity,
@@ -967,11 +991,6 @@ impl SessionRegistry {
         // Created before the assemble because the scheduler is spawned
         // during it and receives the token as a spawn parameter.
         let cancel = CancellationToken::new();
-        // `delegated: false` here is the *startup flag* (what `--delegate`
-        // passed on the command line), not the posture: ADR-0132 moved the
-        // persisted posture into the session store, and the assemble's
-        // resume path restores it from there — so a rehosted session reopens
-        // in the posture it died in without any rehost-specific wiring.
         // ADR-0141: per-session channel accounting — attach/detach on the
         // WS layer keeps this fresh; the agent reads it live.
         let human_channel = Arc::new(muta_contracts::human_request::HumanChannelAccountant::new());
@@ -981,7 +1000,8 @@ impl SessionRegistry {
             ui,
             startup,
             project_root: Some(project_root.clone()),
-            delegated: false,
+            delegated: init_options.delegated,
+            unconfined: init_options.unconfined,
             human_channel: Some(Arc::clone(&human_channel)),
             teardown_token: Some(cancel.clone()),
         })

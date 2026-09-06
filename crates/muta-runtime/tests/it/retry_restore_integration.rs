@@ -33,6 +33,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         startup,
         project_root: Some(project_root),
         delegated: false,
+        unconfined: false,
         teardown_token: None,
     }
 }

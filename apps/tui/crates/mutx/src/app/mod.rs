@@ -615,7 +615,7 @@ pub struct App {
     /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.
     pub delegated: bool,
     /// Whether workspace filesystem confinement is bypassed this session
-    /// (`/jail off`). Mirrored from the harness snapshot.
+    /// (`--unconfined` / `/unconfined on`). Mirrored from the harness snapshot.
     pub unconfined: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Todos modal (`Modal::Todos`) and on the ambient todo bar.

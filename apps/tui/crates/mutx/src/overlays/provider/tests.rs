@@ -587,6 +587,8 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
         favorite,
         last_used_ms: used,
         vision: false,
+        context_window: 128_000,
+        max_output_tokens: None,
     };
     let row = |id: &str, name: &str, models: Vec<muta_contracts::ProviderModelInfo>| {
         muta_contracts::ProviderPickerRow {
@@ -1227,6 +1229,8 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 favorite: false,
                 last_used_ms: None,
                 vision: false,
+                context_window: 1_000_000,
+                max_output_tokens: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "gemini-3.1-pro".to_string(),
@@ -1236,6 +1240,8 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 favorite: false,
                 last_used_ms: None,
                 vision: false,
+                context_window: 1_000_000,
+                max_output_tokens: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "claude-3-7-sonnet".to_string(),
@@ -1245,6 +1251,8 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 favorite: false,
                 last_used_ms: None,
                 vision: false,
+                context_window: 200_000,
+                max_output_tokens: None,
             },
         ],
         active_model: Some("gemini-3.7-flash".to_string()),

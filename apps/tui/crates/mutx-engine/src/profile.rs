@@ -12,6 +12,7 @@
 //!   `SGR 1` (Bold).
 //! - **ANSI X3.4 (ASCII) vs ISO/IEC 10646 (UTF-8)**: Character set constraints.
 
+use crate::layout::{Margin, Rect};
 use crate::{Color, Modifier, Style};
 
 /// Standard terminal color reproduction capability.
@@ -34,6 +35,94 @@ pub enum CharsetStandard {
     Utf8,
     /// ANSI X3.4 7-bit US-ASCII safe fallback (+, -, |, etc.).
     Ascii,
+}
+
+/// Spatial footprint overhead imposed by visual elevation scaffolding (ADR-0181).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpatialCost {
+    /// Horizontal footprint deducted (left + right borders / padding).
+    pub horizontal: u16,
+    /// Vertical footprint deducted (top + bottom borders / padding).
+    pub vertical: u16,
+}
+
+impl SpatialCost {
+    /// Zero spatial cost (borderless chromatic elevation).
+    pub const ZERO: Self = Self {
+        horizontal: 0,
+        vertical: 0,
+    };
+
+    /// Standard framed border cost (1 cell on each of 4 sides = 2 horizontal, 2 vertical).
+    pub const fn framed() -> Self {
+        Self {
+            horizontal: 2,
+            vertical: 2,
+        }
+    }
+
+    pub const fn is_zero(&self) -> bool {
+        self.horizontal == 0 && self.vertical == 0
+    }
+}
+
+/// Visual elevation archetype derived from terminal hardware capabilities (ADR-0181).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ElevationArchetype {
+    /// ITU-T T.416 DirectColor TrueColor environments.
+    /// Visual hierarchy is expressed via chromatic luminance gradients (app_bg -> surface -> code_bg).
+    /// Zero spatial cost (borders and padding are not mandatory for separation).
+    #[default]
+    Chromatic,
+    /// ECMA-48 Ansi16 environments.
+    /// Hierarchy uses high-contrast 16-color foregrounds and minimal structural dividers.
+    Hybrid,
+    /// DEC VT100 Monochrome, Linux VT (/dev/tty1..6), and serial emergency consoles.
+    /// Background color differentiation does not exist; hierarchy MUST be structural.
+    /// Requires explicit ASCII/CP437 borders and DEC VT100 SGR 7 (Reverse Video) for focus.
+    /// Spatial cost: 2 horizontal columns, 2 vertical rows per elevated container.
+    Structured,
+}
+
+impl ElevationArchetype {
+    /// Resolve the visual archetype for a given capability profile.
+    pub const fn for_profile(profile: &TerminalProfile) -> Self {
+        match profile.color_standard {
+            ColorStandard::DirectColor => Self::Chromatic,
+            ColorStandard::Ansi16 => Self::Hybrid,
+            ColorStandard::Monochrome => Self::Structured,
+        }
+    }
+
+    /// Spatial cost deducted before evaluating responsive breakpoints and child viewports.
+    pub const fn spatial_cost(self) -> SpatialCost {
+        match self {
+            Self::Chromatic => SpatialCost::ZERO,
+            Self::Hybrid => SpatialCost::ZERO,
+            Self::Structured => SpatialCost::framed(),
+        }
+    }
+
+    /// Return the safe inner content area after deducting this archetype's spatial cost.
+    pub fn inner_bounds(self, rect: Rect) -> Rect {
+        let cost = self.spatial_cost();
+        rect.inner(Margin {
+            horizontal: cost.horizontal / 2,
+            vertical: cost.vertical / 2,
+        })
+    }
+
+    pub const fn is_structured(self) -> bool {
+        matches!(self, Self::Structured)
+    }
+
+    pub const fn is_chromatic(self) -> bool {
+        matches!(self, Self::Chromatic)
+    }
+
+    pub const fn is_hybrid(self) -> bool {
+        matches!(self, Self::Hybrid)
+    }
 }
 
 /// A deterministic capability profile governing escape sequence emission and widget degradation.
@@ -84,6 +173,11 @@ impl TerminalProfile {
             supports_sync_update: false,
             supports_mouse: false,
         }
+    }
+
+    /// Return the visual elevation archetype for this terminal profile (ADR-0181).
+    pub const fn elevation_archetype(&self) -> ElevationArchetype {
+        ElevationArchetype::for_profile(self)
     }
 
     /// Detect terminal capability profile from environment variables and standards.

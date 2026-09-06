@@ -31,6 +31,23 @@ on every frame.
 The viewport rect itself comes from `viewport_rect(frame)` in
 `apps/tui/crates/mutx/src/primitives.rs`.
 
+## Responsive layout & capability-first pipeline (ADR-0181)
+
+Layout calculation follows a strict unidirectional pipeline:
+**Terminal Capability Profile -> Visual Elevation Archetype -> Spatial Cost Deduction -> Responsive Tier -> Component Paint**.
+
+Responsive breakpoints must never evaluate directly against raw terminal viewport dimensions. In modern TrueColor environments, visual elevation is chromatic (subtle background tints with zero border overhead). In constrained environments (Linux VT, serial consoles, DEC VT100, monochrome), chromatic elevation collapses; panels and cards must use explicit structural framing (ASCII/CP437 borders and DEC VT100 SGR 7 reverse video), which consumes physical grid cells (`SpatialCost { horizontal: 2, vertical: 2 }`).
+
+| Pipeline stage | Input | Output | Purpose |
+|----------------|-------|--------|---------|
+| 1. Profile Discovery | `TERM`, `COLORTERM`, `NO_COLOR` | `TerminalProfile` | DirectColor, Ansi16, or Monochrome (ADR-0180) |
+| 2. Archetype & Cost | `TerminalProfile` | `ElevationArchetype` & `SpatialCost` | Chromatic (0 cost), Structured (2 col / 2 row cost), or Hybrid |
+| 3. Effective Bounds | Raw `Rect` minus `SpatialCost` | Content `Rect` | Effective client area for content layout |
+| 4. Responsive Breakpoint | Content width | `LayoutTier` (`Wide` vs `Compact`) | Master-Detail dual pane (>= 90 cols) vs vertical stack (< 90 cols) |
+| 5. Component Paint | Content bounds + Theme | Screen Grid | Declarative elevation rendering without ad-hoc capability branches |
+
+By deducting spatial costs before resolving `LayoutTier`, edge-case terminals (such as an exact 90-column Linux console) cleanly drop to `Compact` layout rather than selecting dual-pane and suffering border clipping or overflow.
+
 ## Root conversation view
 
 The default. A two-chunk vertical split inside `draw_transcript`:

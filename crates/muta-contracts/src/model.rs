@@ -179,6 +179,45 @@ pub struct ModelCapabilities {
     pub effort_levels: Vec<crate::effort::EffortLevel>,
 }
 
+/// Materialized, route-scoped capabilities evaluated daemon-side via ADR-0149.
+/// Projected to frontends as the infallible single source of truth (ADR-0182).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub struct RouteCapabilities {
+    /// Context window size in tokens. Guaranteed > 0 for all routed channels.
+    pub context_window: usize,
+    /// Maximum generation tokens, when declared or configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Whether the route accepts image attachments.
+    pub vision: bool,
+    /// Whether the route supports tool/function calling.
+    pub tool_call: bool,
+    /// Extended thinking / reasoning support mode.
+    pub thinking: ThinkingSupport,
+}
+
+impl ModelCapabilities {
+    /// Materialize the route-scoped projection for cross-process DTOs.
+    pub fn to_route_capabilities(&self) -> RouteCapabilities {
+        RouteCapabilities {
+            context_window: self.context_window,
+            max_output_tokens: self.max_output_tokens,
+            vision: self.vision,
+            tool_call: self.tool_call,
+            thinking: self.thinking,
+        }
+    }
+}
+
 /// A user's explicit capability override for one (provider-instance, model)
 /// route -- the **top layer** of the capability resolution order (ADR-0149).
 ///

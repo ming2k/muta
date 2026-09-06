@@ -172,13 +172,13 @@ pub(crate) fn parse_delegate_arg(arg: &str) -> Result<Option<bool>, String> {
     }
 }
 
-pub(crate) fn parse_jail_arg(arg: &str) -> Result<Option<bool>, String> {
+pub(crate) fn parse_unconfined_arg(arg: &str) -> Result<Option<bool>, String> {
     match arg.trim() {
         "" => Ok(None),
-        "on" | "true" | "1" | "enable" | "enabled" | "confined" | "jail" => Ok(Some(true)),
-        "off" | "false" | "0" | "disable" | "disabled" | "unconfined" | "escape" => Ok(Some(false)),
+        "on" | "true" | "1" | "enable" | "enabled" | "unconfined" | "escape" => Ok(Some(true)),
+        "off" | "false" | "0" | "disable" | "disabled" | "confined" | "jail" => Ok(Some(false)),
         other => Err(format!(
-            "Unknown value '{other}'. Use `/jail` to toggle, or `/jail on|off`."
+            "Unknown value '{other}'. Use `/unconfined` to toggle, or `/unconfined on|off`."
         )),
     }
 }

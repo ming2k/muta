@@ -51,7 +51,8 @@ fn humanize_command_name(name: &str) -> String {
         "/compact" => "Compact Conversation".to_string(),
         "/new" => "New Session".to_string(),
         "/delegate" => "Delegate Mode".to_string(),
-        "/jail" => "Workspace Jail Confinement".to_string(),
+        "/unconfined" => "Workspace Confinement".to_string(),
+        "/jail" => "Workspace Confinement (legacy alias)".to_string(),
         "/master" => "Master Agent Role".to_string(),
         "/search" => "Search Session History".to_string(),
         "/fork" => "Fork Session".to_string(),
@@ -230,7 +231,7 @@ pub(crate) fn draw_command_palette(
         scroll,
     } = props;
     let outer_rect = modal_area(frame, FixedModalSpec::PROVIDER);
-    let f = modal_frame(frame, outer_rect, theme.panel(), true, true);
+    let f = modal_frame(frame, outer_rect, theme, true, true);
 
     let title = if entries.is_empty() {
         "Commands".to_string()

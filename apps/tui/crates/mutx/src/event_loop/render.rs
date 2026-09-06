@@ -398,6 +398,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 provider_name: hint_instance,
                 reasoning_effort: hint_reasoning,
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
+                context_window: app.active_model_context_window(),
                 last_turn_tps: viewed_chrome
                     .last_turn_performance
                     .and_then(|sample| sample.preferred_tps()),
@@ -1012,7 +1013,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &report,
                 view::ContextUsageView {
                     snapshot: app.context_tokens,
-                    window_tokens: Some(crate::providers::model_context_window(&app.current_model)),
+                    window_tokens: Some(app.active_model_context_window()),
                     draft_content_tokens: muta_contracts::count_tokens(&app.input),
                     draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
                 },

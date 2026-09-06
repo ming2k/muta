@@ -61,7 +61,12 @@ pub fn build_session_context(
         .as_ref()
         .map(|e| e.description.clone())
         .unwrap_or_default();
-    let context_window = entry.as_ref().map(|e| e.context_window()).unwrap_or(0);
+    let context_window = entry
+        .as_ref()
+        .and_then(|e| e.channels.iter().find(|c| c.model == model))
+        .map(|c| c.capabilities().context_window)
+        .or_else(|| entry.as_ref().map(|e| e.context_window()))
+        .unwrap_or(0);
     let api_key_ready = entry.as_ref().map(|e| e.key_ready()).unwrap_or(false);
 
     let model_info = ModelInfo {

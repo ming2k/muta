@@ -44,7 +44,7 @@ pub fn draw_telemetry_modal(
 
     if loading {
         let area = content_modal_area(frame, geometry, 7);
-        let modal = modal_frame(frame, area, theme.panel(), true, true);
+        let modal = modal_frame(frame, area, theme, true, true);
         modal_header_parts(
             frame,
             modal.header,
@@ -115,7 +115,7 @@ pub fn draw_telemetry_modal(
 
         let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
         let area = content_modal_area(frame, geometry, desired);
-        let modal = modal_frame(frame, area, theme.panel(), true, true);
+        let modal = modal_frame(frame, area, theme, true, true);
         modal_header_parts(frame, modal.header, &header, theme);
 
         let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
@@ -139,7 +139,7 @@ pub fn draw_telemetry_modal(
 
         let desired = (rows.len() + 1) as u16 + modal_chrome_rows(geometry.modal_spec());
         let area = content_modal_area(frame, geometry, desired);
-        let modal = modal_frame(frame, area, theme.panel(), true, true);
+        let modal = modal_frame(frame, area, theme, true, true);
         modal_header_parts(frame, modal.header, &header, theme);
 
         let header_h = 1.min(modal.body.height);
@@ -197,7 +197,7 @@ pub fn draw_telemetry_modal(
 
                 let desired = body_lines.len() as u16 + modal_chrome_rows(geometry.modal_spec());
                 let area = content_modal_area(frame, geometry, desired);
-                let modal = modal_frame(frame, area, theme.panel(), true, true);
+                let modal = modal_frame(frame, area, theme, true, true);
                 modal_header_parts(frame, modal.header, &header, theme);
 
                 let rows: Vec<SelectableRow> = body_lines
@@ -226,7 +226,7 @@ pub fn draw_telemetry_modal(
 
                 let desired = (rows.len() + 3) as u16 + modal_chrome_rows(geometry.modal_spec());
                 let area = content_modal_area(frame, geometry, desired);
-                let modal = modal_frame(frame, area, theme.panel(), true, true);
+                let modal = modal_frame(frame, area, theme, true, true);
                 modal_header_parts(frame, modal.header, &header, theme);
 
                 // 1. Tab strip (Fixed at top)

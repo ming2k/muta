@@ -58,7 +58,7 @@ pub fn draw_todos_modal(
 
     let desired = selectable_body_desired_rows(frame, geometry, &rows);
     let area = content_modal_area(frame, geometry, desired);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     // Header: "Todos" title + trailing done/total counter
     if let Some(h) = f.header {

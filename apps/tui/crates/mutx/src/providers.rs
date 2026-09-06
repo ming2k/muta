@@ -392,13 +392,6 @@ fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// The context window (in tokens) of a model id, resolved from the registry.
-/// Returns `0` for unknown models. Replaces the former `provider_context_window`
-/// now that the picker carries the active model id directly.
-pub fn model_context_window(model: &str) -> usize {
-    muta_contracts::model::resolve(model).context_window
-}
-
 /// One selectable row in the **flat model picker** ([`crate::modal::Modal::Models`]
 /// equivalent): a single (provider, model) pair drawn from anywhere in the
 /// snapshot. Built by [`models_flat_filtered_from`]; the picker browses,
@@ -431,6 +424,8 @@ pub struct RankedModel {
     /// A model with usage history sorts into the **Recent** section
     /// (most-recently-used first).
     pub last_used_ms: Option<u64>,
+    /// Context window limit in tokens (ADR-0182).
+    pub context_window: usize,
     /// The fuzzy match against the model id, or `None` in browse mode (empty
     /// query) — and also when the row was included because its PROVIDER name
     /// matched the query but the model id did not (shown unhighlighted).
@@ -625,6 +620,7 @@ pub fn models_flat_filtered_from(
                 thinking: info.thinking,
                 favorite: info.favorite,
                 last_used_ms: info.last_used_ms,
+                context_window: info.context_window,
                 m,
             });
         }
@@ -785,6 +781,8 @@ mod tests {
             favorite: false,
             last_used_ms: None,
             vision: false,
+            context_window: 128_000,
+            max_output_tokens: None,
         }
     }
 

@@ -1071,6 +1071,7 @@ async fn control_create_observe_kill_roundtrip() {
         action: AttachAction::Control(serve::ControlRequest::CreateSession {
             project: "/tmp/x".into(),
             prompt: None,
+            init_options: None,
         }),
         project: None,
         posture: muta_contracts::human_request::HumanChannelPosture::Interactive,

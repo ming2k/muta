@@ -202,8 +202,8 @@ pub use master::{
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities,
-    RemoteModelMetadata, WireProtocol, baseline_models, model_by_id, register_fitted_models,
-    resolve as resolve_model, sanitize_model_id,
+    RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models, model_by_id,
+    register_fitted_models, resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
@@ -236,5 +236,5 @@ pub use web_config::{
 };
 pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,
-    MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Wire, protocol_accepts,
+    MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, SessionInitOptions, Wire, protocol_accepts,
 };

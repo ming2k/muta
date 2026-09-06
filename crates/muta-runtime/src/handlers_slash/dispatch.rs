@@ -8,7 +8,7 @@ use super::record::{
 };
 use super::schedule_ops::{
     SessionRoute, add_scheduled_job, cancel_scheduled_job, list_scheduled_jobs, parse_delegate_arg,
-    parse_jail_arg, session_route, split_schedule_spec,
+    parse_unconfined_arg, session_route, split_schedule_spec,
 };
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
@@ -167,35 +167,33 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::DelegatedChanged(enabled),
             ));
         }
-        Some(BuiltinCmd::Jail) => {
+        Some(BuiltinCmd::Unconfined) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-            let next = match parse_jail_arg(&arg) {
+            let next = match parse_unconfined_arg(&arg) {
                 Ok(next) => next,
                 Err(msg) => {
                     record_error(session, resp_tx, name, args, msg).await;
                     return;
                 }
             };
-            // A bare `/jail` (`None`) toggles the current state.
-            // Note: jail = true means confined; jail = false means unconfined.
-            let currently_jailed = !shared_unconfined.is_unconfined();
-            let jail_enabled = next.unwrap_or(!currently_jailed);
-            shared_unconfined.set_unconfined(!jail_enabled);
+            // A bare `/unconfined` (`None`) toggles the current state.
+            let next_unconfined = next.unwrap_or_else(|| !shared_unconfined.is_unconfined());
+            shared_unconfined.set_unconfined(next_unconfined);
 
-            let (title, detail) = if jail_enabled {
+            let (title, detail) = if next_unconfined {
                 (
-                    "Workspace Jail ON (Confined)",
+                    "Unconfined mode ON (Workspace Confinement Bypassed)",
                     vec![
-                        "File tools are confined to workspace root and temp paths".to_string(),
-                        "Escapes outside admitted roots will be blocked".to_string(),
+                        "Tools may access and edit any file on the host system".to_string(),
+                        "Constrained only by daemon OS user permissions".to_string(),
                     ],
                 )
             } else {
                 (
-                    "Workspace Jail OFF (Unconfined)",
+                    "Unconfined mode OFF (Workspace Confined)",
                     vec![
-                        "Tools may access and edit any file on the host system".to_string(),
-                        "Constrained only by daemon OS user permissions".to_string(),
+                        "File tools are confined to workspace root and temp paths".to_string(),
+                        "Escapes outside admitted roots will be blocked".to_string(),
                     ],
                 )
             };
@@ -212,7 +210,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             .await;
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::UnconfinedChanged(!jail_enabled),
+                RoundEvent::UnconfinedChanged(next_unconfined),
             ));
         }
         Some(BuiltinCmd::Master) => {

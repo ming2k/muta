@@ -133,7 +133,7 @@ pub(crate) struct SessionHead<'a> {
     /// `DELEGATED` tag on the right — the session's persistent mode flag.
     pub delegated: bool,
     /// `true` while the session runs in unconfined filesystem access mode
-    /// (`/jail off`). Shown as a warning-toned `UNCONFINED` tag on the right.
+    /// (`--unconfined` / `/unconfined on`). Shown as a warning-toned `UNCONFINED` tag on the right.
     pub unconfined: bool,
     /// When switching to another session, holds the target session id.
     pub switching_target: Option<&'a str>,

@@ -35,6 +35,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         startup,
         project_root: Some(project_root),
         delegated: false,
+        unconfined: false,
         teardown_token: None,
     }
 }
@@ -121,5 +122,30 @@ async fn delegated_off_after_on_persists_the_de_escalation() {
     assert!(
         !boot.agent.delegated(),
         "the last persisted posture (off) must win over the earlier on"
+    );
+}
+
+#[tokio::test]
+async fn session_init_options_applies_at_fresh_startup_without_command_ledger_entry() {
+    sandbox_once();
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("fresh-project");
+
+    let mut p = params(project, SessionStart::Fresh);
+    p.delegated = true;
+    p.unconfined = true;
+
+    let boot = bootstrap::assemble(p).await.expect("assemble succeeds");
+
+    assert!(boot.agent.delegated(), "agent must start delegated");
+    assert!(boot.session.delegated().await, "session data must persist delegated");
+    assert!(boot.shared_unconfined.is_unconfined(), "jail must be unconfined");
+
+    // Core architectural invariant: startup options must NOT inject fake
+    // harness commands into the session command ledger / transcript!
+    let commands = boot.session.commands().await;
+    assert!(
+        commands.is_empty(),
+        "command ledger must be clean at startup, but had: {commands:?}"
     );
 }

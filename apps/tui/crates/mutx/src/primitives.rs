@@ -4,11 +4,12 @@
 
 use crate::modal::Recess;
 use mutx_engine::{
-    Alignment, Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
-    {Block as RtBlock, Clear, Paragraph}, {Color, Span, Style},
+    Alignment, Constraint, Direction, Frame, Layout, Line, Rect,
+    {Block as RtBlock, Clear, Paragraph}, {Color, Style},
 };
 
 use super::Theme;
+pub(crate) use crate::elevation::*;
 pub(crate) use super::components::footer::{
     FooterHint, FooterHintWithBand, modal_footer_text, render_modal_footer,
     render_modal_footer_with_more,
@@ -17,16 +18,14 @@ pub(crate) use super::components::footer::{
 pub use super::components::path::{
     PathFormatStrategy, PathStyle, PathView, format_path_str, tilde_shorten,
 };
-#[cfg(test)]
-use super::design::PANEL_BAR_INSET;
-use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
+use super::design::{MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
 /// Canonical key-display vocabulary: named `&'static str` constants for the
 /// glyphs footers and legends repeat (`keyvocab::ESC`, `keyvocab::ARROWS_UD`,
 /// …). Re-exported here because every overlay already imports this module for
 /// `FooterHint`, so a footer's key + label both come from one place.
 pub(crate) use super::keymap::keyvocab;
 
-/// 2-tier responsive layout breakpoint for TUI views (ADR-0097 evolution).
+/// 2-tier responsive layout breakpoint for TUI views (ADR-0097 evolution, ADR-0181 capability pipeline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutTier {
     /// Wide display (>= 90 columns): dual-pane side-by-side (Master-Detail).
@@ -39,13 +38,27 @@ impl LayoutTier {
     /// Threshold width in columns where dual-pane layout makes sense.
     pub const WIDE_THRESHOLD: u16 = 90;
 
-    /// Resolve the layout tier from viewport width.
-    pub fn from_width(width: u16) -> Self {
-        if width >= Self::WIDE_THRESHOLD {
+    /// Resolve the layout tier from effective usable width after archetype spatial deduction (ADR-0181).
+    pub fn from_effective_width(effective_width: u16) -> Self {
+        if effective_width >= Self::WIDE_THRESHOLD {
             Self::Wide
         } else {
             Self::Compact
         }
+    }
+
+    /// Resolve the layout tier given raw rect and elevation archetype (ADR-0181).
+    /// Deducts archetype spatial cost (borders, structural margins) before evaluating breakpoint.
+    pub fn from_rect(rect: Rect, archetype: mutx_engine::ElevationArchetype) -> Self {
+        let inner = archetype.inner_bounds(rect);
+        Self::from_effective_width(inner.width)
+    }
+
+    /// Resolution from physical column width without capability awareness.
+    /// Prefer [`Self::from_rect`] in new code to account for capability spatial insets.
+    #[allow(dead_code)]
+    pub fn from_width(width: u16) -> Self {
+        Self::from_effective_width(width)
     }
 
     /// True if the layout is Wide.
@@ -374,97 +387,6 @@ fn scale_color(color: Color, factor: f32) -> Color {
     }
 }
 
-/// A borderless panel with a single thick colored left bar (opencode-style).
-pub(crate) fn panel_block(bar_color: Color, bg: Color) -> RtBlock<'static> {
-    RtBlock::default()
-        .borders(mutx_engine::Borders::LEFT)
-        .border_type(mutx_engine::BorderType::Thick)
-        .border_style(Style::default().fg(bar_color))
-        .style(Style::default().bg(bg))
-}
-
-/// Content rect inside a [`panel_block`]: starts one column right of the left
-/// `┃` bar and reserves a matching column on the right, so the panel's
-/// content is symmetric and a long line never touches either edge. Callers
-/// paint [`panel_block`] bare over the full `area` for the chrome, then
-/// render content into this rect — the left-bar-panel counterpart to how
-/// [`modal_frame`] insets the borderless modal family via
-/// `MODAL_INNER_H_PADDING`.
-#[cfg(test)]
-pub(crate) fn panel_inner(area: Rect) -> Rect {
-    area.inner(Margin {
-        horizontal: PANEL_BAR_INSET,
-        vertical: 0,
-    })
-}
-
-/// Section rects produced by [`modal_frame`]: the header and footer are
-/// `Option`al (omitted when the modal asked for none), and `body` is always
-/// present and flexes to fill whatever the header/footer leave behind.
-pub(crate) struct ModalFrame {
-    pub header: Option<Rect>,
-    pub body: Rect,
-    pub footer: Option<Rect>,
-}
-
-/// Render the unified modal title into the header rect produced by
-/// [`modal_frame`]. This is the single place every centered modal's
-/// `brand + BOLD` title is painted, so the header style no longer needs to be
-/// repeated per-component. The two-line variants (a muted breadcrumb followed
-/// by a brand title, e.g. `Configuration › Layout`) pass the parts via
-/// [`HeaderPart`]; the common case is a single [`HeaderPart::title`].
-pub(crate) fn modal_header(frame: &mut Frame, header: Option<Rect>, title: &str, theme: &Theme) {
-    modal_header_parts(frame, header, &[HeaderPart::title(title)], theme);
-}
-
-/// A styled segment of a modal header line, laid out left-to-right.
-#[derive(Clone, Copy)]
-pub(crate) enum HeaderPart<'a> {
-    /// The primary title: `brand` color, bold.
-    Title(&'a str),
-    /// A leading/trailing muted segment (e.g. the `Configuration › ` breadcrumb
-    /// or `← ` back affordance). `accent` makes it the brand tone instead.
-    Text { text: &'a str, accent: bool },
-}
-
-impl<'a> HeaderPart<'a> {
-    pub(crate) const fn title(text: &'a str) -> Self {
-        HeaderPart::Title(text)
-    }
-}
-
-/// Render a multi-part modal header. `parts` is laid out in order on one line.
-pub(crate) fn modal_header_parts(
-    frame: &mut Frame,
-    header: Option<Rect>,
-    parts: &[HeaderPart<'_>],
-    theme: &Theme,
-) {
-    let Some(h) = header else { return };
-    let spans: Vec<Span<'static>> = parts
-        .iter()
-        .map(|part| match *part {
-            HeaderPart::Title(text) => Span::styled(
-                text.to_string(),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            HeaderPart::Text { text, accent } => Span::styled(
-                text.to_string(),
-                if accent {
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.muted())
-                },
-            ),
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(Line::from(spans)), h);
-}
-
 /// The single separator glyph for a hierarchical (breadcrumb) modal header.
 /// Keeps every drill-in sub-page — `Sessions › Info`, `Settings › Layout`,
 /// `Settings › Appearance` — visually identical. Centralized (and `'static`)
@@ -573,64 +495,6 @@ pub(crate) fn hierarchical_breadcrumb<'a>(
     }
 
     vec![HeaderPart::title(levels[levels.len() - 1])]
-}
-
-/// Paint the unified modal chrome and split the content area into sections.
-///
-/// Every centered modal goes through this so the panel style lives in one
-/// place: a borderless solid-bg panel (no `┃` left bar) with
-/// `MODAL_INNER_H_PADDING`/`MODAL_INNER_V_PADDING` inner padding, then a
-/// vertical split into optional `header` (1 row) / `body` (flex) / optional
-/// 1-row gap + `footer` (1 row). The caller renders its own header / body /
-/// footer content into the returned rects.
-pub(crate) fn modal_frame(
-    frame: &mut Frame,
-    area: Rect,
-    bg: Color,
-    header: bool,
-    footer: bool,
-) -> ModalFrame {
-    frame.render_widget(Clear, area);
-    frame.render_widget(RtBlock::default().style(Style::default().bg(bg)), area);
-    let inner = area.inner(Margin {
-        horizontal: MODAL_INNER_H_PADDING,
-        vertical: MODAL_INNER_V_PADDING,
-    });
-
-    // Tagged constraints so we can map split chunks back to sections:
-    // 0 = header, 4 = gap after header, 1 = body, 2 = gap before footer,
-    // 3 = footer. Both gaps are 1 row so the body always sits one blank line
-    // below the header and one above the footer — regardless of which sections
-    // a modal asks for.
-    let mut tagged: Vec<(u8, Constraint)> = Vec::new();
-    if header {
-        tagged.push((0, Constraint::Length(1)));
-        tagged.push((4, Constraint::Length(1)));
-    }
-    tagged.push((1, Constraint::Min(0)));
-    if footer {
-        tagged.push((2, Constraint::Length(1)));
-        tagged.push((3, Constraint::Length(1)));
-    }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(tagged.iter().map(|(_, c)| *c))
-        .split(inner);
-
-    let mut out = ModalFrame {
-        header: None,
-        body: inner,
-        footer: None,
-    };
-    for (i, (tag, _)) in tagged.iter().enumerate() {
-        match tag {
-            0 => out.header = Some(chunks[i]),
-            1 => out.body = chunks[i],
-            3 => out.footer = Some(chunks[i]),
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Render a modal body with shared scroll mechanics. The `scroll` offset is
@@ -891,34 +755,9 @@ pub(crate) fn rgb(color: Color) -> (u8, u8, u8) {
 
 #[cfg(test)]
 mod tests {
-    //! `panel_inner` is the symmetric-inset contract for the left-bar-panel
-    //! family. Lock its geometry directly so a long overlay line can never
-    //! kiss the panel's right edge regardless of terminal width.
     use super::*;
+    use crate::design::MODAL_INNER_H_PADDING;
     use mutx_engine::{Frame, Rect, Style};
-
-    #[test]
-    fn panel_inner_insets_symmetrically_around_left_bar() {
-        // A 10-wide panel: the `┃` bar owns the first column, content starts
-        // one column in (clear of the bar) and ends one column short of the
-        // right edge (the bar's mirrored gutter).
-        let area = Rect::new(2, 3, 10, 5);
-        let inner = panel_inner(area);
-        assert_eq!(inner.x, 3, "content starts right after the ┃ bar");
-        assert_eq!(inner.width, 8, "10 − 2 (left bar + right gutter)");
-        assert_eq!(inner.y, 3);
-        assert_eq!(inner.height, 5, "no vertical inset");
-        // Content's right edge is exactly one short of the panel's right edge.
-        assert_eq!(inner.x + inner.width, area.x + area.width - 1);
-    }
-
-    #[test]
-    fn panel_inner_clamps_without_underflow() {
-        // A panel too narrow for the bar + gutter collapses to an empty rect
-        // at the panel's origin rather than underflowing the width.
-        let inner = panel_inner(Rect::new(0, 0, 1, 1));
-        assert_eq!(inner, Rect::new(0, 0, 0, 0));
-    }
 
     #[test]
     fn fixed_and_content_modal_specs_preserve_their_sizing_modes() {

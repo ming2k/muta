@@ -314,20 +314,6 @@ pub(crate) const BASH_FOLD_HEAD_ROWS: usize = 3;
 /// Trailing output lines kept visible below a folded bash middle.
 pub(crate) const BASH_FOLD_TAIL_ROWS: usize = 3;
 
-// ── Left-bar panels (panel_block family) ─────────────────────────────────
-// `panel_block` is a borderless solid-bg panel with a single thick colored
-// left `┃` bar — the severity/identity cue shared by the tool-step detail
-// overlay and the permission sheet. These tokens size the content rect
-// inside it, the left-bar-panel family's counterpart to `modal_frame`'s
-// `MODAL_INNER_H_PADDING` (which insets the borderless modal family).
-
-/// Per-side horizontal inset of `panel_block` content: the thick left `┃`
-/// bar occupies 1 column, and a matching 1-column gutter is reserved on the
-/// right so the panel's content is symmetric and a long line never runs
-/// into either edge.
-#[cfg(test)]
-pub(crate) const PANEL_BAR_INSET: u16 = 1;
-
 // ── Minimum terminal size ────────────────────────────────────────────────
 // Below this geometry the layout math (footer split, composer height, code
 // band gutters) would underflow or produce an unusable UI. Instead of drawing

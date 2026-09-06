@@ -61,6 +61,8 @@ pub struct BootstrapParams {
     pub project_root: Option<PathBuf>,
     /// `--delegate` at start (delegated autonomous execution): auto-approve all tool permissions.
     pub delegated: bool,
+    /// `--unconfined` at start (workspace filesystem confinement bypassed): unconfined file access.
+    pub unconfined: bool,
     /// ADR-0141: the human-channel accountant this session reports into.
     /// Attach/detach on the WS layer ORs client postures into it; the
     /// harness's posture gate reads it before parking a human request.
@@ -152,6 +154,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         startup,
         project_root: project_override,
         delegated: delegated_at_start,
+        unconfined: unconfined_at_start,
         human_channel,
         teardown_token,
     } = params;
@@ -605,6 +608,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
         let _ = resp_tx.send(round_response(
             &session.id().await,
+            RoundEvent::DelegatedChanged(true),
+        ));
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
             RoundEvent::Notice(
                 AgentNotice::new(
                     muta_contracts::NoticeKind::CommandAck,
@@ -612,10 +619,33 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                     "Delegated mode ON",
                     muta_contracts::NoticeSource::Harness,
                 )
-                .with_surface(muta_contracts::NoticeSurface::Inline)
+                .with_surface(muta_contracts::NoticeSurface::Toast)
                 .with_body(
                     "All tool permissions are auto-approved this session.\n\
                      Use `/delegate off` to return to interactive mode.",
+                ),
+            ),
+        ));
+    }
+    if unconfined_at_start {
+        shared_unconfined.set_unconfined(true);
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::UnconfinedChanged(true),
+        ));
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    muta_contracts::NoticeKind::CommandAck,
+                    muta_contracts::NoticeSeverity::Warning,
+                    "Unconfined mode ON",
+                    muta_contracts::NoticeSource::Harness,
+                )
+                .with_surface(muta_contracts::NoticeSurface::Toast)
+                .with_body(
+                    "Tools may access and edit any file on the host system.\n\
+                     Use `/unconfined off` to restore workspace confinement.",
                 ),
             ),
         ));

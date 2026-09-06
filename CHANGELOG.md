@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Remove `Ctrl+Q` instant quit shortcut.** Quitting the TUI session is now exclusively guarded by the double-press `Ctrl+C` confirmation window (`App::CTRL_C_ARM_WINDOW`) or explicit `/exit` slash command, preventing accidental session termination from a single `Ctrl+Q` keypress.
+
 ## [0.38.16] - 2026-09-07
 
 ### Refactored

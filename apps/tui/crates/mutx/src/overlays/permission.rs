@@ -66,7 +66,7 @@ pub fn draw_question_modal(
     // the same bottom edge, extended over the hint bar — not centered over
     // the surface. The body scrolls within whatever height the slot leaves.
     let area = slot;
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     let question = request.questions.get(current_question);
     let total = request.questions.len();
@@ -516,7 +516,7 @@ pub fn draw_permission_sheet(
     hit_map.set_permission_sheet(area);
 
     frame.render_widget(Clear, area);
-    frame.render_widget(panel_block(theme.warn(), theme.panel()), area);
+    frame.render_widget(panel_block(theme, theme.warn(), theme.panel()), area);
 
     let content_x = area.x + 1 + PERMISSION_H_PADDING;
     let body_area = Rect::new(

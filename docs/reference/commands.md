@@ -18,7 +18,7 @@ Project and user-defined commands are covered under
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/delegate [on\|off]` | Toggle delegated autonomous execution mode (aliases: `/auto`, `/yolo`) |
-| `/jail [on\|off]` | Toggle workspace filesystem confinement (jail) for this session (aliases: `/unconfined`, `/escape`) |
+| `/unconfined [on\|off]` | Toggle workspace filesystem confinement (unconfined file access) for this session (aliases: `/jail`, `/escape`) |
 | `/master <code\|architect\|reviewer\|security>` | Switch the master preset — changes persona and capability scope |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
@@ -45,7 +45,7 @@ Project and user-defined commands are covered under
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
 | `/help` | Show available commands and keybindings |
-| `/exit` | Exit the program |
+| `/exit` | Exit the program (mirrors the app-wide double `Ctrl+C` quit gesture) |
 
 Several interactive management commands, including `/models`, `/connections`,
 `/permissions`, `/tools`, `/mcp`, `/skills`, and `/settings`, are handled in the

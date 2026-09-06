@@ -337,6 +337,54 @@ impl App {
         )
     }
 
+    /// Return the authoritative model info for the currently active route
+    /// (current_provider, current_model) as projected by the daemon (ADR-0182).
+    pub fn active_model_info(&self) -> Option<&muta_contracts::ProviderModelInfo> {
+        self.provider_picker
+            .rows
+            .iter()
+            .find(|row| row.id == self.current_provider)
+            .and_then(|row| {
+                row.model_info
+                    .iter()
+                    .find(|info| info.model == self.current_model)
+            })
+    }
+
+    /// Return the authoritative route capabilities for the active route (ADR-0182).
+    pub fn active_route_capabilities(&self) -> muta_contracts::RouteCapabilities {
+        self.active_model_info()
+            .map(|info| info.route_capabilities())
+            .unwrap_or_else(|| {
+                let m = muta_contracts::model::resolve(&self.current_model);
+                muta_contracts::RouteCapabilities {
+                    context_window: m.context_window,
+                    max_output_tokens: None,
+                    vision: m.vision,
+                    tool_call: m.tool_call,
+                    thinking: m.thinking,
+                }
+            })
+    }
+
+    /// Return the authoritative context window (in tokens) for the active route.
+    /// Evaluated daemon-side via ADR-0149 (ADR-0182). Falls back to static
+    /// baseline only when the snapshot has not mounted.
+    pub fn active_model_context_window(&self) -> usize {
+        let cw = self.active_route_capabilities().context_window;
+        if cw > 0 {
+            cw
+        } else {
+            muta_contracts::model::resolve(&self.current_model).context_window
+        }
+    }
+
+    /// Whether the active route accepts image input. Uses daemon-projected
+    /// capabilities from ProviderModelInfo, falling back to static registry.
+    pub fn active_model_supports_vision(&self) -> bool {
+        self.active_route_capabilities().vision
+    }
+
     /// Whether the provider with this snapshot id is user-defined (not a
     /// built-in preset). Drives the Connections `e`/`Shift+D` routing and the
     /// Models `d` (remove-model) gate.

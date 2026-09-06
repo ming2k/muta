@@ -50,7 +50,7 @@ pub fn draw_models_modal(
         search,
     } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     let header_rect = f.header;
 

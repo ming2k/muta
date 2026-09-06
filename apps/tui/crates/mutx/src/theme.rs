@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use muta_contracts::{ColorSchemeConfig, ComponentThemesConfig, ThemeFile};
-use mutx_engine::Color;
+use mutx_engine::{Color, Modifier, Style};
 
 /// Metadata for one color scheme shown by the Appearance config page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +202,8 @@ pub struct Theme {
     pub keycap_warn_fg: Color,
     /// Typography and glyph set (ADR-0180).
     pub glyphs: mutx_engine::GlyphSet,
+    /// Visual elevation archetype governing container framing and spatial insets (ADR-0181).
+    pub elevation: mutx_engine::ElevationArchetype,
 }
 
 impl Default for Theme {
@@ -255,6 +257,7 @@ impl Default for Theme {
             keycap_accent_fg: DEFAULT_KEYCAP_ACCENT_FG,
             keycap_warn_fg: DEFAULT_KEYCAP_WARN_FG,
             glyphs: mutx_engine::UNICODE_GLYPHS,
+            elevation: mutx_engine::ElevationArchetype::Chromatic,
         }
     }
 }
@@ -313,6 +316,7 @@ impl Theme {
             keycap_accent_fg: Color::LightGreen,
             keycap_warn_fg: Color::LightYellow,
             glyphs: mutx_engine::UNICODE_GLYPHS,
+            elevation: mutx_engine::ElevationArchetype::Hybrid,
         }
     }
 
@@ -367,6 +371,7 @@ impl Theme {
             keycap_accent_fg: Color::Reset,
             keycap_warn_fg: Color::Reset,
             glyphs: mutx_engine::ASCII_GLYPHS,
+            elevation: mutx_engine::ElevationArchetype::Structured,
         }
     }
 
@@ -392,6 +397,7 @@ impl Theme {
             }
         };
         theme.glyphs = mutx_engine::GlyphSet::for_standard(profile.charset_standard);
+        theme.elevation = profile.elevation_archetype();
         theme
     }
 
@@ -765,6 +771,7 @@ impl Theme {
             keycap_accent_fg: mix(accent, text, 0.25),
             keycap_warn_fg: mix(warning, text, 0.15),
             glyphs: mutx_engine::UNICODE_GLYPHS,
+            elevation: mutx_engine::ElevationArchetype::Chromatic,
         }
     }
 
@@ -819,6 +826,49 @@ impl Theme {
     /// Selection highlight background.
     pub fn selected(&self) -> Color {
         self.selected_bg
+    }
+
+    /// Style for a selectable item/row given its selected state (ADR-0180, ADR-0181).
+    /// - Under `Structured` (Monochrome/VT100/Linux VT): applies DEC VT100 `Modifier::REVERSE` so the
+    ///   selected/focused item is unmistakably visible without relying on background colors.
+    /// - Under `Hybrid`: applies standard 16-color highlight and bold.
+    /// - Under `Chromatic`: applies `theme.selected_bg` background tint.
+    pub fn selection_style(&self, selected: bool) -> Style {
+        if !selected {
+            return Style::default();
+        }
+        match self.elevation {
+            mutx_engine::ElevationArchetype::Structured => {
+                Style::default().add_modifier(Modifier::REVERSE)
+            }
+            mutx_engine::ElevationArchetype::Hybrid => {
+                Style::default()
+                    .bg(self.selected_bg)
+                    .fg(self.text)
+                    .add_modifier(Modifier::BOLD)
+            }
+            mutx_engine::ElevationArchetype::Chromatic => {
+                Style::default().bg(self.selected_bg)
+            }
+        }
+    }
+
+    /// Style for an interactive element with focus (ADR-0180, ADR-0181).
+    pub fn focus_style(&self, focused: bool) -> Style {
+        if !focused {
+            return Style::default();
+        }
+        match self.elevation {
+            mutx_engine::ElevationArchetype::Structured => {
+                Style::default().add_modifier(Modifier::REVERSE)
+            }
+            mutx_engine::ElevationArchetype::Hybrid => {
+                Style::default().add_modifier(Modifier::BOLD)
+            }
+            mutx_engine::ElevationArchetype::Chromatic => {
+                Style::default().fg(self.brand()).add_modifier(Modifier::BOLD)
+            }
+        }
     }
 
     // ── Foregrounds ──

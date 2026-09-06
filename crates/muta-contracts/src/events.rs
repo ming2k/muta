@@ -1276,8 +1276,8 @@ pub enum RoundEvent {
     /// the TUI can refresh its badge without waiting for the next harness snapshot.
     #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
     DelegatedChanged(bool),
-    /// The workspace confinement (jail) toggle changed. `true` = unconfined
-    /// (jail OFF / sandbox bypassed). Emitted by `/jail` so the TUI can refresh its
+    /// The workspace confinement toggle changed. `true` = unconfined
+    /// (confinement bypassed). Emitted by `/unconfined` so the TUI can refresh its
     /// badge without waiting for the next harness snapshot.
     #[serde(alias = "JailChanged")]
     UnconfinedChanged(bool),
@@ -1428,8 +1428,8 @@ pub struct HarnessSnapshot {
     /// visible badge so the elevated state is never silent.
     #[serde(default, alias = "yolo", alias = "autopilot")]
     pub delegated: bool,
-    /// Whether workspace filesystem confinement (jail) is bypassed this session
-    /// (`/jail off`). The TUI mirrors this into an `UNCONFINED` badge so the
+    /// Whether workspace filesystem confinement is bypassed this session
+    /// (`/unconfined on` / `--unconfined`). The TUI mirrors this into an `UNCONFINED` badge so the
     /// elevated filesystem access is never silent.
     #[serde(default, alias = "jail_disabled")]
     pub unconfined: bool,
@@ -1623,6 +1623,31 @@ pub struct ProviderModelInfo {
     /// routes. `false`-defaulted so older snapshots gate conservatively.
     #[serde(default)]
     pub vision: bool,
+    /// Effective context window in tokens for this route — the **full**
+    /// ADR-0149 capability resolution (ADR-0182). Guaranteed > 0 for valid
+    /// channels; 0 indicates an unresolved fallback.
+    #[serde(default)]
+    pub context_window: usize,
+    /// Maximum output generation tokens for this route when declared or overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+}
+
+impl ProviderModelInfo {
+    /// Extract the materialized route capabilities from this model info row (ADR-0182).
+    pub fn route_capabilities(&self) -> crate::RouteCapabilities {
+        crate::RouteCapabilities {
+            context_window: self.context_window,
+            max_output_tokens: self.max_output_tokens,
+            vision: self.vision,
+            tool_call: true,
+            thinking: if self.thinking == Some(true) {
+                crate::ThinkingSupport::AnthropicAdaptive
+            } else {
+                crate::ThinkingSupport::None
+            },
+        }
+    }
 }
 
 /// Full snapshot of provider-picker state: which provider is the current

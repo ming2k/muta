@@ -76,6 +76,7 @@ pub(crate) mod markdown_table;
 pub(crate) mod message_body;
 pub(crate) mod notice;
 pub(crate) mod primitives;
+pub(crate) mod elevation;
 pub(crate) mod view_header;
 
 pub(crate) mod text_layout;

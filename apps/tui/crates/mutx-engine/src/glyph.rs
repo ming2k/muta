@@ -67,6 +67,15 @@ impl GlyphSet {
             self.spinner_frames[phase % self.spinner_frames.len()]
         }
     }
+
+    /// Resolve the matching [`crate::widgets::BorderType`] for this glyph set.
+    pub const fn border_type(&self) -> crate::widgets::BorderType {
+        if self.border_v.len() == 1 && self.border_v.as_bytes()[0] == b'|' {
+            crate::widgets::BorderType::Ascii
+        } else {
+            crate::widgets::BorderType::Plain
+        }
+    }
 }
 
 /// Standard modern ISO/IEC 10646 (UTF-8) glyph set.

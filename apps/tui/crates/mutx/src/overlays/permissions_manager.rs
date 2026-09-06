@@ -36,7 +36,7 @@ pub fn draw_permissions_manager(
     };
     let desired = content_lines + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     // ── Header ──
     modal_header(frame, f.header, "Permissions", theme);

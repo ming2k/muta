@@ -259,15 +259,18 @@ define_builtin_commands! {
             ("off", "Return to interactive confirmation mode"),
         ],
     },
-    Jail = "/jail" : {
-        summary: "Toggle workspace filesystem confinement (jail) for this session",
-        usage: ["/jail", "/jail on", "/jail off"],
-        examples: [("/jail off", "Disable workspace jail (unconfined file access)"), ("/jail on", "Enable workspace jail (confine to workspace)")],
-        intent_keywords: ["jail", "confinement", "escape", "unconfined", "sandbox"],
+    Unconfined = "/unconfined" : {
+        summary: "Toggle workspace filesystem confinement (unconfined file access)",
+        usage: ["/unconfined", "/unconfined on", "/unconfined off"],
+        examples: [
+            ("/unconfined on", "Enable unconfined file access (bypass workspace boundaries)"),
+            ("/unconfined off", "Disable unconfined access (confine file tools to workspace)"),
+        ],
+        intent_keywords: ["unconfined", "confinement", "jail", "escape", "sandbox"],
         category: Automation,
         subcommands: [
-            ("on", "Enable workspace confinement (confine to workspace)"),
-            ("off", "Disable workspace confinement (allow full host filesystem access)"),
+            ("on", "Enable unconfined access (allow full host filesystem access)"),
+            ("off", "Disable unconfined access (confine to workspace)"),
         ],
     },
     Master = "/master" : {
@@ -502,6 +505,8 @@ impl BuiltinCmd {
             "/config" => Some(BuiltinCmd::Settings),
             // `/yolo`, `/auto`, `/autopilot` are aliases for `/delegate` (delegated autonomous execution).
             "/yolo" | "/auto" | "/autopilot" => Some(BuiltinCmd::Delegate),
+            // `/jail`, `/escape` are aliases for `/unconfined` (workspace confinement bypass).
+            "/jail" | "/escape" => Some(BuiltinCmd::Unconfined),
             _ => None,
         }
     }
@@ -645,8 +650,8 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/yolo", "/delegate"),
             ("/auto", "/delegate"),
             ("/autopilot", "/delegate"),
-            ("/unconfined", "/jail"),
-            ("/escape", "/jail"),
+            ("/jail", "/unconfined"),
+            ("/escape", "/unconfined"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

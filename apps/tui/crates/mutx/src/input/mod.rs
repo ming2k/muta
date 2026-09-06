@@ -1250,7 +1250,7 @@ pub fn process_event(
             let physical_key = crate::keymap::Key::from_event(key);
 
             // ── Stage 5: Global Hard-Bound Shortcuts ──────────────────────────
-            // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt), Ctrl+Q (Quit), CopySelection
+            // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt/Quit), CopySelection
             if let Some(cmd_id) =
                 crate::keymap::resolve_global_key_with(physical_key, &context.key_overrides)
             {
@@ -1290,13 +1290,7 @@ pub fn process_event(
                         }
                     }
                     crate::keymap::CommandId::InterruptTask => return InputAction::Interrupt,
-                    crate::keymap::CommandId::Quit => {
-                        if physical_key == crate::keymap::Key::CTRL_Q {
-                            return InputAction::Quit;
-                        } else {
-                            return InputAction::CtrlC;
-                        }
-                    }
+                    crate::keymap::CommandId::Quit => return InputAction::CtrlC,
                     crate::keymap::CommandId::CopySelection => return InputAction::CopySelection,
                     _ => {}
                 }
@@ -1306,7 +1300,7 @@ pub fn process_event(
             // four navigation keys map to dedicated PreAttach actions
             // and everything else is swallowed (no chat composer,
             // modal, or sheet behind the surface). Global chords
-            // (Ctrl+C, Ctrl+Q) still resolve above as escape hatches,
+            // (Ctrl+C) still resolve above as escape hatches,
             // which is consistent with how SessionsPicker handles
             // them — the operator always has a force-quit path.
             if context.pre_attach_active {

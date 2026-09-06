@@ -1,5 +1,5 @@
 use super::schedule_ops::{
-    SessionRoute, parse_delegate_arg, parse_jail_arg, session_route, split_schedule_spec,
+    SessionRoute, parse_delegate_arg, parse_unconfined_arg, session_route, split_schedule_spec,
 };
 use super::security_ops::{TrustRoute, parse_trust_domain, trust_route};
 
@@ -245,19 +245,19 @@ mod delegate_arg_tests {
 }
 
 #[cfg(test)]
-mod jail_arg_tests {
-    use super::parse_jail_arg;
+mod unconfined_arg_tests {
+    use super::parse_unconfined_arg;
 
     #[test]
     fn empty_arg_is_toggle() {
-        assert_eq!(parse_jail_arg(""), Ok(None));
-        assert_eq!(parse_jail_arg("   "), Ok(None));
+        assert_eq!(parse_unconfined_arg(""), Ok(None));
+        assert_eq!(parse_unconfined_arg("   "), Ok(None));
     }
 
     #[test]
     fn enable_forms() {
-        for s in ["on", "true", "1", "enable", "enabled", "confined", "jail"] {
-            assert_eq!(parse_jail_arg(s), Ok(Some(true)), "failed on {s:?}");
+        for s in ["on", "true", "1", "enable", "enabled", "unconfined", "escape"] {
+            assert_eq!(parse_unconfined_arg(s), Ok(Some(true)), "failed on {s:?}");
         }
     }
 
@@ -269,18 +269,18 @@ mod jail_arg_tests {
             "0",
             "disable",
             "disabled",
-            "unconfined",
-            "escape",
+            "confined",
+            "jail",
         ] {
-            assert_eq!(parse_jail_arg(s), Ok(Some(false)), "failed on {s:?}");
+            assert_eq!(parse_unconfined_arg(s), Ok(Some(false)), "failed on {s:?}");
         }
     }
 
     #[test]
     fn unknown_forms_error() {
-        assert!(parse_jail_arg("yes").is_err());
-        assert!(parse_jail_arg("no").is_err());
-        assert!(parse_jail_arg("sandbox").is_err());
+        assert!(parse_unconfined_arg("yes").is_err());
+        assert!(parse_unconfined_arg("no").is_err());
+        assert!(parse_unconfined_arg("sandbox").is_err());
     }
 }
 

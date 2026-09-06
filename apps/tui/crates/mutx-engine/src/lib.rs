@@ -68,5 +68,7 @@ pub use frame::{CursorState, Frame, Terminal, TestTerminal, Widget};
 pub use glyph::{ASCII_GLYPHS, GlyphSet, UNICODE_GLYPHS};
 pub use grid::{Fit, Grid, Pos};
 pub use layout::{Constraint, Direction, Layout, Margin, Rect};
-pub use profile::{CharsetStandard, ColorStandard, TerminalProfile};
+pub use profile::{
+    CharsetStandard, ColorStandard, ElevationArchetype, SpatialCost, TerminalProfile,
+};
 pub use widgets::{Alignment, Block, BorderType, Borders, Clear, Line, Paragraph, Span, Wrap};

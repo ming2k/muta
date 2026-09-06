@@ -496,6 +496,43 @@ fn model_bar_renders_model_and_context() {
 }
 
 #[test]
+fn model_bar_renders_context_gauge_for_projected_route_context_window() {
+    // ADR-0182: A dynamically discovered relay model (e.g. glm-5.3 via opencode-go)
+    // passes its projected route context_window. Even though the model is unknown
+    // to the static baseline registry, the context gauge renders correctly.
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(100, 3);
+    terminal.draw(|f| {
+        draw_model_bar(
+            f,
+            Rect::new(0, 2, 100, 1),
+            ModelBarView {
+                current_model: "glm-5.3",
+                model_available: true,
+                provider_name: Some("opencode-go"),
+                context_tokens: Some(50_000),
+                context_window: 1_000_000,
+                ..Default::default()
+            },
+            &theme,
+            &crate::keymap::GlobalOverrides::default(),
+        );
+    });
+    let buf = terminal.buffer();
+    let text = (0..buf.area().width as usize)
+        .map(|x| buf.content[2 * 100 + x].symbol().to_string())
+        .collect::<String>();
+    assert!(
+        text.contains("50.0k") && text.contains("(5%)"),
+        "context gauge must be rendered for projected context_window: {text:?}"
+    );
+    assert!(
+        text.contains("glm-5.3 @opencode-go"),
+        "identity must be rendered: {text:?}"
+    );
+}
+
+#[test]
 fn model_bar_renders_unavailable_model_indicator() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 1);

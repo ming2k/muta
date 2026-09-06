@@ -16,13 +16,13 @@
 
 use muta_contracts::HistoryEntry;
 use mutx_engine::{
-    Block as RtBlock, Clear as RtClear, Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
+    Clear as RtClear, Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
 };
 
 use super::common::truncate_ellipsis;
 use crate::fuzzy::FuzzyMatch;
 use crate::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keyvocab, render_body,
+    ElevationContainer, FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keyvocab, render_body,
     render_modal_footer_with_more,
 };
 use crate::view::Theme;
@@ -121,34 +121,30 @@ pub fn draw_history_panel(
     // read as selection/severity, which a history list is not. The edges are
     // painted by the same panel fill (no half-block `▄`/`▀` glyphs), so the
     // transition is identical across terminals.
-    let panel_bg = theme.panel();
-    let inner_w = area.width;
     frame.render_widget(RtClear, area);
-    frame.render_widget(
-        RtBlock::default().style(Style::default().bg(panel_bg)),
-        area,
-    );
+    let inner = ElevationContainer::overlay().render(frame, area, theme);
+    let inner_w = inner.width;
 
     // Header row: title + live query echo + counts. Sits just inside the top
     // transition row, full width (no left-accent column to inset around).
-    let header_rect = Rect::new(area.x, area.y + 1, inner_w, 1);
-    let footer_rect = Rect::new(area.x, area.y + area.height.saturating_sub(2), inner_w, 1);
+    let header_rect = Rect::new(inner.x, inner.y + 1, inner_w, 1);
+    let footer_rect = Rect::new(inner.x, inner.y + inner.height.saturating_sub(2), inner_w, 1);
     // Body sits between header and footer.
-    let body_rect = if area.height >= CHROME_ROWS {
+    let body_rect = if inner.height >= CHROME_ROWS {
         Rect::new(
-            area.x,
+            inner.x,
             header_rect.y + 1,
             inner_w,
-            area.height.saturating_sub(CHROME_ROWS),
+            inner.height.saturating_sub(CHROME_ROWS),
         )
     } else {
         // Degenerate tiny terminal: give the body whatever is left after the
         // top transition + header so the list is still visible.
         Rect::new(
-            area.x,
+            inner.x,
             header_rect.y + 1,
             inner_w,
-            area.height.saturating_sub(2),
+            inner.height.saturating_sub(2),
         )
     };
 
@@ -250,6 +246,7 @@ fn list_body<'a>(
     const ROW_NUM_COLS: usize = 6;
     for (row, (orig_idx, m)) in ranked.iter().enumerate() {
         let is_selected = row == modal_index;
+        let is_structured = theme.elevation.is_structured();
         let bg = if is_selected {
             theme.brand()
         } else {
@@ -260,22 +257,32 @@ fn list_body<'a>(
         } else {
             theme.fg()
         };
-        let num_style = if is_selected {
-            Style::default().bg(bg).fg(contrast_fg(theme.brand()))
+        let (num_style, base_style, matched_style) = if is_selected {
+            if is_structured {
+                (
+                    Style::default().add_modifier(Modifier::REVERSE),
+                    Style::default().add_modifier(Modifier::REVERSE),
+                    Style::default().add_modifier(Modifier::REVERSE | Modifier::UNDERLINED),
+                )
+            } else {
+                (
+                    Style::default().bg(bg).fg(contrast_fg(theme.brand())),
+                    Style::default().bg(bg).fg(fg),
+                    Style::default()
+                        .bg(bg)
+                        .fg(contrast_fg(theme.brand()))
+                        .add_modifier(Modifier::UNDERLINED),
+                )
+            }
         } else {
-            Style::default().fg(theme.muted())
-        };
-        let base_style = Style::default().bg(bg).fg(fg);
-        let matched_style = if is_selected {
-            Style::default()
-                .bg(bg)
-                .fg(contrast_fg(theme.brand()))
-                .add_modifier(Modifier::UNDERLINED)
-        } else {
-            Style::default()
-                .bg(bg)
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
+            (
+                Style::default().fg(theme.muted()),
+                Style::default().bg(bg).fg(fg),
+                Style::default()
+                    .bg(bg)
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            )
         };
 
         let raw = history
@@ -313,7 +320,12 @@ fn list_body<'a>(
             spans.push(Span::styled(c.to_string(), style));
         }
         if multiline {
-            spans.push(Span::styled(" ↵", Style::default().bg(bg).fg(num_style.fg)));
+            let multi_style = if is_selected && is_structured {
+                Style::default().add_modifier(Modifier::REVERSE)
+            } else {
+                Style::default().bg(bg).fg(num_style.fg)
+            };
+            spans.push(Span::styled(" ↵", multi_style));
         }
         body.push(Line::from(spans));
     }

@@ -1,10 +1,10 @@
 //! The floating completion popup menu anchored above the composer input.
 
-use mutx_engine::{Block as RtBlock, Clear, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
+use mutx_engine::{Clear, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::model::layout::LayoutMap;
-use crate::primitives::{contrast_fg, viewport_rect};
+use crate::primitives::{ElevationContainer, contrast_fg, viewport_rect};
 use crate::view::Theme;
 
 /// Draw a completion menu anchored above the input box.
@@ -79,8 +79,8 @@ pub fn draw_completion_menu(
         }
     }
 
-    let block = RtBlock::default().style(Style::default().bg(theme.body()));
-    let menu_w = menu_area.width as usize;
+    let inner_menu = ElevationContainer::overlay().render(frame, menu_area, theme);
+    let menu_w = inner_menu.width as usize;
 
     let lines: Vec<Line> = visible_rows
         .iter()
@@ -93,10 +93,14 @@ pub fn draw_completion_menu(
             let is_alias = matches!(c.kind, crate::completion::CompletionItemKind::SlashAlias)
                 || c.alias_of.is_some();
             let cmd_style = if is_selected {
-                Style::default()
-                    .bg(row_bg)
-                    .fg(contrast_fg(theme.brand()))
-                    .add_modifier(Modifier::BOLD)
+                if theme.elevation.is_structured() {
+                    Style::default().add_modifier(Modifier::REVERSE | Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .bg(row_bg)
+                        .fg(contrast_fg(theme.brand()))
+                        .add_modifier(Modifier::BOLD)
+                }
             } else if matches!(
                 c.kind,
                 crate::completion::CompletionItemKind::IntentSuggestion { .. }
@@ -125,7 +129,11 @@ pub fn draw_completion_menu(
                 _ => (c.label.clone(), String::new()),
             };
             let secondary_style = if is_selected {
-                Style::default().bg(row_bg).fg(contrast_fg(theme.brand()))
+                if theme.elevation.is_structured() {
+                    Style::default().add_modifier(Modifier::REVERSE)
+                } else {
+                    Style::default().bg(row_bg).fg(contrast_fg(theme.brand()))
+                }
             } else {
                 Style::default().bg(row_bg).fg(theme.muted())
             };
@@ -137,13 +145,18 @@ pub fn draw_completion_menu(
                 spans.push(Span::styled(secondary, secondary_style));
             }
             if pad > 0 {
-                spans.push(Span::styled(" ".repeat(pad), Style::default().bg(row_bg)));
+                let pad_style = if is_selected && theme.elevation.is_structured() {
+                    Style::default().add_modifier(Modifier::REVERSE)
+                } else {
+                    Style::default().bg(row_bg)
+                };
+                spans.push(Span::styled(" ".repeat(pad), pad_style));
             }
             Line::from(spans)
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines).block(block), menu_area);
+    frame.render_widget(Paragraph::new(lines), inner_menu);
 
     if let Some(doc) = active_doc {
         let space_on_right =
@@ -259,8 +272,9 @@ pub fn draw_completion_menu(
             let doc_area = Rect::new(doc_x, doc_y, doc_width, doc_height);
             frame.render_widget(Clear, doc_area);
 
-            let doc_w = doc_width as usize;
-            let padded_doc_lines: Vec<Line> = (0..doc_height as usize)
+            let inner_doc = ElevationContainer::card().render(frame, doc_area, theme);
+            let doc_w = inner_doc.width as usize;
+            let padded_doc_lines: Vec<Line> = (0..inner_doc.height as usize)
                 .map(|idx| {
                     if let Some(mut line) = insp_lines.get(idx).cloned() {
                         let cur_w = line.width();
@@ -280,8 +294,7 @@ pub fn draw_completion_menu(
                 })
                 .collect();
 
-            let doc_block = RtBlock::default().style(Style::default().bg(doc_bg));
-            frame.render_widget(Paragraph::new(padded_doc_lines).block(doc_block), doc_area);
+            frame.render_widget(Paragraph::new(padded_doc_lines), inner_doc);
         }
     }
 }

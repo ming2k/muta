@@ -175,6 +175,7 @@ async fn dispatch_create(app: &mut App, runtime: &UiRuntime, raw: &str, text: Op
         let outcome = discover_and_control(muta_runtime::serve::ControlRequest::CreateSession {
             project,
             prompt: text,
+            init_options: None,
         })
         .await;
         let line = match outcome {

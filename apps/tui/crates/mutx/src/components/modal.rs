@@ -49,7 +49,7 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
             content_modal_area(frame, geometry, desired)
         }
     };
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let f = modal_frame(frame, area, theme, true, true);
 
     match page.header {
         ModalHeader::Title(title) => {

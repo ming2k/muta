@@ -29,7 +29,7 @@ pub fn draw_help_modal(
 ) -> Rect {
     let spec = FixedModalSpec::HELP;
     let outer_rect = modal_area(frame, spec);
-    let f = modal_frame(frame, outer_rect, theme.panel(), true, true);
+    let f = modal_frame(frame, outer_rect, theme, true, true);
 
     modal_header(frame, f.header, "Help & Key Reference (F1)", theme);
 

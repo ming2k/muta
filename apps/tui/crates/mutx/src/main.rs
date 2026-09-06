@@ -71,6 +71,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mode,
         project: project_override,
         delegated: delegated_at_start,
+        unconfined: unconfined_at_start,
         interactive,
         prompt,
         json: _,
@@ -94,7 +95,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print!("{}", cli::completion_script(shell));
             Ok(())
         }
-        Mode::Dashboard => run_dashboard(project_override, delegated_at_start).await,
+        Mode::Dashboard => {
+            run_dashboard(project_override, delegated_at_start, unconfined_at_start).await
+        }
         Mode::Settings { category } => {
             let cat_str = category.or_else(|| {
                 std::env::var("MUTX_SETTINGS_NAV")
@@ -111,6 +114,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 true,
                 project_override,
                 delegated_at_start,
+                unconfined_at_start,
                 mutx::StartupOverlay::Settings { category: cat },
                 prompt,
             )
@@ -124,6 +128,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 false,
                 project_override,
                 delegated_at_start,
+                unconfined_at_start,
                 overlay,
                 None,
             )
@@ -139,6 +144,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     true,
                     project_override,
                     delegated_at_start,
+                    unconfined_at_start,
                     overlay,
                     Some(prompt),
                 )
@@ -149,6 +155,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     parsed.json,
                     project_override,
                     delegated_at_start,
+                    unconfined_at_start,
                     remote,
                     token,
                 )
@@ -163,6 +170,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 true,
                 project_override,
                 delegated_at_start,
+                unconfined_at_start,
                 overlay,
                 prompt,
             )
@@ -221,6 +229,7 @@ async fn save_history_bounded(history: Vec<muta_contracts::HistoryEntry>, dedup:
 async fn run_dashboard(
     project_override: Option<PathBuf>,
     delegated_at_start: bool,
+    unconfined_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
         .clone()
@@ -261,6 +270,7 @@ async fn run_dashboard(
         false,
         project_override,
         delegated_at_start,
+        unconfined_at_start,
         mutx::StartupOverlay::Dashboard,
         None,
     )
@@ -277,6 +287,7 @@ async fn run_attached(
     fresh: bool,
     project_override: Option<PathBuf>,
     delegated_at_start: bool,
+    unconfined_at_start: bool,
     initial_overlay: mutx::StartupOverlay,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -298,18 +309,25 @@ async fn run_attached(
     // connect opens the TUI sessions picker over a throwaway carrier; the
     // picker's `/sessions <id>` exit re-attaches through `switch_to`.
     let mut pick_pending = session_id.is_none() && !fresh;
-    let mut delegated_pending = delegated_at_start;
     // The startup overlay (dashboard, settings, sessions picker) raises on
     // the first TUI entry only; a `/host` switch re-attaches into an ordinary
     // conversation view (the overlay does not re-arm).
     let mut startup_overlay_pending = initial_overlay;
+    let init_options = muta_contracts::SessionInitOptions::new(
+        delegated_at_start,
+        unconfined_at_start,
+    );
     // Re-attach loop: returning from the TUI with a `/host` switch target
     // re-connects to that session instead of exiting (ADR-0096).
     loop {
         let action = match &target {
             Some(id) => client::AttachAction::Attach(Some(id.clone())),
             // Bare `mutx` asks for a brand-new session unconditionally.
-            None if fresh_pending => client::AttachAction::New,
+            None if fresh_pending => client::AttachAction::New(if init_options.is_default() {
+                None
+            } else {
+                Some(init_options.clone())
+            }),
             // `mutx attach` with no id opens the TUI picker (ADR-0116).
             None if pick_pending => client::AttachAction::Picker,
             // Auto-bind a lone session (the daemon decides; several mean
@@ -386,12 +404,6 @@ async fn run_attached(
                 }
             }
         };
-        if delegated_pending {
-            let _ = tx.send(muta_contracts::AgentRequest::SlashCommand(
-                "/delegate on".to_string(),
-            ));
-            delegated_pending = false;
-        }
         if let Some(prompt) = initial_prompt.take() {
             let _ = tx.send(muta_contracts::AgentRequest::Prompt {
                 text: prompt,

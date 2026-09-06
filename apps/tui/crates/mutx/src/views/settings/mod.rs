@@ -24,7 +24,7 @@ use mutx_engine::{
     Paragraph, Rect, Span, Style, Wrap,
 };
 
-use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
+use crate::primitives::{ElevationContainer, SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
 use crate::view::Theme;
 use crate::view_header::{
     ViewHeader, ViewHints, ViewKind, draw_view_header, draw_view_header_hints,
@@ -246,19 +246,13 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> 
     let detail_rect = body_chunks[1];
 
     // Left pane contrasting surface (panel tone, distinct from view surface)
-    frame.render_widget(
-        RtBlock::default().style(Style::default().bg(props.theme.panel())),
-        category_rect,
-    );
+    let category_inner = ElevationContainer::panel().render(frame, category_rect, props.theme);
 
     // Right pane main canvas body (body tone, distinct from view surface and left nav)
-    frame.render_widget(
-        RtBlock::default().style(Style::default().bg(props.theme.body())),
-        detail_rect,
-    );
+    let _ = ElevationContainer::card().render(frame, detail_rect, props.theme);
 
     // Left pane nav: top/bottom 1 row, left/right 2 cols
-    draw_categories_pane(frame, category_rect, &mut props);
+    draw_categories_pane(frame, category_inner, &mut props);
 
     // Right pane: split into Head (1 row, indented 2 cols), 1 row gap, Detail Content (上下 1 row, 左右 2 cols)
     let detail_vertical_chunks = Layout::default()
@@ -362,7 +356,7 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
     for (i, cat) in ConfigCategory::ALL.iter().enumerate() {
         let is_selected = i == props.category_index;
 
-        let style = if is_selected && is_focused {
+        let mut style = if is_selected && is_focused {
             Style::default()
                 .fg(props.theme.brand())
                 .add_modifier(Modifier::BOLD)
@@ -373,6 +367,9 @@ fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewPro
         } else {
             Style::default().fg(props.theme.muted())
         };
+        if is_selected && props.theme.elevation.is_structured() {
+            style = style.add_modifier(Modifier::REVERSE);
+        }
 
         let marker = if is_selected { "› " } else { "  " };
         lines.push(Line::from(vec![
