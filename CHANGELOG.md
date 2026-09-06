@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-09-07
+
+### Added
+
+- **Lexical syntax highlighting in TUI transcript and diff views.** Added fast token-level lexical
+  highlighting for code blocks and unified diffs across common languages.
+
+### Changed
+
+- **Scope-aware diff rendering and wrap-resilient word highlight.** Enclosing scope/function hints
+  are now rendered in Git-style hunk headers (`@@ -N,M +P,Q @@ fn name()`), and intra-line word-level
+  diff highlights seamlessly handle soft-wrapped rows.
+
 ## [0.39.1] - 2026-09-07
 
 ### Removed
