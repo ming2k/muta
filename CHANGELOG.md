@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-09-07
+
+### Added
+
+- **Homogeneous agent kernel and spatiotemporal aspect engine (ADR-0183).** Unified `Master` and `Runner`
+  into a single homogeneous `Agent` execution core with bounded child postures (`AgentSlot`, `subagent_tool`).
+  Introduced spatiotemporal aspect engine, execution policies, cognitive pipeline integration, and trajectory
+  steering contracts.
+- **TUI composer and modal key extensions.** Added composer extensions, enhanced modal key handling, and
+  fuzzy history recall navigation in `mutx`.
+
 ## [0.38.17] - 2026-09-07
 
 ### Added
