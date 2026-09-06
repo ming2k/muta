@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.17] - 2026-09-07
+
+### Added
+
+- **Capability-first visual archetypes and responsive layout pipeline (ADR-0181).** Decoupled visual
+  elevation into Chromatic, Structured, and Hybrid archetypes in `mutx` and `mutx-engine`. Structural
+  spatial costs (borders, margins) are deducted before responsive breakpoint evaluation, enforcing
+  DEC VT100 reverse video and ASCII framing on constrained displays.
+- **Route-projected capabilities and distributed SSOT (ADR-0182).** Canonical `RouteCapabilities` contract
+  surfacing authoritative context windows and vision support from daemon to frontends, eliminating
+  client-side static heuristics and process-local model registry tables.
+
 ### Changed
 
-- **Remove `Ctrl+Q` instant quit shortcut.** Quitting the TUI session is now exclusively guarded by the double-press `Ctrl+C` confirmation window (`App::CTRL_C_ARM_WINDOW`) or explicit `/exit` slash command, preventing accidental session termination from a single `Ctrl+Q` keypress.
+- **Remove `Ctrl+Q` instant quit shortcut.** Quitting the TUI session is now exclusively guarded by the
+  double-press `Ctrl+C` confirmation window (`App::CTRL_C_ARM_WINDOW`) or explicit `/exit` slash command,
+  preventing accidental session termination from a single `Ctrl+Q` keypress.
 
 ## [0.38.16] - 2026-09-07
 
