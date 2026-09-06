@@ -36,7 +36,7 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
+    // Kimi (Moonshot / opencode-go)
     Model {
         // The Kimi Code platform's current flagship. The platform's live
         // `GET /models` advertises `k3` with a 1M context window, image/video

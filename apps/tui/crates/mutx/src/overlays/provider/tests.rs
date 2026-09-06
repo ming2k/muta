@@ -573,7 +573,7 @@ fn preset_chooser_highlights_the_focused_row_with_a_background_fill() {
     );
 }
 
-// ── Sectioned Models list (Favorites / Recent / All models) ──────────
+// Sectioned Models list (Favorites / Recent / All models)
 
 /// A snapshot with one favorite, two used models, and two plain models,
 /// so all three sections render and RECENT has a meaningful internal

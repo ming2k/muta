@@ -47,7 +47,7 @@ pub fn draw_help_modal(
 
     let mut rows: Vec<SelectableRow> = Vec::new();
 
-    // ── 1. Global Core Shortcuts (6 Canonical Keys) ──
+    // 1. Global Core Shortcuts (6 Canonical Keys)
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
         "Global Core Keys",
     ))));
@@ -63,7 +63,7 @@ pub fn draw_help_modal(
         rows.push(SelectableRow::from_line(row_fmt(key_str, cmd.description)));
     }
 
-    // ── 2. Current Context / Session Controls ──
+    // 2. Current Context / Session Controls
     rows.push(SelectableRow::from_line(Line::from("")));
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
         "Session & Focus Controls",
@@ -83,7 +83,7 @@ pub fn draw_help_modal(
         rows.push(SelectableRow::from_line(row_fmt(key_str, &desc)));
     }
 
-    // ── 3. Readline Text Editing Reference ──
+    // 3. Readline Text Editing Reference
     rows.push(SelectableRow::from_line(Line::from("")));
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
         "Composer Line Editing",
@@ -121,7 +121,7 @@ pub fn draw_help_modal(
         "Paste clipboard text or image",
     )));
 
-    // ── 4. Surface Navigation & Discovery ──
+    // 4. Surface Navigation & Discovery
     rows.push(SelectableRow::from_line(Line::from("")));
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
         "Navigation (Open via Ctrl+L or Slash)",

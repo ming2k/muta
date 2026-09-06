@@ -144,13 +144,13 @@ fn completions_intent_keywords_suggest_canonical_command() {
     assert_eq!(doc.name, "/schedule");
     assert_eq!(doc.category.as_deref(), Some("Automation"));
 
-    // /switch suggests /models and /master
+    // /switch suggests /models and /role
     app.input = "/switch".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"/models"));
-    assert!(labels.contains(&"/master"));
+    assert!(labels.contains(&"/role"));
 }
 
 #[test]
@@ -653,10 +653,8 @@ fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
     assert_eq!(app.session_scroll, 0, "a genuine open resets the scroll");
 }
 
-// ---------------------------------------------------------------------------
 // Unified surface router: transient stack, per-view drafts, queue hook,
 // sub-layer pop, switcher filter.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn model_editor_esc_pops_back_to_its_picker() {

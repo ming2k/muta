@@ -290,7 +290,6 @@ fn typing_while_focused_is_inert() {
 fn ctrl_arrows_page_scroll_modal_body() {
     let scrollable = [
         crate::Modal::Help,
-        crate::Modal::Todos,
         crate::Modal::Config,
         crate::Modal::Telemetry,
         crate::Modal::Sessions,

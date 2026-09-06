@@ -37,7 +37,7 @@ pub fn draw_skills_modal(
         .saturating_sub(2 * crate::design::MODAL_INNER_H_PADDING as usize)
         .max(20);
 
-    // ── Body: the skill list with optional detail expansion ──
+    // Body: the skill list with optional detail expansion
     let skills = session_context.map(|s| s.skills.as_slice()).unwrap_or(&[]);
     let mut body: Vec<Line> = Vec::new();
 
@@ -132,7 +132,7 @@ pub fn draw_skills_modal(
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme, true, true);
 
-    // ── Header ──
+    // Header
     modal_header(frame, f.header, "Skills", theme);
 
     let follow = if skills.is_empty() {
@@ -149,7 +149,7 @@ pub fn draw_skills_modal(
         theme,
     );
 
-    // ── Footer ──
+    // Footer
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if skills.is_empty() {
             &[FooterHint::key_always(crate::keymap::Key::ESC, "close")]

@@ -1,15 +1,13 @@
 //! Transient chrome around the input box: the activity bar with an animated
-//! breathing-dot indicator, the one-row todo bar that surfaces the live task
-//! list, the completion menu anchored above the input, and the persistent
-//! model bar pinned below the input (context usage, stream rate, model
-//! identity).
+//! breathing-dot indicator, the completion menu anchored above the input, and
+//! the persistent model bar pinned below the input (context usage, stream
+//! rate, model identity).
 
 pub mod activity_bar;
 pub mod common;
 pub mod completion_menu;
 pub mod model_bar;
 pub mod queue_bar;
-pub mod todo_bar;
 
 #[cfg(test)]
 mod tests;
@@ -28,4 +26,3 @@ pub use model_bar::{
     draw_model_bar, format_token_count,
 };
 pub use queue_bar::{QueueBarView, QueueItemView, draw_queue_bar};
-pub use todo_bar::draw_todo_bar;

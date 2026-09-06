@@ -517,7 +517,7 @@ fn solve(
     let total_gap = gap.saturating_mul(n - 1);
     let available_main = container_main.saturating_sub(total_gap);
 
-    // ── Step 1: cross-axis sizes ────────────────────────────────────────
+    // Step 1: cross-axis sizes
     // Stretch without a cross override → fill; otherwise take the child's
     // declared cross (0 by default).
     let crosses: Vec<u16> = items
@@ -529,7 +529,7 @@ fn solve(
         })
         .collect();
 
-    // ── Step 2: main-axis bases (usize math for weighted distribution) ──
+    // Step 2: main-axis bases (usize math for weighted distribution)
     let mut mains: Vec<usize> = Vec::with_capacity(n);
     for (i, it) in items.iter().enumerate() {
         let raw = match it.basis {
@@ -544,7 +544,7 @@ fn solve(
         mains.push(raw.clamp(lo, hi));
     }
 
-    // ── Step 3: main-axis grow / shrink distribution ────────────────────
+    // Step 3: main-axis grow / shrink distribution
     let bases_sum: usize = mains.iter().sum();
     if bases_sum < available_main {
         // Surplus distributed by grow weight: floor first, then the
@@ -625,7 +625,7 @@ fn solve(
         *m = (*m).clamp(lo, hi);
     }
 
-    // ── Step 4: justify / align positioning ─────────────────────────────
+    // Step 4: justify / align positioning
     let used: usize = mains.iter().sum::<usize>() + total_gap;
     let free = container_main.saturating_sub(used);
     let (lead, extra_per_gap) = justify_offsets(flex.justify, free, n);

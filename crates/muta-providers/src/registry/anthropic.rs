@@ -60,7 +60,7 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[&str] = &[
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
+    // Claude (Anthropic, via Anthropic-compatible relays)
     // Served over the Anthropic Messages wire format. Relays forward to
     // Anthropic's own `/messages` surface, so these carry
     // `WireProtocol::AnthropicMessages`.

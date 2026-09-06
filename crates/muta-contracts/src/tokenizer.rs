@@ -138,7 +138,6 @@ fn ranks() -> &'static Ranks {
     RANKS.get_or_init(|| parse_packed(CL100K_PACKED))
 }
 
-// ---------------------------------------------------------------------------
 // Pretokenizer — the cl100k_base pattern, hand-rolled (no regex dependency):
 //
 //   '(?:[sdmt]|ll|ve|re) | ?\p{L}+ | ?\p{N}+ | ?[^\s\p{L}\p{N}]+ |
@@ -159,7 +158,6 @@ fn ranks() -> &'static Ranks {
 //   minus its last character; the last character then prefixes the next
 //   pretoken when it is a space (`' '`), or forms its own one-character
 //   pretoken otherwise. Runs at end of input match whole.
-// ---------------------------------------------------------------------------
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum CharKind {
@@ -308,9 +306,7 @@ fn whitespace_run(text: &str, i: usize, out: &mut Vec<Pretoken>) -> usize {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Byte-pair merge — tiktoken's `byte_pair_merge`.
-// ---------------------------------------------------------------------------
 
 /// Merge `piece` greedily: repeatedly merge the adjacent pair whose
 /// concatenation has the lowest rank (ranks are unique, so no tie-break) until
@@ -385,9 +381,7 @@ fn byte_pair_merge(ranks: &Ranks, piece: &[u8], out: &mut Vec<u32>) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Public API
-// ---------------------------------------------------------------------------
 
 /// The `cl100k_base` tokenizer (GPT-3.5/GPT-4 family and most
 /// OpenAI-compatible relays). Zero-sized: the vocabulary is process-global
@@ -447,9 +441,7 @@ impl Tokenizer {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Incremental counting for streamed text
-// ---------------------------------------------------------------------------
 
 /// Exact incremental `cl100k_base` token counter for streamed text.
 ///
@@ -682,7 +674,7 @@ mod tests {
         pretokenize(s).iter().map(|p| &s[p.start..p.end]).collect()
     }
 
-    // --- streaming counter ---------------------------------------------------
+    // streaming counter
 
     /// Every chunking of a text must stream-count to the exact whole count.
     fn assert_streaming_exact(text: &str, sizes: &[usize]) {
@@ -979,7 +971,7 @@ mod tests {
         assert!(Tokenizer::new().encode("").is_empty());
     }
 
-    // --- token-bounded truncation --------------------------------------------
+    // token-bounded truncation
 
     #[test]
     fn truncate_to_tokens_never_exceeds_budget_and_is_exact_prefix() {

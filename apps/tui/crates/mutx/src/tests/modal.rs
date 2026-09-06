@@ -766,7 +766,6 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         Modal::Tools,
         Modal::Mcp,
         Modal::Permissions,
-        Modal::Todos,
         Modal::Config,
         Modal::ProviderPreset,
         Modal::HistorySearch,
@@ -831,7 +830,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     }
 
     // Pure-content modals return a scroll ref but no follow flag.
-    for m in [Modal::Help, Modal::Todos, Modal::Permissions, Modal::Config] {
+    for m in [Modal::Help, Modal::Permissions, Modal::Config] {
         app.set_active_modal_for_test(m);
         let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
         assert!(f.is_none(), "{m:?} has no selection-follow flag");
@@ -839,12 +838,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         *s = 7;
     }
     assert_eq!(app.help_scroll, 7);
-    app.set_active_modal_for_test(Modal::Todos);
-    if let Some((s, _)) = app.modal_scroll_field() {
-        *s = 9;
-    }
-    assert_eq!(app.todos_scroll, 9);
-    assert_ne!(app.help_scroll, 9, "each modal has its own field");
+    assert_eq!(app.permissions_scroll, 7);
 
     // The non-scrolling modals resolve to None so the action falls through to
     // the transcript / caret handling. (The question sheet's body scroll is
@@ -1138,11 +1132,9 @@ fn adopt_caret_head_and_tail_break_selection() {
     assert!(!app.adopt_caret_from_input_selection(SelectionEdge::Head));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // View-scoped chrome for `/btw` aside views (ADR-0103 fix): an aside view must
 // render its own session's activity bar, never inherit the primary's, and the
 // primary's chrome must survive the aside detour untouched.
-// ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn aside_view_does_not_inherit_the_primary_activity_bar() {
@@ -1256,14 +1248,6 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
 }
 
 #[test]
-fn todos_panel_opens_todos_modal() {
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Todos);
-    assert_eq!(app.active_modal(), Modal::Todos);
-    assert!(app.dismiss_surface());
-}
-
-#[test]
 fn config_view_reopen_keeps_pane_and_category() {
     // Settings is a full-screen view (ADR-0141) whose fields persist
     // natively on `App`: the enter ritual (pane reset + current-scheme
@@ -1359,13 +1343,13 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
 #[test]
 fn sheet_mounting_leaves_the_panel_stack_untouched() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Todos);
+    app.open_panel(crate::surfaces::PanelId::Tools);
     // A sheet is slot state, not a router layer: mounting it must leave the
     // panel stack untouched, and dismissing it hands the slot straight back.
     app.push_sheet_surface(crate::sheet::SheetKind::Question);
-    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
+    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Tools));
     app.dismiss_sheet();
-    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
+    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Tools));
 }
 
 #[test]

@@ -493,7 +493,7 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
     assert!(!rendered.contains("+ let x = 2;"));
 }
 
-// ── Tool-step batch spacing (ADR-0001, layout-owned boundaries) ──
+// Tool-step batch spacing (ADR-0001, layout-owned boundaries)
 //
 // Known same-turn tool steps stack flush regardless of disclosure state. The
 // first tests also lock the compatibility behavior for legacy messages whose
@@ -553,7 +553,6 @@ fn render_transcript_frame(
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,

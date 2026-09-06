@@ -33,7 +33,7 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
+    // GLM family (Zhipu / Z.AI / opencode-go)
     Model {
         id: "glm-5.3",
         family: "glm",

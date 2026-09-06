@@ -231,7 +231,7 @@ impl StreamLoopDetector {
             self.buffer.drain(..cut);
         }
 
-        // --- Data flood budget ------------------------------------------------
+        // Data flood budget
         // Density is evaluated first and *shields* the periodic trail: a
         // window of raw data needs no continuity analysis (its danger is
         // volumetric), and repeating numeric columns must not double-count.
@@ -254,7 +254,7 @@ impl StreamLoopDetector {
             }
         }
 
-        // --- Periodic tail, gated by continuity -----------------------------
+        // Periodic tail, gated by continuity
         if let Some(observation) = Self::observe_periodic_tail(&self.buffer) {
             if self
                 .trail
@@ -272,7 +272,7 @@ impl StreamLoopDetector {
             self.trail.observe(None, pushed_chars, MIN_DWELL_CHARS);
         }
 
-        // --- Monotonic line skeleton ----------------------------------------
+        // Monotonic line skeleton
         if let Some(pat) = Self::advance_monotonic_streak(&self.buffer, &mut self.monotonic_streak)
         {
             return Some(pat);
@@ -489,7 +489,7 @@ impl StreamLoopDetector {
 mod tests {
     use super::*;
 
-    // ---- continuity semantics: transient repetition must NOT escalate ----
+    // continuity semantics: transient repetition must NOT escalate
 
     #[test]
     fn table_border_run_stays_silent() {
@@ -589,7 +589,7 @@ mod tests {
         assert!(obs.suffix_len >= 2 * unit.len());
     }
 
-    // ---- monotonic sequence ----------------------------------------------
+    // monotonic sequence
 
     #[test]
     fn detects_monotonic_step_numbering() {
@@ -608,7 +608,7 @@ mod tests {
         assert!(detector.push_and_check(input).is_none());
     }
 
-    // ---- data flood budget ------------------------------------------------
+    // data flood budget
 
     #[test]
     fn digit_dump_below_budget_stays_silent() {
@@ -647,7 +647,7 @@ mod tests {
         assert!(detector.digit_budget_spent < MAX_DEGENERATE_BUDGET_CHARS / 4);
     }
 
-    // ---- reset + trim ------------------------------------------------------
+    // reset + trim
 
     #[test]
     fn reset_clears_trail() {

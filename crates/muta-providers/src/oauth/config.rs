@@ -456,7 +456,6 @@ impl OAuthConfigBuilder {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Built-in Battle-tested Provider Presets
 
 /// Primary Antigravity CLI OAuth client ID (from agy binary).
@@ -480,8 +479,6 @@ pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
 /// Enterprise / Cloud Code Companion OAuth client secret (from agy binary).
 pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str =
     concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Google Antigravity (Cloud Code / Enterprise companion) OAuth client config.
 ///

@@ -73,7 +73,7 @@ impl WebConnections {
         Ok(())
     }
 
-    // ── Search Connections ──────────────────────────────────────────────
+    // Search Connections
 
     pub fn get_search(&self, id: &str) -> Option<&WebSearchConnection> {
         self.search_connections.iter().find(|c| c.id == id)
@@ -126,7 +126,7 @@ impl WebConnections {
         base
     }
 
-    // ── Reader Connections ──────────────────────────────────────────────
+    // Reader Connections
 
     pub fn get_reader(&self, id: &str) -> Option<&WebReaderConnection> {
         self.reader_connections.iter().find(|c| c.id == id)
@@ -179,7 +179,7 @@ impl WebConnections {
         base
     }
 
-    // ── Credential Resolution ───────────────────────────────────────────
+    // Credential Resolution
 
     pub fn resolve_search_credential(
         conn: &WebSearchConnection,

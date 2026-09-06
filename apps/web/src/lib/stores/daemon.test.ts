@@ -166,10 +166,8 @@ describe("DaemonStore smoke", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Wire-protocol coverage: one store + scripted fake WS per test, attached to
 // "sess-1" via a Welcome replay. Round events go through `roundEvent`.
-// ---------------------------------------------------------------------------
 
 describe("DaemonStore wire protocol", () => {
   beforeEach(() => {

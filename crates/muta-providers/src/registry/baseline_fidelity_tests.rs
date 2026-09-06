@@ -9,7 +9,7 @@ use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireProtocol, resolve_model};
 
 const PRE_MIGRATION: &[Model] = &[
-    // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
+    // GLM family (Zhipu / Z.AI / opencode-go)
     Model {
         id: "glm-5.2",
         family: "glm",
@@ -54,7 +54,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
+    // Kimi (Moonshot / opencode-go)
     Model {
         // The Kimi Code platform's current flagship. The platform's live
         // `GET /models` advertises `k3` with a 1M context window, image/video
@@ -109,7 +109,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
+    // Claude (Anthropic, via Anthropic-compatible relays)
     // Served over the Anthropic Messages wire format. Relays forward to
     // Anthropic's own `/messages` surface, so these carry
     // `WireProtocol::AnthropicMessages`.
@@ -186,7 +186,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── GPT-5.6 (OpenAI) ───────────────────────────────────────────────────
+    // GPT-5.6 (OpenAI)
     // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
     // Sol (flagship) / Terra (balanced) / Luna (efficient, high-volume).
     // `gpt-5.6` is an alias that routes to `gpt-5.6-sol`. All speak the
@@ -239,7 +239,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
-    // ── GPT (OpenAI) ───────────────────────────────────────────────────────
+    // GPT (OpenAI)
     // The current frontier chat family served over the OpenAI chat-completions
     // API. All reason (surfaced via the `reasoning_content` stream) and take
     // text+image input. Context windows and pricing per OpenAI's model docs;
@@ -349,7 +349,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── Google (native) ────────────────────────────────────────────────────
+    // Google (native)
     // Native Google REST surface (`generateContent`/`streamGenerateContent`).
     // The id strings mirror Google's official naming and the ids relay/中转站
     // gateways advertise — so a relay-served model resolves to real metadata
@@ -422,7 +422,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
-    // ── Antigravity / Google relay models ─────────────────────────────────
+    // Antigravity / Google relay models
     // Google-native variants that advertise effort-tiered 3.1 Pro
     // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
     // surface (`/v1beta/models/{id}:generateContent`), so the metadata mirrors
@@ -506,7 +506,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
+    // DeepSeek (opencode-go / direct)
     Model {
         id: "deepseek-v4-flash",
         family: "deepseek",
@@ -551,7 +551,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
-    // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
+    // MiMo (Xiaomi / opencode-go, OpenAI format)
     Model {
         id: "mimo-v2.5",
         family: "mimo",
@@ -596,7 +596,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
+    // MiniMax (opencode-go, Anthropic /messages format)
     Model {
         id: "minimax-m3",
         family: "minimax",
@@ -630,7 +630,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
+    // Qwen (opencode-go, OpenAI /chat/completions format)
     // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
     // opencode-go; the KNOWN_MODELS fallback mirrors that so the offline
     // fallback path matches the live catalog.
@@ -678,7 +678,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
+    // xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY)
     Model {
         id: "grok-4.5",
         family: "grok",

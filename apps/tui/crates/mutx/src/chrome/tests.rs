@@ -1,6 +1,5 @@
 use super::model_bar::context_usage_spans;
 use super::*;
-use crate::design::BAR_LEGEND_GAP_MIN;
 use crate::model::layout::LayoutMap;
 use crate::view::Theme;
 use mutx_engine::{Color, Rect};
@@ -107,31 +106,6 @@ fn tilde_home_shortens_a_home_rooted_path() {
     assert_eq!(tilde_home(&home), "~");
 }
 
-fn todo_list_with(item: &str, status: muta_contracts::TodoStatus) -> muta_contracts::TodoList {
-    let mut todos = muta_contracts::TodoList::new();
-    todos.items.push(muta_contracts::TodoItem {
-        id: muta_contracts::TodoId(1),
-        content: item.to_string(),
-        status,
-        created_at: 0,
-        updated_at: 0,
-    });
-    todos
-}
-
-fn todo_row_text(todos: &muta_contracts::TodoList, width: u16) -> String {
-    let mut terminal = mutx_engine::TestTerminal::new(width, 1);
-    terminal.draw(|frame| {
-        draw_todo_bar(frame, Rect::new(0, 0, width, 1), todos, &Theme::default());
-    });
-    terminal
-        .buffer()
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect::<String>()
-}
-
 #[test]
 fn backoff_clause_renders_beside_status_and_degrades_narrow() {
     // Master label keeps the workflow story; the transport countdown is a
@@ -167,90 +141,9 @@ fn backoff_clause_renders_beside_status_and_degrades_narrow() {
 }
 
 #[test]
-fn todo_bar_leads_with_brand_tag_on_a_plain_surface() {
-    // The tag treatment: `TODOS` leads at the gutter in the brand accent
-    // on the plain frame surface — no pin glyph, no raised tint — so the
-    // row reads as quiet metadata rather than another pinned panel. We
-    // assert all of this against the real buffer cells (the substring-only
-    // tests can't see color or background).
-    let theme = Theme::default();
-    let todos = todo_list_with("write the docs", muta_contracts::TodoStatus::InProgress);
-    let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-    terminal.draw(|frame| {
-        draw_todo_bar(frame, Rect::new(0, 0, 80, 1), &todos, &theme);
-    });
-    let cells = terminal.buffer().content.clone();
-
-    // (1) The tag leads at the gutter, brand-colored.
-    assert_eq!(cells[0].symbol(), "T", "expected 'TODOS' tag at col 0");
-    assert_eq!(cells[0].fg(), theme.brand(), "TODOS tag not brand-colored");
-
-    // (2) The bar sits on the plain surface: no raised tint anywhere on
-    // the row (sample the trailing cell too).
-    assert_eq!(cells[0].bg(), Color::Reset, "tag must not sit on a tint");
-    assert_eq!(cells[79].bg(), Color::Reset, "row must stay plain");
-}
-
-#[test]
-fn todo_bar_shows_tag_progress_current_item_and_legend() {
-    // InProgress item is the surfaced "current" content.
-    let todos = todo_list_with("write the docs", muta_contracts::TodoStatus::InProgress);
-    let text = todo_row_text(&todos, 80);
-    assert!(text.contains("TODOS 0/1"), "row was {text:?}");
-    assert!(text.contains("write the docs"), "row was {text:?}");
-    assert!(text.contains("Ctrl+T expand"), "row was {text:?}");
-}
-
-#[test]
-fn todo_bar_falls_back_to_first_pending_when_nothing_is_in_progress() {
-    let todos = todo_list_with("write the docs", muta_contracts::TodoStatus::Pending);
-    let text = todo_row_text(&todos, 80);
-    assert!(text.contains("TODOS 0/1"), "row was {text:?}");
-    // The first Pending item reads as "next up" when nothing is mid-flight.
-    assert!(text.contains("write the docs"), "row was {text:?}");
-}
-
-#[test]
-fn todo_bar_drops_legend_under_width_pressure() {
-    let todos = todo_list_with("write the docs", muta_contracts::TodoStatus::InProgress);
-    // At 20 cols the `expand` label cannot fit alongside the preview.
-    let text = todo_row_text(&todos, 20);
-    assert!(text.contains("TODOS 0/1"), "row was {text:?}");
-    assert!(!text.contains("expand"), "legend leaked: {text:?}");
-}
-
-#[test]
-fn todo_bar_keeps_real_gap_before_the_legend() {
-    // Long content truncates to the preview budget; the `Ctrl+T` keycap
-    // must still keep a real gap from the text instead of butting against
-    // the `…`. At 40 cols the preview is truncated *and* the full legend
-    // still fits, so this exercises exactly the cramped layout the gap is
-    // there to prevent.
-    let todos = todo_list_with(
-        "a very long todo item that must be truncated to leave the legend room",
-        muta_contracts::TodoStatus::InProgress,
-    );
-    let text = todo_row_text(&todos, 40);
-    let ctrl = text.find("Ctrl").expect("legend should fit at 40 cols");
-    let dots = text[..ctrl]
-        .rfind('…')
-        .expect("preview should be truncated");
-    let between = &text[dots + '…'.len_utf8()..ctrl];
-    assert!(
-        between.chars().all(|c| c == ' '),
-        "legend must be separated from the preview by spaces: {text:?}"
-    );
-    assert!(
-        between.chars().count() >= BAR_LEGEND_GAP_MIN,
-        "legend too close to content ({} cols): {text:?}",
-        between.chars().count()
-    );
-}
-
-#[test]
 fn activity_bar_carries_no_todos_badge() {
     // Decoupled: the activity bar is a pure liveness surface now and never
-    // embeds the `todos d/t` summary (that lives on its own bar below).
+    // embeds a `todos d/t` summary.
     let mut terminal = mutx_engine::TestTerminal::new(80, 1);
     terminal.draw(|frame| {
         draw_activity_bar(
@@ -300,7 +193,7 @@ fn narrow_runtime_row_keeps_interrupt_keys_without_todos_badge() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(text.contains("Esc Esc"), "row was {text:?}");
-    // The todos summary lives on the dedicated todo bar, not here.
+    // The activity row does not carry a todos summary.
     assert!(!text.contains("todos"), "badge leaked: {text:?}");
     // Session-state flags live on the hint bar; the activity row never
     // carries them, even when they would fit.

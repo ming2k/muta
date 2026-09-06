@@ -112,9 +112,7 @@ impl EscapeEmitter for TerminalDriver {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Profile 1: DirectColorDriver (ITU-T T.416)
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Full 24-bit TrueColor driver with DEC Mode 2026 synchronized updates and full SGR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,9 +189,7 @@ impl EscapeEmitter for DirectColorDriver {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Profile 2: Ansi16Driver (ECMA-48)
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// 16-color ANSI driver. Zero TrueColor codes emitted; unsupported italics map to underline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,9 +271,7 @@ impl EscapeEmitter for Ansi16Driver {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Profile 3: MonochromeDriver (DEC VT100 / getty)
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// DEC VT100 monochrome physical terminal driver.
 ///
@@ -365,9 +359,7 @@ impl EscapeEmitter for MonochromeDriver {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Shared Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Translate an engine [`Color`] to a crossterm color.
 pub fn to_ct_color(c: Color) -> CtColor {

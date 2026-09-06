@@ -956,7 +956,6 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-// ---------------------------------------------------------------------------
 // Round-interrupt projection: only a genuinely stopped round may leave a
 // durable `RoundInterrupt` record. Two regressions are pinned here:
 //
@@ -967,7 +966,6 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
 //    checkpoint (the model already converged, the history already committed)
 //    parks a reason without changing the outcome. The completed round must
 //    not be re-labelled as an interrupt.
-// ---------------------------------------------------------------------------
 
 /// A provider whose stream never terminates until the test cancels the
 /// round token — the "model is still generating" state an Esc Esc lands in.
@@ -1406,11 +1404,9 @@ async fn superseded_live_round_still_records() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-// ---------------------------------------------------------------------------
 // The end-of-answer supersede race (the false "▲ interrupted · new message"
 // over a round that finished): the model's final delta has arrived and only
 // the stream terminator is in flight when the next message lands.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn late_supersede_on_a_settling_stream_completes_the_round() {

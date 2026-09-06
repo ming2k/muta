@@ -486,9 +486,7 @@ export class DaemonStore {
     return this.daemonProbe;
   }
 
-  // -------------------------------------------------------------------------
   // Monitor channel
-  // -------------------------------------------------------------------------
 
   private connectMonitor() {
     const generation = ++this.monitorGeneration;
@@ -580,9 +578,7 @@ export class DaemonStore {
     }
   }
 
-  // -------------------------------------------------------------------------
   // Session channel
-  // -------------------------------------------------------------------------
 
   public attach(sessionId: string) {
     if (
@@ -749,9 +745,7 @@ export class DaemonStore {
     };
   }
 
-  // -------------------------------------------------------------------------
   // Frame dispatch
-  // -------------------------------------------------------------------------
 
   /**
    * Issue one session-management verb over a one-shot control connection
@@ -957,9 +951,7 @@ export class DaemonStore {
     return items.sort((a, b) => time(a) - time(b));
   }
 
-  // -------------------------------------------------------------------------
   // Round events
-  // -------------------------------------------------------------------------
 
   private handleRoundEvent(sessionId: string, event: RoundEvent) {
     if (sessionId !== this.activeSessionId) {
@@ -1222,9 +1214,7 @@ export class DaemonStore {
     }
   }
 
-  // -------------------------------------------------------------------------
   // Runner events (nested under a parent `task` tool call; ADR-0029)
-  // -------------------------------------------------------------------------
 
   private handleRunnerEvent(parentCallId: string, event: RunnerEvent) {
     const parent = this.liveTools[parentCallId];
@@ -1330,9 +1320,7 @@ export class DaemonStore {
     this.streamingReasoningText = "";
   }
 
-  // -------------------------------------------------------------------------
   // Outgoing requests
-  // -------------------------------------------------------------------------
 
   private send(req: AgentRequest) {
     if (this.sessionWs && this.sessionWs.readyState === WebSocket.OPEN) {
@@ -1471,9 +1459,7 @@ export class DaemonStore {
     return draft;
   }
 
-  // -------------------------------------------------------------------------
   // Misc
-  // -------------------------------------------------------------------------
 
   public pushToast(severity: Toast["severity"], title: string, body?: string) {
     const toast: Toast = { id: this.nextToastId++, severity, title, body };

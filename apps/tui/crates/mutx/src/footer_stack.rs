@@ -48,9 +48,6 @@ pub(crate) enum FooterRowId {
     /// (`FOOTER_TOP_GAP_ROWS`). Never interactive; in the registry only so
     /// the stack's geometry is complete in one place.
     TopGap,
-    /// The ambient task-list summary (`TODOS d/t · preview`). Click →
-    /// Todos modal.
-    Todos,
     /// The ambient outbox summary (`QUEUE n · preview · keys`). Click →
     /// Queue modal.
     Queue,
@@ -156,10 +153,6 @@ mod tests {
                 height: 1,
             },
             FooterRow {
-                id: FooterRowId::Todos,
-                height: 1,
-            },
-            FooterRow {
                 id: FooterRowId::Queue,
                 height: 1,
             },
@@ -186,16 +179,15 @@ mod tests {
     fn places_rows_flush_in_draw_order() {
         let rows = full_stack();
         let placed = place(AREA, &rows);
-        assert_eq!(measure(&rows), 1 + 1 + 1 + 1 + 3 + 1);
+        assert_eq!(measure(&rows), 1 + 1 + 1 + 3 + 1);
         let rects: Vec<(FooterRowId, Rect)> = placed.rows.clone();
-        assert_eq!(rects.len(), 6);
+        assert_eq!(rects.len(), 5);
         let expect = [
             (FooterRowId::TopGap, 10),
-            (FooterRowId::Todos, 11),
-            (FooterRowId::Queue, 12),
-            (FooterRowId::Activity, 13),
-            (FooterRowId::Composer, 14),
-            (FooterRowId::ModelBar, 17),
+            (FooterRowId::Queue, 11),
+            (FooterRowId::Activity, 12),
+            (FooterRowId::Composer, 13),
+            (FooterRowId::ModelBar, 16),
         ];
         for (idx, (id, y)) in expect.iter().enumerate() {
             assert_eq!(rects[idx].0, *id, "row {idx} id");
@@ -204,8 +196,8 @@ mod tests {
             assert_eq!(rects[idx].1.width, 76, "row {idx} shares the band width");
         }
         // Heights match each row's declared height.
-        assert_eq!(rects[4].1.height, 3, "composer height");
-        assert_eq!(rects[5].1.y, 17, "model bar directly below the composer");
+        assert_eq!(rects[3].1.height, 3, "composer height");
+        assert_eq!(rects[4].1.y, 16, "model bar directly below the composer");
     }
 
     /// A hidden row (height 0) keeps its slot but places nothing; the rows
@@ -214,15 +206,14 @@ mod tests {
     #[test]
     fn hidden_row_collapses_and_rows_below_slide_up() {
         let mut rows = full_stack();
-        rows[1].height = 0; // hide Todos
-        rows[3].height = 0; // hide Activity
+        rows[1].height = 0; // hide Queue
+        rows[2].height = 0; // hide Activity
         let placed = place(AREA, &rows);
-        assert_eq!(measure(&rows), 1 + 1 + 3 + 1);
-        assert_eq!(placed.rows.len(), 4);
-        assert!(rect_of(&placed, FooterRowId::Todos).is_none());
+        assert_eq!(measure(&rows), 1 + 3 + 1);
+        assert_eq!(placed.rows.len(), 3);
+        assert!(rect_of(&placed, FooterRowId::Queue).is_none());
         assert!(rect_of(&placed, FooterRowId::Activity).is_none());
-        assert_eq!(rect_of(&placed, FooterRowId::Queue).unwrap().y, 11);
-        assert_eq!(rect_of(&placed, FooterRowId::Composer).unwrap().y, 12);
+        assert_eq!(rect_of(&placed, FooterRowId::Composer).unwrap().y, 11);
     }
 
     /// The measured demand is reported even when the band is too small to
@@ -231,7 +222,7 @@ mod tests {
     #[test]
     fn reports_full_demand_even_when_the_band_clamps() {
         let rows = full_stack();
-        assert_eq!(measure(&rows), 8);
+        assert_eq!(measure(&rows), 7);
         let tiny = Rect::new(0, 10, 80, 2);
         let placed = place(tiny, &rows);
         // Only what fits places; nothing paints past the band's bottom.
@@ -255,7 +246,7 @@ mod tests {
     fn degenerate_band_does_not_panic() {
         let rows = full_stack();
         let placed = place(Rect::new(0, 10, 80, 0), &rows);
-        assert_eq!(measure(&rows), 8);
+        assert_eq!(measure(&rows), 7);
         assert!(placed.rows.is_empty());
     }
 

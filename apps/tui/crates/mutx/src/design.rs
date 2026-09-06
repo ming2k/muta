@@ -11,7 +11,7 @@ pub(crate) const TRANSCRIPT_H_INSET: u16 = 2;
 /// inset rect.
 pub(crate) const TRANSCRIPT_BODY_LEADING_INDENT: u16 = 2;
 
-// ── Command card (ADR-0109) ────────────────────────────────────────────────
+// Command card (ADR-0109)
 // A command row is a *card*, not flat prose: it paints a full-width band
 // (`Theme::command_surface`) with a thick `┃` identity bar in the family
 // tone — the same card grammar the user-message panel, the code band, and
@@ -134,21 +134,8 @@ pub(crate) const MODEL_BAR_MODEL_GAP: usize = 1;
 /// status label + elapsed timer) shown directly above the input box while a
 /// round is active. Collapses to 0 when idle. Drawn by `draw_activity_bar`.
 pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
-/// Todo bar: a one-line region that leads the footer stack (above the queue
-/// bar and the transient activity bar) and surfaces the live task list — a
-/// `TODOS d/t` identity and a one-line preview of the current item (the
-/// `InProgress` one, or the first `Pending` when nothing is mid-flight). The
-/// whole bar is the click target that opens the Todos modal.
-/// Always one row tall when visible (hidden only while an overlay
-/// modal replaces the chrome, inside an runner zoom, or when the task list is
-/// empty). It is the permanent home for todo affordances, so the activity bar
-/// no longer needs to embed the `todos d/t` badge. Rendered on the plain
-/// surface (no raised tint, no glyph) so it reads as quiet metadata rather
-/// than another pinned panel.
-pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Minimum gap between a footer bar's left content and its right-pinned
-/// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
-/// `Ctrl+Q expand`). Deliberately wider than the
+/// keycap legend (e.g. the queue bar's `Ctrl+Q expand`). Deliberately wider than the
 /// 2-col inter-cluster
 /// gap used by the hint bar: a legend is a keyboard affordance, not
 /// prose, so it needs real visual distance from the content — especially when
@@ -156,7 +143,7 @@ pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// directly against a keycap.
 pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
 
-// ── Semantic joins (see docs/reference/tui/visual-language.md) ──────────────
+// Semantic joins (see docs/reference/tui/visual-language.md)
 // Keep labels free of punctuation soup. Atomic values use ordinary spaces,
 // peer metadata uses a two-column gap, secondary measures use parentheses,
 // cause/reason uses an em dash, and hierarchy uses a breadcrumb.
@@ -165,8 +152,8 @@ pub(crate) const JOIN_ENUMERATE_COLS: usize = 2;
 /// Container › member breadcrumb for inline hierarchy (`round 3 › turn 2`).
 #[allow(dead_code)]
 pub(crate) const JOIN_BREADCRUMB: &str = " › ";
-/// Queue bar: a one-line persistent region pinned directly below the todo bar
-/// (and above the transient activity bar) that always surfaces the pending
+/// Queue bar: a one-line persistent region pinned in the footer stack
+/// (above the transient activity bar) that always surfaces the pending
 /// outbox (the `QUEUE` identity + count, an inline preview of the next item
 /// to pop, and the key affordances). Always one row tall when visible
 /// (hidden only while an overlay modal replaces the chrome, inside an runner
@@ -243,7 +230,7 @@ pub(crate) const USER_MESSAGE_RIGHT_PAD_COLS: usize = 2;
 /// the last glyph and the edge of the tinted box.
 pub(crate) const COMPOSER_RIGHT_PAD_COLS: usize = 2;
 
-// ── Modal overlays ───────────────────────────────────────────────────────
+// Modal overlays
 // Every centered modal (Activity, Sessions, Provider, Help, …) goes through
 // `modal_frame`, which paints a borderless solid-bg panel and splits it into
 // header / body / footer. These tokens are the single source of truth for
@@ -264,11 +251,7 @@ pub(crate) const SCROLLBAR_GAP: u16 = 1;
 /// Applied once by `modal_frame` via `Margin { vertical, .. }`.
 pub(crate) const MODAL_INNER_V_PADDING: u16 = 1;
 
-/// Columns between a header title and a trailing meta value shown beside it
-/// (e.g. the Todos `done/total` counter), so title + meta read as one line.
-pub(crate) const MODAL_RUNNER_TITLE_META_GAP: usize = 2;
-
-// ── Block-level code/text surfaces ────────────────────────────────────────
+// Block-level code/text surfaces
 // Every block-level content surface — the markdown `Block::Code` band and the
 // tool-step result blocks (read / bash / listing / matches / diff) — shares ONE
 // design contract so a code block looks the same whether it sits in assistant
@@ -297,7 +280,7 @@ pub(crate) const CODE_BAND_GUTTER_GAP: usize = 1;
 /// cleanly. Grows to fit the highest displayed line number in either band.
 pub(crate) const CODE_BAND_GUTTER_MIN_WIDTH: usize = 2;
 
-// ── Bash output middle-folding ───────────────────────────────────────────
+// Bash output middle-folding
 // An expanded bash step can emit hundreds of stdout/stderr lines, burying the
 // trailing "events" — the `exit N` line, the `[output truncated]` marker, and
 // the termination footer (timeout / blocked / cancelled) — far below the fold.
@@ -314,7 +297,7 @@ pub(crate) const BASH_FOLD_HEAD_ROWS: usize = 3;
 /// Trailing output lines kept visible below a folded bash middle.
 pub(crate) const BASH_FOLD_TAIL_ROWS: usize = 3;
 
-// ── Minimum terminal size ────────────────────────────────────────────────
+// Minimum terminal size
 // Below this geometry the layout math (footer split, composer height, code
 // band gutters) would underflow or produce an unusable UI. Instead of drawing
 // garbage — or panicking deep in a subtraction chain — `draw_transcript`

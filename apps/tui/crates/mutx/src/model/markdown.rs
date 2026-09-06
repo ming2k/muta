@@ -59,7 +59,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         let line = lines[i];
         let trimmed = line.trim_start();
 
-        // --- Fenced code block ------------------------------------------------
+        // Fenced code block
         if let Some(rest) = trimmed.strip_prefix("```") {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             let lang = rest.trim().to_string();
@@ -81,7 +81,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Display math block -----------------------------------------------
+        // Display math block
         if trimmed == "$$" || trimmed.starts_with("$$") || trimmed == "\\[" {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             let closing = if trimmed.starts_with("$$") {
@@ -129,7 +129,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Horizontal rule --------------------------------------------------
+        // Horizontal rule
         if is_rule(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             push_block(&mut blocks, Block::Rule);
@@ -137,7 +137,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Heading ----------------------------------------------------------
+        // Heading
         if let Some((level, content_line)) = parse_heading(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             push_block(
@@ -151,7 +151,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Blockquote -------------------------------------------------------
+        // Blockquote
         if let Some(content_line) = parse_quote(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             // Collect consecutive quote lines.
@@ -182,7 +182,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- List item --------------------------------------------------------
+        // List item
         if parse_list_item(trimmed).is_some() {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             // Collect consecutive list items as a group; push_block's
@@ -207,7 +207,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Table (GFM: | ... | lines with a separator row) ------------------
+        // Table (GFM: | ... | lines with a separator row)
         if trimmed.starts_with('|')
             && i + 1 < lines.len()
             && is_table_separator(lines[i + 1].trim())
@@ -255,14 +255,14 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
-        // --- Blank line: paragraph break -------------------------------------
+        // Blank line: paragraph break
         if trimmed.is_empty() {
             flush_para(&mut para, &mut para_hard, &mut blocks);
             i += 1;
             continue;
         }
 
-        // --- Ordinary prose line ---------------------------------------------
+        // Ordinary prose line
         // A trailing two-space (or tab) marker is a hard line break. Strip it
         // from the stored text; the `para_hard` flag records that this line
         // ends in a hard break so the join inserts a literal "\n" before the

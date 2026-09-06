@@ -410,7 +410,7 @@ impl DatabaseEngine {
         &mut self.conn
     }
 
-    // --- Session Operations ---
+    // Session Operations
 
     /// Create or update a session record.
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
@@ -783,7 +783,7 @@ impl DatabaseEngine {
         Ok(armed)
     }
 
-    // --- Event Ledger Operations (ADR-0163) ---
+    // Event Ledger Operations (ADR-0163)
 
     /// Append a single event to the monotonic event ledger.
     pub fn append_event(&self, event: &SessionEventRecord) -> Result<()> {
@@ -827,7 +827,7 @@ impl DatabaseEngine {
         Ok(events)
     }
 
-    // --- Message & CAS Operations ---
+    // Message & CAS Operations
 
     /// Insert or replace a message record, automatically offloading content exceeding
     /// `CAS_THRESHOLD_BYTES` to the CAS `BlobStore` if configured.
@@ -903,7 +903,7 @@ impl DatabaseEngine {
         Ok(messages)
     }
 
-    // --- Command Ledger Operations (ADR-0091) ---
+    // Command Ledger Operations (ADR-0091)
 
     /// Insert or update a command audit record.
     pub fn record_command(&self, cmd: &CommandRecord) -> Result<()> {
@@ -955,7 +955,7 @@ impl DatabaseEngine {
         Ok(commands)
     }
 
-    // --- Key-Value Operations ---
+    // Key-Value Operations
 
     /// Put a key-value entry.
     pub fn set_kv(&self, key: &str, value: &str) -> Result<()> {
@@ -1006,7 +1006,7 @@ impl DatabaseEngine {
         Ok(keys)
     }
 
-    // --- FTS5 Full-Text History Search (proto.muta.v1.MutaService/SearchHistory) ---
+    // FTS5 Full-Text History Search (proto.muta.v1.MutaService/SearchHistory)
 
     /// Perform BM25 full-text search across messages, optionally filtered by workspace root.
     pub fn search_history(
@@ -1064,7 +1064,7 @@ impl DatabaseEngine {
         Ok(results)
     }
 
-    // --- Typed JSON KV Helpers (ADR-0168) ---
+    // Typed JSON KV Helpers (ADR-0168)
 
     /// Retrieve and deserialize a JSON value from `kv_store`.
     pub fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
@@ -1088,7 +1088,7 @@ impl DatabaseEngine {
         self.set_kv(key, &serialized)
     }
 
-    // --- Authoritative Input History Operations (ADR-0168 / SSOT) ---
+    // Authoritative Input History Operations (ADR-0168 / SSOT)
 
     /// Record a prompt into `input_history`, respecting `dedup` and the global `HISTORY_CAP`.
     pub fn record_input_history(
@@ -1328,7 +1328,7 @@ impl DatabaseEngine {
         total
     }
 
-    // --- Legacy Flat-File Migration (ADR-0168) ---
+    // Legacy Flat-File Migration (ADR-0168)
 
     /// Migrate legacy session files (.json snapshots and .jsonl logs) from a sessions directory into SQLite muta.db,
     /// and safely purge the migrated files from disk per ADR-0168.
@@ -1474,7 +1474,7 @@ impl DatabaseEngine {
     }
 }
 
-// --- Asynchronous Persistence Actor (Single-Writer Pattern) ---
+// Asynchronous Persistence Actor (Single-Writer Pattern)
 
 /// Command variants dispatched to the single-writer persistence actor.
 pub enum PersistenceCommand {

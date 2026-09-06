@@ -302,19 +302,6 @@ pub fn selectable_row(
     Line::from(spans)
 }
 
-pub fn todo_status_glyph_color(
-    status: muta_contracts::TodoStatus,
-    theme: &Theme,
-    muted: Color,
-) -> Color {
-    use muta_contracts::TodoStatus;
-    match status {
-        TodoStatus::Completed => theme.ok(),
-        TodoStatus::InProgress => theme.warn(),
-        TodoStatus::Pending | TodoStatus::Cancelled => muted,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -445,7 +445,7 @@ mod tests {
         Theme::default()
     }
 
-    // ── Phase / timing contract ─────────────────────────────────────────
+    // Phase / timing contract
 
     #[test]
     fn ignition_finishes_at_total_duration() {
@@ -472,7 +472,7 @@ mod tests {
         assert!(!ignition_finished(LABEL_TOTAL_MS)); // waves still running
     }
 
-    // ── Wave sampling ───────────────────────────────────────────────────
+    // Wave sampling
 
     #[test]
     fn wave_sweeps_left_to_right() {
@@ -542,7 +542,7 @@ mod tests {
         assert!(max > 0.5, "crest intensity is substantial: {max}");
     }
 
-    // ── Band painting over the grid ─────────────────────────────────────
+    // Band painting over the grid
 
     /// Render a uniform panel, run the band painter at `ms`, and return the
     /// grid rows for inspection.
@@ -659,7 +659,7 @@ mod tests {
         });
     }
 
-    // ── MAX label ───────────────────────────────────────────────────────
+    // MAX label
 
     fn label_text(width: usize, progress: f32) -> String {
         max_label_spans(width, progress, Color::Rgb(20, 20, 26), &theme())
@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(text.chars().count(), 4);
     }
 
-    // ── Prompt accent ───────────────────────────────────────────────────
+    // Prompt accent
 
     #[test]
     fn prompt_tint_charges_then_fades_back_to_default() {
@@ -790,7 +790,7 @@ mod tests {
         assert!(ignition_prompt_color(None, &theme).is_none());
     }
 
-    // ── Frame gallery (visual regression anchor) ────────────────────────
+    // Frame gallery (visual regression anchor)
 
     #[test]
     fn ignition_frame_gallery() {

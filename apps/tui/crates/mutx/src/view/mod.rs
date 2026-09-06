@@ -4,7 +4,7 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_todo_bar};
+pub use crate::chrome::{ActivityBarView, draw_activity_bar};
 pub use crate::chrome::{
     ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar, draw_queue_bar,
 };
@@ -20,7 +20,7 @@ pub(crate) use crate::design::{
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
     ENVOY_FOOTER_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS,
     MODEL_BAR_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, TODO_BAR_ROWS, TOOL_STEP_BODY_INDENT_COLS,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS,
     TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
     TRANSCRIPT_H_INSET,
 };
@@ -194,10 +194,6 @@ pub struct TranscriptView<'a> {
     /// (`DELEGATED`) on the right. `None` only in non-session contexts
     /// (tests/showcase) where no ambient session exists.
     pub session_head: Option<SessionHead<'a>>,
-    /// Live unified task list, if any. Surfaced on the todo bar (a one-row
-    /// summary: tag · progress · current item); the full per-item breakdown
-    /// lives in the Todos modal.
-    pub todos: Option<&'a muta_contracts::TodoList>,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,
@@ -437,7 +433,6 @@ pub fn draw_transcript(
         side_banner,
         page_hints,
         session_head,
-        todos,
         round_started_at,
         hovered_step,
         focused_target,
@@ -463,7 +458,7 @@ pub fn draw_transcript(
         full,
     );
 
-    // ── Too-small terminal guard ──────────────────────────────────────────
+    // Too-small terminal guard
     // When the terminal is resized below the usable minimum, the layout math
     // (footer split, composer height, gutter columns) would underflow or
     // produce an unusable UI — and a degenerate 0×0 / 1×1 geometry risks an
@@ -592,13 +587,6 @@ pub fn draw_transcript(
     };
 
     // The todo bar leads the footer stack and surfaces the live task list —
-    // a `TODOS d/t` identity and a preview of the current item. It is
-    // hidden only while an overlay owns the chrome, inside an runner zoom, or
-    // when the list is empty.
-    let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
-    let todo_row_needed = !chrome_hidden && !in_runner && has_visible_todos;
-    let todo_height: u16 = if todo_row_needed { TODO_BAR_ROWS } else { 0 };
-
     // The queue bar surfaces pending outbox messages. It is hidden while the
     // viewed session's queue is empty (the common idle case) so an ordinary
     // session reclaims the row; it appears the moment a message is staged
@@ -641,8 +629,8 @@ pub fn draw_transcript(
     // The footer stack is declared once, in draw order — the single-pass
     // placer derives both the band's total height (for the layout split) and
     // each row's rect, so the height arithmetic can no longer exist in two
-    // copies that drift. Order, top → bottom: gap, todo bar, queue bar,
-    // activity bar, step focus bar, input box, hint bar.
+    // copies that drift. Order, top → bottom: gap, queue bar,
+    // activity bar, input box, hint bar.
     let footer_rows: Vec<FooterRow> = if chrome_hidden || in_runner {
         Vec::new()
     } else {
@@ -650,10 +638,6 @@ pub fn draw_transcript(
             FooterRow {
                 id: FooterRowId::TopGap,
                 height: FOOTER_TOP_GAP_ROWS,
-            },
-            FooterRow {
-                id: FooterRowId::Todos,
-                height: todo_height,
             },
             FooterRow {
                 id: FooterRowId::Queue,
@@ -830,15 +814,7 @@ pub fn draw_transcript(
     // hand-derived `footer_x`/`footer_w` remains.
     let placed_footer = footer_stack::place(chunks[1], &footer_rows);
 
-    // The persistent todo bar leads the footer stack. It surfaces the live task
-    // list — the `TODOS d/t` identity and a preview of the current item — and
-    // is the click target that opens the Todos modal
-    // (the event loop resolves the click from the placed registry).
-    footer_stack::rect_of(&placed_footer, FooterRowId::Todos)
-        .filter(|_| todo_row_needed)
-        .and_then(|rect| todos.map(|list| draw_todo_bar(frame, rect, list, theme)));
-
-    // The persistent queue bar sits directly below the todo bar. It is a
+    // The persistent queue bar leads the footer stack below the top gap. It is a
     // stable one-row outbox summary so pending messages never have to be
     // inferred from the hint bar. The whole bar is the click target that
     // expands the full Queue modal.

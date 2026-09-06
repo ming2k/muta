@@ -325,7 +325,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 unconfined: app.unconfined,
                 switching_target: app.switching_session.as_deref(),
             }),
-            todos: app.todos.as_ref(),
             // View-scoped: the elapsed-timer origin belongs to the viewed
             // session's round (an aside view times the aside's round, not
             // the primary's).
@@ -626,7 +625,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Hit-test rects for the footer bars, resolved from the one registry the
     // renderer placed this frame (`TranscriptRender::footer`) — one source
     // of truth instead of per-bar plumbing.
-    app.todos_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Todos);
     app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
     // The composer panel's own rect, for the spatial mouse router (wheel
     // ticks and selection edge-autoscroll inside the box drive the input's
@@ -1093,16 +1091,6 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             }
             Some(rects.area)
         }
-        Modal::Todos => Some(view::draw_todos_modal(
-            f,
-            view::TodosModalView {
-                todos: app.todos.as_ref(),
-            },
-            &mut app.todos_scroll,
-            &app.theme,
-            &app.selection,
-            &mut layout_map,
-        )),
         Modal::Queue => Some(view::draw_queue_modal(
             f,
             view::QueueModalView {

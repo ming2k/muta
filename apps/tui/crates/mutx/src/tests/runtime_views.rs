@@ -2,66 +2,6 @@
 
 use super::*;
 
-#[test]
-fn todos_modal_aligns_with_header() {
-    let mut todos = muta_contracts::TodoList::new();
-    todos.items.push(muta_contracts::TodoItem {
-        id: muta_contracts::TodoId(1),
-        content: "First todo task".to_string(),
-        status: muta_contracts::TodoStatus::InProgress,
-        created_at: 0,
-        updated_at: 0,
-    });
-    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-    let mut scroll = 0;
-    let theme = Theme::default();
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-    let mut rect = mutx_engine::Rect::default();
-    terminal.draw(|frame| {
-        rect = crate::overlays::draw_todos_modal(
-            frame,
-            crate::overlays::TodosModalView {
-                todos: Some(&todos),
-            },
-            &mut scroll,
-            &theme,
-            &crate::model::selection::SelectionState::None,
-            &mut layout_map,
-        );
-    });
-    let buffer = terminal.buffer();
-    let inner_x = rect.x + crate::design::MODAL_INNER_H_PADDING;
-    let header_y = rect.y + crate::design::MODAL_INNER_V_PADDING;
-    // Header title "Todos" starts at inner_x
-    assert_eq!(buffer.get(inner_x, header_y).unwrap().symbol(), "T");
-    // Todo item status glyph "●" starts at the exact same column inner_x, aligning with header title
-    let body_y = header_y + 2;
-    assert_eq!(buffer.get(inner_x, body_y).unwrap().symbol(), "●");
-    assert_eq!(buffer.get(inner_x + 1, body_y).unwrap().symbol(), " ");
-    assert_eq!(buffer.get(inner_x + 2, body_y).unwrap().symbol(), "F");
-}
-
-#[test]
-fn todos_modal_renders_empty_state() {
-    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-    let mut scroll = 0;
-    let theme = Theme::default();
-    let mut layout_map = crate::model::layout::LayoutMap::new();
-    let mut rect = mutx_engine::Rect::default();
-    terminal.draw(|frame| {
-        rect = crate::overlays::draw_todos_modal(
-            frame,
-            crate::overlays::TodosModalView { todos: None },
-            &mut scroll,
-            &theme,
-            &crate::model::selection::SelectionState::None,
-            &mut layout_map,
-        );
-    });
-    assert!(rect.width > 0 && rect.height > 0);
-    assert_eq!(scroll, 0);
-}
-
 /// Regression for the wiring itself: the event loop feeds the input layer the
 /// **unsuppressed** `completion_kind` (the dismissal latch travels as its own
 /// `completion_dismissed` flag). Suppressing the kind while the latch is set

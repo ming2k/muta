@@ -473,7 +473,7 @@ mod tests {
             arguments: "{}".into(),
         };
 
-        // --- Case 1: trailing unanswered assistant (the original bug) ---
+        // Case 1: trailing unanswered assistant (the original bug)
         let body = super::body(
             vec![
                 Message::new(Role::User, "go"),
@@ -491,7 +491,7 @@ mod tests {
             "trailing unanswered assistant must be dropped"
         );
 
-        // --- Case 2: assistant with content but no tool result ---
+        // Case 2: assistant with content but no tool result
         let body = super::body(
             vec![
                 Message::new(Role::User, "go"),
@@ -515,7 +515,7 @@ mod tests {
             "unanswered calls must be stripped"
         );
 
-        // --- Case 3: partially answered call set ---
+        // Case 3: partially answered call set
         let body = super::body(
             vec![
                 Message::new(Role::User, "go"),
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["id"], "a");
 
-        // --- Case 4: multiple consecutive unanswered assistants ---
+        // Case 4: multiple consecutive unanswered assistants
         let body = super::body(
             vec![
                 Message::new(Role::User, "go"),
@@ -556,7 +556,7 @@ mod tests {
         assert!(msgs[1].get("tool_calls").is_none());
         assert!(msgs[2].get("tool_calls").is_none());
 
-        // --- Case 5: fully healthy conversation (no stripping) ---
+        // Case 5: fully healthy conversation (no stripping)
         let body = super::body(
             vec![
                 Message::new(Role::User, "go"),

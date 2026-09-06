@@ -47,7 +47,6 @@ fn render_full_view(
                     unconfined: false,
                     switching_target: None,
                 }),
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,

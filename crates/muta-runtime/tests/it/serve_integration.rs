@@ -1236,7 +1236,7 @@ async fn native_local_ipc_bind_failure_is_reported() {
     handle.cancel.cancel();
 }
 
-// ── Idle-empty session reaper ─────────────────────────────────────────────
+// Idle-empty session reaper
 
 /// Construct and host a bare session with no broadcast-tap subscriber, so the
 /// only potential event receiver is one the test adds explicitly. Unlike
@@ -1373,7 +1373,7 @@ async fn reaper_keeps_session_once_it_has_content() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-// ── Idle-hosted suspension (memory bounding for real sessions) ────────────
+// Idle-hosted suspension (memory bounding for real sessions)
 
 /// A persisted idle session with no clients is suspended after the TTL: the
 /// daemon's memory must be bounded by *active* work, not by session history.
@@ -1464,7 +1464,7 @@ async fn suspension_skips_empty_unpersisted_sessions() {
     assert!(hosted_ids(&registry).await.contains(&id));
 }
 
-// ── Daemon lifecycle (ADR-0100/0101) ──────────────────────────────────────
+// Daemon lifecycle (ADR-0100/0101)
 
 /// `ControlRequest::Shutdown` funnels into the serve gate: the reply is sent
 /// *before* the drain cancels this very connection (ADR-0100), and the
@@ -1862,9 +1862,7 @@ async fn control_suspend_session_parks_a_contentful_session() {
     assert!(!hosted_ids(&registry).await.contains(&id));
 }
 
-// ---------------------------------------------------------------------------
 // Workspace asset-trust attach flow.
-// ---------------------------------------------------------------------------
 
 /// Shared harness for the trust attach tests: hosts one session over the
 /// given project root + security store, attaches an interactive client, and

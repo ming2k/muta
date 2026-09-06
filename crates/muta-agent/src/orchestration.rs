@@ -289,7 +289,7 @@ impl Provider for ProxyProvider {
     }
 }
 
-// ── /debug trace ──────────────────────────────────────────────
+// /debug trace
 
 /// A queued capture record awaiting its response. Held across the inner call
 /// (for `chat`) or inside a [`CapturedStream`] (for the streaming paths) and
@@ -1914,7 +1914,7 @@ pub fn send_compaction(
     ));
 }
 
-// ── /repeat scheduler ─────────────────────────────────────────────────
+// /repeat scheduler
 
 /// One scheduler tick over the session's scheduled-prompt list
 /// (`/schedule` and the legacy `/repeat`):

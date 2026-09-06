@@ -689,7 +689,6 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills
-        | Modal::Todos
         | Modal::None => {}
     }
 }
@@ -848,7 +847,6 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Tools
         | Modal::Mcp
         | Modal::Skills
-        | Modal::Todos
         | Modal::None => {}
     }
 }

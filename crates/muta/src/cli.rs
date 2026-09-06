@@ -24,9 +24,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-// ─────────────────────────────────────────────────────────────────────────
 // The parsed command line
-// ─────────────────────────────────────────────────────────────────────────
 
 /// What the user asked the binary to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,9 +176,7 @@ pub struct CliArgs {
     pub project: Option<PathBuf>,
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // The command spec — one source of truth for parse, help, and completion
-// ─────────────────────────────────────────────────────────────────────────
 
 /// A command or subcommand entry.
 struct Spec {
@@ -407,9 +403,7 @@ fn resolve<'a>(word: &str, specs: &'a [Spec]) -> Option<&'a Spec> {
     specs.iter().find(|s| s.names.contains(&word))
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Flag parsing
-// ─────────────────────────────────────────────────────────────────────────
 
 /// A flag misuse, rendered as `--flag: message`.
 struct FlagError(String);
@@ -642,9 +636,7 @@ fn parse_table_flags(args: &[String], diagnostic: bool) -> Result<TableFlags, Fl
     Ok(flags)
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // parse
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Parse the command line into [`CliArgs`]. Errors are short, actionable
 /// strings; the caller owns the exit policy (GNU: stderr + exit 2).
@@ -985,9 +977,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     Ok(base(mode))
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Suggestions
-// ─────────────────────────────────────────────────────────────────────────
 
 /// clap-style "did you mean": an exact-prefix match first, then the
 /// closest command within a small edit distance.
@@ -1023,9 +1013,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Help (generated from the spec tables)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Per-command flag tables rendered into help. Kept as data so help and
 /// completion share them.
@@ -1184,9 +1172,7 @@ fn subs_of(cmd: &str) -> Option<&'static [Spec]> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Shell completions (generated from the same tables)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// The static completion script for a shell.
 pub fn completion_script(shell: Shell) -> String {
@@ -1330,9 +1316,7 @@ fn fish_completion() -> String {
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod surface_tests {

@@ -69,7 +69,7 @@ pub const COLOR_SCHEMES: [ColorSchemePreset; 7] = [
     ),
 ];
 
-// ── Default Styling Constants ──────────────────────────────────────────────
+// Default Styling Constants
 pub const DEFAULT_CRATE_FG: Color = Color::Rgb(180, 190, 254);
 pub const DEFAULT_CARET_FG: Color = Color::Rgb(213, 213, 205);
 pub const DEFAULT_INPUT_PLACEHOLDER_FG: Color = Color::Rgb(119, 125, 117);
@@ -775,7 +775,7 @@ impl Theme {
         }
     }
 
-    // ── Surfaces (backgrounds) ──
+    // Surfaces (backgrounds)
     /// Frame background — the base everything sits on.
     pub fn surface(&self) -> Color {
         self.app_bg
@@ -871,7 +871,7 @@ impl Theme {
         }
     }
 
-    // ── Foregrounds ──
+    // Foregrounds
     pub fn fg(&self) -> Color {
         self.text
     }
@@ -909,7 +909,7 @@ impl Theme {
         self.info
     }
 
-    // ── Attachment chips ──
+    // Attachment chips
     // Paste chips (`[Pasted text #N +M lines (size)]`) and image chips
     // (`[Image #N (size)]`) are the composer's identifiers for staged
     // attachments. Each kind gets its own foreground + tinted band so pasted
@@ -1043,7 +1043,7 @@ impl Theme {
         mutx_engine::Style::default().fg(self.keycap_label_fg)
     }
 
-    // ── 4-Layer Spatial Surfaces Tokens ──
+    // 4-Layer Spatial Surfaces Tokens
     pub fn surfaces(&self) -> SurfacesTokens {
         SurfacesTokens {
             view: ViewTokens {
@@ -1071,7 +1071,7 @@ impl Theme {
         }
     }
 
-    // ── Feedback Severity Tokens ──
+    // Feedback Severity Tokens
     pub fn feedback(&self, severity: muta_contracts::NoticeSeverity) -> FeedbackToneTokens {
         match severity {
             muta_contracts::NoticeSeverity::Info => FeedbackToneTokens {
@@ -1100,7 +1100,7 @@ impl Theme {
         }
     }
 
-    // ── Component Overrides Tokens ──
+    // Component Overrides Tokens
     pub fn components(&self) -> ComponentsTokens {
         ComponentsTokens {
             input: InputTokens {

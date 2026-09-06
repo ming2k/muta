@@ -209,7 +209,7 @@ pub fn headers(
     headers
 }
 
-// ── prompt-caching breakpoint stamping ────────────────────────────────────
+// prompt-caching breakpoint stamping
 
 /// Hard cap on breakpoints across tools + system + messages combined
 /// (a 5th returns HTTP 400).
@@ -306,7 +306,7 @@ fn stamp_message_history_breakpoints(messages: &mut Value, budget: usize, contro
     }
 }
 
-// ── extended-thinking / effort stamping ───────────────────────────────────
+// extended-thinking / effort stamping
 
 /// The `budget_tokens` value for MANUAL extended thinking on models without
 /// adaptive thinking (Haiku 4.5). The Messages API requires `budget_tokens <
@@ -366,7 +366,7 @@ fn stamp_thinking(
     }
 }
 
-// ── message conversion ────────────────────────────────────────────────────
+// message conversion
 
 /// Convert a harness [`Message`] to an Anthropic message object.
 ///

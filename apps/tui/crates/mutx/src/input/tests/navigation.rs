@@ -287,7 +287,6 @@ fn page_keys_scroll_question_modal_body() {
 fn page_keys_scroll_every_scrollable_modal_body() {
     let scrollable = [
         crate::Modal::Help,
-        crate::Modal::Todos,
         crate::Modal::Permissions,
         crate::Modal::Config,
         crate::Modal::Telemetry,

@@ -137,7 +137,7 @@ impl ToolAccesses {
         self
     }
 
-    // ---- convenience constructors mirroring kimi-code's factories ----
+    // convenience constructors mirroring kimi-code's factories
 
     /// Read a single file.
     #[inline]
@@ -298,7 +298,7 @@ mod tests {
         ToolAccesses::read_write_file(p)
     }
 
-    // ---- operation compatibility (B) ----
+    // operation compatibility (B)
 
     #[test]
     fn two_reads_same_file_do_not_conflict() {
@@ -326,7 +326,7 @@ mod tests {
         assert!(!s.conflicts(&ToolAccesses::search_tree("src")));
     }
 
-    // ---- path overlap (C) ----
+    // path overlap (C)
 
     #[test]
     fn reads_of_different_files_do_not_conflict() {
@@ -357,7 +357,7 @@ mod tests {
         assert!(!wt("src/lib.rs").conflicts(&rd("src")));
     }
 
-    // ---- All ----
+    // All
 
     #[test]
     fn all_conflicts_with_everything() {
@@ -367,7 +367,7 @@ mod tests {
         assert!(all.conflicts(&ToolAccesses::all()));
     }
 
-    // ---- none ----
+    // none
 
     #[test]
     fn none_never_conflicts() {
@@ -378,7 +378,7 @@ mod tests {
         assert!(!n.conflicts(&n));
     }
 
-    // ---- normalization ----
+    // normalization
 
     #[test]
     fn normalization_collapses_and_strips() {

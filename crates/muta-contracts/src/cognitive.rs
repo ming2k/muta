@@ -83,7 +83,7 @@ fn strip_markdown_code_fence(raw: &str) -> &str {
     trimmed
 }
 
-// ── 0. In-flight Stream Loop Review ──────────────────────────────────────
+// 0. In-flight Stream Loop Review
 
 /// The output channel in which the deterministic detector found a candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ impl CognitiveTask for StreamLoopReviewerTask {
     }
 }
 
-// ── 1. Session Digest ──────────────────────────────────────────────────────
+// 1. Session Digest
 
 /// The resume-time "working memory" projection of a session: a headline, the
 /// user's intent, and a running checklist of what has happened.
@@ -239,7 +239,7 @@ impl CognitiveTask for SessionDigestTask {
     }
 }
 
-// ── 2. Pre-flight Intent & Tier Routing ────────────────────────────────────
+// 2. Pre-flight Intent & Tier Routing
 
 /// Target execution tier determined during pre-flight analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -307,7 +307,7 @@ impl CognitiveTask for PreFlightRouterTask {
     }
 }
 
-// ── 3. Environment Sensing & Dynamic Reminder ─────────────────────────────
+// 3. Environment Sensing & Dynamic Reminder
 
 /// Input state captured from the local workspace environment.
 #[derive(Debug, Clone, Serialize, Deserialize)]

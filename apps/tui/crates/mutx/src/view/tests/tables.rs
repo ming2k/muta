@@ -36,7 +36,7 @@ fn wide_table_shrinks_columns_and_keeps_borders_intact() {
         TableAlignment::None,
     ];
 
-    // ── Narrow terminal (34 cols): table is far wider, must shrink ──
+    // Narrow terminal (34 cols): table is far wider, must shrink
     let lines = build_table_render(&headers, &rows, &aligns, 34).lines;
     assert!(!lines.is_empty(), "table must produce output");
 
@@ -71,7 +71,7 @@ fn wide_table_shrinks_columns_and_keeps_borders_intact() {
         "all data lines must have the same number of column separators"
     );
 
-    // ── Wide terminal (80 cols): table fits without shrinking ──
+    // Wide terminal (80 cols): table fits without shrinking
     let wide_lines = build_table_render(&headers, &rows, &aligns, 76).lines;
     for (i, line) in wide_lines.iter().enumerate() {
         assert!(

@@ -153,7 +153,7 @@ fn list_skill_files(root: &std::path::Path) -> String {
     }
 }
 
-// --- Tools available for programmatic invocation / tests ---
+// Tools available for programmatic invocation / tests
 // Note: Skills are now progressively disclosed in the system prompt metadata and read via standard file tools.
 
 #[cfg(test)]

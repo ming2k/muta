@@ -331,9 +331,7 @@ pub(crate) fn tab_strip_line(
     ])
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Overview Tab Builder
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn build_overview_body(
     report: &TokenSourceReport,
@@ -344,7 +342,7 @@ pub(crate) fn build_overview_body(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    // ── 1. Context Window ──
+    // 1. Context Window
     lines.push(overview_section_header("CONTEXT WINDOW", theme));
 
     let window_max = context.window_tokens.unwrap_or(0);
@@ -386,7 +384,7 @@ pub(crate) fn build_overview_body(
 
     lines.push(Line::from(""));
 
-    // ── 2. Session Token Totals ──
+    // 2. Session Token Totals
     lines.push(overview_section_header("SESSION TOKEN TOTALS", theme));
 
     let total_prompt = report.grand_total.prompt_tokens as u64;
@@ -442,7 +440,7 @@ pub(crate) fn build_overview_body(
 
     lines.push(Line::from(""));
 
-    // ── 3. Performance & Activity ──
+    // 3. Performance & Activity
     lines.push(overview_section_header(
         "STREAM PERFORMANCE & ACTIVITY",
         theme,
@@ -534,9 +532,7 @@ fn kv_overview_line(key: &str, value: &str, val_style: Style, theme: &Theme) -> 
     ])
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // L1: Round Table Builder (Sticky Header + Data Rows)
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn build_rounds_table(
     rounds: &[TelemetryRound],
@@ -709,9 +705,7 @@ pub(crate) fn build_rounds_table(
     (header_lines, rows, follow)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // L2: Turn Table Builder (Sticky Header + Data Rows)
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn build_turns_table(
     rounds: &[TelemetryRound],
@@ -871,9 +865,7 @@ pub(crate) fn build_turns_table(
     (header_lines, rows, follow)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // L3: Attempt Inspector Body (Vertical Waterfall)
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn build_attempt_inspector_body(
     rounds: &[TelemetryRound],

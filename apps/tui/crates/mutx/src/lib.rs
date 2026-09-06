@@ -47,7 +47,7 @@ mod transcript;
 pub mod trust_gate;
 mod versioned;
 
-// ── View layer (merged from the former `mutx-view` crate) ─────────────
+// View layer (merged from the former `mutx-view` crate)
 
 // Semantic data model.
 pub(crate) mod model;
@@ -109,7 +109,7 @@ pub(crate) use providers::{CustomField, PROVIDER_PRESETS, preset_label_for};
 use muta_contracts::{
     AgentRequest, AgentResponse, HarnessSnapshot, LoopStatus, Message, ParentStatus,
     PermissionRequest, ProviderPickerSnapshot, Role, RoundEvent, SessionContextSnapshot,
-    SessionOverview, TodoList, UserQuestionRequest,
+    SessionOverview, UserQuestionRequest,
 };
 use mutx_engine::{Backend, Terminal};
 use std::{
@@ -381,10 +381,6 @@ pub async fn run_tui(
         retry_pending: false,
     }));
     let harness_clone = harness.clone();
-    // Unified task list, mirrored from `AgentResponse::TodosUpdated`. Empty
-    // (`None`) hides the panel.
-    let todos: Arc<Mutex<Option<TodoList>>> = Arc::new(Mutex::new(None));
-    let todos_clone = todos.clone();
     let round_count: Arc<Mutex<u64>> = Arc::new(Mutex::new(initial_round_count));
     let round_count_clone = round_count.clone();
     // Current ReAct turn within the active round. Reset to 0 at each round
@@ -1774,11 +1770,7 @@ pub async fn run_tui(
                             let mut msgs = buf.write().await;
                             finalize_streaming_reasoning(&mut msgs, duration_ms);
                         }
-                        RoundEvent::TodosUpdated(list) => {
-                            if !routes_to_side {
-                                *todos_clone.lock().await = Some(list);
-                            }
-                        }
+                        RoundEvent::TodosUpdated(_) => {}
                         RoundEvent::DelegatedChanged(enabled) => {
                             if !routes_to_side {
                                 harness_clone.lock().await.delegated = enabled;
@@ -2295,7 +2287,6 @@ pub async fn run_tui(
         telemetry_turn: None,
         usage_stats: None,
         usage_stats_scroll: 0,
-        todos_rect: None,
         queue_rect: None,
         modal_rect: None,
         modal_body_height: 0,
@@ -2359,11 +2350,9 @@ pub async fn run_tui(
         provider_retry: None,
         delegated: false,
         unconfined: false,
-        todos: None,
         round_count: 0,
         current_turn: 0,
         round_started_at: None,
-        todos_scroll: 0,
         queue_scroll: 0,
         queue_modal_follow: true,
         help_scroll: 0,
@@ -2577,7 +2566,6 @@ pub async fn run_tui(
             oauth_add_signal,
             awaiting_oauth_add,
             session_context,
-            todos,
             round_count,
             current_turn,
             round_started_at,
@@ -2703,156 +2691,11 @@ fn push_local_notice(
     );
 }
 
-/// Format a single inline-transcript notice for a task-list update. Task-list
-/// changes are the agent's own bookkeeping — full per-item detail lives in the
-/// Activity modal — so the transcript never fans them out into one line per
-/// changed step. Instead every update collapses to **at most one** summary line:
-/// the running `done/total` tally, optionally annotated with how many items
-/// changed status this turn. Returns `None` when nothing changed.
 #[cfg(test)]
-fn describe_todos_change(prev: Option<&TodoList>, new: Option<&TodoList>) -> Option<String> {
-    let new = new.filter(|l| !l.items.is_empty())?;
-    let done = new.count(muta_contracts::TodoStatus::Completed);
-    let total = new.items.len();
-    let Some(prev) = prev.filter(|l| !l.items.is_empty()) else {
-        return Some(format!("tasks started ({done}/{total})"));
-    };
-    // Count status transitions across the items present in both snapshots.
-    // Newly added items (no positional counterpart) do not read as a status
-    // *change* and are absorbed into the tally rather than flagged here.
-    let changed = prev
-        .items
-        .iter()
-        .zip(new.items.iter())
-        .filter(|(a, b)| a.status != b.status)
-        .count();
-    if changed == 0 && prev.items.len() == new.items.len() {
-        return None;
-    }
-    // One compact line: progress tally plus — only when something actually
-    // moved — how many steps changed this turn.
-    if changed > 0 {
-        Some(format!("tasks ({done}/{total}, {changed} updated)"))
-    } else {
-        Some(format!("tasks ({done}/{total})"))
-    }
-}
-
-#[cfg(test)]
-mod describe_todos_change_tests {
-    //! Behaviour contract for the single-line task-list transcript notice.
-    //! The point of condensing is that *every* update — even one that ticks
-    //! five steps at once — yields at most one `ℹ` line, not a fan-out.
+mod streaming_appends_tests {
+    //! Identity-addressed streaming appends (ADR-0114).
     use super::*;
-    use muta_contracts::{TodoId, TodoItem, TodoStatus};
-
-    fn item(id: u64, status: TodoStatus) -> TodoItem {
-        TodoItem {
-            id: TodoId(id),
-            content: format!("step {id}"),
-            status,
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-
-    fn list(items: &[TodoItem]) -> TodoList {
-        TodoList {
-            items: items.to_vec(),
-            ..TodoList::default()
-        }
-    }
-
-    #[test]
-    fn first_appearance_announces_started_with_tally() {
-        let new = list(&[
-            item(1, TodoStatus::InProgress),
-            item(2, TodoStatus::Pending),
-            item(3, TodoStatus::Pending),
-        ]);
-        // No previous list → the "started" line, counting completed (0/3).
-        assert_eq!(
-            describe_todos_change(None, Some(&new)),
-            Some("tasks started (0/3)".to_string())
-        );
-    }
-
-    #[test]
-    fn multiple_status_changes_collapse_to_one_line() {
-        // The regression this guards: previously each changed step emitted its
-        // own `ℹ` line. Now five simultaneous ticks produce exactly one.
-        let prev = list(&[
-            item(1, TodoStatus::Pending),
-            item(2, TodoStatus::Pending),
-            item(3, TodoStatus::InProgress),
-            item(4, TodoStatus::Pending),
-            item(5, TodoStatus::Pending),
-        ]);
-        let new = list(&[
-            item(1, TodoStatus::Completed),
-            item(2, TodoStatus::Completed),
-            item(3, TodoStatus::Completed),
-            item(4, TodoStatus::InProgress),
-            item(5, TodoStatus::Cancelled),
-        ]);
-        assert_eq!(
-            describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks (3/5, 5 updated)".to_string())
-        );
-    }
-
-    #[test]
-    fn single_status_change_counts_one() {
-        let prev = list(&[
-            item(1, TodoStatus::Pending),
-            item(2, TodoStatus::InProgress),
-        ]);
-        let new = list(&[item(1, TodoStatus::Pending), item(2, TodoStatus::Completed)]);
-        assert_eq!(
-            describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks (1/2, 1 updated)".to_string())
-        );
-    }
-
-    #[test]
-    fn no_change_emits_nothing() {
-        let same = list(&[
-            item(1, TodoStatus::InProgress),
-            item(2, TodoStatus::Pending),
-        ]);
-        assert_eq!(describe_todos_change(Some(&same), Some(&same)), None);
-    }
-
-    #[test]
-    fn size_only_change_drops_the_updated_suffix() {
-        // Items added without any positional status change: still one line,
-        // but without the "N updated" suffix since nothing transitioned.
-        let prev = list(&[item(1, TodoStatus::Pending)]);
-        let new = list(&[
-            item(1, TodoStatus::Pending),
-            item(2, TodoStatus::Pending),
-            item(3, TodoStatus::Pending),
-        ]);
-        assert_eq!(
-            describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks (0/3)".to_string())
-        );
-    }
-
-    #[test]
-    fn empty_new_list_emits_nothing() {
-        let prev = list(&[item(1, TodoStatus::Pending)]);
-        assert_eq!(
-            describe_todos_change(Some(&prev), Some(&TodoList::default())),
-            None
-        );
-        assert_eq!(
-            describe_todos_change(None, Some(&TodoList::default())),
-            None
-        );
-    }
-
-    // ── Identity-addressed streaming appends (ADR-0114) ──────────────────
+    use crate::model::document::MessageKind;
 
     fn thinking_entry(round: u64, turn: u64, content: &str) -> TranscriptMessage {
         let mut m = TranscriptMessage::thinking(content);

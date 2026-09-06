@@ -1,7 +1,7 @@
 # Queue bar
 
 One-row persistent summary of the viewed session's staged outbox, pinned at the
-top of the footer stack just below the [todo bar](todo-bar.md) and above the
+top of the footer stack above the
 transient [activity bar](activity-bar.md). It is the permanent home for
 queue-affordances while the agent is mid-round: a busy `Enter` stages the
 message here rather than sending it immediately.
@@ -29,7 +29,7 @@ ladder](visual-language.md)) — no `·`. The preview truncates with `…`.
 | Legend | `Ctrl+P` + ` block`/` resume`  `Ctrl+Q` + ` expand` | keycap (`theme.brand()` + BOLD) + `theme.muted()` |
 
 The bar sits on the **plain surface** (no raised tint, no tray glyph, no
-send-time label), quietly matching the [todo bar](todo-bar.md) above it. The
+send-time label). The
 per-item send time lives in the [Queue modal](modals.md) instead.
 
 The legend keeps a guaranteed `BAR_LEGEND_GAP_MIN` columns of breathing room

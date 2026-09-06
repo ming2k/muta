@@ -233,7 +233,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // ── Acceptance banner (only when force-mounted by env var) ──
+    // Acceptance banner (only when force-mounted by env var)
     if state.acceptance() {
         push_wrapped_styled(
             &mut lines,
@@ -248,7 +248,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
         lines.push(Line::default());
     }
 
-    // ── Header (origin badge) ──
+    // Header (origin badge)
     lines.push(Line::from(vec![Span::styled(
         "[workspace trust]",
         Style::default()
@@ -286,7 +286,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
         return;
     }
 
-    // ── Question body ──
+    // Question body
     let qmodel = state.model();
     let request = qmodel.request();
     let current = qmodel.current();
@@ -316,7 +316,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
         lines.push(Line::default());
         lines.push(Line::default());
 
-        // ── Options ──
+        // Options
         let selected_bg = theme.selected();
         let selected_fg = contrast_fg(selected_bg);
         for (idx, opt) in question.options.iter().enumerate() {
@@ -355,7 +355,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
     lines.push(Line::default());
     lines.push(Line::default());
 
-    // ── Footer key hints ──
+    // Footer key hints
     let hint = Span::styled(
         "↑/↓ navigate   Enter select   Esc quit",
         Style::default().fg(theme.muted()),

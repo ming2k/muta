@@ -713,7 +713,6 @@ pub fn estimate_string_tokens(s: &str) -> i64 {
     tokenizer::count_tokens(s) as i64
 }
 
-// ---------------------------------------------------------------------------
 // Incremental token accounting
 //
 // Messages are immutable once written: a user prompt, an assistant turn, and
@@ -723,7 +722,6 @@ pub fn estimate_string_tokens(s: &str) -> i64 {
 // weights are therefore a pure function of message bytes and can be cached
 // content-addressed: the same message never pays for BPE tokenization twice,
 // no matter how many estimate passes, retries, or projections re-walk it.
-// ---------------------------------------------------------------------------
 
 /// A 128-bit fingerprint of every byte that feeds [`estimate_message_tokens`]
 /// for one message. Collisions across a session's lifetime are negligible

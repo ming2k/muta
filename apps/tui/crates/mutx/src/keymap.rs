@@ -23,9 +23,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::modal::Modal;
 use crate::surfaces::View;
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Canonical key vocabulary and display formatting
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Repeated legend tokens — glyph strings that stand for an affordance.
 pub mod keyvocab {
@@ -548,14 +546,12 @@ impl Key {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Command Registry SSOT Specification Types
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Exhaustive identifier for every executable command in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandId {
-    // ── Global (6 Hard-Bound Shortcuts) ──
+    // Global (6 Hard-Bound Shortcuts)
     Help,
     CommandPalette,
     CancelOrBack,
@@ -563,18 +559,17 @@ pub enum CommandId {
     Quit,
     CopySelection,
 
-    // ── Session & Composer ──
+    // Session & Composer
     SendPrompt,
     QueueFollowUp,
     SteerImmediate,
     ToggleSendMode,
     HistorySearch,
 
-    // ── Surface Navigation ──
+    // Surface Navigation
     NavigateSession,
     NavigateDashboard,
     NavigateSettings,
-    OpenTodos,
     OpenQueue,
     OpenTelemetry,
     OpenModels,
@@ -589,7 +584,7 @@ pub enum CommandId {
     OpenBtw,
     OpenSessions,
 
-    // ── Management & Actions ──
+    // Management & Actions
     ToggleQueueBlock,
     ClearQueue,
     PermissionsClearAll,
@@ -686,9 +681,7 @@ pub struct CommandSpec {
     pub description: &'static str,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Availability Predicates
-// ─────────────────────────────────────────────────────────────────────────────
 
 fn avail_always(_: &AppContext) -> Availability {
     Availability::Available
@@ -728,12 +721,10 @@ fn avail_queue_nonempty(ctx: &AppContext) -> Availability {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Static Command Registry Master Table
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub static COMMAND_REGISTRY: &[CommandSpec] = &[
-    // ── 6 Canonical Global Bindings ──
+    // 6 Canonical Global Bindings
     CommandSpec {
         id: CommandId::Help,
         label: "Help",
@@ -812,7 +803,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Copy selected text to clipboard",
     },
-    // ── Session & Composer Controls ──
+    // Session & Composer Controls
     CommandSpec {
         id: CommandId::SendPrompt,
         label: "Send Prompt",
@@ -878,7 +869,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Search and recall past prompt history",
     },
-    // ── Surface Navigation ──
+    // Surface Navigation
     CommandSpec {
         id: CommandId::NavigateSession,
         label: "Session",
@@ -917,19 +908,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
         description: "Open application and appearance settings",
-    },
-    CommandSpec {
-        id: CommandId::OpenTodos,
-        label: "Todos",
-        hint: "/todos",
-        category: CommandCategory::Navigate,
-        scope: Scope::Global,
-        bindings: &[],
-        slash: Some("/todos"),
-        availability: avail_always,
-        disclosure: DisclosurePriority::L2Palette,
-        danger: DangerLevel::Safe,
-        description: "View agent task list and progression status",
     },
     CommandSpec {
         id: CommandId::OpenQueue,
@@ -1100,7 +1078,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Switch between saved project sessions",
     },
-    // ── Management Actions ──
+    // Management Actions
     CommandSpec {
         id: CommandId::ToggleQueueBlock,
         label: "Block / Resume Queue",
@@ -1168,9 +1146,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Registry Lookup & Derivation Utilities
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Complete set of registered command specs.
 pub fn all_commands() -> &'static [CommandSpec] {
@@ -1603,9 +1579,7 @@ pub fn commands_for_palette(ctx: &AppContext) -> Vec<(&'static CommandSpec, Avai
         .collect()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

@@ -34,7 +34,7 @@ impl AspectEngine {
         &self.cognitive
     }
 
-    // ── Phase 1: Pre-flight ───────────────────────────────────────────────
+    // Phase 1: Pre-flight
 
     /// Evaluate user turn intent and select the appropriate execution tier.
     pub async fn evaluate_pre_flight(
@@ -59,7 +59,7 @@ impl AspectEngine {
             .await
     }
 
-    // ── Phase 2: Turn Intake ──────────────────────────────────────────────
+    // Phase 2: Turn Intake
 
     /// Sense workspace environment facts (e.g. git status) and synthesize a dynamic reminder.
     pub async fn evaluate_turn_intake(
@@ -85,14 +85,14 @@ impl AspectEngine {
         output.reminder_text
     }
 
-    // ── Phase 3: In-flight Stream ─────────────────────────────────────────
+    // Phase 3: In-flight Stream
 
     /// Confirm or clear an L1 in-flight stream loop candidate.
     pub async fn review_stream_loop(&self, input: StreamLoopReviewInput) -> StreamLoopVerdict {
         self.cognitive.review_stream_loop(input).await
     }
 
-    // ── Phase 4: Tool Gating ──────────────────────────────────────────────
+    // Phase 4: Tool Gating
 
     /// Evaluate tool invocation safety against repeated-call ruts and doom thresholds.
     pub fn evaluate_tool_gating(
@@ -124,7 +124,7 @@ impl AspectEngine {
         AspectVerdict::Continue
     }
 
-    // ── Phase 5: Round EOL ────────────────────────────────────────────────
+    // Phase 5: Round EOL
 
     /// Asynchronously distill working memory and generate/revise session digest.
     pub async fn process_round_eol(

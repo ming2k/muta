@@ -464,7 +464,7 @@ mod tests {
     use super::*;
     use muta_contracts::{Message, Role, Tool};
 
-    // --- resolved-variant schema reaches the request body ---
+    // resolved-variant schema reaches the request body
 
     /// Minimal Tool stand-in carrying a variant id, so resolving a toolset and
     /// preparing its schemas can be exercised without the whole tools crate.

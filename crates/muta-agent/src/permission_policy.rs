@@ -216,10 +216,8 @@ pub fn default_chain() -> Vec<Box<dyn PermissionPolicy>> {
     ]
 }
 
-// ---------------------------------------------------------------------------
 // Concrete policies. Hook/Bash/Broker are async; the rest decide from the
 // context alone.
-// ---------------------------------------------------------------------------
 
 /// Gate 1: PreToolUse hook. Runs the (async) hook verdict and honours a deny.
 pub struct HookPolicy;

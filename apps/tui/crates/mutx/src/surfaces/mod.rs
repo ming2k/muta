@@ -6,12 +6,9 @@
 //!   stands *in* a view and the terminal is the view (`Session`,
 //!   `Dashboard`, `Settings`, `Runner`, `Side`).
 //! - A [`PanelId`] names a **retained modal** — one of the browse overlays
-//!   (help, activity, todos, tools, …) that floats over whatever view is
+//!   (help, tools, …) that floats over whatever view is
 //!   active. Retention (cursor/scroll/drafts via [`PanelRegistry`]) is
 //!   orthogonal to geometry: a panel is still a modal.
-//! - A [`Modal`] is only a surface's rendering/input presentation and is
-//!   never a usable identity: Activity and Todos intentionally share one
-//!   modal.
 //!
 //! The [`SurfaceRouter`] is the sole owner of the focused surface: the
 //! base view, the panel or transient floating over it, and the transient
@@ -105,7 +102,6 @@ impl View {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelId {
     Help,
-    Todos,
     Tools,
     Mcp,
     Skills,
@@ -138,7 +134,6 @@ impl PanelId {
     pub(crate) fn modal(self) -> Modal {
         match self {
             PanelId::Help => Modal::Help,
-            PanelId::Todos => Modal::Todos,
             PanelId::Tools => Modal::Tools,
             PanelId::Mcp => Modal::Mcp,
             PanelId::Skills => Modal::Skills,
@@ -156,11 +151,10 @@ impl PanelId {
     }
 
     /// Every panel id, in quick-switcher display order: reference surfaces
-    /// first (Help, Todos), then manager lists, then reports,
+    /// first (Help), then manager lists, then reports,
     /// then the pickers.
-    pub(crate) const ALL: [PanelId; 15] = [
+    pub(crate) const ALL: [PanelId; 14] = [
         PanelId::Help,
-        PanelId::Todos,
         PanelId::Tools,
         PanelId::Mcp,
         PanelId::Skills,
@@ -180,7 +174,6 @@ impl PanelId {
     pub(crate) fn label(self) -> &'static str {
         match self {
             PanelId::Help => "Help / keys",
-            PanelId::Todos => "Todos",
             PanelId::Tools => "Tools",
             PanelId::Mcp => "MCP servers",
             PanelId::Skills => "Skills",
@@ -203,7 +196,6 @@ impl PanelId {
     pub(crate) fn hint(self) -> &'static str {
         match self {
             PanelId::Help => "F1",
-            PanelId::Todos => "/todos",
             PanelId::Tools => "/tools",
             PanelId::Mcp => "/mcp",
             PanelId::Skills => "/skills",
@@ -287,8 +279,7 @@ enum Overlay {
 /// or transient floating over it, and a bounded transient return stack.
 ///
 /// Only the router may turn an exact [`PanelId`] or [`View`] into its
-/// [`Modal`] projection. This makes the Activity/Todos identity non-lossy
-/// and gives request sheets, editors and the quick switcher one consistent
+/// [`Modal`] projection. This gives request sheets, editors and the quick switcher one consistent
 /// push/pop contract.
 #[derive(Debug)]
 pub(crate) struct SurfaceRouter {
@@ -746,25 +737,25 @@ mod tests {
     }
 
     #[test]
-    fn router_preserves_todos_panel_identity() {
-        assert_eq!(PanelId::Todos.modal(), Modal::Todos);
-        let router = SurfaceRouter::with_panel(PanelId::Todos);
-        assert_eq!(router.modal(), Modal::Todos);
-        assert_eq!(router.active_panel(), Some(PanelId::Todos));
+    fn router_preserves_panel_identity() {
+        assert_eq!(PanelId::Tools.modal(), Modal::Tools);
+        let router = SurfaceRouter::with_panel(PanelId::Tools);
+        assert_eq!(router.modal(), Modal::Tools);
+        assert_eq!(router.active_panel(), Some(PanelId::Tools));
         assert_eq!(router.active_view(), View::Session);
     }
 
     #[test]
     fn transient_stack_restores_exact_panel() {
-        let mut router = SurfaceRouter::with_panel(PanelId::Todos);
+        let mut router = SurfaceRouter::with_panel(PanelId::Tools);
         router.push_transient(Modal::ViewSwitcher);
         router.push_transient(Modal::OauthPending);
         assert_eq!(router.pop_transient().modal(), Modal::ViewSwitcher);
-        assert_eq!(router.pop_transient().panel(), Some(PanelId::Todos));
+        assert_eq!(router.pop_transient().panel(), Some(PanelId::Tools));
         // The panel is restored as the active surface.
-        assert_eq!(router.active(), Surface::Panel(PanelId::Todos));
+        assert_eq!(router.active(), Surface::Panel(PanelId::Tools));
         // An unbalanced pop falls back to the session view.
-        assert_eq!(router.active(), Surface::Panel(PanelId::Todos));
+        assert_eq!(router.active(), Surface::Panel(PanelId::Tools));
         router.hide_panel();
         let drained = router.pop_transient();
         assert_eq!(drained, Surface::View(View::Session));

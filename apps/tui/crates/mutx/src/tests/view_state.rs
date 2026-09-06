@@ -363,9 +363,7 @@ fn view_reset_clears_pending_scroll_settle() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // ADR-0133: retained, buffer-like view state.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn browse_view_reopen_restores_scroll_and_selection() {
@@ -468,7 +466,7 @@ fn view_switcher_restore_roundtrip() {
     );
 
     // Help's retained state survived the switcher round-trip.
-    app.open_panel(crate::surfaces::PanelId::Todos);
+    app.open_panel(crate::surfaces::PanelId::Tools);
     assert!(!app.open_panel(crate::surfaces::PanelId::Help));
     assert_eq!(app.modal_index, 4, "retained selection intact");
 }

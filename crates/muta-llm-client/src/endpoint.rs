@@ -136,7 +136,7 @@ impl Endpoint {
         self.id = id;
     }
 
-    // ── accessors ────────────────────────────────────────────────────────
+    // accessors
     //
     // Provided once here so each provider forwards through its embedded
     // `endpoint` field instead of restating them. Naming note: these are

@@ -405,7 +405,6 @@ const fn nonzero(tokens: u64) -> i64 {
     if tokens < 1 { 1 } else { tokens as i64 }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Baseline value-sets (Layer B).
 //
 // Each const is the **seed ladder** for the model family named in its doc.
@@ -413,7 +412,6 @@ const fn nonzero(tokens: u64) -> i64 {
 // doc). The first doc line of each const states whether upstream advertises
 // tiers (so the baseline is just a pre-fetch seed) or advertises nothing (so
 // the baseline *is* the effective ladder, sourced from prose docs).
-// ─────────────────────────────────────────────────────────────────────────
 
 /// **Upstream advertises nothing** — effective ladder, sourced from prose.
 /// `low`/`medium`/`high`: the conservative set for any model whose higher

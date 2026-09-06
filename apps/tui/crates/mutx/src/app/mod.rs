@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{
     AgentRequest, ConnectionAuth, ImagePart, LoopStatus, ParentStatus, PermissionRequest,
-    ProviderPickerSnapshot, SessionOverview, TodoList,
+    ProviderPickerSnapshot, SessionOverview,
 };
 
 use crate::completion::CompletionItemKind;
@@ -369,10 +369,6 @@ pub struct App {
     pub usage_stats: Option<muta_contracts::usage_stats::UsageStatsReport>,
     /// Scroll offset of the usage-statistics overlay body.
     pub usage_stats_scroll: usize,
-    /// Screen rect of the todo bar (the one-row task-list summary), so a click
-    /// on it opens the Activity modal directly on the Todos section. `None`
-    /// when no todos are shown (empty task list or bar hidden).
-    pub todos_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the persistent queue bar (the one-row outbox summary),
     /// so a click anywhere on it expands the full Queue modal. `None` when the
     /// bar is hidden (chrome hidden or runner zoom).
@@ -617,11 +613,6 @@ pub struct App {
     /// Whether workspace filesystem confinement is bypassed this session
     /// (`--unconfined` / `/unconfined on`). Mirrored from the harness snapshot.
     pub unconfined: bool,
-    /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
-    /// inside the Todos modal (`Modal::Todos`) and on the ambient todo bar.
-    /// `None` (or an empty list) hides it. A plan approved via `plan_exit`
-    /// seeds this list from its `##` headings.
-    pub todos: Option<TodoList>,
     /// Harness round counter, mirrored each frame.
     pub round_count: u64,
     /// Current turn within the active round (1-indexed for display:
@@ -631,9 +622,6 @@ pub struct App {
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,
-    /// Scroll offset inside `Modal::Todos`. Reset to 0 each time the modal
-    /// opens; clamped each frame by the modal's body renderer.
-    pub todos_scroll: usize,
     /// Scroll offset inside `Modal::Queue`. Reset to 0 each time the modal
     /// opens; clamped each frame by the modal's body renderer. When
     /// `queue_modal_follow` is set, it is nudged so the ↑/↓ selection stays

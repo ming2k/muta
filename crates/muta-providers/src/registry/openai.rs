@@ -26,7 +26,7 @@ pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── GPT-5.6 (OpenAI) ───────────────────────────────────────────────────
+    // GPT-5.6 (OpenAI)
     // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
     // Sol (flagship) / Terra (balanced) / Luna (efficient, high-volume).
     // `gpt-5.6` is an alias that routes to `gpt-5.6-sol`. All speak the
@@ -79,7 +79,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
-    // ── GPT (OpenAI) ───────────────────────────────────────────────────────
+    // GPT (OpenAI)
     // The current frontier chat family served over the OpenAI chat-completions
     // API. All reason (surfaced via the `reasoning_content` stream) and take
     // text+image input. Context windows and pricing per OpenAI's model docs;

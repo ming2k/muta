@@ -56,7 +56,7 @@ impl TranscriptLayout for TurnBand {
         while mi < messages_len {
             let msg = &stream.messages[mi];
 
-            // ── Detect the start of a turn group ────────────────────────────
+            // Detect the start of a turn group
             // The group planner can start at optional thinking/assistant text,
             // then look forward for the tool step that makes this a tool turn.
             if let (Some(group_end), Some(turn)) =
@@ -81,7 +81,7 @@ impl TranscriptLayout for TurnBand {
                 continue;
             }
 
-            // ── Non-grouped message: legacy behavior ────────────────────────
+            // Non-grouped message: legacy behavior
             stream.gap(default_gap_before(stream.messages, mi));
             stream.badge(mi);
             stream.dispatch(mi);

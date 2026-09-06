@@ -816,7 +816,7 @@ pub(crate) fn draw_command_content(
             );
         }
 
-        // ── Themed termination footer (L6) ──
+        // Themed termination footer (L6)
         // Every non-trivial termination renders a themed footer so the user
         // and the model see *why* the command ended, not just that it did.
         // A healthy `Exited` run is silent here (its exit code is above);
@@ -1028,7 +1028,7 @@ fn emit_command_lines_folded(
     let tail_start = total - BASH_FOLD_TAIL_ROWS;
     let hidden = tail_start - head_end;
 
-    // ── head ──
+    // head
     for (text, style) in rows[..head_end].iter() {
         byte_offset = emit_command_lines(
             ctx,
@@ -1044,7 +1044,7 @@ fn emit_command_lines_folded(
         );
     }
 
-    // ── ellipsis ──
+    // ellipsis
     // Advance `byte_offset` past every hidden logical line so the tail rows
     // anchor at their true `output`-space positions. Each hidden line occupies
     // `text.len() + 1` bytes in the flat stream (the `+1` is the `\n`
@@ -1063,7 +1063,7 @@ fn emit_command_lines_folded(
     ]);
     let _ = ctx.paint(ellipsis_line); // summary row: not registered for selection
 
-    // ── tail ──
+    // tail
     for (text, style) in rows[tail_start..].iter() {
         byte_offset = emit_command_lines(
             ctx,

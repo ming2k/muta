@@ -460,7 +460,7 @@ impl MasterPreset {
     }
 }
 
-// ── Canonical ADR-0183 Aliases ─────────────────────────────────────────────
+// Canonical ADR-0183 Aliases
 /// Canonical alias for [`MasterRuntimeConfig`] under the homogeneous agent model.
 pub type AgentRuntimeConfig = MasterRuntimeConfig;
 /// Canonical alias for [`MasterPreset`] under the homogeneous agent model.

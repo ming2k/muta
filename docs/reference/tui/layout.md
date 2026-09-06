@@ -91,14 +91,13 @@ transcript layout. See [Head band](status-bar.md).
 
 ### Footer stack
 
-The footer's height is the sum of its rows. The activity, todo, and queue
+The footer's height is the sum of its rows. The activity and queue
 bars are optional and collapse to 0 when they have nothing to show; the input
 box and model bar are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
 | Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
-| Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
 | Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 4` | Not in envoy view; chrome visible |
 | Model bar | `MODEL_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Ambient gauges only: model name + reasoning tier + `@instance` · context usage · stream rate. |
@@ -106,7 +105,6 @@ box and model bar are persistent (when chrome is visible):
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ SESSION b3c4 ~/projects/xx                      DELEGATED  │  ← head row
-│ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
 │                                                          │  ← input box
@@ -120,14 +118,12 @@ box and model bar are persistent (when chrome is visible):
 The activity bar carries the breathing-dot liveness anchor plus the live
 status label and the round elapsed timer — each surfaced only while it
 applies. It sits directly above the input box so the live status reads as
-part of the composer cluster. The ambient meta bars float above it: the todo
-bar leads the stack and owns the agent's live task list (tag · progress ·
-current item); the queue bar owns the pending outbox. (Every join on these
-rows — the ` · ` between progress and preview, the whitespace between keycap
+part of the composer cluster. The queue bar owns the pending outbox.
+(Every join on these rows — the ` · ` between items, the whitespace between keycap
 units — follows the [join ladder](visual-language.md).) The structural counters
 (`round N › turn M · <model>`) deliberately do **not** appear on the bars;
-they live inside the Activity modal (opened by clicking the activity bar),
-along with the per-item todo breakdown. The model bar carries the ambient gauges while the composer carries the next input
+they live inside the Activity modal (opened by clicking the activity bar).
+The model bar carries the ambient gauges while the composer carries the next input
 action (left) plus three ambient clusters on the right: the latest-turn
 stream rate (`47.8 tok/s`, or `–` before a defensible sample), the model
 identity group (`model effort @instance`), and the context meter. The rate
@@ -176,7 +172,7 @@ not the root conversation.
 | Transcript (children) | `Min(0)` | fills |
 | Envoy bar | `Length(ENVOY_BAR_ROWS = 1)` | 1 |
 
-The activity bar, todo bar, queue bar, input box, and model bar
+The activity bar, queue bar, input box, and model bar
 all collapse to 0 — the zoomed view is read-only, with the navigation bar as
 its only chrome.
 See [Envoy view](envoy-view.md) for the focus stack that drives this
@@ -190,7 +186,7 @@ its normal height and darkens the whole live surface in place
 (`recess_backdrop` scales every cell by `theme.modal_dim_factor`), so the
 transcript and chrome stay visible for context while the centered panel reads
 as the focal layer. The **Takeover** policy (the sessions picker only) instead
-collapses the entire footer (activity bar, todo bar, queue bar, input box,
+collapses the entire footer (activity bar, queue bar, input box,
 model bar) to 0 height and fully occludes the surface. The one
 **None**-recess surface is the [permission sheet](modals.md#permission-sheet),
 which is inline (no dimming, no footer collapse) and replaces only the
@@ -302,7 +298,7 @@ with the transcript content above.
 | `footer_stack.rs` | Declarative footer stack — row list, `measure`/`place` single-pass layout, hit-rect registry (`FooterRowId`) |
 | `design.rs` | All non-color layout tokens: `TRANSCRIPT_H_INSET`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `MODEL_BAR_ROWS`, `ENVOY_FOOTER_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
-| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_model_bar` (ambient gauges), `draw_completion_menu` |
+| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_queue_bar` (outbox summary), `draw_model_bar` (ambient gauges), `draw_completion_menu` |
 | `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `draw_runner_footer` — the unified head row at the top of every view, plus the zoomed-runner footer |
 | `composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
 | `disclosure/renderers.rs` | `draw_runner_inline_step`, `draw_sticky_summary_if_needed` |

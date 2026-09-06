@@ -111,14 +111,13 @@ impl SelectableRow {
     /// excluded from copy. When the row wraps, continuation rows default to a
     /// whitespace prefix of the same width; override with
     /// [`Self::with_hang_prefix`].
+    #[allow(dead_code)]
     pub(crate) fn with_prefix(mut self, prefix: RowSegment) -> Self {
         self.prefix = Some(prefix);
         self
     }
 
-    /// Override the continuation-row prefix (hanging indent), so wrapped
-    /// rows align under the content column instead of under the first-row
-    /// glyph/gutter.
+    #[allow(dead_code)]
     pub(crate) fn with_hang_prefix(mut self, prefix: RowSegment) -> Self {
         self.hang_prefix = Some(prefix);
         self
@@ -175,6 +174,7 @@ impl SelectableRow {
     /// Calculate the visual row count for this logical row when wrapped to `body_width`.
     ///
     /// Mirrors the wrap-budgeting logic in [`render_selectable_body`].
+    #[allow(dead_code)]
     pub(crate) fn visual_row_count(&self, body_width: usize) -> usize {
         let seg_width = |s: &RowSegment| mutx_engine::text::str_width(&s.text);
         let prefix_w = self.prefix.as_ref().map(seg_width).unwrap_or(0);
@@ -186,6 +186,7 @@ impl SelectableRow {
 }
 
 /// Compute the total visual rows for a slice of [`SelectableRow`]s within `body_width`.
+#[allow(dead_code)]
 pub(crate) fn selectable_body_visual_rows(rows: &[SelectableRow], body_width: usize) -> usize {
     rows.iter().map(|r| r.visual_row_count(body_width)).sum()
 }
@@ -196,6 +197,7 @@ pub(crate) fn selectable_body_visual_rows(rows: &[SelectableRow], body_width: us
 /// Probes the modal's available body width in `frame` and wraps every row, matching
 /// [`render_selectable_body`]'s visual row accounting so content-sized modals open
 /// at the exact height needed to show their content without false scrollbars.
+#[allow(dead_code)]
 pub(crate) fn selectable_body_desired_rows(
     frame: &Frame,
     geometry: ContentModalSpec,
@@ -775,7 +777,7 @@ mod tests {
     fn visual_row_count_and_desired_rows_match_wrapped_rendering() {
         let mut grid = mutx_engine::Grid::new(80, 24);
         let frame = mutx_engine::Frame::new(&mut grid);
-        let geometry = ContentModalSpec::TODOS;
+        let geometry = ContentModalSpec::PERMISSIONS;
 
         let rows = vec![
             SelectableRow::styled("Header", mutx_engine::Style::default()),

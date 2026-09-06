@@ -14,7 +14,7 @@ pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
+    // xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY)
     Model {
         id: "grok-4.5",
         family: "grok",

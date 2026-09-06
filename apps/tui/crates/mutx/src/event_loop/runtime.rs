@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use muta_contracts::LoopStatus;
 use muta_contracts::{
     HarnessSnapshot, ParentStatus, PermissionRequest, ProviderPickerSnapshot, SessionOverview,
-    TodoList, UserQuestionRequest,
+    UserQuestionRequest,
 };
 
 use crate::model::document::{NoticeSeverity, TranscriptMessage};
@@ -134,7 +134,6 @@ pub struct UiRuntime {
     pub awaiting_oauth_add: Arc<AtomicBool>,
     #[allow(dead_code)]
     pub session_context: Arc<Mutex<Option<muta_contracts::SessionContextSnapshot>>>,
-    pub todos: Arc<Mutex<Option<TodoList>>>,
     pub round_count: Arc<Mutex<u64>>,
     pub current_turn: Arc<Mutex<u64>>,
     pub round_started_at: Arc<Mutex<Option<std::time::Instant>>>,
@@ -198,7 +197,6 @@ impl UiRuntime {
             oauth_add_signal: Arc::new(Mutex::new(None)),
             awaiting_oauth_add: Arc::new(AtomicBool::new(false)),
             session_context: Arc::new(Mutex::new(None)),
-            todos: Arc::new(Mutex::new(None)),
             round_count: Arc::new(Mutex::new(0)),
             current_turn: Arc::new(Mutex::new(0)),
             round_started_at: Arc::new(Mutex::new(None)),

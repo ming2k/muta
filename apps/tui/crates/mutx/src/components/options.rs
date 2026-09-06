@@ -187,7 +187,7 @@ impl<'a> ChoiceOptionRow<'a> {
     }
 }
 
-// ── wrap helpers (shared; re-exported so callers don't redefine them) ──
+// wrap helpers (shared; re-exported so callers don't redefine them)
 
 /// Push wrapped `text` whose first line carries a *separately styled* prefix
 /// (e.g. a checkbox) and whose continuation lines use a plain indent.

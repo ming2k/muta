@@ -1643,7 +1643,7 @@ async fn schema_violating_call_never_reaches_the_tool() {
     assert_eq!(calls.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
 }
 
-// ---- Golden-transcript harness ----------------------------------------
+// Golden-transcript harness
 //
 // `ScriptedProvider` replays a fixed list of streamed events — one script
 // per ReAct turn — so a whole agent round runs deterministically and its
@@ -2553,7 +2553,7 @@ async fn delegated_preserves_schema_and_intercepts_ask_user_at_runtime() {
     );
 }
 
-// ---- Persistent permissions (cross-session) -------------------------------
+// Persistent permissions (cross-session)
 //
 // Verifies the per-project `Always` allowlist round-trips through disk:
 // approving `Always` on one agent is visible to a fresh agent constructed
@@ -2694,7 +2694,7 @@ async fn agent_without_project_root_never_writes_permissions_file() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ---- Uncapped ReAct turns ----------------------------------------------
+// Uncapped ReAct turns
 //
 // The per-round turn cap was removed (along with the soft convergence
 // nudge) to align with the codex / claude-code agentic-loop model: the
@@ -2734,9 +2734,7 @@ async fn round_runs_uncapped_until_model_emits_text() {
     assert_eq!(outcome.unwrap().message.content, "all done");
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Session review (ADR-0018, superseding the periodic ADR-0016 design)
-// ─────────────────────────────────────────────────────────────────────
 
 /// Build N distinct read-only `alpha` turns (each with a different
 /// path so they count as distinct calls rather than repeats), optionally
@@ -2807,7 +2805,7 @@ fn agent_config_defaults_match_runtime_constants() {
     assert_eq!(agent.get_hard_stop_turns(), 0);
 }
 
-// ── /debug trace ──────────────────────────────────────────────
+// /debug trace
 
 /// A provider whose `stream_chat_events` emits a fixed two-event sequence, so
 /// the streaming capture path can be exercised deterministically.
@@ -3022,7 +3020,7 @@ fn request_pressure_includes_system_prompt_and_tool_schemas() {
     );
 }
 
-// ---- ToolScheduler dispatch driver (stage-3 pipeline) ---------------------
+// ToolScheduler dispatch driver (stage-3 pipeline)
 //
 // Contract-level coverage for the scheduler-driven `schedule` stage: result
 // recording stays input-ordered under out-of-order completion, an interrupt

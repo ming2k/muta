@@ -135,7 +135,7 @@ impl ScheduledJob {
     }
 }
 
-// ── Legacy `RepeatJob` compatibility ──────────────────────────────────────
+// Legacy `RepeatJob` compatibility
 //
 // Existing session snapshots serialised before this change used a flat
 // `RepeatJob { cron: String, … }`. We:
@@ -312,7 +312,7 @@ pub fn parse_schedule_arg(raw: &str, now: DateTime<Utc>) -> Option<ScheduleAt> {
         return None;
     }
 
-    // ── Cron: exactly five whitespace-separated fields. ──
+    // Cron: exactly five whitespace-separated fields.
     let fields: Vec<&str> = trimmed.split_whitespace().collect();
     if fields.len() >= 5 {
         let maybe_cron = fields[..5].join(" ");
@@ -323,13 +323,13 @@ pub fn parse_schedule_arg(raw: &str, now: DateTime<Utc>) -> Option<ScheduleAt> {
 
     let lower = trimmed.to_ascii_lowercase();
 
-    // ── Relative countdown. (case-insensitive keywords/units) ──
+    // Relative countdown. (case-insensitive keywords/units)
     if let Some(at) = parse_relative_countdown(&lower, now) {
         return Some(ScheduleAt::Once(at));
     }
 
-    // ── Absolute time. (case-insensitive keywords; the ISO `T` separator is
-    // matched case-insensitively inside `parse_dated_time`.) ──
+    // Absolute time. (case-insensitive keywords; the ISO `T` separator is
+    // matched case-insensitively inside `parse_dated_time`.)
     if let Some(at) = parse_absolute_time(&lower, now) {
         return Some(ScheduleAt::Once(at));
     }
@@ -515,7 +515,7 @@ mod tests {
         Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
     }
 
-    // ── Schedule ──
+    // Schedule
 
     #[test]
     fn schedule_cron_next_fire() {
@@ -535,7 +535,7 @@ mod tests {
         assert!(s.is_once());
     }
 
-    // ── parse_schedule_arg: cron ──
+    // parse_schedule_arg: cron
 
     #[test]
     fn parses_cron_form() {
@@ -550,7 +550,7 @@ mod tests {
         ));
     }
 
-    // ── parse_schedule_arg: relative countdown ──
+    // parse_schedule_arg: relative countdown
 
     #[test]
     fn parses_compact_countdown() {
@@ -588,7 +588,7 @@ mod tests {
         assert!(parse_schedule_arg("10x", t(2026, 1, 1, 0, 0)).is_none());
     }
 
-    // ── parse_schedule_arg: absolute time ──
+    // parse_schedule_arg: absolute time
 
     #[test]
     fn parses_bare_clock_today_or_tomorrow() {
@@ -649,7 +649,7 @@ mod tests {
         assert!(parse_schedule_arg("not a time", now).is_none());
     }
 
-    // ── ScheduledJob serde back-compat ──
+    // ScheduledJob serde back-compat
 
     #[test]
     fn scheduled_job_cron_round_trips() {

@@ -383,13 +383,13 @@ pub struct Stream<'a, 'f> {
     /// to rediscover the scroll extent.
     pub virtual_total_lines: Option<usize>,
 
-    // ── mutable scroll / Y accounting ──────────────────────────────────────
+    // mutable scroll / Y accounting
     pub current_y: u16,
     pub skip_rows: usize,
     /// Total stream height (un-clipped by the viewport).
     pub content_lines: usize,
 
-    // ── accumulators consumed by `draw_transcript` after the layout returns ─
+    // accumulators consumed by `draw_transcript` after the layout returns
     pub sticky_steps: Vec<StickyStep>,
 }
 

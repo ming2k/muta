@@ -1025,7 +1025,7 @@ impl SessionDriver {
                 }
             }
 
-            // ── Activity-state reconcile (ADR-0091) ──────────────────────
+            // Activity-state reconcile (ADR-0091)
             // Round-owned requests resolve themselves via the round task's
             // terminal `HarnessState(Idle)`. Control-plane requests must be
             // resolved here instead: re-publish the authoritative harness

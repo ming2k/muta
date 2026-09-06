@@ -628,7 +628,7 @@ fn draw_console(
     body
 }
 
-// ── shared chrome ─────────────────────────────────────────────────────────
+// shared chrome
 
 /// Paint a panel band with a small title and return (outer, inner-body).
 /// `focused` brightens the title so the active pane reads as such.
@@ -855,7 +855,7 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
     let brand = Style::default().fg(theme.brand());
     let muted = Style::default().fg(theme.muted());
 
-    // ── 1. Cognitive Mission & Intent ──────────────────────────────────
+    // 1. Cognitive Mission & Intent
     if let Some(digest) = &row.digest {
         if !digest.title.is_empty() {
             lines.push(Line::from(vec![
@@ -893,7 +893,7 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
         }
     }
 
-    // ── 2. Telemetry & Runtime Status ──────────────────────────────────
+    // 2. Telemetry & Runtime Status
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Telemetry:",
@@ -1050,7 +1050,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-// ── the console's command grammar ──────────────────────────────────────────
+// the console's command grammar
 
 /// One line of the console transcript: what was dispatched and how the
 /// daemon answered. Kept as typed data (not preformatted strings) so the
@@ -1531,7 +1531,7 @@ mod tests {
         assert_eq!(dock_status_label(SessionStatus::Failed), "failed");
     }
 
-    // ── console grammar ──────────────────────────────────────────────────
+    // console grammar
 
     #[test]
     fn address_grammar_routes_leading_targets() {

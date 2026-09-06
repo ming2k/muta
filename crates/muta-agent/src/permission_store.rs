@@ -88,7 +88,7 @@ impl PermissionStore {
         }
     }
 
-    // ── delegated (autonomous execution posture) ────────────────────
+    // delegated (autonomous execution posture)
 
     pub fn delegated(&self) -> bool {
         *lock(&self.delegated)
@@ -103,7 +103,7 @@ impl PermissionStore {
     // ask_user / interactive-input oneshots, uniform exactly-once
     // settlement, per-kind metrics. The store keeps only rules + the delegated flag.
 
-    // ── allowlist ───────────────────────────────────────────────────────
+    // allowlist
 
     /// Check whether a rule is in the "always allow" set. A stored scope of
     /// `"*"` is a wildcard for that tool (matches any scope). Any other stored
@@ -227,7 +227,7 @@ impl PermissionStore {
         removed
     }
 
-    // ── persistence ─────────────────────────────────────────────────────
+    // persistence
 
     /// Seed the allowlist from declarative `[permissions]` config rules. Called
     /// at startup after `set_project_root` (so persistent rules are already
@@ -478,7 +478,7 @@ mod tests {
     // `human_broker::tests::cancel_all_settles_every_kind_with_none_or_reject`.
     // The store keeps only rules + the delegated flag.
 
-    // ── #3: revoked config rules must not resurrect on re-seed ──────────
+    // #3: revoked config rules must not resurrect on re-seed
 
     #[test]
     fn revoke_then_reseed_does_not_resurrect_config_rule() {

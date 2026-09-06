@@ -35,7 +35,7 @@ pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
+    // DeepSeek (opencode-go / direct)
     Model {
         id: "deepseek-v4-flash",
         family: "deepseek",

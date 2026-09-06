@@ -73,7 +73,6 @@ fn input_box_grows_with_wrapped_content() {
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
-                    todos: None,
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -1206,7 +1205,6 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -1468,7 +1466,6 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -1560,7 +1557,6 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -1725,7 +1721,6 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -1766,9 +1761,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Tinted-panel composer geometry (the four-row redesign)
-// ---------------------------------------------------------------------------
 
 fn frame_row_text(terminal: &mut mutx_engine::TestTerminal, y: u16) -> String {
     let buffer = terminal.buffer();

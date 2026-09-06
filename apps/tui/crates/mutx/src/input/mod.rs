@@ -491,10 +491,6 @@ pub enum InputAction {
     /// Plain Ctrl+C: copy selection, clear input, or arm quit. It never
     /// interrupts a running turn — only double-Esc does.
     CtrlC,
-    /// Open the Todos modal (the agent's live task list). The list is
-    /// agent-owned and read-only in the TUI; the modal surfaces it on its own
-    /// dedicated overlay, opened with `Ctrl+T`.
-    OpenTodos,
     /// Open the unified session telemetry report — the drill-down behind the model
     /// bar's context meter and rate gauge. Keyboard twin of clicking those gauges (`Ctrl+O`).
     OpenTelemetry,
@@ -1253,7 +1249,7 @@ pub fn process_event(
 
             let physical_key = crate::keymap::Key::from_event(key);
 
-            // ── Stage 5: Global Hard-Bound Shortcuts ──────────────────────────
+            // Stage 5: Global Hard-Bound Shortcuts
             // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt/Quit), CopySelection
             if let Some(cmd_id) =
                 crate::keymap::resolve_global_key_with(physical_key, &context.key_overrides)
@@ -1366,7 +1362,7 @@ pub fn process_event(
                 }
             }
 
-            // ── Surface Dispatch (ADR-0172) ─────────────────────────────
+            // Surface Dispatch (ADR-0172)
             // Each full-screen view owns the keys for its own focus planes
             // while no modal is up: the Session view's chat scheme (and its
             // Runner / Side siblings) resolves them here, before the modal /
@@ -1384,13 +1380,13 @@ pub fn process_event(
                 return action;
             }
 
-            // ── Modal Verb Dispatch (ADR-0172) ──────────────────────────
+            // Modal Verb Dispatch (ADR-0172)
             // Each modal owns its single-letter verb keys (space/r in the MCP
             // manager, d/n/i in the sessions picker, the dashboard console,
             // …) in its own scheme. A key the modal does not own falls through
             // to the shared affordance library (list nav, readline, paste,
             // scrolling) and text insertion.
-            // ── Sheet Verb Dispatch (ADR-0173 §3) ───────────────────────
+            // Sheet Verb Dispatch (ADR-0173 §3)
             // Each interaction sheet owns its single-key verbs in its own
             // scheme; a key the sheet does not own falls through to the
             // modal schemes and the sheet arms below. A mounted sheet takes
@@ -1578,7 +1574,6 @@ pub fn process_event(
                         // switcher's is a *switch* — both close the panel.
                         super::Modal::ViewSwitcher => InputAction::None,
                         super::Modal::Config => InputAction::ConfigActivate,
-                        super::Modal::Todos => InputAction::CloseModal,
                         super::Modal::Telemetry => InputAction::TelemetryActivate,
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
@@ -2056,7 +2051,6 @@ pub fn process_event(
                         super::Modal::HistorySearch => InputAction::None,
                         super::Modal::Sessions => InputAction::ModalUp,
                         super::Modal::Host => InputAction::ModalUp,
-                        super::Modal::Todos => InputAction::ScrollUp,
                         super::Modal::Tools => InputAction::SessionSelect { forward: false },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: false },
                         super::Modal::Skills => InputAction::SessionSelect { forward: false },
@@ -2111,7 +2105,6 @@ pub fn process_event(
                         super::Modal::HistorySearch => InputAction::None,
                         super::Modal::Sessions => InputAction::ModalDown,
                         super::Modal::Host => InputAction::ModalDown,
-                        super::Modal::Todos => InputAction::ScrollDown,
                         super::Modal::Tools => InputAction::SessionSelect { forward: true },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: true },
                         super::Modal::Skills => InputAction::SessionSelect { forward: true },

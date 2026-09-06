@@ -467,7 +467,7 @@ impl Agent {
             }
         };
 
-        // ── Permission policy chain (full async chain) ──
+        // Permission policy chain (full async chain)
         // Every permission gate — PreToolUse hook, disabled mask, schema
         // validation, operation-scope gate, bash policy, and the broker's
         // explicit-grant/development fast paths — runs
@@ -610,7 +610,7 @@ impl Agent {
             return self.execute_ask_user(call, call_id, event_tx).await;
         }
 
-        // ── Stdin policy decision (L3 + L3.5) ──
+        // Stdin policy decision (L3 + L3.5)
         // Decided here, before spawn, for execute_command only. The three-way decision:
         //   1. opt-in model stdin (α): `allow_model_stdin` on AND the model
         //      supplied a `stdin` arg → Prefilled{model}. Structurally

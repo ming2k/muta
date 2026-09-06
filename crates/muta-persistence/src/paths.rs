@@ -110,7 +110,7 @@ impl Dirs {
         Self::resolve(&PathsOverride::default())
     }
 
-    // ---- well-known files --------------------------------------------------
+    // well-known files
 
     /// User-edited configuration. `$XDG_CONFIG_HOME/muta/config.toml`.
     pub fn config_file(&self) -> PathBuf {
@@ -264,7 +264,7 @@ impl Dirs {
         self.state_dir.join("log")
     }
 
-    // ---- helpers -----------------------------------------------------------
+    // helpers
 
     /// The **daemon instance directory**: the one directory holding the
     /// per-daemon runtime files — `daemon.json` (discovery), `daemon.sock`
@@ -399,9 +399,7 @@ pub fn get() -> Dirs {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Internals
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -765,7 +763,7 @@ mod tests {
         });
     }
 
-    // ---- MUTA_HOME instance root (ADR-0121) ------------------------------
+    // MUTA_HOME instance root (ADR-0121)
 
     #[test]
     fn muta_home_redirects_every_category_and_the_instance_dir() {

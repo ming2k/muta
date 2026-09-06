@@ -171,22 +171,6 @@ pub(super) async fn handle_selection_start(
         app.focused_target = None;
         app.drag.cancel();
     } else if app.active_modal() == Modal::None
-        && app.todos_rect.is_some_and(|r| {
-            // Todo bar: open the Todos modal directly.
-            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
-        })
-    {
-        // Gate on `Modal::None` so a click never stacks a modal on top of
-        // an in-progress decision.
-        // A retained view (ADR-0133): reopen restores the scroll the user
-        // left; only the first open initialises.
-        super::enter_panel(
-            app,
-            crate::surfaces::PanelId::Todos,
-            runtime,
-            viewed_session_id,
-        );
-    } else if app.active_modal() == Modal::None
         && app
             .queue_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
@@ -247,7 +231,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.drag.cancel();
     } else {
-        // ── Unified content hit-test cascade ──
+        // Unified content hit-test cascade
         // interaction::classify_click runs the full priority
         // chain (input box → step summary → table cell →
         // generic content → gap → dead) so the event loop

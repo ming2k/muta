@@ -661,7 +661,7 @@ impl Agent {
         self.permissions.project_root()
     }
 
-    // --- Public hook entry points (ADR-0025) ---------------------------------
+    // Public hook entry points (ADR-0025)
     // The PreToolUse / PostToolUse / Stop insertion points are inline in the
     // loop above (they need local control flow); the lifecycle entry points
     // below are called by the driver / orchestration at the session, turn, and

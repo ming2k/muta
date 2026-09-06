@@ -12,7 +12,7 @@ fn background_service(ctx: &ToolContext) -> Option<Arc<dyn BackgroundJobService>
     ctx.get::<Arc<dyn BackgroundJobService>>().cloned()
 }
 
-// ── process_poll ──
+// process_poll
 
 #[derive(ToolSchema, Deserialize)]
 struct ProcessPollArgs {
@@ -75,7 +75,7 @@ muta_contracts::register_tool!(ProcessPollFactory => |ctx| ProcessPollTool {
     service: background_service(ctx),
 });
 
-// ── process_logs ──
+// process_logs
 
 #[derive(ToolSchema, Deserialize)]
 struct ProcessLogsArgs {
@@ -144,7 +144,7 @@ muta_contracts::register_tool!(ProcessLogsFactory => |ctx| ProcessLogsTool {
     service: background_service(ctx),
 });
 
-// ── process_kill ──
+// process_kill
 
 #[derive(ToolSchema, Deserialize)]
 struct ProcessKillArgs {
@@ -205,7 +205,7 @@ muta_contracts::register_tool!(ProcessKillFactory => |ctx| ProcessKillTool {
     service: background_service(ctx),
 });
 
-// ── process_wait ──
+// process_wait
 
 #[derive(ToolSchema, Deserialize)]
 struct ProcessWaitArgs {

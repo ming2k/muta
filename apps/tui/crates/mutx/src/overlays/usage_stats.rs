@@ -99,7 +99,7 @@ fn usage_body(report: &UsageStatsReport, body_width: usize, theme: &Theme) -> Ve
         return body;
     }
 
-    // ---- Summary -----------------------------------------------------------
+    // Summary
     let span_label = match (&report.first_day, &report.last_day) {
         (Some(first), Some(last)) if first == last => first.clone(),
         (Some(first), Some(last)) => format!("{first} → {last}"),
@@ -166,21 +166,21 @@ fn usage_body(report: &UsageStatsReport, body_width: usize, theme: &Theme) -> Ve
         theme,
     ));
 
-    // ---- Daily chart + table ----------------------------------------------
+    // Daily chart + table
     body.push(Line::from(""));
     body.push(section_line("Daily tokens", theme));
     body.push(daily_chart(report, body_width, theme));
     body.push(Line::from(""));
     daily_table(report, &mut body, theme);
 
-    // ---- Model breakdown ---------------------------------------------------
+    // Model breakdown
     if !report.models.is_empty() {
         body.push(Line::from(""));
         body.push(section_line("By model", theme));
         model_table(report, &mut body, theme);
     }
 
-    // ---- Event log ---------------------------------------------------------
+    // Event log
     if !report.events.is_empty() {
         body.push(Line::from(""));
         body.push(section_line("Recent requests", theme));

@@ -1157,12 +1157,10 @@ pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
     messages.retain(|message| message.role != Role::Assistant || valid_assistant_response(message));
 }
 
-// ---------------------------------------------------------------------------
 // PermissionContext: the agent's implementation of the policy-chain capability
 // trait. Policies reach the agent's async machinery (hooks, bash policy,
 // permission store) through this, keeping permission_policy.rs decoupled from
 // the concrete Agent type.
-// ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
 impl crate::permission_policy::PermissionContext for Agent {
@@ -1445,7 +1443,7 @@ mod tests {
         );
     }
 
-    // ── skip_interactive_input wiring (ADR-0043 interactive-input opt-out) ──
+    // skip_interactive_input wiring (ADR-0043 interactive-input opt-out)
 
     /// Minimal provider mock so an `Agent` can be constructed in unit tests
     /// without a live model. `decide_command_stdin` never reaches the provider, so

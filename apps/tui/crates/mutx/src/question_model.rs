@@ -169,7 +169,7 @@ impl QuestionModel {
         }
     }
 
-    // ── Accessors used by the renderer and by tests ──────────────────────
+    // Accessors used by the renderer and by tests
 
     pub fn request(&self) -> &UserQuestionRequest {
         &self.request
@@ -543,7 +543,7 @@ mod tests {
         }
     }
 
-    // ── Open / defaults ──────────────────────────────────────────────────
+    // Open / defaults
 
     #[test]
     fn single_select_open_defaults_to_first_option_selected() {
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(m.selected(), &[Vec::<usize>::new()]);
     }
 
-    // ── Navigation (Up/Down) ─────────────────────────────────────────────
+    // Navigation (Up/Down)
 
     #[test]
     fn down_wraps_around() {
@@ -590,7 +590,7 @@ mod tests {
         assert!(eff.is_empty());
     }
 
-    // ── Toggle / select (single-select) ──────────────────────────────────
+    // Toggle / select (single-select)
 
     #[test]
     fn single_select_toggle_after_move_keeps_live_selection() {
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(m.selected(), &[vec![0]]); // unchanged
     }
 
-    // ── Toggle / select (multi-select) ───────────────────────────────────
+    // Toggle / select (multi-select)
 
     #[test]
     fn multi_select_toggle_adds_and_sorts() {
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(m.selected(), &[Vec::<usize>::new()]);
     }
 
-    // ── "Other" free text ────────────────────────────────────────────────
+    // "Other" free text
 
     #[test]
     fn insert_char_only_works_when_other_highlighted() {
@@ -744,7 +744,7 @@ mod tests {
         assert_eq!(m.other_text(), &[""]);
     }
 
-    // ── Submit / cancel effects ──────────────────────────────────────────
+    // Submit / cancel effects
 
     #[test]
     fn submit_emits_reply_and_closed_with_labels() {
@@ -827,7 +827,7 @@ mod tests {
         );
     }
 
-    // ── Multi-question answers ───────────────────────────────────────────
+    // Multi-question answers
 
     #[test]
     fn next_and_previous_navigate_pages_without_early_submit() {
@@ -865,7 +865,7 @@ mod tests {
         );
     }
 
-    // ── Single-select: switch selection back and forth ──────────────────
+    // Single-select: switch selection back and forth
 
     #[test]
     fn single_select_switches_selection_on_repeated_jump() {
@@ -905,7 +905,7 @@ mod tests {
         assert_eq!(m.selected(), &[vec![2]], "selection follows the highlight");
     }
 
-    // ── Single-select: discontinuous keystrokes (move, then pick) ────────
+    // Single-select: discontinuous keystrokes (move, then pick)
 
     #[test]
     fn single_select_arrows_commit_the_selection_live() {
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(m.selected(), &[vec![1]]);
     }
 
-    // ── Multi-select: add several, deselect, reselect ───────────────────
+    // Multi-select: add several, deselect, reselect
 
     #[test]
     fn multi_select_select_all_three_then_deselect_middle() {
@@ -1002,7 +1002,7 @@ mod tests {
         );
     }
 
-    // ── "Other" edge cases ───────────────────────────────────────────────
+    // "Other" edge cases
 
     #[test]
     fn multi_select_other_blank_in_reply_emits_literal_other() {
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(m.other_text(), &[""]);
     }
 
-    // ── Multi-question (paged) interaction ───────────────────────────────
+    // Multi-question (paged) interaction
 
     #[test]
     fn two_question_reply_carries_one_array_per_question() {
@@ -1102,7 +1102,7 @@ mod tests {
         assert_eq!(m.selected(), &[vec![0], vec![1]]);
     }
 
-    // ── Full interaction script (regression) ─────────────────────────────
+    // Full interaction script (regression)
 
     #[test]
     fn full_script_multi_select_then_other_then_submit() {
@@ -1134,7 +1134,7 @@ mod tests {
         );
     }
 
-    // ── Rendering film: see the interaction, frame by frame ──────────────
+    // Rendering film: see the interaction, frame by frame
     //
     // The pure `update` lets a test feed a *script* of actions and render every
     // intermediate state. Each frame is snapshotted, so `cargo insta review`

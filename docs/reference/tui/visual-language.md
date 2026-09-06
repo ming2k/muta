@@ -157,7 +157,7 @@ Migrated to whitespace / breadcrumb:
 
 ## Source
 
-`design.rs` (constants), `chrome.rs` (todo/queue/activity bars), `footer.rs`
+`design.rs` (constants), `chrome.rs` (queue/activity bars), `footer.rs`
 (modal hint joins), `meta_strip.rs` (header chips), `overlays/activity.rs`
 (round › turn breadcrumb). The ladder supersedes the ad-hoc ` · ` guidance in
 `components.md` and ADR-0049's "anchor · detail · time" phrasing, which is now

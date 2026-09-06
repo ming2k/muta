@@ -35,7 +35,7 @@ impl DeviceCodeResponse {
     }
 }
 
-// ── Poll-loop bounds (mirror opencode's xai.ts) ─────────────────────────────
+// Poll-loop bounds (mirror opencode's xai.ts)
 /// Default poll interval when the server doesn't return `interval` (seconds).
 const DEVICE_CODE_DEFAULT_INTERVAL_MS: u64 = 5_000;
 /// Floor the poll interval so we never hammer the token endpoint.

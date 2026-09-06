@@ -38,10 +38,10 @@ pub fn draw_permissions_manager(
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme, true, true);
 
-    // ── Header ──
+    // Header
     modal_header(frame, f.header, "Permissions", theme);
 
-    // ── Body: the rule list ──
+    // Body: the rule list
     let rules = session_context
         .map(|s| s.permissions.as_slice())
         .unwrap_or(&[]);
@@ -84,7 +84,7 @@ pub fn draw_permissions_manager(
         theme,
     );
 
-    // ── Footer ──
+    // Footer
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if rules.is_empty() {
             &[FooterHint::key_always(crate::keymap::Key::ESC, "close")]

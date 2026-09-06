@@ -28,7 +28,6 @@ pub(crate) async fn sync_runtime_state_to_app(
     app.harness_retry_pending = harness.retry_pending;
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.phase = runtime.phase.lock().await.clone();
-    app.todos = runtime.todos.lock().await.clone();
     app.round_count = *runtime.round_count.lock().await;
     app.current_turn = *runtime.current_turn.lock().await;
     app.round_started_at = *runtime.round_started_at.lock().await;

@@ -49,7 +49,7 @@ fn paste_in_readonly_modal_is_dropped_silently() {
     assert!(app.pending_text_pastes.is_empty());
 }
 
-// ── Caret ownership / visibility (IME anchor) ─────────────────────────────
+// Caret ownership / visibility (IME anchor)
 // `App::caret_owner` / `App::caret_visible` are the single source of truth for
 // which surface holds the terminal cursor. The IME anchors its composition
 // window to that cursor, so any state that owns no caret must hide it —
@@ -124,7 +124,6 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         Modal::Tools,
         Modal::Mcp,
         Modal::Permissions,
-        Modal::Todos,
         // `Question` is listed here to cover the *default* state — any option
         // but "Other" highlighted (or no question model at all). Its caret
         // ownership is conditional: see `caret_owner_question_owns_caret_only_on_other`.
@@ -289,9 +288,7 @@ fn input_selection_relays_arrows_only_when_composer_owns_caret() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Input viewport: wheel scrolling and selection edge-autoscroll
-// ---------------------------------------------------------------------------
 
 /// A composer panel fixture: a 60-col box at the screen bottom whose height
 /// leaves `visible` text rows, and a draft of one-char-per-line rows so the

@@ -21,7 +21,7 @@ static DEFAULT_EXPLICIT_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Enabl
     max_breakpoints: Some(4),
 };
 
-// ── request body shape ────────────────────────────────────────────────────
+// request body shape
 
 fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> BodyInput<'a> {
     BodyInput {
@@ -145,7 +145,7 @@ fn request_body_includes_tools_in_anthropic_shape() {
     assert!(tool.get("function").is_none());
 }
 
-// ── prompt-caching breakpoints ────────────────────────────────────────────
+// prompt-caching breakpoints
 
 /// Count every `cache_control` breakpoint across `tools` + `system` +
 /// `messages`.
@@ -346,7 +346,7 @@ fn cache_breakpoints_skip_non_stampable_system_shape() {
     assert_eq!(count_cache_breakpoints(&body), 2);
 }
 
-// ── extended-thinking / effort stamping ───────────────────────────────────
+// extended-thinking / effort stamping
 
 #[test]
 fn claude_request_body_omits_thinking_by_default() {
@@ -564,7 +564,7 @@ fn effort_without_thinking_stays_decoupled() {
     );
 }
 
-// ── extended-thinking replay (message conversion) ─────────────────────────
+// extended-thinking replay (message conversion)
 
 #[test]
 fn assistant_message_replays_signed_thinking_block() {
@@ -621,7 +621,7 @@ fn assistant_message_omits_thinking_block_when_no_reasoning() {
     assert_eq!(blocks[0]["type"], "text");
 }
 
-// ── usage parsing ─────────────────────────────────────────────────────────
+// usage parsing
 
 #[test]
 fn anthropic_usage_folds_cache_tokens_into_prompt_total() {

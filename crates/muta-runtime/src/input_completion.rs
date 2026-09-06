@@ -239,7 +239,7 @@ pub fn complete_slash_items(
     };
     let replace_end = input.chars().count();
 
-    // ---- Second stage: `/cmd <cursor>` completes first-token verbs ----
+    // Second stage: `/cmd <cursor>` completes first-token verbs
     // Progressive disclosure: the command menu stays a lean list of
     // canonical names; the subcommand tier (with its own introductions)
     // only appears once the user has committed to a parent and typed a
@@ -248,7 +248,7 @@ pub fn complete_slash_items(
         return complete_subcommand_items(catalog, input, &current, replace_end);
     }
 
-    // ---- First stage: `/pre<cursor>` completes command names ----
+    // First stage: `/pre<cursor>` completes command names
     let mut items = Vec::new();
     for spec in &catalog.commands {
         if spec.name.to_lowercase().starts_with(&current) {

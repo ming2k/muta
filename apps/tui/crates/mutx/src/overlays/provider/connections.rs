@@ -391,7 +391,7 @@ pub(crate) fn connection_detail_body(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // ── Configuration ──────────────────────────────────────────────────────────
+    // Configuration
     lines.push(Line::from(Span::styled("Configuration", header_style)));
     lines.push(kv("ID", &detail.id));
     lines.push(kv("Name", &detail.name));
@@ -424,7 +424,7 @@ pub(crate) fn connection_detail_body(
         lines.push(kv("Default Active", &default_str));
     }
 
-    // ── Client Profile ────────────────────────────────────────────────────────
+    // Client Profile
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("Client Profile", header_style)));
     lines.push(kv("Preset", detail.client_identity.label()));
@@ -444,7 +444,7 @@ pub(crate) fn connection_detail_body(
         }
     }
 
-    // ── Served Models ──────────────────────────────────────────────────────────
+    // Served Models
     lines.push(Line::from(""));
     let models_title = if detail.models.is_empty() {
         "Served Models".to_string()
@@ -492,7 +492,7 @@ pub(crate) fn connection_detail_body(
         }
     }
 
-    // ── Provider Usage & Quota ─────────────────────────────────────────────────
+    // Provider Usage & Quota
     lines.push(Line::from(""));
     let mut quota_header_spans = vec![Span::styled("Provider Usage & Quota", header_style)];
     if let muta_contracts::ConnectionUsageState::Available(usage) = &detail.usage

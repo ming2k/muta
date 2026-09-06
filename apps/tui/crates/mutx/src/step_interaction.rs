@@ -66,7 +66,7 @@ pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
     Some((cursor.message_idx, kind))
 }
 
-// ── Lifecycle-aware default disclosure ──
+// Lifecycle-aware default disclosure
 //
 // A step's default disclosure is a pure function of (kind, lifecycle) — NOT
 // set once at creation. Tool steps stay collapsed while running (no result

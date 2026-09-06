@@ -61,9 +61,7 @@ import type {
 
 export type QueuedUserInput = QueuedMessage;
 
-// ---------------------------------------------------------------------------
 // Agent requests (client → daemon), as flattened into `Wire::Request`.
-// ---------------------------------------------------------------------------
 
 /**
  * serde flattens the externally-tagged `AgentRequest` into the `Wire::Request`
@@ -77,9 +75,7 @@ type FlattenedIntoEnvelope<T> = T extends string ? { [Variant in T]: null } : T;
 /** `AgentRequest` as it appears flattened inside `Wire::Request`. */
 export type AgentRequest = FlattenedIntoEnvelope<AgentRequestPayload>;
 
-// ---------------------------------------------------------------------------
 // Monitor plane (flattened `Wire::Monitor` frames).
-// ---------------------------------------------------------------------------
 
 /**
  * `MonitorEvent` flattened into the envelope (tag `kind`, snake_case). The
@@ -93,10 +89,8 @@ export type MonitorFrame = { type: "Monitor" } & MonitorEvent;
 /** The `kind` tag values of a monitor frame. */
 export type MonitorEventKind = MonitorEvent["kind"];
 
-// ---------------------------------------------------------------------------
 // Round-summary helpers (mirror `RoundSummary::{active_ms, tps}` in
 // crates/muta-contracts/src/events.rs).
-// ---------------------------------------------------------------------------
 
 /** Mirrors `RoundSummary::active_ms` (wall-clock minus human-decision pause). */
 export function roundActiveMs(s: RoundSummary): number {
@@ -109,12 +103,10 @@ export function roundTps(s: RoundSummary): number {
   return denominator === 0 ? 0 : (s.output_tokens * 1000) / denominator;
 }
 
-// ---------------------------------------------------------------------------
 // Agent responses (daemon → client), flattened into `Wire::Response`.
 // hand-maintained: `AgentResponse` carries many TUI-only variants (session
 // context modal, token-usage report, OAuth connect status, /btw asides…)
 // that the Web app never consumes; only the subset below is modeled.
-// ---------------------------------------------------------------------------
 
 export interface WelcomePayload {
   session_id: string;
@@ -161,7 +153,6 @@ export type AgentResponse =
   | { Error: string }
   | { Exit: null };
 
-// ---------------------------------------------------------------------------
 // Transport envelope (crates/muta-contracts/src/wire.rs since ADR-0134) —
 // `AttachAction`, `ControlRequest`, and `SessionOverview` are GENERATED now
 // (the generated file is the single mirror of the Rust serde truth) and
@@ -169,7 +160,6 @@ export type AgentResponse =
 // union itself and the web-only payload unions remain hand-written here
 // (the Rust `Wire` references TUI-only response variants the panel never
 // consumes, so generating the envelope wholesale would drag those in).
-// ---------------------------------------------------------------------------
 
 export interface ControlReply {
   ok: boolean;

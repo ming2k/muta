@@ -215,7 +215,7 @@ async fn run_inner(
         .unwrap_or(0);
     registry.set_monitor_meta(String::new(), started_at).await;
 
-    // ── Single instance (ADR-0101) ────────────────────────────────────────
+    // Single instance (ADR-0101)
     // Hold the global lock for the process lifetime. A second daemon spawned
     // while this one drains blocks (bounded) on the same lock instead of
     // unlinking a live daemon's UDS socket — the clobbering race the
@@ -385,7 +385,7 @@ async fn run_inner(
     }
     tracing::info!(%bind, port, "muta daemon: listening");
 
-    // ── Boot rehost (ADR-0125) ───────────────────────────────────────────
+    // Boot rehost (ADR-0125)
     // Autonomous sessions come back with the daemon: any persisted session
     // with armed `/schedule` jobs is re-assembled so its scheduler keeps
     // firing. Runs after the listener binds (startup latency stays flat;
@@ -407,12 +407,12 @@ async fn run_inner(
         }
     }
 
-    // ── Serving ───────────────────────────────────────────────────────────
+    // Serving
     // Wait for a trigger, or the idle-exit timer (which itself is just
     // another trigger source, ADR-0100 rule 3).
     serve_until_trigger(&gate, &registry, &handle, lifecycle.idle_exit).await;
 
-    // ── Draining (ADR-0101): budgeted phases, each checking `forced` ──────
+    // Draining (ADR-0101): budgeted phases, each checking `forced`
     let reason = gate
         .reason()
         .unwrap_or(ShutdownReason::Fatal("unknown".into()));

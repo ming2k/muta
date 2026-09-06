@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(humanize_sig("use_skill|<unwatched>"), "use_skill");
     }
 
-    // ── Signature normalization (v2) ─────────────────────────────────────
+    // Signature normalization (v2)
     // The guard is only as good as signature equality: before normalization,
     // `sleep 1; make test` vs `sleep 2; make test` were distinct signatures
     // and the guard never fired on variant loops.

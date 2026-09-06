@@ -28,9 +28,7 @@ impl App {
     }
 
     /// Exact identity of the focused retained panel (ADR-0141: a retained
-    /// modal). This deliberately cannot be reconstructed from
-    /// [`Self::active_modal`] because Activity and Todos share the same
-    /// modal presentation.
+    /// modal).
     pub(crate) fn active_panel(&self) -> Option<crate::surfaces::PanelId> {
         self.surfaces.active_panel()
     }
@@ -131,7 +129,6 @@ impl App {
         use crate::surfaces::{PanelId, View};
         let panel = match modal {
             Modal::Help => Some(PanelId::Help),
-            Modal::Todos => Some(PanelId::Todos),
             Modal::Tools => Some(PanelId::Tools),
             Modal::Mcp => Some(PanelId::Mcp),
             Modal::Skills => Some(PanelId::Skills),
@@ -192,7 +189,6 @@ impl App {
         let modal = self.active_modal();
         match modal {
             Modal::Help => Some((&mut self.help_scroll, None)),
-            Modal::Todos => Some((&mut self.todos_scroll, None)),
             Modal::Permissions => Some((&mut self.permissions_scroll, None)),
             Modal::Config => match self.config_focus {
                 crate::overlays::ConfigFocus::Categories => Some((&mut self.config_scroll, None)),
@@ -513,7 +509,6 @@ impl App {
         use crate::surfaces::PanelId;
         match id {
             PanelId::Help => self.help_scroll = 0,
-            PanelId::Todos => self.todos_scroll = 0,
             PanelId::Tools | PanelId::Mcp => {
                 self.session_scroll = 0;
                 self.session_modal_follow = true;
@@ -657,7 +652,6 @@ impl App {
     fn panel_scroll(&self, id: crate::surfaces::PanelId) -> usize {
         match id {
             crate::surfaces::PanelId::Help => self.help_scroll,
-            crate::surfaces::PanelId::Todos => self.todos_scroll,
             crate::surfaces::PanelId::Tools
             | crate::surfaces::PanelId::Mcp
             | crate::surfaces::PanelId::Skills => self.session_scroll,
@@ -678,7 +672,6 @@ impl App {
     fn apply_panel_scroll(&mut self, id: crate::surfaces::PanelId, scroll: usize) {
         match id {
             crate::surfaces::PanelId::Help => self.help_scroll = scroll,
-            crate::surfaces::PanelId::Todos => self.todos_scroll = scroll,
             crate::surfaces::PanelId::Tools
             | crate::surfaces::PanelId::Mcp
             | crate::surfaces::PanelId::Skills => {

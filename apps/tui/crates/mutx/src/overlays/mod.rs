@@ -6,7 +6,6 @@
 //! - [`tools`] — tools manager modal (the interactive tool-list surface)
 //! - [`skills`] — skills modal (loaded-skill list with detail expansion)
 //! - [`mcp`] — MCP manager modal (per-server enable/reconnect surface)
-//! - [`todos`] — todos modal (unified task list overview)
 //! - [`permission`] — permission sheet + question modal
 //! - [`history`] — history search modal
 //! - [`help`] — help / keybindings modal
@@ -30,7 +29,6 @@ pub mod session;
 pub mod skills;
 pub mod telemetry;
 pub mod toast;
-pub mod todos;
 pub mod tools;
 pub mod tree;
 pub mod usage_stats;
@@ -70,7 +68,6 @@ pub use telemetry::{
     telemetry_round_count,
 };
 pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
-pub use todos::{TodosModalView, draw_todos_modal};
 pub use tools::draw_tools_modal;
 pub use tree::draw_tree_modal;
 pub use usage_stats::draw_usage_stats_modal;

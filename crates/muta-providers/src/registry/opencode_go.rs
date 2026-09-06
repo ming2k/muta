@@ -29,7 +29,7 @@ pub const WIRE_OVERRIDES: &[(&str, WireProtocol)] = &[
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-    // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
+    // DeepSeek (opencode-go / direct)
     Model {
         id: "deepseek-v4-flash",
         family: "deepseek",
@@ -85,7 +85,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
+    // GLM family (Zhipu / Z.AI / opencode-go)
     Model {
         id: "glm-5.2",
         family: "glm",
@@ -152,7 +152,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
+    // MiMo (Xiaomi / opencode-go, OpenAI format)
     Model {
         id: "mimo-v2.5",
         family: "mimo",
@@ -197,7 +197,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
+    // MiniMax (opencode-go, Anthropic /messages format)
     Model {
         id: "minimax-m3",
         family: "minimax",
@@ -231,7 +231,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
+    // Qwen (opencode-go, OpenAI /chat/completions format)
     // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
     // opencode-go; this baseline table mirrors that so the offline
     // fallback path matches the live catalog.

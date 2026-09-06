@@ -1,11 +1,11 @@
 # Activity bar
 
 Transient activity indicator shown in the footer stack, directly above the
-input box (below the ambient [todo bar](todo-bar.md) and queue bar). It
+input box (below the queue bar). It
 unifies the live status label and the breathing-dot liveness anchor into one
 click-to-open bar. Long-lived session-state flags (`DELEGATED` and friends)
 are deliberately absent — they live on the dedicated [head row](status-bar.md)
-below the model bar — and the task-list summary lives on its own todo bar above.
+below the model bar.
 
 ## Appearance
 
@@ -92,7 +92,7 @@ the typed phase's own word changes are the honest freshness signal. See
 
 | Condition | Visible? |
 |-----------|----------|
-| Idle | No — the row returns to the transcript (the task list lives on the [todo bar](todo-bar.md)) |
+| Idle | No — the row returns to the transcript |
 | Streaming assistant text ("responding") | Yes — the bar stays up across the whole round lifecycle, sustaining the breathing-dot liveness anchor (ADR-0008) through the longest phase |
 | Running tool / queued / waiting | Yes |
 | Slash command dispatched (harness idle) | No — a command is a synchronous control-plane operation outside the round state machine, so it never arms the bar; its in-flight state is the pending command row in the transcript ([ADR-0110](../../adr/0110-commands-do-not-trigger-the-activity-bar.md)) |

@@ -577,7 +577,7 @@ mod tests {
         );
     }
 
-    // --- reconfigure (ADR-0085 §6) ----------------------------------------
+    // reconfigure (ADR-0085 §6)
     //
     // These tests use `enabled: false` servers so no real subprocess is
     // spawned: a disabled server resolves to a `Disabled` entry with no live

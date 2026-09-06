@@ -11,13 +11,11 @@ use muta_contracts::InstructionTier;
 use super::system_prompt::InstructionOrder;
 use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
 
-// ---------------------------------------------------------------------------
 // Default system-prompt sections.
 //
 // Each is a zero-sized struct: the only state a section needs is the live
 // turn state, which arrives via [`SystemPromptContext`]. That makes each section
 // individually unit-testable and individually re-orderable / disable-able.
-// ---------------------------------------------------------------------------
 
 /// Opening identity sentence (name/mission/persona), composed by the
 /// embedding. Empty preamble (tests / identity-less agents) → inactive.

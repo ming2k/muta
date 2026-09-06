@@ -74,7 +74,7 @@ fn instance(id: &str, preset_id: Option<&str>) -> Connection {
     }
 }
 
-// ── derivation ─────────────────────────────────────────────────────────────
+// derivation
 
 #[test]
 fn preset_connection_derives_models_from_the_preset() {
@@ -326,7 +326,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
     );
 }
 
-// ── picker ─────────────────────────────────────────────────────────────────
+// picker
 
 #[test]
 fn build_picker_state_reflects_instances() {
@@ -381,7 +381,7 @@ fn channel_model_info_effort_ladders_survive() {
     assert_eq!(info.thinking, None);
 }
 
-// ── discovery + fitted overlay ─────────────────────────────────────────────
+// discovery + fitted overlay
 
 #[tokio::test]
 async fn live_discovery_writes_the_per_instance_cache() {
@@ -781,7 +781,7 @@ fn sync_fitted_model_registry_overlays_fitted_ids() {
     assert!(resolved.reasoning());
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// helpers
 
 #[test]
 fn catalog_builds_from_the_state_store_only() {

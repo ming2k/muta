@@ -1385,9 +1385,7 @@ pub fn compact_messages(
     ))
 }
 
-// ---------------------------------------------------------------------------
 // LLM-based summarization
-// ---------------------------------------------------------------------------
 
 const SUMMARIZATION_SYSTEM_PROMPT: &str = "\
 You are an anchored context summarization assistant for coding sessions.\n\
@@ -1640,9 +1638,7 @@ pub async fn summarize_with_provider(
     Ok(summary)
 }
 
-// ---------------------------------------------------------------------------
 // Compaction orchestrator
-// ---------------------------------------------------------------------------
 
 /// Run a compaction over `history` in place.
 ///

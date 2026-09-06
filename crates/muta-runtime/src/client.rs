@@ -1099,7 +1099,7 @@ enum Reply {
     Pick(Vec<SessionOverview>),
 }
 
-// ---- Monitor-protocol client (ADR-0093) ----
+// Monitor-protocol client (ADR-0093)
 /// Open the WebSocket, perform the monitor handshake, and return a channel of
 /// stream frames. The WS pump runs on a background task; the channel closes
 /// when the daemon hangs up.

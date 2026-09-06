@@ -1478,20 +1478,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::CtrlC => {
             return commands::handle_ctrl_c(app, viewed_session_id, copy_tx, copy_pending);
         }
-        input::InputAction::OpenTodos => {
-            // Ctrl+T opens the Todos modal — the agent's live task
-            // list surfaced on its own overlay. The list is
-            // agent-owned and read-only in the TUI; this opens the
-            // Activity view pinned to the Todos section, exactly
-            // like clicking the todo bar. A retained view (ADR-0133):
-            // reopen restores the retained scroll.
-            enter_panel(
-                app,
-                crate::surfaces::PanelId::Todos,
-                runtime,
-                viewed_session_id,
-            );
-        }
         input::InputAction::OpenQueue => {
             // F2 opens the queue overview — the full outbox list that
             // the persistent queue bar previews. The selection starts
@@ -2814,14 +2800,6 @@ async fn execute_command_by_id(
         }
         CommandId::NavigateSettings => {
             enter_view(app, crate::surfaces::View::Settings, runtime);
-        }
-        CommandId::OpenTodos => {
-            enter_panel(
-                app,
-                crate::surfaces::PanelId::Todos,
-                runtime,
-                viewed_session_id,
-            );
         }
         CommandId::OpenQueue => {
             enter_panel(

@@ -53,7 +53,7 @@ pub struct Connection {
     /// Defaults to [`muta_contracts::ClientProfile::Native`].
     #[serde(default, alias = "client_profile")]
     pub client_identity: ClientIdentity,
-    // ── Pure-custom declaration (only for `preset_id = None`) ─────────────
+    // Pure-custom declaration (only for `preset_id = None`)
     /// Wire transport for a custom connection's routes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<WireProtocol>,

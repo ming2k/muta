@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ----- `@path` completion tests -----
+// `@path` completion tests
 
 #[test]
 fn mention_range_detects_at_start_of_input() {
@@ -65,7 +65,7 @@ fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
     );
 }
 
-// ----- resolved `/command` highlight tests -----
+// resolved `/command` highlight tests
 
 #[test]
 fn resolved_slash_len_matches_builtin_command_without_args() {
@@ -1040,7 +1040,7 @@ fn range_selection_cjk_left_arrow_snaps_grapheme() {
     assert_eq!(app.cursor_position, 0, "← steps left from char 1 to char 0");
 }
 
-// ----- ADR-0162 Zero-Latency Two-Tier Completion & SWR Tests -----
+// ADR-0162 Zero-Latency Two-Tier Completion & SWR Tests
 
 #[test]
 fn adr0162_slash_completions_are_synchronous_and_zero_latency() {

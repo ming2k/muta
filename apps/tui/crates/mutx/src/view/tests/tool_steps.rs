@@ -73,7 +73,6 @@ fn runner_view_groups_children_into_turn_bands() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -177,7 +176,6 @@ fn runner_step_and_view_render_without_panicking() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -226,7 +224,6 @@ fn runner_step_and_view_render_without_panicking() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: None,
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -327,7 +324,6 @@ fn height_cache_skip_path_matches_full_layout() {
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
-                    todos: None,
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -436,7 +432,6 @@ fn expanded_edit_diff_height_is_scroll_independent() {
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
-                    todos: None,
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -502,17 +497,6 @@ fn completed_diff_cache_survives_height_invalidation_and_resize() {
 fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     let theme = Theme::default();
     let messages = vec![TranscriptMessage::new(muta_contracts::Role::User, "hello")];
-    let todos = muta_contracts::TodoList {
-        items: vec![muta_contracts::TodoItem {
-            id: muta_contracts::TodoId(1),
-            content: "one".into(),
-            status: muta_contracts::TodoStatus::InProgress,
-            created_at: 0,
-            updated_at: 0,
-        }],
-        next_id: 2,
-        updated_at_round: 0,
-    };
     let queue_items = [crate::chrome::QueueItemView {
         queued_at_ms: 1_700_000_000_000,
         text: "next".into(),
@@ -545,7 +529,6 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
-                todos: Some(&todos),
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -565,7 +548,6 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     // shared inset, status_y after the top gap, then each row's y is the
     // cumulative sum of the rows above it.
     let footer_h = crate::design::FOOTER_TOP_GAP_ROWS
-            + crate::design::TODO_BAR_ROWS
             + crate::design::QUEUE_BAR_ROWS
             + crate::design::ACTIVITY_BAR_ROWS
             + rendered.input_rect.height // composer
@@ -579,19 +561,14 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
 
     let expect = |y: u16, h: u16| mutx_engine::Rect::new(footer_x, y, footer_w, h);
     assert_eq!(
-        footer_stack::rect_of(&rendered.footer, FooterRowId::Todos),
-        Some(expect(status_y, TODO_BAR_ROWS)),
-        "todos bar rect"
-    );
-    assert_eq!(
         footer_stack::rect_of(&rendered.footer, FooterRowId::Queue),
-        Some(expect(status_y + TODO_BAR_ROWS, QUEUE_BAR_ROWS)),
+        Some(expect(status_y, QUEUE_BAR_ROWS)),
         "queue bar rect"
     );
     assert_eq!(
         footer_stack::rect_of(&rendered.footer, FooterRowId::Activity),
         Some(expect(
-            status_y + TODO_BAR_ROWS + QUEUE_BAR_ROWS,
+            status_y + QUEUE_BAR_ROWS,
             ACTIVITY_BAR_ROWS
         )),
         "activity bar rect"
@@ -604,7 +581,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     assert_eq!(
         rendered.input_rect,
         expect(
-            status_y + TODO_BAR_ROWS + QUEUE_BAR_ROWS + ACTIVITY_BAR_ROWS,
+            status_y + QUEUE_BAR_ROWS + ACTIVITY_BAR_ROWS,
             rendered.input_rect.height
         ),
         "composer rect matches the legacy offset"
@@ -618,7 +595,6 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
         rendered.hint_rect,
         expect(
             status_y
-                + TODO_BAR_ROWS
                 + QUEUE_BAR_ROWS
                 + ACTIVITY_BAR_ROWS
                 + rendered.input_rect.height,
@@ -626,8 +602,8 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
         ),
         "hint bar rect matches the legacy offset"
     );
-    // The registry contains the five interactive rows (TopGap is 0-height and omitted).
-    assert_eq!(rendered.footer.rows.len(), 5, "registry completeness");
+    // The registry contains the four interactive rows (TopGap is 0-height and omitted).
+    assert_eq!(rendered.footer.rows.len(), 4, "registry completeness");
     assert_eq!(
         footer_stack::rect_of(&rendered.footer, FooterRowId::TopGap),
         None,
@@ -703,7 +679,6 @@ fn checklist_tool_step_renders_with_active_selection_without_panic() {
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
-                    todos: None,
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,

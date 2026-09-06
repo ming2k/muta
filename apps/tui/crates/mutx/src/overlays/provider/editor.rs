@@ -17,7 +17,7 @@ use crate::primitives::{
 use crate::providers::{CustomField, PROVIDER_PRESETS, ProviderPreset};
 use crate::view::Theme;
 
-// ── Effort selector (Faster⇄Smarter node slider) ────────────────────────────
+// Effort selector (Faster⇄Smarter node slider)
 
 const EFFORT_SCALE_ENDS: (&str, &str) = ("Faster", "Smarter");
 const TRACK_NODE: char = '○';

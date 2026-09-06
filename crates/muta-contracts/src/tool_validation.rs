@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn validation_table() {
         let cases: Vec<(Value, &str, Result<(), &str>)> = vec![
-            // ── Top-level type matching ──
+            // Top-level type matching
             (json!({"type": "object"}), "{}", Ok(())),
             (
                 json!({"type": "object"}),
@@ -163,7 +163,7 @@ mod tests {
             ),
             (json!({"type": "array"}), "[1]", Ok(())),
             (json!({"type": "boolean"}), "true", Ok(())),
-            // ── integer vs number (praxion fix #11 semantics) ──
+            // integer vs number (praxion fix #11 semantics)
             // An integer value matches an `integer` schema...
             (json!({"type": "integer"}), "42", Ok(())),
             // ...and is also accepted for a `number` schema.
@@ -175,10 +175,10 @@ mod tests {
                 Err("expected type `integer`, got `number`"),
             ),
             (json!({"type": "number"}), "4.2", Ok(())),
-            // ── Empty / typeless schema admits anything ──
+            // Empty / typeless schema admits anything
             (json!({}), "123", Ok(())),
             (json!({}), "[1, 2]", Ok(())),
-            // ── required: key presence, top level only ──
+            // required: key presence, top level only
             (
                 json!({"type": "object", "required": ["path"]}),
                 "{}",
@@ -196,7 +196,7 @@ mod tests {
             ),
             // Empty required list admits anything.
             (json!({"type": "object", "required": []}), "{}", Ok(())),
-            // ── Per-property primitive type checks ──
+            // Per-property primitive type checks
             (
                 json!({"type": "object", "properties": {"command": {"type": "string"}}}),
                 "{\"command\": 123}",
@@ -245,7 +245,7 @@ mod tests {
                 "{\"a\": \"x\", \"b\": 123}",
                 Ok(()),
             ),
-            // ── No recursion into nested objects ──
+            // No recursion into nested objects
             // `opts` must be an object, but its nested `required`/`properties`
             // are NOT validated by this layer.
             (
@@ -281,13 +281,13 @@ mod tests {
                 "{\"opts\": []}",
                 Err("invalid argument `opts`: expected type `object`, got `array`"),
             ),
-            // ── required/properties with no top-level "type" still apply ──
+            // required/properties with no top-level "type" still apply
             (
                 json!({"required": ["a"]}),
                 "{}",
                 Err("missing required field(s): `a`"),
             ),
-            // ── Unparseable argument strings pass through to the Tool impl ──
+            // Unparseable argument strings pass through to the Tool impl
             (json!({"type": "object", "required": ["a"]}), "", Ok(())),
             (json!({"type": "object"}), "{not json", Ok(())),
         ];

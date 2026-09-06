@@ -167,12 +167,12 @@ fn history_panel_collapses_to_actual_row_count() {
         )
     });
     let panel = panel.expect("panel should render with ample room above");
-    // 2 entries + 4 chrome rows (top padding, header, footer, bottom
-    // padding) = 6 rows. The panel still collapses to the actual row
-    // count — a fixed minimum would have forced 8+ regardless of entries.
+    // 2 entries + 3 chrome rows (top padding, header, bottom padding) = 5 rows.
+    // The panel still collapses to the actual row count — a fixed minimum
+    // would have forced 8+ regardless of entries.
     assert_eq!(
-        panel.height, 6,
-        "panel must collapse to actual row count + chrome (6), not a fixed minimum"
+        panel.height, 5,
+        "panel must collapse to actual row count + chrome (5), not a fixed minimum"
     );
 }
 

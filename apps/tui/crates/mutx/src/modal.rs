@@ -117,10 +117,6 @@ pub enum Modal {
     /// `/settings`, ADR-0141): dual-pane configuration center. `Tab`
     /// switches focus between categories and detail; `Esc` closes.
     Config,
-    /// Todos overview: the unified task list with status glyphs and progress counter.
-    /// Opened by `Ctrl+T` or by clicking the todo bar. The body scrolls via
-    /// `App::todos_scroll`.
-    Todos,
     /// Queue overview: the full list of staged outbox messages for the viewed
     /// session, in dispatch order, each with its target modifier, queued time,
     /// and (truncated) text. Opened by clicking the persistent queue bar below
@@ -260,7 +256,7 @@ impl Modal {
                 decide: true,
                 opaque: true,
             },
-            Modal::Help | Modal::Todos | Modal::UsageStats | Modal::Tree => Claims {
+            Modal::Help | Modal::UsageStats | Modal::Tree => Claims {
                 text_entry: false,
                 list_nav: false,
                 body_scroll: true,
@@ -315,7 +311,6 @@ impl Modal {
                 | Modal::Skills
                 | Modal::Sessions
                 | Modal::Permissions
-                | Modal::Todos
                 | Modal::Queue
                 | Modal::HistorySearch
                 | Modal::Models
@@ -397,7 +392,6 @@ mod claims_tests {
             Modal::Mcp,
             Modal::Skills,
             Modal::Permissions,
-            Modal::Todos,
             Modal::Queue,
             Modal::Telemetry,
             Modal::UsageStats,

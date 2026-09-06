@@ -575,12 +575,10 @@ fn resize_then_repaint_does_not_inherit_stale_bold() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Scroll translation: the streaming-transcript frame (ADR on middle-component
 // flicker). A transcript whose content grows at the bottom while following it
 // shifts every settled row up; the diff must translate that into one terminal
 // scroll plus the genuinely-new row, and convergence must hold afterwards.
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Fill `back` with one labeled row per label, then clear dirty so the test
 /// controls exactly what the "writer" repaints.

@@ -1421,7 +1421,7 @@ impl Config {
             (self.default_connection.clone(), self.default_model.clone())
         };
 
-        // ── config.toml = behavior only ─────────────────────────────────────
+        // config.toml = behavior only
         // Secrets live in `credentials.toml`, connections in `connections.toml`.
         let mut out = self.clone();
         out.default_connection = default_connection;
@@ -1796,7 +1796,7 @@ name = "DeepSeek"
         assert!(!with_thinking.is_empty());
     }
 
-    // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------
+    // project-scope MCP merge (ADR-0085 §2/§3)
 
     struct ScratchProject(tempfile::TempDir);
 
