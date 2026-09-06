@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-09-07
+
+### Removed
+
+- **Decommission legacy todo bar and todos overlays.** Removed deprecated `TodoBar` component and
+  task-list overlay modals in `mutx` to streamline the chrome stack, consolidating live runtime feedback
+  into the activity and queue bars.
+
+### Changed
+
+- **Codebase commentary normalization.** Cleaned up stylistic comment dividers and normalized visual banners
+  across crates and frontend modules.
+
 ## [0.39.0] - 2026-09-07
 
 ### Added
