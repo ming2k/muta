@@ -19,7 +19,7 @@
 //!   and the two newest messages) so the stable prefix is cached at 0.1× input
 //!   cost. See `stamp_cache_control` and friends.
 
-use muta_contracts::{Message, Role, ThinkingSupport};
+use muta_contracts::{Message, Role, ReasoningSupport};
 use serde_json::{Value, json};
 
 use super::thinking::ThinkingConfig;
@@ -327,21 +327,21 @@ fn stamp_thinking(
     max_tokens: u32,
     thinking: ThinkingConfig,
 ) {
-    // The model registry (`ThinkingSupport` + `effort_levels`) is the single
+    // The model registry (`ReasoningSupport` + `effort_levels`) is the single
     // source of truth for *how* a model reasons on the wire.
     let resolved = thinking.resolve_for(&capabilities.effort_levels);
     let want = resolved.mode.is_on();
     match capabilities.thinking {
-        ThinkingSupport::AnthropicManual if want => {
+        ReasoningSupport::AnthropicManual if want => {
             body["thinking"] = json!({
                 "type": "enabled",
                 "budget_tokens": manual_thinking_budget(max_tokens),
             });
         }
-        ThinkingSupport::AnthropicAdaptiveAlwaysOn => {
+        ReasoningSupport::AnthropicAdaptiveAlwaysOn => {
             body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
         }
-        ThinkingSupport::AnthropicAdaptiveOnByDefault => {
+        ReasoningSupport::AnthropicAdaptiveOnByDefault => {
             // Sonnet 5: omitting the field RUNS thinking. Honor opt-OUT with
             // `{type:"disabled"}`; opt-in emits adaptive.
             if want {

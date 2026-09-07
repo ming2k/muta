@@ -940,6 +940,7 @@ async fn handle_wire_stream(
         provider,
         model,
         round_interrupts: bound.session.round_interrupts().await,
+        retry_resolutions: bound.session.retry_resolutions().await,
         command_catalog: bound.command_catalog.clone(),
     };
     wire_sink

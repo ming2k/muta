@@ -4,7 +4,6 @@
 //! so that selection and copy operate on semantic units (blocks) rather than
 //! terminal grid characters.
 
-use muta_contracts::tokenizer::StreamingCounter;
 use muta_contracts::{Role, RunnerEvent};
 
 use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_ENUMERATE_COLS};
@@ -193,17 +192,12 @@ pub enum MessageKind {
         /// Child events emitted by an runner spawned from this tool step.
         children: Vec<TranscriptMessage>,
     },
-    Thinking {
+    Reasoning {
         content: String,
         duration_ms: Option<u64>,
         expanded: bool,
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
-        /// Incremental exact token count (ADR-0184). Fed per streamed delta
-        /// so the per-frame `thinking_summary` never re-tokenizes the whole
-        /// accumulated chain — the previous `count_tokens(content)` call per
-        /// frame made streaming cost O(n²) in the reasoning length.
-        stream_tokens: StreamingCounter,
         /// Milestone (heading) count, frozen at construction / stream end.
         /// Only displayed for finished traces, so it never needs per-frame
         /// recomputation.
@@ -1158,6 +1152,7 @@ impl TranscriptMessage {
                 // Still-streaming seed: the real termination lands with the
                 // final result (`finish_tool_step`). Default until then.
                 termination: muta_contracts::tool_output::ShellTermination::default(),
+                detached_job_id: None,
             }));
         }
         if let Some(muta_contracts::ToolOutput::Shell {
@@ -1354,7 +1349,7 @@ impl TranscriptMessage {
                 }
             }
             // The runner's live reasoning chain, folded into the same
-            // `MessageKind::Thinking` message a resumed session restores from
+            // `MessageKind::Reasoning` message a resumed session restores from
             // `reasoning_content` — so a live drill-in and a reloaded one show
             // the same children. Placement mirrors the wire order the child
             // emits (reasoning precedes its turn's assistant text and tool
@@ -1363,7 +1358,7 @@ impl TranscriptMessage {
             // source, so no phantom summary trace can appear here.
             RunnerEvent::StreamReasoningStart { round, turn } => {
                 children.push(
-                    TranscriptMessage::thinking("")
+                    TranscriptMessage::reasoning("")
                         .with_round(*round)
                         .with_turn((*turn as u64) + 1),
                 );
@@ -1375,26 +1370,26 @@ impl TranscriptMessage {
                 // two deltas must not fork the trace into a second entry.
                 if let Some(last) = children
                     .iter_mut()
-                    .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
+                    .rfind(|m| m.is_reasoning() && m.is_reasoning_streaming())
                 {
-                    last.push_thinking_delta(delta);
+                    last.push_reasoning_delta(delta);
                 } else {
-                    children.push(TranscriptMessage::thinking(delta));
+                    children.push(TranscriptMessage::reasoning(delta));
                 }
             }
             RunnerEvent::StreamReasoningEnd(content) => {
                 if let Some(last) = children
                     .iter_mut()
-                    .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
+                    .rfind(|m| m.is_reasoning() && m.is_reasoning_streaming())
                 {
-                    last.finalize_thinking(content);
+                    last.finalize_reasoning(content);
                     // No wall clock is available on the folding path; 0 is
                     // the same terminal stamp a resumed session applies, and
                     // what matters is that the trace stops "streaming" so the
                     // spinner freezes.
-                    last.set_thinking_duration(0);
+                    last.set_reasoning_duration(0);
                 } else if !content.is_empty() {
-                    children.push(TranscriptMessage::thinking(content));
+                    children.push(TranscriptMessage::reasoning(content));
                 }
             }
             RunnerEvent::ToolCall {
@@ -1836,25 +1831,19 @@ impl TranscriptMessage {
             .map(str::to_string)
     }
 
-    pub fn thinking(content: impl Into<String>) -> Self {
+    pub fn reasoning(content: impl Into<String>) -> Self {
         let content = sanitize_text(&content.into()).into_owned();
-        let mut stream_tokens = StreamingCounter::new();
-        // Closed-stream accounting: the full content is already final, so
-        // finish the counter for an exact total (no carried tail).
-        stream_tokens.push(&content);
-        stream_tokens.finish();
         let milestones = count_milestones(&content);
         let mut message = Self {
             id: next_message_id(),
             role: Role::Assistant,
             blocks: Vec::new(),
             raw: String::new(),
-            kind: MessageKind::Thinking {
+            kind: MessageKind::Reasoning {
                 content: content.clone(),
                 duration_ms: None,
                 expanded: false,
                 user_pinned: false,
-                stream_tokens,
                 milestones,
             },
             delivery: DeliveryStatus::default(),
@@ -1876,51 +1865,37 @@ impl TranscriptMessage {
         message
     }
 
-    /// Append a reasoning delta to a still-streaming Thinking message
-    /// (ADR-0184): content, raw, and the incremental token counter advance
-    /// together. The counter makes the per-frame summary O(delta) instead of
-    /// re-tokenizing the whole chain every frame.
-    pub fn push_thinking_delta(&mut self, delta: &str) {
+    /// Append a reasoning delta to a still-streaming Reasoning message.
+    pub fn push_reasoning_delta(&mut self, delta: &str) {
         let sanitized = sanitize_text(delta);
-        let MessageKind::Thinking {
-            content,
-            stream_tokens,
-            ..
-        } = &mut self.kind
-        else {
+        let MessageKind::Reasoning { content, .. } = &mut self.kind else {
             return;
         };
         content.push_str(&sanitized);
-        stream_tokens.push(&sanitized);
         self.raw.push_str(&sanitized);
         self.bump_rev();
     }
 
-    /// Replace a streaming Thinking message's content with the authoritative
+    /// Replace a streaming Reasoning message's content with the authoritative
     /// full text and close the trace (stream end / restored session).
-    pub fn finalize_thinking(&mut self, content: &str) {
+    pub fn finalize_reasoning(&mut self, content: &str) {
         let content = sanitize_text(content).into_owned();
         let milestones = count_milestones(&content);
         self.raw = content.clone();
-        if let MessageKind::Thinking {
+        if let MessageKind::Reasoning {
             content: current,
-            stream_tokens,
             milestones: slot,
             ..
         } = &mut self.kind
         {
-            // Authoritative replacement: recount from the full text exactly.
-            *stream_tokens = StreamingCounter::new();
-            stream_tokens.push(&content);
-            stream_tokens.finish();
             *current = content;
             *slot = milestones;
         }
         self.reparse();
     }
 
-    pub fn is_thinking(&self) -> bool {
-        matches!(self.kind, MessageKind::Thinking { .. })
+    pub fn is_reasoning(&self) -> bool {
+        matches!(self.kind, MessageKind::Reasoning { .. })
     }
 
     /// Whether this is the live provider-retry entry.
@@ -2026,6 +2001,30 @@ impl TranscriptMessage {
             },
         };
         Self::notice(severity, raw).with_notice_parts(parts)
+    }
+
+    /// Construct a retry-resolution marker row: the success-side twin of
+    /// [`Self::round_interrupted`]. One compact system notice per round that
+    /// recovered from transient provider faults; the per-attempt fault lines
+    /// ride as the expandable detail.
+    pub fn retry_resolved(record: muta_contracts::RetryResolution) -> Self {
+        Self::notice(
+            NoticeSeverity::Info,
+            record.summary_line(),
+        )
+        .with_notice_parts(NoticeParts {
+            origin: Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::Interrupted,
+            }),
+            topic: Some("recovered".to_string()),
+            title: record.summary_line(),
+            detail: if record.faults.is_empty() {
+                None
+            } else {
+                Some(record.faults.join("\n"))
+            },
+        })
+        .with_sent_at_ms(record.at_ms)
     }
 
     /// Construct a notice message. Replaces the ad-hoc
@@ -2206,27 +2205,27 @@ impl TranscriptMessage {
     /// its stream is still open. The renderer treats this as the "spinner
     /// should keep breathing" state, and `finalize_streaming_reasoning` uses
     /// it to find orphaned traces to freeze after an interrupt.
-    pub fn is_thinking_streaming(&self) -> bool {
+    pub fn is_reasoning_streaming(&self) -> bool {
         matches!(
             self.kind,
-            MessageKind::Thinking {
+            MessageKind::Reasoning {
                 duration_ms: None,
                 ..
             }
         )
     }
 
-    pub fn thinking_expanded(&self) -> Option<bool> {
+    pub fn reasoning_expanded(&self) -> Option<bool> {
         match &self.kind {
-            MessageKind::Thinking { expanded, .. } => Some(*expanded),
+            MessageKind::Reasoning { expanded, .. } => Some(*expanded),
             _ => None,
         }
     }
 
     /// Auto/system disclosure setter — respects a user pin. See
     /// [`Self::set_tool_step_expanded`] for the rationale.
-    pub fn set_thinking_expanded(&mut self, expanded: bool) {
-        if let MessageKind::Thinking {
+    pub fn set_reasoning_expanded(&mut self, expanded: bool) {
+        if let MessageKind::Reasoning {
             expanded: current,
             user_pinned,
             ..
@@ -2240,8 +2239,8 @@ impl TranscriptMessage {
     }
 
     /// User-driven disclosure change: force `expanded` and pin it.
-    pub fn pin_thinking_expanded(&mut self, expanded: bool) {
-        if let MessageKind::Thinking {
+    pub fn pin_reasoning_expanded(&mut self, expanded: bool) {
+        if let MessageKind::Reasoning {
             expanded: current,
             user_pinned,
             ..
@@ -2252,8 +2251,8 @@ impl TranscriptMessage {
         }
     }
 
-    pub fn set_thinking_duration(&mut self, duration_ms: u64) {
-        if let MessageKind::Thinking { duration_ms: d, .. } = &mut self.kind {
+    pub fn set_reasoning_duration(&mut self, duration_ms: u64) {
+        if let MessageKind::Reasoning { duration_ms: d, .. } = &mut self.kind {
             *d = Some(duration_ms);
         }
     }
@@ -2264,66 +2263,47 @@ impl TranscriptMessage {
     /// Sol, ChatGPT Responses `reasoning_summary_text`, Claude thinking headings),
     /// this dynamically extracts the active milestone header while streaming
     /// (`Thinking through the security architecture components`) and reports the
-    /// completed milestone state once finished (`Thought through the security architecture components (1.2s)`
-    /// or `Thought through 3 steps  180 tokens (2.4s)`).
+    /// completed milestone state once finished (`Thought through the security
+    /// architecture components (1.2s)`).
     ///
-    /// For models with raw unstructured chain-of-thought, it reports **tokens**
-    /// (ADR-0120) — the unit of what this thinking block costs against the
-    /// context window (`Thinking  148 tokens` while streaming, `Thought  1318 tokens (2.4s)` settled).
-    pub fn thinking_summary(&self) -> Option<String> {
-        /// Live-count floor applied while streaming (see method doc).
-        const STREAM_COUNT_QUANTUM: usize = 25;
-        /// Below this many tokens even the live count updates per token —
-        /// the trace is short enough that per-token increments are rare
-        /// relative to the render heartbeat.
-        const STREAM_EXACT_UNDER: usize = 100;
-
-        let MessageKind::Thinking {
+    /// Deliberately **no token count** (ADR-0191): a local cl100k count of the
+    /// visible chain is not the billed reasoning volume — hidden-CoT models
+    /// bill far more than they show, and a number that ranges from exact to
+    /// 10× off is noise. The authoritative reasoning-token figure lives in the
+    /// usage/performance surfaces via `TokenUsage.reasoning_tokens`.
+    pub fn reasoning_summary(&self) -> Option<String> {
+        let MessageKind::Reasoning {
             content,
             duration_ms,
-            stream_tokens,
             milestones,
             ..
         } = &self.kind
         else {
             return None;
         };
-        // Incremental count (ADR-0184): the counter is fed per delta, so this
-        // is O(1) per frame instead of a full BPE pass over the whole chain.
-        // The only inexactness is the counter's carried tail (a single open
-        // pretoken), which closes on the next delta or at stream end.
-        let tokens = stream_tokens.tokens();
         let active_milestone = extract_active_milestone(content);
 
         Some(match duration_ms {
-            None => {
-                if let Some(milestone) = active_milestone {
+            None => match active_milestone {
+                Some(milestone) => {
                     let topic = normalize_thinking_topic(&milestone);
                     format!("Thinking through {topic}")
-                } else {
-                    // Floor to the quantum once the count grows past the
-                    // per-token regime so the number climbs in visible steps
-                    // instead of strobing digit-by-digit every heartbeat.
-                    let shown = if tokens < STREAM_EXACT_UNDER {
-                        tokens
-                    } else {
-                        tokens - tokens % STREAM_COUNT_QUANTUM
-                    };
-                    format!("Thinking  {shown} tokens")
                 }
-            }
+                // No milestone to show: an activity word, not a metric.
+                None => "Thinking…".to_string(),
+            },
             Some(ms) => {
                 let duration = duration_text(Some(*ms));
                 let milestones = *milestones;
                 if milestones > 1 {
-                    format!("Thought through {milestones} steps  {tokens} tokens ({duration})")
+                    format!("Thought through {milestones} steps ({duration})")
                 } else if milestones == 1
                     && let Some(milestone) = active_milestone
                 {
                     let topic = normalize_thinking_topic(&milestone);
                     format!("Thought through {topic} ({duration})")
                 } else {
-                    format!("Thought  {tokens} tokens ({duration})")
+                    format!("Thought ({duration})")
                 }
             }
         })
@@ -2704,7 +2684,13 @@ pub fn normalize_thinking_topic(raw: &str) -> String {
 
     let mut stripped = topic;
     for prefix in REDUNDANT_PREFIXES {
-        if stripped.len() > prefix.len() && stripped[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        // `get` returns None when the prefix length lands mid-UTF-8-char;
+        // byte-length slicing (`stripped[..prefix.len()]`) would panic there.
+        let head = match stripped.get(..prefix.len()) {
+            Some(head) => head,
+            None => continue,
+        };
+        if stripped.len() > prefix.len() && head.eq_ignore_ascii_case(prefix) {
             let candidate = stripped[prefix.len()..].trim();
             if !candidate.is_empty() {
                 stripped = candidate;

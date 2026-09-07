@@ -53,6 +53,7 @@ import type {
   PermissionDecision,
   ProviderPickerSnapshot,
   QueuedMessage,
+  RetryResolution,
   RoundEvent,
   RoundInterrupt,
   RoundSummary,
@@ -116,6 +117,8 @@ export interface WelcomePayload {
   model: string;
   /** Round-interrupt records (C11); absent on older daemons. */
   round_interrupts?: RoundInterrupt[];
+  /** Retry-resolution records; absent on older daemons. */
+  retry_resolutions?: RetryResolution[];
   /** Backend-owned command vocabulary shared with every frontend. */
   command_catalog?: CommandCatalog;
 }
@@ -127,6 +130,8 @@ export interface ConversationReplacedPayload {
   commands?: CommandRecord[];
   /** Round-interrupt records (C11); absent on older daemons. */
   round_interrupts?: RoundInterrupt[];
+  /** Retry-resolution records; absent on older daemons. */
+  retry_resolutions?: RetryResolution[];
 }
 
 export type AgentResponse =

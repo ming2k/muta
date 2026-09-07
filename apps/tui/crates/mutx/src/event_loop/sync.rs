@@ -47,7 +47,7 @@ pub(crate) async fn sync_runtime_state_to_app(
         app.modal_index = 0;
         app.permission_scroll = 0;
         app.permission_show_details = false;
-        app.focused_target = None;
+        app.park_transcript_focus_for_sheet();
     } else if app.pending_permission.is_none()
         && app.active_sheet() == Some(crate::sheet::Permission)
     {
@@ -81,7 +81,7 @@ pub(crate) async fn sync_runtime_state_to_app(
                 app.question_scroll = 0;
                 app.question_modal_follow = true;
                 app.modal_index = 0;
-                app.focused_target = None;
+                app.park_transcript_focus_for_sheet();
             } else {
                 app.question = None;
                 if app.active_sheet() == Some(crate::sheet::Question) {
@@ -93,7 +93,7 @@ pub(crate) async fn sync_runtime_state_to_app(
         if app.question.is_some() && !request_sheet_open {
             app.push_sheet_surface(crate::sheet::Question);
             app.modal_index = 0;
-            app.focused_target = None;
+            app.park_transcript_focus_for_sheet();
         }
     }
 
@@ -130,13 +130,12 @@ pub(crate) async fn sync_runtime_state_to_app(
                 // sheet mount does, so nothing downstream
                 // assumes it owns input.
                 app.modal_index = 0;
-                app.focused_target = None;
+                app.park_transcript_focus_for_sheet();
             }
         }
         drop(signal);
 
-        // Unmount when the snapshot turns trusted or the workspace
-        // is no longer quarantined. The harness snapshot on
+        // Unmount when the snapshot turns trusted or the workspace        // is no longer quarantined. The harness snapshot on
         // `UiRuntime::harness` is the freshest one the listener has
         // observed; reading it through the runtime cell avoids racing
         // the listener's own `harness_clone` update.
@@ -169,7 +168,7 @@ pub(crate) async fn sync_runtime_state_to_app(
             if let Some(req) = front {
                 app.pending_input = Some(req);
                 app.modal_index = 0;
-                app.focused_target = None;
+                app.park_transcript_focus_for_sheet();
             } else {
                 app.pending_input = None;
                 if app.active_sheet() == Some(crate::sheet::InputInjection) {
@@ -183,7 +182,7 @@ pub(crate) async fn sync_runtime_state_to_app(
             app.park_input_draft();
             app.push_sheet_surface(crate::sheet::InputInjection);
             app.modal_index = 0;
-            app.focused_target = None;
+            app.park_transcript_focus_for_sheet();
         }
     }
 

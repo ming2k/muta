@@ -1,11 +1,11 @@
 //! Anthropic Messages — resolved thinking/effort configuration.
 //!
 //! [`ThinkingConfig`] carries the two orthogonal reasoning knobs —
-//! [`ThinkingMode`] (on/off) and [`Effort`] (depth) — that the request layer
+//! [`ReasoningMode`] (on/off) and [`Effort`] (depth) — that the request layer
 //! stamps onto every `/messages` body. This is an Anthropic-transport concern
 //! (it configures *how* the request encodes reasoning), so it lives here
 //! rather than in `muta-contracts` (which holds only the model *capabilities*:
-//! `ThinkingMode`, `Effort`, `ThinkingSupport`).
+//! `ReasoningMode`, `Effort`, `ReasoningSupport`).
 //!
 //! **Reasoning is opt-in.** The default for every model is thinking **off**
 //! with no explicit effort — extended thinking is a per-model decision the user
@@ -13,15 +13,15 @@
 //! (ADR-0046). A request only carries a `thinking` object when the user has
 //! turned it on for that model.
 
-use muta_contracts::{Effort, thinking::ThinkingSupport};
+use muta_contracts::{Effort, reasoning::ReasoningSupport};
 
 /// Re-export the on/off enum so callers reaching it through this module keep a
 /// stable path.
-pub use muta_contracts::ThinkingMode;
+pub use muta_contracts::ReasoningMode;
 
 /// Resolved thinking/effort configuration for an Anthropic Messages provider.
 ///
-/// The two knobs are **orthogonal** ([`ThinkingMode`] = on/off switch,
+/// The two knobs are **orthogonal** ([`ReasoningMode`] = on/off switch,
 /// [`Effort`] = depth throttle) and are surfaced as such — never coupled.
 ///
 /// `effort` is `Option<Effort>`:
@@ -35,7 +35,7 @@ pub use muta_contracts::ThinkingMode;
 /// time (see `Self::resolve_for`).
 #[derive(Debug, Clone, Copy)]
 pub struct ThinkingConfig {
-    pub mode: ThinkingMode,
+    pub mode: ReasoningMode,
     pub effort: Option<Effort>,
 }
 
@@ -47,7 +47,7 @@ impl ThinkingConfig {
     }
 
     /// Set the thinking mode. Returns `self` for chaining.
-    pub fn with_mode(mut self, mode: ThinkingMode) -> Self {
+    pub fn with_mode(mut self, mode: ReasoningMode) -> Self {
         self.mode = mode;
         self
     }
@@ -91,15 +91,15 @@ impl ThinkingConfig {
 
     /// Whether the resolved model requires the manual-thinking beta header.
     /// Used by `request::beta_header`.
-    pub(super) fn needs_manual_beta(self, support: ThinkingSupport) -> bool {
-        matches!(support, ThinkingSupport::AnthropicManual) && self.mode.is_on()
+    pub(super) fn needs_manual_beta(self, support: ReasoningSupport) -> bool {
+        matches!(support, ReasoningSupport::AnthropicManual) && self.mode.is_on()
     }
 }
 
 impl Default for ThinkingConfig {
     fn default() -> Self {
         Self {
-            mode: ThinkingMode::Off,
+            mode: ReasoningMode::Off,
             effort: None,
         }
     }

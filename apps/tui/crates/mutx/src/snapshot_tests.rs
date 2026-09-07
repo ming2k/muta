@@ -281,6 +281,7 @@ fn execute_command_expanded_renders_structured_shell() {
             exit: Some(1),
             truncated: false,
             termination: muta_contracts::tool_output::ShellTermination::Exited,
+            detached_job_id: None,
         },
         true,
     );
@@ -319,6 +320,7 @@ fn execute_command_expanded_preserves_stdout_stderr_interleaving() {
             exit: Some(0),
             truncated: false,
             termination: muta_contracts::tool_output::ShellTermination::Exited,
+            detached_job_id: None,
         },
         true,
     );
@@ -346,6 +348,7 @@ fn execute_command_expanded_folds_long_output_keeping_tail_events() {
             exit: Some(1),
             truncated: false,
             termination: muta_contracts::tool_output::ShellTermination::Exited,
+            detached_job_id: None,
         },
         true,
     );
@@ -451,6 +454,7 @@ fn execute_command_running_streams_live_preview() {
             exit: None,
             truncated: false,
             termination: muta_contracts::tool_output::ShellTermination::Exited,
+            detached_job_id: None,
         },
         false,
     );
@@ -1230,8 +1234,8 @@ fn command_component_pending_classifies_plain() {
 /// owns the boundary before the following assistant text.
 #[test]
 fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
-    let mut reasoning = TranscriptMessage::thinking("first thought\n\nsecond thought").with_turn(1);
-    reasoning.pin_thinking_expanded(true);
+    let mut reasoning = TranscriptMessage::reasoning("first thought\n\nsecond thought").with_turn(1);
+    reasoning.pin_reasoning_expanded(true);
     let assistant = TranscriptMessage::new(Role::Assistant, "final answer").with_turn(2);
     let messages = vec![reasoning, assistant];
 
@@ -1415,8 +1419,8 @@ fn pure_prose_assistant_turn_renders_turn_header() {
 /// tools inside the batch stay flush.
 #[test]
 fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
-    let mut thinking = TranscriptMessage::thinking("inspect the files").with_turn(7);
-    thinking.set_thinking_duration(10);
+    let mut thinking = TranscriptMessage::reasoning("inspect the files").with_turn(7);
+    thinking.set_reasoning_duration(10);
     let first = tool_step_structured(
         "read_text",
         r#"{"path":"a.rs"}"#,

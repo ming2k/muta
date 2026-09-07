@@ -1064,8 +1064,20 @@ pub(crate) mod question_effects {
                     let mut queue = runtime.pending_question.lock().await;
                     queue.retain(|r| r.id != *request_id);
                     if queue.is_empty() {
+                        drop(queue);
                         app.question = None;
-                        app.pop_transient_surface();
+                        // The sheet is composer-slot state (ADR-0173 §3),
+                        // not router foreground identity: unmount it via
+                        // `dismiss_sheet`, never `pop_transient_surface`.
+                        // Popping the surface router here consumed an
+                        // unbalanced return frame (the sync never pushed a
+                        // transient for the sheet), leaving the router's
+                        // `transcript_focused`-equivalent state desynced —
+                        // the composer rendered its inactive palette and
+                        // never recovered.
+                        if app.active_sheet() == Some(crate::sheet::SheetKind::Question) {
+                            app.dismiss_sheet();
+                        }
                         app.modal_index = 0;
                     }
                 }
@@ -1087,6 +1099,72 @@ mod tests {
         assert_eq!(
             created_connection_preset_id(Some("openai".to_string())).as_deref(),
             Some("openai")
+        );
+    }
+
+    /// Regression (composer stuck inactive after the question sheet is
+    /// answered): `Closed` must unmount the sheet as composer-slot state
+    /// (`dismiss_sheet`, ADR-0173 §3) — never `pop_transient_surface`, which
+    /// consumed an unbalanced return frame and left the composer dimmed.
+    #[tokio::test]
+    async fn closed_effect_unmounts_question_sheet_not_router_transient() {
+        use crate::question_model::{QuestionAction, QuestionEffect, QuestionModel};
+        use crate::sheet::SheetKind;
+
+        let mut app = crate::tests::new_app_for_relay_tests();
+        let runtime = crate::event_loop::runtime::UiRuntime::minimal_for_test();
+
+        // Simulate the mounted sheet exactly as the per-frame sync leaves it:
+        // slot state set, no router transient pushed on top of the session view.
+        let request = {
+            use muta_contracts::{UserQuestion, UserQuestionOption, UserQuestionRequest};
+            UserQuestionRequest {
+                id: "q1".into(),
+                questions: vec![UserQuestion {
+                    header: Some("Style".into()),
+                    question: "Which error handling crate?".into(),
+                    options: vec![
+                        UserQuestionOption {
+                            label: "anyhow".into(),
+                            description: None,
+                        },
+                        UserQuestionOption {
+                            label: "eyre".into(),
+                            description: None,
+                        },
+                    ],
+                    multi_select: false,
+                }],
+                origin: None,
+            }
+        };
+        app.question = Some(QuestionModel::open(request));
+        app.push_sheet_surface(SheetKind::Question);
+
+        let effects = {
+            let qm = app.question.take().expect("question mounted");
+            let (_qm, effects) = qm.update(QuestionAction::Submit);
+            effects
+        };
+        assert!(effects.contains(&QuestionEffect::Closed { request_id: "q1".into() }));
+
+        super::question_effects::apply(&effects, &mut app, &runtime).await;
+
+        assert!(app.question.is_none(), "model dropped");
+        assert_eq!(
+            app.active_sheet(),
+            None,
+            "sheet must unmount so the composer slot is handed back"
+        );
+        assert_eq!(
+            app.active_modal(),
+            crate::modal::Modal::None,
+            "the session view must stay mounted underneath"
+        );
+        assert_eq!(
+            app.caret_owner(),
+            crate::CaretOwner::Composer,
+            "the composer must own the caret again after the sheet closes"
         );
     }
 }

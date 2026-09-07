@@ -1,7 +1,7 @@
 //! The `copilot-oauth` provider preset: GitHub Copilot subscription models
 //! over OpenAI-compatible chat completions against `api.githubcopilot.com`.
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
@@ -22,7 +22,7 @@ pub const MODELS: &[Model] = &[Model {
     id: "gpt-4o-mini",
     family: "gpt",
     context_window: 128_000,
-    thinking: ThinkingSupport::None,
+    thinking: ReasoningSupport::None,
     tool_call: true,
     vision: true,
     protocol: WireProtocol::OpenAiChatCompletions,

@@ -1,7 +1,7 @@
 //! The `xai-oauth` provider preset: xAI Grok over OpenAI-compatible chat
 //! completions (SuperGrok OAuth or `XAI_API_KEY`).
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
@@ -19,7 +19,7 @@ pub const MODELS: &[Model] = &[
         id: "grok-4.5",
         family: "grok",
         context_window: 256_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -30,7 +30,7 @@ pub const MODELS: &[Model] = &[
         id: "grok-4.20",
         family: "grok",
         context_window: 256_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -41,7 +41,7 @@ pub const MODELS: &[Model] = &[
         id: "grok-4.3",
         family: "grok",
         context_window: 256_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -52,7 +52,7 @@ pub const MODELS: &[Model] = &[
         id: "grok-build-0.1",
         family: "grok",
         context_window: 256_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,

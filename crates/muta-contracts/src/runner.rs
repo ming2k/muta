@@ -633,7 +633,7 @@ mod tests {
             id: "test",
             family: "test",
             context_window: 100_000,
-            thinking: crate::thinking::ThinkingSupport::None,
+            thinking: crate::reasoning::ReasoningSupport::None,
             tool_call: true,
             vision: true,
             protocol: crate::WireProtocol::OpenAiChatCompletions,

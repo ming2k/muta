@@ -1133,6 +1133,16 @@ fn valid_assistant_response(message: &Message) -> bool {
 /// parsed, and which provider/model was responsible. The matching per-turn
 /// stream summary (chars fed vs emitted, reasoning/tool-call traffic) is logged
 /// by the provider at `muta_contracts::provider=debug`.
+///
+/// The error is classified as a *retryable* upstream fault: an entirely empty
+/// assistant frame is a transient provider glitch (truncated stream, flaky
+/// gateway), not a harness or request problem. The pending request checkpoint
+/// is still armed at this point, so the orchestration retry loop resends the
+/// exact same request — completed tool results are preserved and no side
+/// effect replays. Returning a terminal `HarnessError::Other` here instead
+/// would kill the round and force a manual `/retry` (observed live: an
+/// omen-alpha empty frame at turn 4 stopped an unattended session for ~11
+/// minutes until a human nudged it).
 fn empty_response_error(response: &Message) -> HarnessError {
     tracing::warn!(
         target: "muta_contracts::agent",
@@ -1147,8 +1157,13 @@ fn empty_response_error(response: &Message) -> HarnessError {
         tool_calls = response.tool_calls.as_ref().map(|c| c.len()).unwrap_or(0),
         "empty assistant response: provider returned no content and no tool calls",
     );
-    HarnessError::Other(
-        "Provider returned an empty assistant response (no content, no tool calls).".to_string(),
+    HarnessError::Provider(
+        muta_contracts::ProviderError::new(
+            response.provider.as_deref().unwrap_or("harness"),
+            muta_contracts::ProviderErrorKind::Upstream,
+            "Provider returned an empty assistant response (no content, no tool calls).",
+        )
+        .retryable(None),
     )
 }
 

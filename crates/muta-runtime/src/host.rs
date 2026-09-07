@@ -385,13 +385,66 @@ async fn run_inner(
     }
     tracing::info!(%bind, port, "muta daemon: listening");
 
-    // Boot rehost (ADR-0125)
-    // Autonomous sessions come back with the daemon: any persisted session
-    // with armed `/schedule` jobs is re-assembled so its scheduler keeps
-    // firing. Runs after the listener binds (startup latency stays flat;
-    // the scan is header-only and each assembly is the ordinary lazy-resume
-    // path) and yields to an early shutdown trigger so a stop-race cannot
-    // strand it mid-scan.
+    // Boot rehost (ADR-0190 D4, the general successor of ADR-0125's
+    // armed-schedule rehost): every service task in the durable task ledger
+    // that carries a restart policy is re-spawned so services survive
+    // daemon restarts. Runs after the listener binds (startup latency stays
+    // flat); each respawn is a bare process start — the owning session, if
+    // hosted, sees the task through the shared fabric once re-attached.
+    {
+        use crate::background_jobs::{BackgroundJobManager, ProcessSpawnOptions};
+        use muta_contracts::JobSpec;
+        let dirs = muta_persistence::paths::get();
+        crate::task_ledger::rehost_all(&dirs.db_file(), |row| {
+            let JobSpec::Process {
+                command,
+                restart: Some(policy),
+                ..
+            } = &row.spec
+            else {
+                return;
+            };
+            // Spawn detached from any session: the rehosted service is a
+            // daemon-level service; its events reach whichever session's
+            // mailbox subscribes to the shared fabric next. Use a plain
+            // process spawn on the workspace root when known; failures are
+            // logged and non-fatal.
+            let workspace = std::env::temp_dir();
+            let roots: Vec<std::path::PathBuf> = Vec::new();
+            let mgr = BackgroundJobManager::new();
+            let mgr_for_log = mgr.clone();
+            let command = command.clone();
+            let policy = *policy;
+            tokio::spawn(async move {
+                match mgr
+                    .spawn_process_ex(
+                        command,
+                        ProcessSpawnOptions {
+                            label: Some(format!("rehost:{}", row.job_id)),
+                            cwd: None,
+                            workspace_root: &workspace,
+                            additional_roots: &roots,
+                            detached: true,
+                            timeout: None,
+                            owner_session: None,
+                        },
+                        muta_contracts::JobKind::Service,
+                        Some(muta_contracts::Readiness::FirstOutput),
+                        Some(policy),
+                    )
+                    .await
+                {
+                    Ok(info) => {
+                        tracing::info!(job = %info.id.0, "rehosted service started");
+                    }
+                    Err(error) => {
+                        let _ = &mgr_for_log;
+                        tracing::warn!(%error, "rehosted service failed to start");
+                    }
+                }
+            });
+        });
+    }
 
     // Serving
     // Wait for a trigger, or the idle-exit timer (which itself is just

@@ -124,6 +124,20 @@ pub(super) fn transcript_interrupts_from_records(
         .collect()
 }
 
+/// Build durable retry-resolution rows from the session store's records —
+/// the success-side twin of [`transcript_interrupts_from_records`].
+pub(super) fn transcript_retry_resolutions_from_records(
+    records: Vec<muta_contracts::RetryResolution>,
+) -> Vec<TranscriptMessage> {
+    records
+        .into_iter()
+        .map(|record| {
+            let at_ms = record.at_ms;
+            TranscriptMessage::retry_resolved(record).with_sent_at_ms(at_ms)
+        })
+        .collect()
+}
+
 /// Merge rebuilt round-interrupt rows into a restored transcript (C11),
 /// mirroring [`merge_command_rows`]'s seam rule: each marker lands **before
 /// the first user message whose send time is later than the stop** — at the
@@ -322,12 +336,12 @@ fn transcript_from_core_inner(
             // Mirrors the live path's `StreamReasoningDelta` gate: a hidden-chain
             // model (`ReasoningSummary`, e.g. GPT-5.x) never disclosed its full
             // reasoning chain, so its persisted `reasoning_content` is only a
-            // summary. Restoring it as a `MessageKind::Thinking` message would
+            // summary. Restoring it as a `MessageKind::Reasoning` message would
             // resurrect a phantom entry the live stream never created — leaking
             // into layout counts, selection math, and scroll state. Skip it.
             // `model` is the persisted `Option<String>` attribution. Use
             // `model_by_id` (not `resolve`): `resolve` falls back to a model
-            // with `ThinkingSupport::None` for unrecognized ids, whose
+            // with `ReasoningSupport::None` for unrecognized ids, whose
             // `chain_disclosed()` is `false`, which would suppress restoration
             // of reasoning traces for local/user-defined models that DO reason
             // — a regression for legacy transcripts. `model_by_id` returns
@@ -340,7 +354,7 @@ fn transcript_from_core_inner(
                 .map(|m| m.thinking.chain_disclosed())
                 .unwrap_or(true);
             if chain_disclosed && let Some(reasoning) = message.reasoning_content.take() {
-                let mut thinking = TranscriptMessage::thinking(reasoning);
+                let mut thinking = TranscriptMessage::reasoning(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();
                 thinking.effort = effort.clone();
@@ -348,11 +362,11 @@ fn transcript_from_core_inner(
                     thinking.round = Some(restored_round);
                     thinking.turn = Some(restored_turn);
                 }
-                thinking.set_thinking_duration(0);
+                thinking.set_reasoning_duration(0);
                 // Honor the configured default expand state for reasoning
                 // traces so resumed sessions match live behavior.
-                if config::thinking_default_expanded(config) {
-                    thinking.set_thinking_expanded(true);
+                if config::reasoning_default_expanded(config) {
+                    thinking.set_reasoning_expanded(true);
                 }
                 restored.push(thinking);
             }
@@ -528,8 +542,8 @@ pub(super) fn finalize_streaming_reasoning(
 ) {
     let stamped = duration_ms.unwrap_or(0);
     for message in messages.iter_mut() {
-        if message.is_thinking_streaming() {
-            message.set_thinking_duration(stamped);
+        if message.is_reasoning_streaming() {
+            message.set_reasoning_duration(stamped);
         }
     }
 }

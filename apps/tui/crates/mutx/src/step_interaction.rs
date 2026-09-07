@@ -1,7 +1,7 @@
 //! Step interaction decisions: classifying pointer hits on step summaries.
 //!
 //! The transcript layout marks step summaries with sentinel `block_idx` values
-//! (`TOOL_STEP_BLOCK_IDX` / `THINKING_BLOCK_IDX`) so the click/hover
+//! (`TOOL_STEP_BLOCK_IDX` / `REASONING_BLOCK_IDX`) so the click/hover
 //! machinery can tell them apart from prose, code, and table cells. This
 //! module owns those sentinels and the "what kind of step is under the
 //! pointer" classification, so the app's event loop (`lib.rs`) speaks in terms
@@ -16,7 +16,7 @@ use crate::config::{TuiConfig, tool_default_expanded};
 use crate::model::document::ToolStepStatus;
 use crate::model::layout::{
     COMMAND_RESULT_BLOCK_IDX, InteractiveTarget, NOTICE_BLOCK_IDX, PROVIDER_RETRY_BLOCK_IDX,
-    SemanticCursor, THINKING_BLOCK_IDX, TOOL_STEP_BLOCK_IDX,
+    SemanticCursor, REASONING_BLOCK_IDX, TOOL_STEP_BLOCK_IDX,
 };
 
 /// Which kind of step a pointer hit resolved to.
@@ -25,7 +25,7 @@ pub enum StepKind {
     /// A tool step or runner task summary.
     ToolStep,
     /// A reasoning trace summary.
-    Thinking,
+    Reasoning,
     /// The live provider-retry summary.
     ProviderRetry,
     /// A command invocation with expandable result.
@@ -39,7 +39,7 @@ impl StepKind {
     pub fn focus_target(self, mi: usize) -> InteractiveTarget {
         match self {
             StepKind::ToolStep => InteractiveTarget::tool_step(mi),
-            StepKind::Thinking => InteractiveTarget::thinking(mi),
+            StepKind::Reasoning => InteractiveTarget::reasoning(mi),
             StepKind::ProviderRetry => InteractiveTarget::provider_retry(mi),
             StepKind::CommandResult => InteractiveTarget::command_result(mi),
             StepKind::Notice => InteractiveTarget::notice(mi),
@@ -57,7 +57,7 @@ impl StepKind {
 pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
     let kind = match cursor.block_idx {
         TOOL_STEP_BLOCK_IDX => StepKind::ToolStep,
-        THINKING_BLOCK_IDX => StepKind::Thinking,
+        REASONING_BLOCK_IDX => StepKind::Reasoning,
         PROVIDER_RETRY_BLOCK_IDX => StepKind::ProviderRetry,
         COMMAND_RESULT_BLOCK_IDX => StepKind::CommandResult,
         NOTICE_BLOCK_IDX => StepKind::Notice,
@@ -124,9 +124,9 @@ mod tests {
 
     #[test]
     fn thinking_summary_classifies() {
-        let (mi, kind) = summary_at(&cursor(THINKING_BLOCK_IDX, 3)).unwrap();
+        let (mi, kind) = summary_at(&cursor(REASONING_BLOCK_IDX, 3)).unwrap();
         assert_eq!(mi, 3);
-        assert_eq!(kind, StepKind::Thinking);
+        assert_eq!(kind, StepKind::Reasoning);
     }
 
     #[test]

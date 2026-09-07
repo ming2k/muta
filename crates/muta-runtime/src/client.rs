@@ -820,6 +820,10 @@ pub enum Handshake {
         /// so an attaching TUI projects the stopped rounds into its restored
         /// transcript. Empty for older daemons.
         round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+        /// Durable retry-resolution records from the daemon's welcome, so an
+        /// attaching TUI projects recovered rounds into its restored
+        /// transcript. Empty for older daemons.
+        retry_resolutions: Vec<muta_contracts::RetryResolution>,
         /// The provider/model the session is currently serving, carried on
         /// the welcome so the TUI's hint bar shows them from the first frame
         /// instead of waiting for the next provider mutation.
@@ -903,6 +907,7 @@ async fn finish_handshake(
                         provider,
                         model,
                         round_interrupts,
+                        retry_resolutions,
                         command_catalog,
                     } => {
                         return Ok(Reply::Welcome(Welcome {
@@ -912,6 +917,7 @@ async fn finish_handshake(
                             provider,
                             model,
                             round_interrupts,
+                            retry_resolutions,
                             command_catalog,
                         }));
                     }
@@ -995,6 +1001,7 @@ async fn finish_handshake(
         round_counter: welcome.round_counter,
         history: welcome.messages,
         round_interrupts: welcome.round_interrupts,
+        retry_resolutions: welcome.retry_resolutions,
         provider: welcome.provider,
         model: welcome.model,
         command_catalog: welcome.command_catalog,
@@ -1092,6 +1099,10 @@ struct Welcome {
     /// Durable round-interrupt records (C11) carried on the daemon's
     /// welcome; empty for older daemons that predate the field.
     round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+    /// Durable retry-resolution records (success-side mirror of the
+    /// interrupts) carried on the daemon's welcome; empty for older daemons
+    /// that predate the field.
+    retry_resolutions: Vec<muta_contracts::RetryResolution>,
     command_catalog: muta_contracts::CommandCatalog,
 }
 enum Reply {

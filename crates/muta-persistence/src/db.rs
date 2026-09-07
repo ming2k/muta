@@ -13,14 +13,14 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 8;
+pub const CURRENT_DB_VERSION: u32 = 9;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "88a5585c8267145cc5f05a10b142788918d07a7db7780eb8222a881833a1ba1b";
+    "e03ffc333983f5ae04f9e5f5f64b14b44c451b30c898b44c52bbd64415adf656";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -348,6 +348,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 8,
         sql: "",
     },
+    Migration {
+        // Durable retry-resolution records: the success-side mirror of
+        // `round_interrupts`. One JSON column on `sessions`, default `[]`.
+        // The DDL is applied conditionally by the migration runner (version
+        // 9 arm) so a database that already carries the column — a dev
+        // build's startup repair, or a partially-applied v9 — passes
+        // through unchanged instead of failing on a duplicate column.
+        version: 9,
+        sql: "",
+    },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -360,6 +370,10 @@ const SESSIONS_WORKING_STATE_COLUMNS: &[(&str, &str)] = &[
     ("disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
     ("commands", "TEXT NOT NULL DEFAULT '[]'"),
     ("round_interrupts", "TEXT NOT NULL DEFAULT '[]'"),
+    // `retry_resolutions` is owned by migration 9, not this conditional
+    // repair list: migration 6's repair runs before migration 9 on an
+    // interim-v5 database and would add the column first, making migration
+    // 9's unconditional `ADD COLUMN` fail with "duplicate column name".
     ("retry_pending", "TEXT"),
     ("request_usage_records", "TEXT NOT NULL DEFAULT '[]'"),
     ("checksum", "INTEGER"),
@@ -635,6 +649,9 @@ fn verify_sessions_schema(conn: &Connection) -> Result<()> {
             .iter()
             .map(|(c, _)| c.to_string()),
     );
+    // Column owned by migration 9 (not in the conditional repair list, see
+    // the note there) — the startup guard still requires it.
+    expected.insert("retry_resolutions".to_string());
     expected.extend(SESSIONS_V2_COLUMNS.iter().map(|(c, _)| c.to_string()));
     // Columns migration 8 retired from the row (their data moved to the
     // usage ledger table) must not be required here.
@@ -681,6 +698,22 @@ fn migrate_schema(conn: &mut Connection) -> Result<()> {
                     "Applying SQLite schema migration"
                 );
                 tx.execute_batch(migration.sql)?;
+
+                // Migration 9 is a no-op when the column already exists — a
+                // database stamped by an intermediate dev build (via the
+                // startup repair, or a partially-applied v9) must pass
+                // through unchanged instead of failing on a duplicate
+                // `ADD COLUMN` (mirrors the migration-6 conditional repair).
+                if migration.version == 9 {
+                    let has_column = sessions_columns(&tx)?
+                        .iter()
+                        .any(|column| column == "retry_resolutions");
+                    if !has_column {
+                        tx.execute_batch(
+                            "ALTER TABLE sessions ADD COLUMN retry_resolutions TEXT NOT NULL DEFAULT '[]';",
+                        )?;
+                    }
+                }
 
                 if migration.version == 3 {
                     let mut stmt =
@@ -729,6 +762,17 @@ fn migrate_schema(conn: &mut Connection) -> Result<()> {
                 }
                 if migration.version == 8 {
                     apply_usage_ledger_schema(&tx)?;
+                }
+                if migration.version == 9 {
+                    // Conditional add (see the migration entry's note): the
+                    // column already exists on every database whose version-5
+                    // SQL was finalized after the feature landed.
+                    let existing = sessions_columns(&tx)?;
+                    if !existing.contains("retry_resolutions") {
+                        tx.execute_batch(
+                            "ALTER TABLE sessions ADD COLUMN retry_resolutions TEXT NOT NULL DEFAULT '[]';",
+                        )?;
+                    }
                 }
             }
         }
@@ -1093,8 +1137,8 @@ impl DatabaseEngine {
 
             self.conn.execute(
                 r#"
-                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, checksum, schema_version)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
                 ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     fork_kind = excluded.fork_kind,
@@ -1113,6 +1157,7 @@ impl DatabaseEngine {
                     disabled_tools = excluded.disabled_tools,
                     commands = excluded.commands,
                     round_interrupts = excluded.round_interrupts,
+                    retry_resolutions = excluded.retry_resolutions,
                     retry_pending = excluded.retry_pending,
                     checksum = excluded.checksum,
                     schema_version = excluded.schema_version;
@@ -1137,6 +1182,7 @@ impl DatabaseEngine {
                     serde_json::to_string(&data.disabled_tools.iter().collect::<Vec<_>>()).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     serde_json::to_string(&data.commands).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     serde_json::to_string(&data.round_interrupts).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    serde_json::to_string(&data.retry_resolutions).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     data.retry_pending.as_ref().and_then(|p| serde_json::to_string(p).ok()),
                     data.checksum.map(|c| c as i64),
                     data.schema_version as i64,
@@ -1432,7 +1478,7 @@ impl DatabaseEngine {
         let row = self
             .conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
                 params![session_id],
                 |row| {
                     Ok((
@@ -1453,9 +1499,10 @@ impl DatabaseEngine {
                         row.get::<_, String>(14)?,
                         row.get::<_, String>(15)?,
                         row.get::<_, String>(16)?,
-                        row.get::<_, Option<String>>(17)?,
-                        row.get::<_, Option<i64>>(18)?,
-                        row.get::<_, i64>(19)?,
+                        row.get::<_, String>(17)?,
+                        row.get::<_, Option<String>>(18)?,
+                        row.get::<_, Option<i64>>(19)?,
+                        row.get::<_, i64>(20)?,
                     ))
                 },
             )
@@ -1478,6 +1525,7 @@ impl DatabaseEngine {
             disabled_tools,
             commands,
             round_interrupts,
+            retry_resolutions,
             retry_pending,
             checksum,
             schema_version,
@@ -1675,6 +1723,10 @@ impl DatabaseEngine {
             }),
             round_interrupts: serde_json::from_str(&round_interrupts).unwrap_or_else(|error| {
                 tracing::warn!(session = %session_id, error = %error, "round_interrupts column undecodable; treated as empty");
+                Default::default()
+            }),
+            retry_resolutions: serde_json::from_str(&retry_resolutions).unwrap_or_else(|error| {
+                tracing::warn!(session = %session_id, error = %error, "retry_resolutions column undecodable; treated as empty");
                 Default::default()
             }),
             retry_pending: retry_pending

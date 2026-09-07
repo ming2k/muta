@@ -12,8 +12,8 @@ fn redesigned_components_render_without_panicking() {
     terminal
             .draw(|f| {
                 let mut layout_map = LayoutMap::new();
-                let mut thinking = TranscriptMessage::thinking("Reasoning about the task step by step.");
-                thinking.set_thinking_expanded(true);
+                let mut thinking = TranscriptMessage::reasoning("Reasoning about the task step by step.");
+                thinking.set_reasoning_expanded(true);
                 let mut tool = TranscriptMessage::tool_step("call_1", "list_dir", r#"{"path":"."}"#);
                 tool.set_tool_step_expanded(true);
                 tool.finish_tool_step("call_1", "file_a\nfile_b", muta_contracts::ToolOutput::text("file_a\nfile_b"), 12);

@@ -132,7 +132,7 @@ use crate::render::Theme;
 use crate::transcript::{
     finalize_streaming_reasoning, merge_command_rows, merge_round_interrupt_rows,
     rebase_transcript_rounds, transcript_commands_from_ledger, transcript_interrupts_from_records,
-    transcript_messages_from_core,
+    transcript_retry_resolutions_from_records, transcript_messages_from_core,
 };
 
 /// Where the session this TUI drives lives. All sessions in the unified
@@ -275,6 +275,7 @@ pub struct TuiLaunchConfig {
     pub initial_round_count: u64,
     pub command_catalog: muta_contracts::CommandCatalog,
     pub initial_round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+    pub initial_retry_resolutions: Vec<muta_contracts::RetryResolution>,
     pub tui_config: config::TuiConfig,
     pub input_history_config: config::InputHistoryConfig,
     pub session: SessionSource,
@@ -296,6 +297,7 @@ pub async fn run_tui(
         initial_round_count,
         command_catalog,
         initial_round_interrupts,
+        initial_retry_resolutions,
         tui_config,
         input_history_config,
         session,
@@ -343,6 +345,10 @@ pub async fn run_tui(
     restored = merge_round_interrupt_rows(
         restored,
         transcript_interrupts_from_records(initial_round_interrupts),
+    );
+    restored = merge_round_interrupt_rows(
+        restored,
+        transcript_retry_resolutions_from_records(initial_retry_resolutions),
     );
     rebase_transcript_rounds(&mut restored, initial_round_count);
     let messages = Arc::new(versioned::Versioned::new(restored));
@@ -974,6 +980,34 @@ pub async fn run_tui(
                                 *activity_clone.lock().await = None;
                             }
                         }
+                        RoundEvent::RetryResolved(resolution) => {
+                            // The retry loop recovered: fold the transient
+                            // retry countdown into a permanent transcript
+                            // marker (the durable twin lives in the session's
+                            // retry-resolutions ledger and re-projects on
+                            // resume). `RoundCompleted` follows immediately;
+                            // its `retain(!is_provider_retry)` sweep no longer
+                            // finds a live entry because this fold already
+                            // replaced it with a Notice-kind row.
+                            let mut msgs = buf.write().await;
+                            let folded = if let Some(last) =
+                                msgs.last_mut().filter(|m| m.is_provider_retry())
+                            {
+                                // Pin the fold state so the collapsed row keeps
+                                // whatever expansion the live entry had.
+                                let expanded = last.notice_expanded();
+                                *last = TranscriptMessage::retry_resolved(resolution.clone());
+                                if let Some(expanded) = expanded {
+                                    last.pin_notice_expanded(expanded);
+                                }
+                                true
+                            } else {
+                                false
+                            };
+                            if !folded {
+                                msgs.push(TranscriptMessage::retry_resolved(resolution));
+                            }
+                        }
                         RoundEvent::Activity(status) => {
                             // View-scoped chrome: record this session's own
                             // phase regardless of which view is focused; only
@@ -1056,7 +1090,7 @@ pub async fn run_tui(
                                 // First byte proves the request left; upgrade
                                 // out of AwaitingModel unless a more specific
                                 // stream phase already won the slot.
-                                if !matches!(c.phase, Some(Phase::Thinking | Phase::Answering)) {
+                                if !matches!(c.phase, Some(Phase::Reasoning | Phase::Answering)) {
                                     c.phase = Some(Phase::Answering);
                                 }
                             });
@@ -1200,13 +1234,13 @@ pub async fn run_tui(
                             // stream is alive. Hidden-chain models also land
                             // here (their summary deltas still prove thinking).
                             if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::Thinking);
+                                *activity_clone.lock().await = Some(Phase::Reasoning);
                             }
-                            chrome_updater.edit(|c| c.phase = Some(Phase::Thinking));
+                            chrome_updater.edit(|c| c.phase = Some(Phase::Reasoning));
                             // surface only a reasoning summary, never their full
                             // chain. Disclosing even that summary as a
-                            // `MessageKind::Thinking` message would leave a
-                            // phantom entry that layout counts (`is_thinking()`)
+                            // `MessageKind::Reasoning` message would leave a
+                            // phantom entry that layout counts (`is_reasoning()`)
                             // and selection math still see. Gate at message
                             // creation — the canonical point — so such models
                             // never produce a thinking message at all. The raw
@@ -1217,7 +1251,7 @@ pub async fn run_tui(
                                 let model_id = cm_clone.lock().await.clone();
                                 // `model_by_id` (not `resolve`) so unrecognized
                                 // ids default to disclosed — `resolve` falls
-                                // back to `ThinkingSupport::None` (chain not
+                                // back to `ReasoningSupport::None` (chain not
                                 // disclosed), which would drop reasoning deltas
                                 // for local/user-defined models that reason.
                                 // Only known `ReasoningSummary` models are gated.
@@ -1259,7 +1293,7 @@ pub async fn run_tui(
                                     &cm_clone,
                                 )
                                 .await;
-                                let mut thinking = TranscriptMessage::thinking(delta.clone())
+                                let mut thinking = TranscriptMessage::reasoning(delta.clone())
                                     .with_attribution(provider, model)
                                     .with_effort(effort);
                                 if let Some((round, turn)) = position {
@@ -1271,7 +1305,7 @@ pub async fn run_tui(
                                 // default). On completion the transition leaves it as-is
                                 // (no auto-collapse), so the user keeps what they were
                                 // reading.
-                                thinking.set_thinking_expanded(config::thinking_default_expanded(
+                                thinking.set_reasoning_expanded(config::reasoning_default_expanded(
                                     &tui_config_clone,
                                 ));
                                 let pre_append_tail = msgs.last().map(|tail| tail.id);
@@ -1307,14 +1341,14 @@ pub async fn run_tui(
                             // trace (command row, notice) cannot steal or orphan the
                             // finalize, and the spinner never runs forever.
                             let target = msgs.iter_mut().rfind(|message| {
-                                message.is_thinking_streaming()
+                                message.is_reasoning_streaming()
                                     && message.round == round
                                     && message.turn == turn
                             });
                             if let Some(last) = target {
                                 last.raw = content.clone();
                                 last.reparse();
-                                if let MessageKind::Thinking {
+                                if let MessageKind::Reasoning {
                                     content: current,
                                     duration_ms: d,
                                     ..
@@ -1387,7 +1421,7 @@ pub async fn run_tui(
                             duration_ms,
                         } => {
                             if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::Thinking);
+                                *activity_clone.lock().await = Some(Phase::Reasoning);
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
@@ -1885,12 +1919,23 @@ pub async fn run_tui(
                                 muta_contracts::JobSpec::Process { command, label, .. } => {
                                     label.as_deref().unwrap_or(command)
                                 }
-                                muta_contracts::JobSpec::Runner { description, .. } => description,
+                                muta_contracts::JobSpec::Timer { label, prompt, .. } => label
+                                    .as_deref()
+                                    .unwrap_or_else(|| prompt.as_str()),
                             };
                             let msg = format!("Background job started: {label} ({})", info.id.0);
                             push_local_notice(&mut msgs, NoticeSeverity::Info, msg);
                         }
                         RoundEvent::BackgroundJobProgress { .. } => {}
+                        RoundEvent::BackgroundJobReady { job_id } => {
+                            // ADR-0190: a service task reported readiness.
+                            let mut msgs = buf.write().await;
+                            push_local_notice(
+                                &mut msgs,
+                                NoticeSeverity::Info,
+                                format!("Background service ready: {}", job_id.0),
+                            );
+                        }
                         RoundEvent::BackgroundJobCompleted(outcome) => {
                             let mut msgs = buf.write().await;
                             let (label, is_success) = match &outcome.state {
@@ -2023,6 +2068,7 @@ pub async fn run_tui(
                     messages,
                     commands,
                     round_interrupts,
+                    retry_resolutions,
                 } => {
                     *switching_session_clone.lock().await = None;
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
@@ -2031,6 +2077,10 @@ pub async fn run_tui(
                     rebuilt = merge_round_interrupt_rows(
                         rebuilt,
                         transcript_interrupts_from_records(round_interrupts),
+                    );
+                    rebuilt = merge_round_interrupt_rows(
+                        rebuilt,
+                        transcript_retry_resolutions_from_records(retry_resolutions),
                     );
                     *messages_clone.write().await = rebuilt;
                     needs_round_rebase = true;
@@ -2653,9 +2703,9 @@ fn append_reasoning_delta(
 ) -> Option<u64> {
     let target = messages
         .iter_mut()
-        .rfind(|message| message.is_thinking() && message.round == round && message.turn == turn)?;
+        .rfind(|message| message.is_reasoning() && message.round == round && message.turn == turn)?;
     target.push_stream(delta);
-    if let MessageKind::Thinking { content, .. } = &mut target.kind {
+    if let MessageKind::Reasoning { content, .. } = &mut target.kind {
         content.push_str(delta);
     }
     Some(target.id)
@@ -2706,8 +2756,8 @@ mod streaming_appends_tests {
     use super::*;
     use crate::model::document::MessageKind;
 
-    fn thinking_entry(round: u64, turn: u64, content: &str) -> TranscriptMessage {
-        let mut m = TranscriptMessage::thinking(content);
+    fn reasoning_entry(round: u64, turn: u64, content: &str) -> TranscriptMessage {
+        let mut m = TranscriptMessage::reasoning(content);
         m.round = Some(round);
         m.turn = Some(turn);
         m
@@ -2719,7 +2769,7 @@ mod streaming_appends_tests {
         // CommandResult entry after the still-streaming Thinking entry. The
         // next reasoning delta must extend the *original* entry, not fork a
         // second Thinking block.
-        let mut messages = vec![thinking_entry(8, 1, "the error chain is")];
+        let mut messages = vec![reasoning_entry(8, 1, "the error chain is")];
         messages.push(TranscriptMessage::pending_command("delegate", "on").with_sent_at_ms(1_000));
 
         let id = append_reasoning_delta(&mut messages, Some(8), Some(1), " now clear")
@@ -2727,12 +2777,12 @@ mod streaming_appends_tests {
         assert_eq!(id, messages[0].id);
         // Still exactly one Thinking entry…
         assert_eq!(
-            messages.iter().filter(|m| m.is_thinking()).count(),
+            messages.iter().filter(|m| m.is_reasoning()).count(),
             1,
             "the delta must not fork a second Thinking entry"
         );
         // …and the delta landed inside it, in order.
-        let MessageKind::Thinking { content, .. } = &messages[0].kind else {
+        let MessageKind::Reasoning { content, .. } = &messages[0].kind else {
             panic!("entry 0 must remain a Thinking entry");
         };
         assert_eq!(content, "the error chain is now clear");
@@ -2746,16 +2796,16 @@ mod streaming_appends_tests {
         // Multiple thinking entries can share a position across retries; the
         // backward scan must hit the newest one.
         let mut messages = vec![
-            thinking_entry(2, 1, "first attempt"),
-            thinking_entry(2, 1, "second attempt"),
+            reasoning_entry(2, 1, "first attempt"),
+            reasoning_entry(2, 1, "second attempt"),
         ];
         let id = append_reasoning_delta(&mut messages, Some(2), Some(1), "…").unwrap();
         assert_eq!(id, messages[1].id);
-        let MessageKind::Thinking { content, .. } = &messages[1].kind else {
+        let MessageKind::Reasoning { content, .. } = &messages[1].kind else {
             panic!()
         };
         assert_eq!(content, "second attempt…");
-        let MessageKind::Thinking { content, .. } = &messages[0].kind else {
+        let MessageKind::Reasoning { content, .. } = &messages[0].kind else {
             panic!()
         };
         assert_eq!(content, "first attempt");
@@ -2764,7 +2814,7 @@ mod streaming_appends_tests {
     #[test]
     fn reasoning_delta_rejects_foreign_positions() {
         // A delta for another turn must not graft onto an older turn's entry.
-        let mut messages = vec![thinking_entry(8, 1, "old")];
+        let mut messages = vec![reasoning_entry(8, 1, "old")];
         assert_eq!(
             append_reasoning_delta(&mut messages, Some(8), Some(2), "new"),
             None

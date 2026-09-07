@@ -743,6 +743,86 @@ async fn stream_ending_mid_tool_call_is_retryable() {
     );
 }
 
+/// An entirely empty assistant frame (no content, no reasoning, no tool call
+/// — a real production incident on `gogo`/omen-alpha, 2026-09-07) is a
+/// transient upstream glitch, not a terminal round failure. Before the fix it
+/// surfaced as `HarnessError::Other` and killed the round, leaving an
+/// unattended session idle until a human retried. It must instead surface as
+/// a *retryable* provider error so the orchestration loop resends the same
+/// (checkpoint-armed) request automatically.
+#[tokio::test]
+async fn empty_assistant_response_is_retryable_not_terminal() {
+    struct EmptyFrameProvider;
+    #[async_trait]
+    impl Provider for EmptyFrameProvider {
+        async fn chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+            unreachable!("streaming path should be used")
+        }
+        async fn stream_chat(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
+            Ok(Box::pin(stream::empty()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _request: muta_contracts::ModelRequest,
+        ) -> Result<
+            BoxStream<'static, Result<ProviderStreamEvent, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                ),
+            )])))
+        }
+    }
+
+    let agent = Arc::new(Agent::new(
+        Arc::new(EmptyFrameProvider),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+    let mut messages = vec![Message::new(Role::User, "hello")];
+
+    let result = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    match result {
+        Err(muta_contracts::HarnessError::Provider(err))
+            if matches!(
+                err.retry_disposition(),
+                muta_contracts::RetryDisposition::Retry { .. }
+            ) =>
+        {
+            let message = err.message();
+            assert!(
+                message.contains("empty assistant response"),
+                "message should name the empty-response fault: {message}"
+            );
+            assert_eq!(
+                err.kind(),
+                muta_contracts::ProviderErrorKind::Upstream,
+                "an empty frame is an upstream fault"
+            );
+        }
+        other => panic!("empty assistant response must be retryable, got: {other:?}"),
+    }
+    assert_eq!(
+        messages.len(),
+        1,
+        "the empty response must not be committed to history"
+    );
+}
+
 /// The same truncation one delta later: the name arrived but the argument
 /// JSON was cut off mid-payload. The half-written call must not reach
 /// execution — where its parse error would be indistinguishable from the
@@ -1864,6 +1944,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             // High-resolution performance samples are non-deterministic by
             // construction; dropped so transcripts stay stable across runs.
             AgentEvent::TurnPerformance(_) => None,
+            AgentEvent::BackgroundJobReady { .. } => None,
             AgentEvent::Notice(notice) => {
                 Some(format!("notice {:?} {:?}", notice.kind, notice.title))
             }

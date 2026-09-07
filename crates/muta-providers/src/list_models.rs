@@ -51,7 +51,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use muta_contracts::{RemoteModelMetadata, SecretString, ThinkingSupport, WireProtocol};
+use muta_contracts::{RemoteModelMetadata, SecretString, ReasoningSupport, WireProtocol};
 use serde_json::Value;
 
 /// The protocol a discovery request speaks. Model-catalog APIs are related to,
@@ -217,7 +217,7 @@ pub struct DiscoveredModel {
     pub reasoning: Option<bool>,
     /// The precise reasoning wire representation when advertised. This is
     /// stronger than the coarse [`Self::reasoning`] display flag.
-    pub thinking: Option<ThinkingSupport>,
+    pub thinking: Option<ReasoningSupport>,
     /// Native tool/function calling support, when advertised.
     pub tool_call: Option<bool>,
     /// Image-input support (Kimi's `supports_image_in`, or Copilot's
@@ -242,9 +242,9 @@ impl DiscoveredModel {
             thinking: self.thinking.or_else(|| {
                 self.reasoning.map(|reasoning| {
                     if reasoning {
-                        ThinkingSupport::ReasoningContent
+                        ReasoningSupport::ReasoningContent
                     } else {
-                        ThinkingSupport::None
+                        ReasoningSupport::None
                     }
                 })
             }),
@@ -564,9 +564,9 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                     max_output_tokens: None,
                     reasoning: Some(reasoning),
                     thinking: Some(if reasoning {
-                        ThinkingSupport::ReasoningSummary
+                        ReasoningSupport::ReasoningSummary
                     } else {
-                        ThinkingSupport::None
+                        ReasoningSupport::None
                     }),
                     tool_call: Some(true),
                     vision: Some(vision),
@@ -683,19 +683,19 @@ fn copilot_model_from_capabilities(
         .and_then(Value::as_bool)
         == Some(true)
     {
-        Some(ThinkingSupport::AnthropicAdaptive)
+        Some(ReasoningSupport::AnthropicAdaptive)
     } else if supports
         .and_then(|s| s.get("max_thinking_budget"))
         .and_then(Value::as_u64)
         .is_some()
     {
-        Some(ThinkingSupport::AnthropicManual)
+        Some(ReasoningSupport::AnthropicManual)
     } else {
         reasoning.map(|enabled| {
             if enabled {
-                ThinkingSupport::ReasoningContent
+                ReasoningSupport::ReasoningContent
             } else {
-                ThinkingSupport::None
+                ReasoningSupport::None
             }
         })
     };
@@ -826,7 +826,7 @@ fn parse_antigravity_models_map(
             context_window,
             max_output_tokens,
             reasoning,
-            thinking: Some(ThinkingSupport::ReasoningContent),
+            thinking: Some(ReasoningSupport::ReasoningContent),
             tool_call: Some(true),
             vision,
             effort_levels: None,
@@ -1081,7 +1081,7 @@ mod tests {
         assert_eq!(models[1].picker_enabled, Some(true));
         assert_eq!(models[1].protocol, Some(WireProtocol::OpenAiResponses));
         assert_eq!(models[1].context_window, Some(272_000));
-        assert_eq!(models[1].thinking, Some(ThinkingSupport::ReasoningSummary));
+        assert_eq!(models[1].thinking, Some(ReasoningSupport::ReasoningSummary));
         assert_eq!(models[1].vision, Some(true));
         assert_eq!(
             models[1].effort_levels,
@@ -1205,7 +1205,7 @@ mod tests {
         assert_eq!(gpt5.context_window, Some(272_000));
         assert_eq!(gpt5.max_output_tokens, Some(128_000));
         assert_eq!(gpt5.reasoning, Some(true));
-        assert_eq!(gpt5.thinking, Some(ThinkingSupport::ReasoningContent));
+        assert_eq!(gpt5.thinking, Some(ReasoningSupport::ReasoningContent));
         assert_eq!(gpt5.tool_call, Some(true));
         assert_eq!(gpt5.vision, Some(true));
         assert_eq!(
@@ -1222,7 +1222,7 @@ mod tests {
         // `reasoning_effort` vocabulary.
         assert_eq!(gpt4o.reasoning, Some(true));
         assert_eq!(gpt4o.effort_levels, None);
-        assert_eq!(gpt4o.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+        assert_eq!(gpt4o.thinking, Some(ReasoningSupport::AnthropicAdaptive));
     }
 
     #[test]
@@ -1272,7 +1272,7 @@ mod tests {
         assert_eq!(claude.picker_enabled, Some(true));
         assert_eq!(claude.protocol, Some(WireProtocol::AnthropicMessages));
         assert_eq!(claude.family.as_deref(), Some("claude-opus"));
-        assert_eq!(claude.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+        assert_eq!(claude.thinking, Some(ReasoningSupport::AnthropicAdaptive));
         assert_eq!(claude.tool_call, Some(true));
         assert_eq!(claude.max_output_tokens, Some(64_000));
 
@@ -1286,7 +1286,7 @@ mod tests {
                 muta_contracts::EffortLevel::Known(muta_contracts::Effort::High)
             ])
         );
-        assert_eq!(remote.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+        assert_eq!(remote.thinking, Some(ReasoningSupport::AnthropicAdaptive));
 
         let internal = models
             .iter()

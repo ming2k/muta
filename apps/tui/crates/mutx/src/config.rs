@@ -164,7 +164,7 @@ pub fn tool_default_expanded(config: &TuiConfig, name: &str) -> bool {
 
 /// Effective default-expand state for a reasoning trace. Defaults to
 /// collapsed (`false`) when not configured.
-pub fn thinking_default_expanded(config: &TuiConfig) -> bool {
+pub fn reasoning_default_expanded(config: &TuiConfig) -> bool {
     config
         .default_expanded
         .get(THINKING_KEY)
@@ -378,9 +378,9 @@ mod tests {
 
     #[test]
     fn thinking_defaults_collapsed_and_is_overridable() {
-        assert!(!thinking_default_expanded(&TuiConfig::default()));
+        assert!(!reasoning_default_expanded(&TuiConfig::default()));
         let cfg = config(&[(THINKING_KEY, true)]);
-        assert!(thinking_default_expanded(&cfg));
+        assert!(reasoning_default_expanded(&cfg));
     }
 
     #[test]
@@ -395,7 +395,7 @@ thinking = true
         assert!(tool_default_expanded(&cfg, "edit_text"));
         assert!(tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
-        assert!(thinking_default_expanded(&cfg));
+        assert!(reasoning_default_expanded(&cfg));
     }
 
     #[test]
@@ -479,7 +479,7 @@ bogus = "ctrl+z"
         assert!(cfg.default_expanded.is_empty());
         assert!(tool_default_expanded(&cfg, "edit_text"));
         assert!(tool_default_expanded(&cfg, "write_file"));
-        assert!(!thinking_default_expanded(&cfg));
+        assert!(!reasoning_default_expanded(&cfg));
     }
 
     #[test]

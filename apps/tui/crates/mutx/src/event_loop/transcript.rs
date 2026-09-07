@@ -100,12 +100,12 @@ pub(crate) fn apply_transcript_patch_with_cursor(
             }
             TranscriptUpdate::ReasoningDelta { message_id, delta } => {
                 let Some(message) = target_mut(messages, message_id, cursor)
-                    .filter(|message| message.is_thinking())
+                    .filter(|message| message.is_reasoning())
                 else {
                     return false;
                 };
                 message.push_stream(&delta);
-                if let MessageKind::Thinking { content, .. } = &mut message.kind {
+                if let MessageKind::Reasoning { content, .. } = &mut message.kind {
                     content.push_str(&delta);
                     true
                 } else {
@@ -254,7 +254,7 @@ pub(crate) fn extract_focused_target_text(
             .as_ref()
             .cloned()
             .unwrap_or_else(|| format!("{name} {arguments}")),
-        crate::model::document::MessageKind::Thinking { content, .. } => content.clone(),
+        crate::model::document::MessageKind::Reasoning { content, .. } => content.clone(),
         crate::model::document::MessageKind::CommandResult {
             invocation, result, ..
         } => {

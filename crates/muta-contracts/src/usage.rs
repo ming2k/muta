@@ -34,4 +34,13 @@ pub struct TokenUsage {
     /// `prompt_tokens` when the upstream reports it.
     #[serde(default)]
     pub cache_miss_input_tokens: i64,
+    /// Provider-reported reasoning tokens (OpenAI Responses
+    /// `output_tokens_details.reasoning_tokens`; chat-completions
+    /// `completion_tokens_details.reasoning_tokens`). A diagnostic breakout
+    /// that is already included in `completion_tokens` — not an addition to
+    /// any total. `0` means the provider reported no such counter (Anthropic
+    /// and Google never do); absence is never encoded as a fabricated zero
+    /// for a provider that does report it.
+    #[serde(default)]
+    pub reasoning_tokens: i64,
 }

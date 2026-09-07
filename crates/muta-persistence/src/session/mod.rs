@@ -145,6 +145,12 @@ pub struct SessionData {
     /// the transcript (ADR-0186 §3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+    /// Durable retry-resolution records: the success-side mirror of
+    /// `round_interrupts` — one per round that recovered from transient
+    /// provider faults via the harness retry loop. Projection state, never
+    /// part of the transcript (ADR-0186 §3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) retry_resolutions: Vec<muta_contracts::RetryResolution>,
     /// The durable `/retry` resume point (C12).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retry_pending: Option<muta_contracts::RetryPoint>,
@@ -191,6 +197,7 @@ impl SessionData {
             request_usage_records: self.request_usage_records.clone(),
             commands: self.commands.clone(),
             round_interrupts: self.round_interrupts.clone(),
+            retry_resolutions: self.retry_resolutions.clone(),
             retry_pending: self.retry_pending.clone(),
             unknown_entries: Vec::new(),
             unknown_directives: Vec::new(),
@@ -252,6 +259,7 @@ impl Default for SessionData {
             request_usage_records: Vec::new(),
             commands: Vec::new(),
             round_interrupts: Vec::new(),
+            retry_resolutions: Vec::new(),
             retry_pending: None,
             unattended: false,
             tree: muta_contracts::SessionTree::default(),

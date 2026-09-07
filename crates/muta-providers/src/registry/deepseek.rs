@@ -14,7 +14,7 @@
 //! upstream, but is no longer what the preset seeds.
 
 use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
@@ -40,7 +40,7 @@ pub const MODELS: &[Model] = &[
         id: "deepseek-v4-flash",
         family: "deepseek",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -51,7 +51,7 @@ pub const MODELS: &[Model] = &[
         id: "deepseek-v4-flash-0731",
         family: "deepseek",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -62,7 +62,7 @@ pub const MODELS: &[Model] = &[
         id: "deepseek-v4-pro",
         family: "deepseek",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -73,7 +73,7 @@ pub const MODELS: &[Model] = &[
         id: "deepseek-v4-pro-0813",
         family: "deepseek",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -84,7 +84,7 @@ pub const MODELS: &[Model] = &[
         id: "deepseek-v4-flash-vision-exp",
         family: "deepseek",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,

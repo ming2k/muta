@@ -1,7 +1,7 @@
 //! The `kimi-code` provider template and its legacy registry preset:
 //! Moonshot AI's Kimi Code coding platform (`api.kimi.com/coding/v1`).
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSpec};
@@ -50,7 +50,7 @@ pub const MODELS: &[Model] = &[
         id: "k3",
         family: "kimi",
         context_window: 1_048_576,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -61,7 +61,7 @@ pub const MODELS: &[Model] = &[
         id: "kimi-k2.7-code",
         family: "kimi",
         context_window: 262_144,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -72,7 +72,7 @@ pub const MODELS: &[Model] = &[
         id: "kimi-k2.6",
         family: "kimi",
         context_window: 262_144,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -83,7 +83,7 @@ pub const MODELS: &[Model] = &[
         id: "kimi-k2.5",
         family: "kimi",
         context_window: 262_144,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,

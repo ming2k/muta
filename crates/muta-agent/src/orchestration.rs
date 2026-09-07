@@ -1212,6 +1212,10 @@ pub async fn execute_round(
     let mut attempt: usize = 0;
     let retry_limit = retry_max_attempts.clamp(1, 60);
     let mut compacted_after_overflow = false;
+    // Faults the retry loop recovered from, in order. Fed the durable
+    // `RetryResolution` (and the live `RetryResolved` event) when the round
+    // ultimately completes — the success-side mirror of a round interrupt.
+    let mut retry_faults: Vec<String> = Vec::new();
     // Keep the ReAct turn alive across network attempts. Completed prior turns
     // are already durably checkpointed above; retaining this state means a
     // retry resumes the pending provider request with the same history, guard
@@ -1331,6 +1335,7 @@ pub async fn execute_round(
         if attempt >= retry_limit {
             break Err(HarnessError::Other(message));
         }
+        retry_faults.push(message.clone());
         if streamed_text.swap(false, Ordering::SeqCst) {
             let _ = tx.send(round_response(&session_id, RoundEvent::StreamDiscard));
         }
@@ -1511,6 +1516,30 @@ pub async fn execute_round(
         && let Err(err) = session.set_round_counter(agent_round).await
     {
         tracing::warn!(error = %err, "could not persist round counter");
+    }
+
+    // The round recovered from transient provider faults: fold the live
+    // retry entry into a durable resolution (success-side mirror of a round
+    // interrupt). Emitted just before `RoundCompleted` so frontends retire
+    // the countdown entry in order, and persisted so the recovery survives
+    // resume and is auditable after the fact.
+    if !retry_faults.is_empty() {
+        let resolution = muta_contracts::RetryResolution {
+            attempts: retry_faults.len() as u32,
+            faults: retry_faults,
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            round: Some(agent_round),
+        };
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::RetryResolved(resolution.clone()),
+        ));
+        if let Err(error) = session.record_retry_resolution(resolution).await {
+            tracing::warn!(%error, "could not persist retry resolution record");
+        }
     }
 
     if emit_round_completed {
@@ -1845,6 +1874,10 @@ pub fn relay_agent_event(
         AgentEvent::BackgroundJobProgress { job_id, line } => round_response(
             session_id,
             RoundEvent::BackgroundJobProgress { job_id, line },
+        ),
+        AgentEvent::BackgroundJobReady { job_id } => round_response(
+            session_id,
+            RoundEvent::BackgroundJobReady { job_id },
         ),
         AgentEvent::BackgroundJobCompleted(outcome) => {
             round_response(session_id, RoundEvent::BackgroundJobCompleted(outcome))

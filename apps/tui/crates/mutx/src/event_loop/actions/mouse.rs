@@ -215,8 +215,8 @@ pub(super) async fn handle_selection_start(
         if let Some(mi) = app.sticky_step {
             let mut messages = runtime.messages.write().await;
             app.focused_target = app.focused_messages().get(mi).and_then(|message| {
-                if message.is_thinking() {
-                    Some(InteractiveTarget::thinking(mi))
+                if message.is_reasoning() {
+                    Some(InteractiveTarget::reasoning(mi))
                 } else if message.is_tool_step() || message.is_runner_task() {
                     Some(InteractiveTarget::tool_step(mi))
                 } else {
@@ -286,7 +286,7 @@ pub(super) async fn handle_selection_start(
                             drop(messages);
                         }
                     }
-                    StepKind::Thinking
+                    StepKind::Reasoning
                     | StepKind::ProviderRetry
                     | StepKind::CommandResult
                     | StepKind::Notice => {
@@ -478,7 +478,7 @@ pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: 
                 .read()
                 .await
                 .get(mi)
-                .map(|m| m.is_thinking() || m.is_tool_step() || m.is_runner_task())
+                .map(|m| m.is_reasoning() || m.is_tool_step() || m.is_runner_task())
                 .unwrap_or(false);
             app.hovered_step = is_step.then_some(mi);
         }

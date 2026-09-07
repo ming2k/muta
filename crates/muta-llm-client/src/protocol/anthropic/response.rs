@@ -47,6 +47,9 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
         cache_creation_input_tokens: cache_creation,
         cache_read_input_tokens: cache_read,
         cache_miss_input_tokens: 0,
+        // Anthropic reports no reasoning-token counter in `usage`; the
+        // reasoning volume rides inside `output_tokens`.
+        reasoning_tokens: 0,
     })
 }
 
@@ -111,6 +114,8 @@ impl StreamUsage {
             cache_creation_input_tokens: creation,
             cache_read_input_tokens: read,
             cache_miss_input_tokens: 0,
+            // Anthropic streams no reasoning-token counter; `0` = unreported.
+            reasoning_tokens: 0,
         })
     }
 }
@@ -454,6 +459,7 @@ mod tests {
                 cache_creation_input_tokens: 100,
                 cache_read_input_tokens: 400,
                 cache_miss_input_tokens: 0,
+            reasoning_tokens: 0,
             })]
         );
 
@@ -483,6 +489,7 @@ mod tests {
                 cache_creation_input_tokens: 100,
                 cache_read_input_tokens: 400,
                 cache_miss_input_tokens: 0,
+            reasoning_tokens: 0,
             })]
         );
     }
@@ -512,6 +519,7 @@ mod tests {
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 400,
                 cache_miss_input_tokens: 0,
+            reasoning_tokens: 0,
             })]
         );
     }
@@ -536,6 +544,7 @@ mod tests {
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
                 cache_miss_input_tokens: 0,
+            reasoning_tokens: 0,
             })]
         );
     }

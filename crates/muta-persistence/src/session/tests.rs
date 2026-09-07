@@ -66,6 +66,78 @@ async fn full_transcript_includes_everything_unprojected() {
 }
 
 // ---------------------------------------------------------------
+// Session switching must not inherit the previous session's projection.
+// ---------------------------------------------------------------
+
+/// Regression (ADR-0189 `projected_cache`): `open` swaps the store's whole
+/// `SessionData` but the projection cache belonged to the session being left.
+/// The stale cache made `model_window` return the previous session's window
+/// after a switch — and the resume path then `replace_messages`-ed it over
+/// the newly opened session, wiping the resumed transcript (the
+/// `/sessions <id>` restore rendered an empty view).
+#[tokio::test]
+async fn open_repoints_projection_to_the_switched_session() {
+    let dir = temp_dir("open-cache");
+    let store = SessionStore::for_path(dir.join("a.json"));
+    store
+        .replace_messages(vec![user("from session A"), assistant("reply A")])
+        .await
+        .unwrap();
+
+    // Populate session B on disk via a second store, then switch.
+    let other = SessionStore::for_path(dir.join("b.json"));
+    other
+        .replace_messages(vec![user("from session B")])
+        .await
+        .unwrap();
+    let b_id = other.id().await;
+
+    // Warm the projection cache against session A first.
+    assert_eq!(store.model_window().await.len(), 2);
+    store.open(&b_id).await.unwrap();
+
+    let window = store.model_window().await;
+    assert_eq!(
+        window.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+        vec!["from session B"],
+        "model_window after `open` must derive from the switched-to session, \
+         never the session left behind"
+    );
+}
+
+/// The same staleness hazard for `reset` (`/new`): a stale window made the
+/// length-based delta check in `append_turn` drop the fresh session's first
+/// durable write.
+#[tokio::test]
+async fn reset_does_not_inherit_the_previous_projection() {
+    let dir = temp_dir("reset-cache");
+    let store = SessionStore::for_path(dir.join("a.json"));
+    store
+        .replace_messages(vec![user("from session A"), assistant("reply A")])
+        .await
+        .unwrap();
+    // Warm the cache against session A.
+    assert_eq!(store.model_window().await.len(), 2);
+
+    store.reset().await.unwrap();
+    let window = store.model_window().await;
+    assert!(
+        window.is_empty(),
+        "the fresh session must start with an empty window"
+    );
+
+    // The first turn on the fresh session must be appended, not silently
+    // dropped by a stale cache length.
+    store.append_turn(&[user("hello")]).await.unwrap();
+    assert_eq!(
+        store.model_window().await.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+        vec!["hello"],
+        "the fresh session's first turn must be committed, not swallowed by \
+         a stale projection length"
+    );
+}
+
+// ---------------------------------------------------------------
 // Projection: commit translates to directives; view reproduces.
 // ---------------------------------------------------------------
 

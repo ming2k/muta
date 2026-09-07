@@ -3,4 +3,4 @@
 /**
  * The provenance of a session relative to its lineage.
  */
-export type SessionForkKind = "trunk" | "fork" | "aside";
+export type SessionForkKind = "trunk" | "fork" | "aside" | "subagent";

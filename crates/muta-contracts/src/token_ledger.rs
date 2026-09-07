@@ -253,6 +253,11 @@ pub struct RequestUsageRecord {
     pub cache_read_tokens: i64,
     #[serde(default)]
     pub cache_miss_tokens: i64,
+    /// Provider-reported reasoning tokens (a diagnostic subset of
+    /// `completion_tokens`, never additional billable volume). `0` when the
+    /// upstream reports no such counter.
+    #[serde(default)]
+    pub reasoning_tokens: i64,
     /// Milliseconds the provider spent *generating* this attempt — measured
     /// from request dispatch to a validated assistant response, so it excludes
     /// tool execution and human-decision pauses. Together with
@@ -374,6 +379,7 @@ impl RequestUsageRecord {
                 cache_write_tokens: self.cache_write_tokens,
                 cache_read_tokens: self.cache_read_tokens,
                 cache_miss_tokens: self.cache_miss_tokens,
+                reasoning_tokens: self.reasoning_tokens,
                 ..Default::default()
             },
             RequestUsageSource::Estimated => TokenSourceTotals {
@@ -395,6 +401,7 @@ impl RequestUsageRecord {
             cache_write_tokens: self.cache_write_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cache_miss_tokens: self.cache_miss_tokens,
+            reasoning_tokens: self.reasoning_tokens,
         }
     }
 }
@@ -425,6 +432,11 @@ pub struct TokenSourceTotals {
     /// input, not additional billable tokens.
     #[serde(default)]
     pub cache_miss_tokens: i64,
+    /// Provider-reported reasoning tokens (OpenAI Responses / chat-completions
+    /// details). A diagnostic subset of `completion_tokens`; `0` when the
+    /// provider reports no such counter.
+    #[serde(default)]
+    pub reasoning_tokens: i64,
 }
 
 impl TokenSourceTotals {
@@ -442,6 +454,7 @@ impl TokenSourceTotals {
         self.cache_write_tokens += other.cache_write_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
         self.cache_miss_tokens += other.cache_miss_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
     }
 }
 
@@ -470,6 +483,10 @@ pub struct TokenTurn {
     pub cache_read_tokens: i64,
     #[serde(default)]
     pub cache_miss_tokens: i64,
+    /// Provider-reported reasoning tokens (diagnostic subset of
+    /// `completion_tokens`). `0` when unreported.
+    #[serde(default)]
+    pub reasoning_tokens: i64,
 }
 
 /// Internal per-key accumulator: running totals plus the ordered line items.
@@ -733,6 +750,7 @@ impl TokenSourceLedger {
             record.cache_write_tokens = usage.cache_creation_input_tokens.max(0);
             record.cache_read_tokens = usage.cache_read_input_tokens.max(0);
             record.cache_miss_tokens = usage.cache_miss_input_tokens.max(0);
+            record.reasoning_tokens = usage.reasoning_tokens.max(0);
         } else {
             record.source = RequestUsageSource::Estimated;
             record.prompt_tokens = record.projected_prompt_tokens.max(0);
@@ -824,6 +842,7 @@ impl TokenSourceLedger {
             cache_write_tokens: turn.cache_write_tokens.max(0),
             cache_read_tokens: turn.cache_read_tokens.max(0),
             cache_miss_tokens: turn.cache_miss_tokens.max(0),
+            reasoning_tokens: turn.reasoning_tokens.max(0),
             ..turn
         };
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -835,6 +854,7 @@ impl TokenSourceLedger {
             entry.totals.cache_write_tokens += turn.cache_write_tokens;
             entry.totals.cache_read_tokens += turn.cache_read_tokens;
             entry.totals.cache_miss_tokens += turn.cache_miss_tokens;
+            entry.totals.reasoning_tokens += turn.reasoning_tokens;
         } else {
             entry.totals.estimated_tokens += turn.total_tokens;
         }
@@ -1473,6 +1493,7 @@ mod tests {
                 cache_write_tokens: 800,
                 cache_read_tokens: 0,
                 cache_miss_tokens: 0,
+                reasoning_tokens: 0,
             },
         );
         ledger.record("anthropic", "claude", 50, false);

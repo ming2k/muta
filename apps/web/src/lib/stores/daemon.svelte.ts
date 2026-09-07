@@ -38,6 +38,7 @@ import type {
   ProviderPickerSnapshot,
   QueuedMessage,
   QueuedUserInput,
+  RetryResolution,
   RoundEvent,
   RoundInterrupt,
   RoundSummary,
@@ -84,7 +85,7 @@ const CLIENT_VERSION: string =
  * in its window; sending it is what opts this client into protocol-number
  * negotiation instead of product-version equality.
  */
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;
@@ -182,7 +183,16 @@ export interface LiveToolExecution {
 export type FeedItem =
   | { kind: "message"; key: string; message: Message }
   | { kind: "command"; key: string; record: CommandRecord }
-  | { kind: "interrupt"; key: string; record: RoundInterrupt };
+  | { kind: "interrupt"; key: string; record: RoundInterrupt }
+  | { kind: "retry_resolution"; key: string; record: RetryResolution }
+  | {
+      kind: "retry_scheduled";
+      key: string;
+      attempt: number;
+      max_attempts: number;
+      delay_ms: number;
+      message: string;
+    };
 
 /** Resolved connection settings for the daemon endpoint. */
 export interface DaemonConfig {
@@ -819,6 +829,7 @@ export class DaemonStore {
           frame.messages.filter((m) => !m.hidden),
           [],
           frame.round_interrupts ?? [],
+          frame.retry_resolutions ?? [],
         );
         break;
       case "Pick":
@@ -909,6 +920,7 @@ export class DaemonStore {
         resp.ConversationReplaced.messages.filter((m) => !m.hidden),
         resp.ConversationReplaced.commands ?? [],
         resp.ConversationReplaced.round_interrupts ?? [],
+        resp.ConversationReplaced.retry_resolutions ?? [],
       );
     } else if ("CopyToClipboard" in resp) {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -937,18 +949,22 @@ export class DaemonStore {
     messages: Message[],
     commands: CommandRecord[],
     interrupts: RoundInterrupt[] = [],
+    retryResolutions: RetryResolution[] = [],
   ): FeedItem[] {
     const items: FeedItem[] = [
       ...messages.map((m) => this.messageItem(m)),
       ...commands.map((c) => this.commandItem(c)),
       ...interrupts.map((r) => this.interruptItem(r)),
+      ...retryResolutions.map((r) => this.retryResolutionItem(r)),
     ];
     const time = (item: FeedItem): number =>
       item.kind === "message"
         ? messageTimeMs(item.message)
         : item.kind === "command"
           ? item.record.timestamp
-          : item.record.at_ms;
+          : "record" in item
+            ? item.record.at_ms
+            : Date.now();
     return items.sort((a, b) => time(a) - time(b));
   }
 
@@ -1102,11 +1118,35 @@ export class DaemonStore {
       );
     } else if ("RetryScheduled" in event) {
       const r = event.RetryScheduled;
-      this.pushToast(
-        "warning",
-        `Retry ${r.attempt}/${r.max_attempts} in ${Math.round(r.delay_ms / 1000)}s`,
-        r.message,
-      );
+      // Live retry state rides a dedicated feed row (upserted in place, like
+      // the TUI's countdown entry) instead of a toast — a retry that recovers
+      // is transcript-worthy, and a toast would vanish mid-scroll.
+      const last = this.feed[this.feed.length - 1];
+      if (last?.kind === "retry_scheduled") {
+        last.attempt = r.attempt;
+        last.max_attempts = r.max_attempts;
+        last.delay_ms = r.delay_ms;
+        last.message = r.message;
+      } else {
+        this.pushFeed({
+          kind: "retry_scheduled",
+          key: this.feedKey(),
+          attempt: r.attempt,
+          max_attempts: r.max_attempts,
+          delay_ms: r.delay_ms,
+          message: r.message,
+        });
+      }
+    } else if ("RetryResolved" in event) {
+      // The round recovered: replace the live countdown row with a permanent
+      // resolution marker (the durable twin lives in the session's
+      // retry-resolutions ledger and re-projects on resume).
+      const resolved = this.feed[this.feed.length - 1];
+      if (resolved?.kind === "retry_scheduled") {
+        this.feed[this.feed.length - 1] = this.retryResolutionItem(event.RetryResolved);
+      } else {
+        this.pushFeed(this.retryResolutionItem(event.RetryResolved));
+      }
     } else if ("SteerAdmitted" in event) {
       this.appendInsertedInput(event.SteerAdmitted);
     } else if ("FollowUpStarted" in event) {
@@ -1488,6 +1528,10 @@ export class DaemonStore {
 
   private interruptItem(record: RoundInterrupt): FeedItem {
     return { kind: "interrupt", key: this.feedKey(), record };
+  }
+
+  private retryResolutionItem(record: RetryResolution): FeedItem {
+    return { kind: "retry_resolution", key: this.feedKey(), record };
   }
 
   private clearSessionState() {

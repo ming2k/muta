@@ -378,6 +378,9 @@ pub async fn publish_btw_list(
 /// session's agent/store/lifecycle triple, the response channel, and the
 /// config. Every turn entry point threads the same six handles; bundling
 /// keeps the signatures to (env, input).
+/// Copyable by construction (all fields are shared references), so the wake
+/// path can clone it into a round boundary without a hand-written helper.
+#[derive(Clone, Copy)]
 pub(crate) struct SideEnv<'a> {
     pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
     pub master: &'a Arc<Agent>,

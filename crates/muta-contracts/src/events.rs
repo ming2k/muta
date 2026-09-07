@@ -616,6 +616,10 @@ pub enum AgentResponse {
         /// [`AgentResponse::ConversationReplaced`].
         #[serde(default)]
         round_interrupts: Vec<RoundInterrupt>,
+        /// Retry-resolution records for the aside, same as
+        /// [`AgentResponse::ConversationReplaced`].
+        #[serde(default)]
+        retry_resolutions: Vec<crate::RetryResolution>,
     },
     /// The user left the `/btw` aside view (ADR-0103). The TUI returns to the
     /// primary transcript. Detach is non-destructive by default: the aside
@@ -668,6 +672,11 @@ pub enum AgentResponse {
         /// were stopped, why, and when.
         #[serde(default)]
         round_interrupts: Vec<RoundInterrupt>,
+        /// Retry-resolution records: re-projected into the transcript at
+        /// their timestamp seams so the resumed session shows which rounds
+        /// recovered from transient provider faults.
+        #[serde(default)]
+        retry_resolutions: Vec<crate::RetryResolution>,
     },
     /// Replace the sessions picker contents. Data responses never navigate;
     /// slash-command presentation is signalled separately.
@@ -1053,6 +1062,50 @@ impl RoundInterruptReason {
     }
 }
 
+/// The durable twin of a round that *recovered* from transient provider
+/// failures via the harness retry loop — the success-side mirror of
+/// [`RoundInterrupt`]. Where an interrupt records "this round stopped", a
+/// resolution records "this round hit N retryable provider faults and then
+/// completed". Written once, when the round reaches its natural terminal
+/// path after at least one retry; re-projected into the transcript on
+/// resume so the recovery is auditable after the fact, exactly as an
+/// interrupt is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RetryResolution {
+    /// How many retry attempts the round consumed (1 = one fault retried
+    /// once, …). Equal to the number of [`Self::faults`].
+    pub attempts: u32,
+    /// The per-attempt fault summaries, in order, one line each (the same
+    /// public message the live retry notice carried).
+    pub faults: Vec<String>,
+    /// Unix-epoch milliseconds at which the final (successful) retry
+    /// completed — i.e. when the round stopped being in retry backoff.
+    pub at_ms: u64,
+    /// The 1-based round that recovered, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub round: Option<u64>,
+}
+
+impl RetryResolution {
+    /// The collapsed transcript line, e.g.
+    /// `"Recovered after 2 provider retries — retried once"`. Kept short so
+    /// it fits the transcript's meta strip; the full fault list rides in
+    /// [`Self::faults`] and is rendered as the expandable detail.
+    pub fn summary_line(&self) -> String {
+        let mut line = format!(
+            "Recovered after {} provider {}",
+            self.attempts,
+            if self.attempts == 1 { "retry" } else { "retries" }
+        );
+        if let Some(round) = self.round {
+            line.push_str(&format!(" (round {round})"));
+        }
+        line
+    }
+}
+
 /// The durable `/retry` resume point: everything a later round needs to
 /// *continue* a stopped round as itself — same round number, contiguous turn
 /// ordinals — rather than minting a fresh round.
@@ -1285,6 +1338,13 @@ pub enum RoundEvent {
         delay_ms: u64,
         message: String,
     },
+    /// The round that consumed one or more retries reached its natural
+    /// terminal path — the recovery is now durable fact, not live state.
+    /// Frontends must fold their transient retry entry (countdown UI) into
+    /// a permanent transcript marker carrying this record, mirroring how
+    /// [`RoundEvent::RoundInterrupted`] projects its durable twin. Emitted
+    /// at most once per round, immediately before [`RoundEvent::RoundCompleted`].
+    RetryResolved(crate::RetryResolution),
     Activity(String),
     /// A new ReAct turn started within the current user round. `turn` is the
     /// 0-indexed model-request index within the round (0 = the first request).
@@ -1340,6 +1400,12 @@ pub enum RoundEvent {
     BackgroundJobProgress {
         job_id: crate::job::JobId,
         line: String,
+    },
+    /// A service task reported readiness (ADR-0190): the process is alive and
+    /// its readiness condition (first output, grace, or port probe) is met.
+    /// Wake-eligible.
+    BackgroundJobReady {
+        job_id: crate::job::JobId,
     },
     /// A background job completed.
     BackgroundJobCompleted(crate::job::BackgroundJobOutcome),
@@ -1645,9 +1711,9 @@ impl ProviderModelInfo {
             vision: self.vision,
             tool_call: true,
             thinking: if self.thinking == Some(true) {
-                crate::ThinkingSupport::AnthropicAdaptive
+                crate::ReasoningSupport::AnthropicAdaptive
             } else {
-                crate::ThinkingSupport::None
+                crate::ReasoningSupport::None
             },
         }
     }
@@ -1737,7 +1803,7 @@ pub enum RunnerEvent {
     StreamReasoningStart { round: u64, turn: usize },
     /// New reasoning token from the runner (a disclosed chain only — the
     /// sender gates hidden-chain models out at the source; see
-    /// [`crate::ThinkingSupport::chain_disclosed`]).
+    /// [`crate::ReasoningSupport::chain_disclosed`]).
     StreamReasoningDelta(String),
     /// The runner's reasoning stream finished with the final accumulated
     /// reasoning text.
@@ -1896,6 +1962,10 @@ pub enum AgentEvent {
     BackgroundJobProgress {
         job_id: crate::job::JobId,
         line: String,
+    },
+    /// A service task reported readiness (ADR-0190). Wake-eligible.
+    BackgroundJobReady {
+        job_id: crate::job::JobId,
     },
     /// A background job completed.
     BackgroundJobCompleted(crate::job::BackgroundJobOutcome),

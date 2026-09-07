@@ -20,14 +20,16 @@ use serde_json::Value;
 /// Parse a Responses `usage` object (`input_tokens` / `output_tokens` /
 /// `total_tokens`) into a [`TokenUsage`]. Returns `None` when absent or without
 /// numeric fields. The Responses API reports reasoning tokens under
-/// `output_tokens_details.reasoning_tokens`; they are folded into the
-/// completion count (mirroring how chat-completions reports them). Its
-/// auto-cache discount surfaces as `input_tokens_details.cached_tokens` and is
-/// surfaced in [`TokenUsage::cache_read_input_tokens`].
+/// `output_tokens_details.reasoning_tokens`; they are carried in
+/// [`TokenUsage::reasoning_tokens`] (already included in the completion count,
+/// never an addition to it). Its auto-cache discount surfaces as
+/// `input_tokens_details.cached_tokens` and is surfaced in
+/// [`TokenUsage::cache_read_input_tokens`].
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let input = usage["input_tokens"].as_i64();
     let output = usage["output_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
+    let reasoning = usage["output_tokens_details"]["reasoning_tokens"].as_i64();
     let prompt = input;
     let completion = output.or_else(|| total.zip(prompt).map(|(t, p)| (t - p).max(0)));
     // Route cache-read accounting through the shared helper so the cache
@@ -42,6 +44,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: 0,
@@ -50,6 +53,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
     }
 }

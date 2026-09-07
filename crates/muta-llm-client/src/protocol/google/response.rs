@@ -23,11 +23,15 @@ pub struct StreamPayload {
 /// the object is absent or has no numeric fields. Google's implicit context
 /// caching discount surfaces as `cachedContentTokenCount`; it is surfaced in
 /// [`TokenUsage::cache_read_input_tokens`] so the token-source report shows the
-/// hit rate. Google exposes no separate cache-write counter.
+/// hit rate. Google exposes no separate cache-write counter. Its hidden
+/// reasoning budget surfaces as `thoughtsTokenCount` and is carried in
+/// [`TokenUsage::reasoning_tokens`] (already included in
+/// `candidatesTokenCount`, never an addition to it).
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let prompt = usage["promptTokenCount"].as_i64();
     let completion = usage["candidatesTokenCount"].as_i64();
     let total = usage["totalTokenCount"].as_i64();
+    let reasoning = usage["thoughtsTokenCount"].as_i64();
     // Route cache-read accounting through the shared helper so the cache
     // policy is enforced in one place (ADR-0161). Google hides the discount in
     // `cachedContentTokenCount`, which the helper reads.
@@ -40,6 +44,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: prompt.unwrap_or(0),
@@ -48,6 +53,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
     }
 }

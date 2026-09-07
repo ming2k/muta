@@ -71,6 +71,11 @@ pub enum ToolOutput {
         /// reads as a normal exit rather than failing to load.
         #[serde(default)]
         termination: ShellTermination,
+        /// Set only with [`ShellTermination::Detached`] (ADR-0190): the
+        /// background-job id the child was adopted under, so the UI can point
+        /// at the notification target.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detached_job_id: Option<String>,
     },
     /// Source code / file contents, with an optional language hint (file
     /// extension) so a future renderer can syntax-highlight. `text` is the
@@ -234,6 +239,11 @@ pub enum ShellTermination {
     /// command was *not* executed. Rendered as a `warn()`-coloured footer
     /// with the suggested non-interactive flags.
     InteractiveBlocked,
+    /// The sync budget expired while the child was still alive and producing
+    /// output (ADR-0190 detach-on-budget): the process was *not* killed — it
+    /// was adopted by the background-job fabric, results arrive via job
+    /// notification. `exit` is `None`; the job id rides the output payload.
+    Detached,
     /// The wall-clock timeout ceiling was reached (the command was producing
     /// output but running too long). The child was killed.
     Timeout,
@@ -738,6 +748,12 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
         ShellTermination::Cancelled => {
             Some("[killed by harness: cancelled by an operator interrupt.]")
         }
+        ShellTermination::Detached => Some(
+            "[running: the sync budget expired but the command is still alive. \
+             It was NOT killed — it continues as a background job and its \
+             completion (or the service's failure) will be reported here \
+             automatically. Use process_poll/process_logs to inspect it now.]",
+        ),
     }
 }
 
@@ -877,6 +893,7 @@ mod tests {
             exit: Some(0),
             truncated: false,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         assert_eq!(exited.to_text(), "hi\n");
 
@@ -901,6 +918,7 @@ mod tests {
                 exit: None,
                 truncated: false,
                 termination: term,
+                detached_job_id: None,
             };
             let text = o.to_text();
             assert!(
@@ -921,6 +939,7 @@ mod tests {
             exit: Some(0),
             truncated: false,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         assert_eq!(o.to_text(), "hi\n");
         assert!(!o.is_error());
@@ -936,6 +955,7 @@ mod tests {
             exit: Some(0),
             truncated: false,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         assert_eq!(o.to_text(), "(success, stderr):\nwarn");
     }
@@ -950,6 +970,7 @@ mod tests {
             exit: Some(1),
             truncated: false,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         assert_eq!(o.to_text(), "Exit 1\nSTDOUT:\nout\nSTDERR:\nerr");
         assert!(o.is_error());
@@ -965,6 +986,7 @@ mod tests {
             exit: None,
             truncated: false,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         assert_eq!(o.to_text(), "Exit -1\nSTDOUT:\n\nSTDERR:\nkilled");
         assert!(o.is_error());
@@ -981,6 +1003,7 @@ mod tests {
             exit: Some(0),
             truncated: true,
             termination: ShellTermination::Exited,
+            detached_job_id: None,
         };
         let text = o.to_text();
         // 9000 'a's ≈ 1125 cl100k tokens; the notice reports tokens (ADR-0120).

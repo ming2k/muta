@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::tools::execute_command::pipes::{OutputCollector, spawn_stream_readers};
+use crate::tools::execute_command::pipes::{
+    OutputCollector, StreamReaders, spawn_stream_readers,
+};
+use tokio::task::JoinHandle;
 
 pub fn workspace_sandbox_shell(
     command: &str,
@@ -18,6 +21,78 @@ pub fn workspace_sandbox_shell(
     )
 }
 
+/// The handle the caller must keep alive when a foreground child is handed to
+/// the fabric (ADR-0190 detach-on-budget): stdout/stderr stay piped, and the
+/// adopted owner (the job manager) drains them.
+struct AdoptableChild {
+    child: tokio::process::Child,
+    process_tree: muta_platform::process::OwnedProcessTree,
+}
+
+impl muta_contracts::CrateChildBridge for AdoptableChild {
+    fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        self.child
+            .try_wait()
+            .map(|s| s.and_then(|st| st.code()))
+            .map_err(|e| e.to_string())
+    }
+
+    fn kill(&mut self) -> Result<(), String> {
+        // Signal the whole process tree; the child itself is reaped by the
+        // fabric's poll loop on its next try_wait.
+        self.process_tree
+            .terminate()
+            .map_err(|e| format!("process tree termination failed: {e}"))
+    }
+}
+
+/// Ownership shuttle for the detach-then-fallback flow: handles are moved out
+/// for the adoption attempt and restored if the fabric refuses.
+struct StreamReadersFallback {
+    rx: Option<tokio::sync::mpsc::UnboundedReceiver<(muta_contracts::tool_output::ShellStream, String)>>,
+    stdout_task: Option<JoinHandle<()>>,
+    stderr_task: Option<JoinHandle<()>>,
+    child: Option<tokio::process::Child>,
+    process_tree: Option<muta_platform::process::OwnedProcessTree>,
+}
+
+impl StreamReadersFallback {
+    fn take(
+        readers: &mut StreamReaders,
+        child: tokio::process::Child,
+        process_tree: muta_platform::process::OwnedProcessTree,
+    ) -> Self {
+        Self {
+            rx: Some(std::mem::replace(
+                &mut readers.rx,
+                tokio::sync::mpsc::unbounded_channel().1,
+            )),
+            stdout_task: Some(std::mem::replace(
+                &mut readers.stdout_task,
+                tokio::spawn(async {}),
+            )),
+            stderr_task: Some(std::mem::replace(
+                &mut readers.stderr_task,
+                tokio::spawn(async {}),
+            )),
+            child: Some(child),
+            process_tree: Some(process_tree),
+        }
+    }
+
+    /// Restore the drained handles after a refused adoption, returning the
+    /// child and its process tree for the legacy kill path.
+    fn restore(mut self) -> (StreamReaders, tokio::process::Child, muta_platform::process::OwnedProcessTree) {
+        let readers = StreamReaders {
+            rx: self.rx.take().unwrap(),
+            stdout_task: self.stdout_task.take().unwrap(),
+            stderr_task: self.stderr_task.take().unwrap(),
+        };
+        (readers, self.child.take().unwrap(), self.process_tree.take().unwrap())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_episodic_command(
     command: &str,
     timeout_duration: Duration,
@@ -25,6 +100,7 @@ pub async fn run_episodic_command(
     env: Arc<dyn muta_contracts::ExecutionEnvironment>,
     stdin_policy: muta_contracts::StdinPolicy,
     on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
+    job_service: Option<Arc<dyn muta_contracts::BackgroundJobService>>,
 ) -> Result<muta_contracts::ToolOutput, String> {
     // Resolve the stdin policy into the `Stdio` the child is spawned with.
     let stdin_bytes = match &stdin_policy {
@@ -37,7 +113,7 @@ pub async fn run_episodic_command(
         std::process::Stdio::null()
     };
 
-    let (mut child, process_tree) = {
+    let (mut child, mut process_tree) = {
         let mut invocation = match isolation {
             muta_contracts::ShellIsolation::Host => muta_platform::shell::native_shell(command),
             muta_contracts::ShellIsolation::Workspace => {
@@ -116,6 +192,72 @@ pub async fn run_episodic_command(
         }
     }
 
+    // ADR-0190 detach-on-budget: when the idle budget fires but the process
+    // produced output before going quiet (output-then-silence is the service
+    // signature), the child is NOT killed — it is adopted by the background
+    // job fabric, which keeps draining its pipes and notifies the session on
+    // exit. Silence-from-birth (a stdin prompt the agent cannot answer)
+    // still kills: there is nothing worth adopting.
+    if idle_blocked && job_service.is_some() && !collector.is_empty() {
+        {
+            let mut readers_fallback = StreamReadersFallback::take(&mut readers, child, process_tree);
+            let mut rx = readers_fallback.rx.take().unwrap();
+            collector.drain_remaining_rx(&mut rx);
+            drop(rx);
+            if let Some(h) = readers_fallback.stdout_task.take() { h.abort(); }
+            if let Some(h) = readers_fallback.stderr_task.take() { h.abort(); }
+
+            let pid = readers_fallback.child.as_ref().and_then(|c| c.id()).unwrap_or_default();
+            let adoptable = AdoptableChild {
+                child: readers_fallback.child.take().unwrap(),
+                process_tree: readers_fallback.process_tree.take().unwrap(),
+            };
+            let captured: Vec<String> = collector
+                .lines()
+                .iter()
+                .map(|l| l.text.clone())
+                .collect();
+
+            match job_service
+                .as_ref()
+                .unwrap()
+                .adopt_process(
+                    command.to_string(),
+                    None,
+                    muta_contracts::AdoptionInfo {
+                        captured_lines: captured,
+                        pid,
+                        child: Box::new(adoptable),
+                    },
+                )
+                .await
+            {
+                Ok(info) => {
+                    collector.flush_stream(on_stream);
+                    let (stdout, stderr, lines, truncated) = collector.apply_caps(None);
+                    return Ok(muta_contracts::ToolOutput::Shell {
+                        command: command.to_string(),
+                        stdout,
+                        stderr,
+                        lines,
+                        exit: None,
+                        truncated,
+                        termination: muta_contracts::tool_output::ShellTermination::Detached,
+                        detached_job_id: Some(info.id.0),
+                    });
+                }
+                Err(_) => {
+                    // Adoption refused: restore the handles and fall through
+                    // to the legacy kill path below.
+                    let (r, c, t) = readers_fallback.restore();
+                    readers = r;
+                    child = c;
+                    process_tree = t;
+                }
+            }
+        }
+    }
+
     if timed_out || idle_blocked {
         let _ = process_tree.terminate();
         readers.stdout_task.abort();
@@ -152,6 +294,7 @@ pub async fn run_episodic_command(
         exit,
         truncated,
         termination,
+        detached_job_id: None,
     })
 }
 

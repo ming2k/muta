@@ -9,7 +9,7 @@ use super::{
     refresh_connection_models_for_etag, sync_fitted_model_registry,
 };
 use muta_contracts::catalog::Transport;
-use muta_contracts::{ConnectionAuth, Effort, OpenAiResponsesDialect, ThinkingMode, WireProtocol};
+use muta_contracts::{ConnectionAuth, Effort, OpenAiResponsesDialect, ReasoningMode, WireProtocol};
 use muta_persistence::config::{
     Config, Credentials, DiscoveryCache, FittedModelInfo, ModelListCacheState,
 };
@@ -264,7 +264,7 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
             effort, thinking, ..
         } => {
             assert_eq!(*effort, Some(Effort::Max));
-            assert_eq!(*thinking, Some(ThinkingMode::Off), "explicit off wins");
+            assert_eq!(*thinking, Some(ReasoningMode::Off), "explicit off wins");
         }
         other => panic!("expected Anthropic transport, got {other:?}"),
     }

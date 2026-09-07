@@ -180,9 +180,20 @@ impl OutputCollector {
         self.compact_in_flight_if_needed();
     }
 
+    /// True when at least one output line was captured. A child that has
+    /// produced output and then gone silent is the ADR-0190 detach signature
+    /// (service banner, then listen-loop quiet); silence-from-birth is not.
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// The captured lines in arrival order (for adoption replay).
+    pub fn lines(&self) -> &[ShellLine] {
+        &self.lines
+    }
+
     /// Apply head+tail byte caps and line count caps to prevent unbound memory growth.
-    pub fn apply_caps(mut self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {
-        let mut collection_truncated = self.truncated;
+    pub fn apply_caps(mut self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {        let mut collection_truncated = self.truncated;
         if self.stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
             self.stdout_buf = head_tail(&self.stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
             collection_truncated = true;

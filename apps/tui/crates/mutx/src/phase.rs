@@ -35,7 +35,7 @@ pub enum Phase {
     /// The model request is in flight, waiting for the first byte.
     AwaitingModel,
     /// A reasoning (`thinking`) stream is actively producing deltas.
-    Thinking,
+    Reasoning,
     /// An answer (visible text) stream is actively producing deltas.
     Answering,
     /// Stream finished; the harness is persisting and settling the turn
@@ -136,7 +136,7 @@ impl Phase {
             Self::Queued => Cow::Borrowed("queued"),
             Self::Preparing => Cow::Borrowed("preparing context"),
             Self::AwaitingModel => Cow::Borrowed("waiting for model"),
-            Self::Thinking => Cow::Borrowed("thinking"),
+            Self::Reasoning => Cow::Borrowed("thinking"),
             Self::Answering => Cow::Borrowed("answering"),
             Self::Finalizing => Cow::Borrowed("finalizing response"),
             Self::Tool(verb) => Cow::Borrowed(verb.label()),

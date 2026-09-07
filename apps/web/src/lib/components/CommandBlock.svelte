@@ -47,10 +47,6 @@
       return `Session: ${s.id}\nForked from: ${s.parent_id ?? "none"}\nModel-window messages: ${s.message_count}\nArchived transcript messages: ${s.archived_count}\nLast context projection: ${s.last_projection ?? "none"}`;
     }
     if ("Review" in result) return reviewToText(result.Review.verdicts, result.Review.turns);
-    if ("Scheduled" in result) {
-      const s = result.Scheduled;
-      return `Scheduled ${s.kind} job ${s.id} (${s.trigger}), next ${s.next}.`;
-    }
     return "";
   }
 

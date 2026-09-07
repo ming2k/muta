@@ -6,6 +6,7 @@
   import MessageItem from "./lib/components/MessageItem.svelte";
   import CommandBlock from "./lib/components/CommandBlock.svelte";
   import InterruptMarker from "./lib/components/InterruptMarker.svelte";
+  import RetryMarker from "./lib/components/RetryMarker.svelte";
   import ToolCard from "./lib/components/ToolCard.svelte";
   import Composer from "./lib/components/Composer.svelte";
   import PermissionBanner from "./lib/components/PermissionBanner.svelte";
@@ -107,6 +108,16 @@
             <MessageItem message={item.message} />
           {:else if item.kind === "interrupt"}
             <InterruptMarker record={item.record} />
+          {:else if item.kind === "retry_resolution"}
+            <RetryMarker record={item.record} />
+          {:else if item.kind === "retry_scheduled"}
+            <div class="retry-live" role="status">
+              <span class="glyph">↻</span>
+              <span class="label">retrying</span>
+              <span class="detail"
+                >{item.attempt}/{item.max_attempts} · {item.message}</span
+              >
+            </div>
           {:else}
             <CommandBlock record={item.record} />
           {/if}
@@ -157,6 +168,26 @@
 <ToastStack />
 
 <style>
+  .retry-live {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 2px;
+    font-size: 13px;
+    color: var(--fg-muted, #9a9a9a);
+  }
+
+  .retry-live .glyph,
+  .retry-live .label {
+    color: var(--warn, #d9a03f);
+    font-weight: 600;
+  }
+
+  .retry-live .detail {
+    color: var(--fg, #d8d8d8);
+    overflow-wrap: anywhere;
+  }
+
   .layout {
     display: flex;
     height: 100vh;

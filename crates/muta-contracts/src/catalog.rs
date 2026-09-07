@@ -77,7 +77,7 @@ pub enum Transport {
         base_url: String,
         client_profile: crate::ClientProfile,
         effort: Option<crate::Effort>,
-        thinking: Option<crate::ThinkingMode>,
+        thinking: Option<crate::ReasoningMode>,
         dialect: AnthropicMessagesDialect,
     },
     /// Google native API (`generativelanguage.googleapis.com` or Antigravity).

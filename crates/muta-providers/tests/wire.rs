@@ -526,7 +526,7 @@ async fn anthropic_stream_surfaces_in_band_error_event() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 use muta_contracts::catalog::{Channel, Transport};
-use muta_contracts::{Effort, ThinkingMode};
+use muta_contracts::{Effort, ReasoningMode};
 use muta_providers::build_provider_for_channel;
 
 /// Build a channel → factory provider, send one turn to a mockito server that
@@ -588,7 +588,7 @@ async fn factory_publishes_explicit_high_effort() {
 /// (Previously setting effort forced `thinking:{adaptive}` on.) The pure-mode
 /// contract (no `thinking` field) is asserted in the unit test
 /// `effort_without_thinking_stays_decoupled`; this test proves the factory
-/// honors an explicit `ThinkingMode::Off` together with an effort override end
+/// honors an explicit `ReasoningMode::Off` together with an effort override end
 /// to end — i.e. the two overrides reach the provider independently.
 #[tokio::test]
 async fn factory_keeps_effort_decoupled_from_thinking_off() {
@@ -599,7 +599,7 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
             base_url: String::new(),
             client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::Medium),
-            thinking: Some(ThinkingMode::Off),
+            thinking: Some(ReasoningMode::Off),
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
@@ -625,7 +625,7 @@ async fn factory_publishes_thinking_without_output_config() {
             base_url: String::new(),
             client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: None,
-            thinking: Some(ThinkingMode::Adaptive),
+            thinking: Some(ReasoningMode::Adaptive),
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
@@ -643,7 +643,7 @@ async fn factory_publishes_thinking_without_output_config() {
 }
 
 /// Sonnet 5 thinking is ON by default when the `thinking` field is omitted, so
-/// an explicit opt-OUT (`ThinkingMode::Off`) MUST publish
+/// an explicit opt-OUT (`ReasoningMode::Off`) MUST publish
 /// `thinking:{type:"disabled"}`. Omitting the field would leave the model
 /// reasoning and billing against the user's ADR-0046 opt-out intent — the
 /// regression this variant exists to catch.
@@ -656,7 +656,7 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
             base_url: String::new(),
             client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::High),
-            thinking: Some(ThinkingMode::Off),
+            thinking: Some(ReasoningMode::Off),
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
@@ -687,7 +687,7 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
             base_url: String::new(),
             client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: Some(Effort::Xhigh),
-            thinking: Some(ThinkingMode::Adaptive),
+            thinking: Some(ReasoningMode::Adaptive),
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),
@@ -708,7 +708,7 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
 }
 
 /// Fable 5 thinking is ALWAYS ON and cannot be disabled; even an explicit
-/// `ThinkingMode::Off` override is a no-op on the wire, which still publishes
+/// `ReasoningMode::Off` override is a no-op on the wire, which still publishes
 /// `thinking:{type:"adaptive"}`.
 #[tokio::test]
 async fn fable5_always_on_thinking_ignores_off_override() {
@@ -719,7 +719,7 @@ async fn fable5_always_on_thinking_ignores_off_override() {
             base_url: String::new(),
             client_profile: muta_contracts::ClientProfile::from("ua"),
             effort: None,
-            thinking: Some(ThinkingMode::Off),
+            thinking: Some(ReasoningMode::Off),
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("k"),

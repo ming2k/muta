@@ -393,11 +393,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let shared_additional_roots = execution_env.shared_additional_roots();
     let shared_confinement = execution_env.shared_confinement();
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
+    let session_job_service = crate::background_jobs::SessionJobService::new(
+        background_jobs.clone(),
+        execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>,
+    );
+    // ADR-0190 D5: bind the owning session so every task this service
+    // spawns is stamped with it (snapshots + ledger rows).
+    session_job_service.bind_owner(session.id().await);
     let job_service: Arc<dyn muta_contracts::BackgroundJobService> =
-        Arc::new(crate::background_jobs::SessionJobService::new(
-            background_jobs.clone(),
-            execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>,
-        ));
+        Arc::new(session_job_service);
 
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
@@ -858,12 +862,36 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                     crate::background_jobs::BackgroundJobEvent::Progress { job_id, line } => {
                         RoundEvent::BackgroundJobProgress { job_id, line }
                     }
+                    crate::background_jobs::BackgroundJobEvent::Ready { job_id } => {
+                        RoundEvent::BackgroundJobReady { job_id }
+                    }
                     crate::background_jobs::BackgroundJobEvent::Completed(outcome) => {
                         RoundEvent::BackgroundJobCompleted(outcome)
                     }
                 };
                 let _ = resp_tx_jobs.send(round_response(&session_id, round_evt));
             }
+        });
+    }
+
+    // ADR-0190 mailbox: fabric completion events wake the session. The
+    // driver's round machinery decides queue-vs-start via `RoundLifecycle`;
+    // this task is the select-arm body running outside the request loop so
+    // wake requests contend with user input on equal terms.
+    {
+        let mailbox_rx = background_jobs.subscribe();
+        let mailbox_env = crate::task_mailbox::MailboxEnv {
+            side: side.clone(),
+            agent: agent.clone(),
+            session: session.clone(),
+            lifecycle: lifecycle.clone(),
+            tx: resp_tx.clone(),
+            req_tx: req_tx.clone(),
+            config: config.clone(),
+        };
+        let mailbox_id = session.id().await;
+        tokio::spawn(async move {
+            crate::task_mailbox::run_mailbox(mailbox_rx, mailbox_env, mailbox_id).await;
         });
     }
 

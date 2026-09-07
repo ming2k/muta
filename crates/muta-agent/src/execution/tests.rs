@@ -150,6 +150,7 @@ async fn secret_scrub_middleware_redacts_credentials() {
         exit: Some(0),
         truncated: false,
         termination: muta_contracts::ShellTermination::Exited,
+        detached_job_id: None,
     };
 
     middleware

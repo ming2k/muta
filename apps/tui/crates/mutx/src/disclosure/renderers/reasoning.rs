@@ -12,7 +12,7 @@ use super::base::{
 use super::sticky::StickyStep;
 use crate::message_body::draw_message_body;
 use crate::model::document::{Block, Inline, TranscriptMessage};
-use crate::model::layout::{BlockRegion, THINKING_BLOCK_IDX};
+use crate::model::layout::{BlockRegion, REASONING_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
 use crate::render::{
     REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
@@ -37,10 +37,10 @@ pub fn draw_reasoning_trace(
     let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
-    let Some(summary) = msg.thinking_summary() else {
+    let Some(summary) = msg.reasoning_summary() else {
         return;
     };
-    let expanded = msg.thinking_expanded() == Some(true);
+    let expanded = msg.reasoning_expanded() == Some(true);
     let full_width = ctx.area.width as usize;
 
     if full_width < (TRANSCRIPT_BODY_LEADING_INDENT as usize + 1) {
@@ -79,7 +79,7 @@ pub fn draw_reasoning_trace(
             &summary,
             hovered,
             focused,
-            THINKING_BLOCK_IDX,
+            REASONING_BLOCK_IDX,
         )
     };
 

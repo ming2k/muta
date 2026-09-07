@@ -35,7 +35,7 @@ pub mod thinking;
 // provider crate keep a stable path. They live in `muta-contracts` because they
 // are model capabilities, not transport details.
 pub use muta_contracts::effort::Effort;
-pub use muta_contracts::{ThinkingMode, ThinkingSupport};
+pub use muta_contracts::{ReasoningMode, ReasoningSupport};
 pub use thinking::ThinkingConfig;
 
 /// Anthropic-compatible `/messages` provider.
@@ -263,7 +263,7 @@ impl Provider for AnthropicMessagesProvider {
     fn effort(&self) -> Option<Effort> {
         // Effort is only live while thinking is actually on: an opted-out
         // channel must not stamp a depth onto its turns (ADR-0046).
-        if self.thinking.mode == ThinkingMode::Adaptive {
+        if self.thinking.mode == ReasoningMode::Adaptive {
             self.thinking.effort
         } else {
             None

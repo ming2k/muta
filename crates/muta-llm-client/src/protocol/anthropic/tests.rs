@@ -8,7 +8,7 @@ use super::request::{self, BodyInput};
 use super::response;
 use super::*;
 use muta_contracts::{
-    Effort, Message, PromptCacheMode, ResolvedCachePlan, Role, ThinkingMode, Tool,
+    Effort, Message, PromptCacheMode, ResolvedCachePlan, Role, ReasoningMode, Tool,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -370,7 +370,7 @@ fn claude_request_body_omits_thinking_by_default() {
 fn claude_request_body_injects_adaptive_thinking_when_opted_in() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "claude-opus-4-8".to_string(), "https://x")
-            .with_thinking(ThinkingConfig::default().with_mode(ThinkingMode::Adaptive));
+            .with_thinking(ThinkingConfig::default().with_mode(ReasoningMode::Adaptive));
     let body = request::body(
         vec![Message::new(Role::User, "hi")],
         body_input(&provider, false),
@@ -392,7 +392,7 @@ fn haiku_uses_manual_thinking_not_adaptive_when_opted_in() {
     )
     .with_thinking(
         ThinkingConfig::default()
-            .with_mode(ThinkingMode::Adaptive)
+            .with_mode(ReasoningMode::Adaptive)
             .with_effort(Effort::Max),
     );
     let body = request::body(
@@ -439,7 +439,7 @@ fn sonnet_46_clamps_xhigh_to_high_but_opus_48_keeps_it() {
     )
     .with_thinking(
         ThinkingConfig::default()
-            .with_mode(ThinkingMode::Adaptive)
+            .with_mode(ReasoningMode::Adaptive)
             .with_effort(Effort::Xhigh),
     );
     let body = request::body(
@@ -452,7 +452,7 @@ fn sonnet_46_clamps_xhigh_to_high_but_opus_48_keeps_it() {
         AnthropicMessagesProvider::new("k".to_string(), "claude-opus-4-8".to_string(), "https://x")
             .with_thinking(
                 ThinkingConfig::default()
-                    .with_mode(ThinkingMode::Adaptive)
+                    .with_mode(ReasoningMode::Adaptive)
                     .with_effort(Effort::Xhigh),
             );
     let body = request::body(
@@ -499,7 +499,7 @@ fn non_default_effort_is_stamped_into_output_config() {
         AnthropicMessagesProvider::new("k".to_string(), "claude-opus-4-8".to_string(), "https://x")
             .with_thinking(
                 ThinkingConfig::default()
-                    .with_mode(ThinkingMode::Adaptive)
+                    .with_mode(ReasoningMode::Adaptive)
                     .with_effort(Effort::Max),
             );
     let body = request::body(

@@ -797,6 +797,8 @@ describe("DaemonStore wire protocol", () => {
         store.feed.map((item) => {
           if (item.kind === "message") return item.message.content;
           if (item.kind === "command") return `cmd:${item.record.name}`;
+          if (item.kind === "retry_scheduled") return `retry:${item.attempt}`;
+          if (item.kind === "retry_resolution") return `recovered:${item.record.attempts}`;
           return `interrupt:${item.record.reason}`;
         }),
       ).toEqual(["first", "cmd:help", "third"]);

@@ -6,7 +6,7 @@ use super::derive::derive_entries;
 use super::{Stores, effective_default_connection_id};
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
-    Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ThinkingMode,
+    Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ReasoningMode,
 };
 use muta_persistence::config::Config;
 use muta_persistence::connection_usage::ConnectionUsage;
@@ -258,7 +258,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             // state is off unless it has an explicit on override. The info
             // surfaces both knobs so the picker can show a model's effort only
             // when it is actually opted in to reasoning (thinking on).
-            let thinking_on = matches!(thinking, Some(ThinkingMode::Adaptive));
+            let thinking_on = matches!(thinking, Some(ReasoningMode::Adaptive));
             ProviderModelInfo {
                 model: channel.model.clone(),
                 protocol: muta_contracts::WireProtocol::AnthropicMessages

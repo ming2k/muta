@@ -923,7 +923,7 @@ mod tests {
         // re-sending either would fail the retry identically.
         let capabilities = {
             let mut caps = p_caps("gemini-3.7-flash");
-            caps.thinking = muta_contracts::thinking::ThinkingSupport::ReasoningContent;
+            caps.thinking = muta_contracts::reasoning::ReasoningSupport::ReasoningContent;
             caps.effort_levels = muta_contracts::effort::EFFORT_GEMINI_LEVEL
                 .iter()
                 .copied()
@@ -957,7 +957,7 @@ mod tests {
         // body; the downgrade applies there identically.
         let capabilities = {
             let mut caps = p_caps("gemini-2.5-pro");
-            caps.thinking = muta_contracts::thinking::ThinkingSupport::ReasoningContent;
+            caps.thinking = muta_contracts::reasoning::ReasoningSupport::ReasoningContent;
             caps.effort_levels = muta_contracts::effort::EFFORT_GEMINI_BUDGET
                 .iter()
                 .copied()

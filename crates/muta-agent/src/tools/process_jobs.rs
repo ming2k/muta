@@ -291,7 +291,7 @@ muta_contracts::register_tool!(ProcessWaitFactory => |ctx| ProcessWaitTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::{BackgroundJobInfo, JobSpec, JobState};
+    use muta_contracts::{BackgroundJobInfo, JobKind, JobSpec, JobState};
     use std::sync::Mutex;
 
     struct MockJobService {
@@ -326,6 +326,9 @@ mod tests {
                     label,
                     cwd,
                     detached,
+                    task_kind: JobKind::default(),
+                    readiness: None,
+                    restart: None,
                 },
                 state: JobState::Running {
                     started_at_ms: 1000,

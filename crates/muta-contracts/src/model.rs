@@ -12,7 +12,7 @@
 //! provider metadata supplies a more specific endpoint. A remote catalogue can
 //! legitimately route the same model id through a different surface.
 
-use crate::thinking::ThinkingSupport;
+use crate::reasoning::ReasoningSupport;
 
 /// The exact inference wire protocol used by a route. Provider dialects alter
 /// authentication and envelopes without changing this protocol identity.
@@ -80,8 +80,8 @@ pub struct Model {
     /// What extended thinking this model supports and how it is encoded on the
     /// wire. The single source of truth for thinking capability; the coarse
     /// "does it reason" bool used for display derives from it via
-    /// [`Model::reasoning`]. See [`ThinkingSupport`].
-    pub thinking: ThinkingSupport,
+    /// [`Model::reasoning`]. See [`ReasoningSupport`].
+    pub thinking: ReasoningSupport,
     /// Whether the model supports native tool/function calling.
     pub tool_call: bool,
     /// Whether the model supports vision (image inputs via `image_url`/
@@ -142,7 +142,7 @@ pub struct RemoteModelMetadata {
     pub max_output_tokens: Option<u32>,
     /// Exact reasoning representation supported by the advertised endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingSupport>,
+    pub thinking: Option<ReasoningSupport>,
     /// Whether native tool/function calls are accepted by this endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call: Option<bool>,
@@ -169,7 +169,7 @@ pub struct ModelCapabilities {
     pub family: String,
     pub context_window: usize,
     pub max_output_tokens: Option<u32>,
-    pub thinking: ThinkingSupport,
+    pub thinking: ReasoningSupport,
     pub tool_call: bool,
     pub vision: bool,
     /// The effort ladder this channel honors, as [`crate::EffortLevel`] so a
@@ -202,7 +202,7 @@ pub struct RouteCapabilities {
     /// Whether the route supports tool/function calling.
     pub tool_call: bool,
     /// Extended thinking / reasoning support mode.
-    pub thinking: ThinkingSupport,
+    pub thinking: ReasoningSupport,
 }
 
 impl ModelCapabilities {
@@ -247,7 +247,7 @@ pub struct CapabilityOverrides {
     pub max_output_tokens: Option<u32>,
     /// Force the thinking representation. `None` -> inherit.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingSupport>,
+    pub thinking: Option<ReasoningSupport>,
     /// Force native tool calling on/off. `None` -> inherit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call: Option<bool>,
@@ -354,8 +354,8 @@ impl ModelCapabilities {
 
     /// Whether the model's full reasoning chain is disclosed to the user.
     ///
-    /// Returns `false` for [`ThinkingSupport::None`] (does not reason) and
-    /// [`ThinkingSupport::ReasoningSummary`] (hidden internal chain, returns only
+    /// Returns `false` for [`ReasoningSupport::None`] (does not reason) and
+    /// [`ReasoningSupport::ReasoningSummary`] (hidden internal chain, returns only
     /// summary/placeholder deltas).
     pub const fn chain_disclosed(&self) -> bool {
         self.thinking.chain_disclosed()
@@ -383,7 +383,7 @@ mod capability_tests {
         // The provider omitted reasoning, so the local baseline remains
         // (no baseline is registered for this id in core's own tests, so the
         // fallback's `None` applies).
-        assert_eq!(effective.thinking, ThinkingSupport::None);
+        assert_eq!(effective.thinking, ReasoningSupport::None);
     }
 
     #[test]
@@ -445,7 +445,7 @@ pub fn fallback_model(_id: &str) -> Model {
         id: "",
         family: "",
         context_window: 0,
-        thinking: ThinkingSupport::None,
+        thinking: ReasoningSupport::None,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -576,9 +576,9 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
                 family: Box::leak(fitted.family.into_boxed_str()),
                 context_window: fitted.context_window,
                 thinking: if fitted.reasoning {
-                    ThinkingSupport::ReasoningContent
+                    ReasoningSupport::ReasoningContent
                 } else {
-                    ThinkingSupport::None
+                    ReasoningSupport::None
                 },
                 // The harness depends on tool calling; an advertised coding
                 // model is assumed capable (same assumption as the fallback).
@@ -661,13 +661,13 @@ mod tests {
 
     #[test]
     fn user_thinking_override_controls_chain_disclosure() {
-        // baseline has ThinkingSupport::AnthropicAdaptive -> chain_disclosed = true
+        // baseline has ReasoningSupport::AnthropicAdaptive -> chain_disclosed = true
         let caps = ModelCapabilities::for_channel("fixture-alpha", None);
         assert!(caps.chain_disclosed());
 
         // Override to ReasoningSummary -> chain_disclosed becomes false
         let user_summary = CapabilityOverrides {
-            thinking: Some(ThinkingSupport::ReasoningSummary),
+            thinking: Some(ReasoningSupport::ReasoningSummary),
             ..Default::default()
         };
         let caps_summary = caps.clone().apply_overrides(&user_summary);
@@ -676,7 +676,7 @@ mod tests {
 
         // Override to ReasoningContent -> chain_disclosed becomes true
         let user_disclosed = CapabilityOverrides {
-            thinking: Some(ThinkingSupport::ReasoningContent),
+            thinking: Some(ReasoningSupport::ReasoningContent),
             ..Default::default()
         };
         let caps_disclosed = caps.clone().apply_overrides(&user_disclosed);
@@ -694,7 +694,7 @@ mod tests {
             id: "fixture-alpha",
             family: "fixture",
             context_window: 111_000,
-            thinking: ThinkingSupport::ReasoningContent,
+            thinking: ReasoningSupport::ReasoningContent,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::OpenAiChatCompletions,
@@ -705,7 +705,7 @@ mod tests {
             id: "fixture-beta",
             family: "fixture",
             context_window: 222_000,
-            thinking: ThinkingSupport::None,
+            thinking: ReasoningSupport::None,
             tool_call: true,
             vision: false,
             protocol: WireProtocol::AnthropicMessages,
@@ -717,7 +717,7 @@ mod tests {
         id: "fixture-gamma",
         family: "fixture",
         context_window: 333_000,
-        thinking: ThinkingSupport::None,
+        thinking: ReasoningSupport::None,
         tool_call: false,
         vision: false,
         protocol: WireProtocol::GoogleGenerateContent,

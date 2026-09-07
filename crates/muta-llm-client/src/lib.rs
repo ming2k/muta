@@ -41,7 +41,7 @@ pub use transport::{decode_response_json, ensure_success, retry_after_ms, transp
 // Re-export the concrete provider types at the crate root for ergonomic access
 // and stable intra-doc links.
 pub use prompt_cache::PromptCacheConfig;
-pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ThinkingConfig, ThinkingMode};
+pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ThinkingConfig, ReasoningMode};
 pub use protocol::google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
 pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvider};
 
@@ -59,7 +59,7 @@ pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvide
 #[cfg(test)]
 mod test_baselines {
     use muta_contracts::model::BaselineModels;
-    use muta_contracts::thinking::ThinkingSupport;
+    use muta_contracts::reasoning::ReasoningSupport;
     use muta_contracts::{Model, WireProtocol};
 
     const CLAUDE_BASELINES: &[Model] = &[
@@ -67,7 +67,7 @@ mod test_baselines {
             id: "claude-opus-4-8",
             family: "claude",
             context_window: 1_000_000,
-            thinking: ThinkingSupport::AnthropicAdaptive,
+            thinking: ReasoningSupport::AnthropicAdaptive,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::AnthropicMessages,
@@ -78,7 +78,7 @@ mod test_baselines {
             id: "claude-sonnet-4-6",
             family: "claude",
             context_window: 1_000_000,
-            thinking: ThinkingSupport::AnthropicAdaptive,
+            thinking: ReasoningSupport::AnthropicAdaptive,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::AnthropicMessages,
@@ -89,7 +89,7 @@ mod test_baselines {
             id: "claude-haiku-4-5-20251001",
             family: "claude",
             context_window: 200_000,
-            thinking: ThinkingSupport::AnthropicManual,
+            thinking: ReasoningSupport::AnthropicManual,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::AnthropicMessages,
@@ -103,7 +103,7 @@ mod test_baselines {
             id: "gpt-5.5",
             family: "gpt",
             context_window: 1_000_000,
-            thinking: ThinkingSupport::ReasoningSummary,
+            thinking: ReasoningSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::OpenAiChatCompletions,
@@ -114,7 +114,7 @@ mod test_baselines {
             id: "gpt-5.6-sol",
             family: "gpt",
             context_window: 1_000_000,
-            thinking: ThinkingSupport::ReasoningSummary,
+            thinking: ReasoningSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
             protocol: WireProtocol::OpenAiChatCompletions,

@@ -100,8 +100,8 @@ impl App {
             } else if let Some(expanded) = message.command_result_expanded() {
                 message.pin_command_result_expanded(!expanded);
                 Some(!expanded)
-            } else if let Some(expanded) = message.thinking_expanded() {
-                message.pin_thinking_expanded(!expanded);
+            } else if let Some(expanded) = message.reasoning_expanded() {
+                message.pin_reasoning_expanded(!expanded);
                 Some(!expanded)
             } else if let Some(expanded) = message.notice_expanded() {
                 message.pin_notice_expanded(!expanded);
@@ -184,8 +184,8 @@ impl App {
         if let Some(message_idx) = self.sticky_step
             && let Some(message) = self.focused_messages().get(message_idx)
         {
-            let target = if message.is_thinking() {
-                InteractiveTarget::thinking(message_idx)
+            let target = if message.is_reasoning() {
+                InteractiveTarget::reasoning(message_idx)
             } else if message.is_tool_step() || message.is_runner_task() {
                 InteractiveTarget::tool_step(message_idx)
             } else {

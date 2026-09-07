@@ -3,7 +3,7 @@
 //! plus the per-model `max_tokens` table every Anthropic-format build
 //! consults.
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
@@ -68,7 +68,7 @@ pub const MODELS: &[Model] = &[
         id: "claude-opus-4-8",
         family: "claude",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::AnthropicAdaptive,
+        thinking: ReasoningSupport::AnthropicAdaptive,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::AnthropicMessages,
@@ -80,7 +80,7 @@ pub const MODELS: &[Model] = &[
         id: "claude-sonnet-4-6",
         family: "claude",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::AnthropicAdaptive,
+        thinking: ReasoningSupport::AnthropicAdaptive,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::AnthropicMessages,
@@ -97,7 +97,7 @@ pub const MODELS: &[Model] = &[
         // emit `thinking:{type:"adaptive"}` regardless of the user's on/off
         // choice (an opt-out is a no-op on this model). Manual `type:"enabled"`
         // also returns 400.
-        thinking: ThinkingSupport::AnthropicAdaptiveAlwaysOn,
+        thinking: ReasoningSupport::AnthropicAdaptiveAlwaysOn,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::AnthropicMessages,
@@ -114,7 +114,7 @@ pub const MODELS: &[Model] = &[
         // `AnthropicAdaptive` (omit disables) nor `AnthropicAdaptiveAlwaysOn`
         // (cannot disable) — so the transport emits an explicit `disabled` on
         // opt-out to honor ADR-0046. Manual `type:"enabled"` returns 400.
-        thinking: ThinkingSupport::AnthropicAdaptiveOnByDefault,
+        thinking: ReasoningSupport::AnthropicAdaptiveOnByDefault,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::AnthropicMessages,
@@ -130,7 +130,7 @@ pub const MODELS: &[Model] = &[
         // Haiku 4.5 supports only MANUAL extended thinking
         // (`thinking:{type:"enabled",budget_tokens}`); it has no adaptive mode
         // and rejects the `effort` parameter (400), hence empty `effort_levels`.
-        thinking: ThinkingSupport::AnthropicManual,
+        thinking: ReasoningSupport::AnthropicManual,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::AnthropicMessages,

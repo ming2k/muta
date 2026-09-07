@@ -1,7 +1,7 @@
 //! Baselines for case-sensitive model ids used by custom OpenAI-compatible
 //! routes. Custom connections are declarations, not provider presets.
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 pub const MODELS: &[Model] = &[
@@ -9,7 +9,7 @@ pub const MODELS: &[Model] = &[
         id: "GLM-5.2",
         family: "glm",
         context_window: 200_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -20,7 +20,7 @@ pub const MODELS: &[Model] = &[
         id: "Deepseek-v4-flash",
         family: "deepseek",
         context_window: 200_000,
-        thinking: ThinkingSupport::ReasoningContent,
+        thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,

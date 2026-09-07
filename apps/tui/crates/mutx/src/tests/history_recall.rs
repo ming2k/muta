@@ -58,7 +58,7 @@ fn restored_assistant_components_share_their_round_and_turn() {
 
     let restored = transcript_messages_from_core(vec![assistant], &config::TuiConfig::default());
     assert_eq!(restored.len(), 3);
-    assert!(restored[0].is_thinking());
+    assert!(restored[0].is_reasoning());
     assert!(restored[1].is_tool_step());
     assert_eq!(restored[2].role, Role::Assistant);
     assert!(restored.iter().all(|message| message.round == Some(1)));
@@ -240,13 +240,13 @@ fn restored_reasoning_is_not_shown_as_running() {
     let restored = transcript_messages_from_core(vec![message], &config::TuiConfig::default());
     assert_eq!(restored.len(), 1);
     let thinking = &restored[0];
-    assert!(thinking.is_thinking());
+    assert!(thinking.is_reasoning());
     assert_eq!(thinking.turn, Some(1));
     // A finished reasoning block must not be rendered with a live spinner.
     assert!(
-        thinking.thinking_summary().unwrap().contains("0ms"),
+        thinking.reasoning_summary().unwrap().contains("0ms"),
         "restored thinking should have a finished duration, got {:?}",
-        thinking.thinking_summary()
+        thinking.reasoning_summary()
     );
 }
 

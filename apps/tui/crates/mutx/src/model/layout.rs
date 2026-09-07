@@ -8,7 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub const TOOL_STEP_BLOCK_IDX: usize = usize::MAX;
-pub const THINKING_BLOCK_IDX: usize = usize::MAX - 1;
+pub const REASONING_BLOCK_IDX: usize = usize::MAX - 1;
 pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
 /// ADR-0091 command-result header rows: same disclosure interaction as tool
 /// steps, own block index so focus/click resolution routes to the command.
@@ -55,7 +55,7 @@ pub struct InteractiveTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InteractiveTargetKind {
     ToolStep,
-    Thinking,
+    Reasoning,
     ProviderRetry,
     CommandResult,
     Notice,
@@ -70,11 +70,11 @@ impl InteractiveTarget {
         }
     }
 
-    pub fn thinking(message_idx: usize) -> Self {
+    pub fn reasoning(message_idx: usize) -> Self {
         Self {
             message_idx,
-            block_idx: THINKING_BLOCK_IDX,
-            kind: InteractiveTargetKind::Thinking,
+            block_idx: REASONING_BLOCK_IDX,
+            kind: InteractiveTargetKind::Reasoning,
         }
     }
 
@@ -498,7 +498,7 @@ impl LayoutMap {
                 matches!(
                     region.block_idx,
                     TOOL_STEP_BLOCK_IDX
-                        | THINKING_BLOCK_IDX
+                        | REASONING_BLOCK_IDX
                         | PROVIDER_RETRY_BLOCK_IDX
                         | COMMAND_RESULT_BLOCK_IDX
                         | NOTICE_BLOCK_IDX
@@ -511,7 +511,7 @@ impl LayoutMap {
         for region in regions {
             let target = match region.block_idx {
                 TOOL_STEP_BLOCK_IDX => InteractiveTarget::tool_step(region.message_idx),
-                THINKING_BLOCK_IDX => InteractiveTarget::thinking(region.message_idx),
+                REASONING_BLOCK_IDX => InteractiveTarget::reasoning(region.message_idx),
                 PROVIDER_RETRY_BLOCK_IDX => InteractiveTarget::provider_retry(region.message_idx),
                 COMMAND_RESULT_BLOCK_IDX => InteractiveTarget::command_result(region.message_idx),
                 NOTICE_BLOCK_IDX => InteractiveTarget::notice(region.message_idx),
@@ -723,7 +723,7 @@ mod tests {
         });
         map.push(BlockRegion {
             message_idx: 3,
-            block_idx: THINKING_BLOCK_IDX,
+            block_idx: REASONING_BLOCK_IDX,
             start_byte: 0,
             end_byte: 0,
             text: String::new(),
@@ -736,7 +736,7 @@ mod tests {
             map.interactive_targets(),
             vec![
                 InteractiveTarget::tool_step(2),
-                InteractiveTarget::thinking(3)
+                InteractiveTarget::reasoning(3)
             ]
         );
     }

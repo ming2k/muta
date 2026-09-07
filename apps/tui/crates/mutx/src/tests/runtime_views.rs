@@ -338,3 +338,115 @@ fn websearch_reader_dropdown_builds_and_selects() {
     let empty_dropdown = crate::overlays::build_websearch_reader_dropdown("none", Some(&ws));
     assert_eq!(empty_dropdown.items.len(), 2); // disabled + add_new
 }
+
+/// Sheet-mount focus consistency (ADR-0173 §3 × ADR-0174): an agent-driven
+/// sheet is a context switch — the transcript-focus states (`focused_target`
+/// and `transcript_focused`) parked at every mount site must include browse
+/// focus, not just the step target. Without the browse-focus half, this
+/// sequence dims the composer forever after the sheet closes: user clicks the
+/// transcript (browse focus) → question sheet mounts (only `focused_target`
+/// cleared) → user answers → sheet unmounts → composer renders its inactive
+/// palette against the stale `transcript_focused`.
+#[tokio::test]
+async fn sheet_mount_parks_browse_focus_not_just_step_target() {
+    use muta_contracts::{UserQuestion, UserQuestionOption, UserQuestionRequest};
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    // Browse focus is live: the user clicked into the transcript a moment ago.
+    app.transcript_focused = true;
+
+    // The agent's question arrives; the per-frame sync mounts the sheet.
+    runtime
+        .pending_question
+        .lock()
+        .await
+        .push_back(UserQuestionRequest {
+            id: "q1".into(),
+            questions: vec![UserQuestion {
+                header: Some("Style".into()),
+                question: "Which error handling crate?".into(),
+                options: vec![
+                    UserQuestionOption {
+                        label: "anyhow".into(),
+                        description: None,
+                    },
+                    UserQuestionOption {
+                        label: "eyre".into(),
+                        description: None,
+                    },
+                ],
+                multi_select: false,
+            }],
+            origin: None,
+        });
+    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+
+    assert_eq!(
+        app.active_sheet(),
+        Some(crate::sheet::SheetKind::Question),
+        "question sheet mounted"
+    );
+    assert!(
+        !app.transcript_focused,
+        "browse focus must be parked at sheet mount, alongside the step target"
+    );
+    assert!(app.focused_target.is_none());
+
+    // The user answers; the Closed effect unmounts the sheet. The composer
+    // slot is handed back clean — no stale focus dims it.
+    app.question = None;
+    app.dismiss_sheet();
+
+    assert_eq!(
+        app.caret_owner(),
+        crate::CaretOwner::Composer,
+        "composer must own the caret again after the sheet closes"
+    );
+}
+
+/// The permission sheet's pass-through (ADR-0173 §2) stays intact: browse
+/// focus legitimately re-armed *behind* the sheet while it is up (a click
+/// into the transcript during the decision) is not stolen back by the
+/// per-frame sync — the park happens at mount only.
+#[tokio::test]
+async fn permission_sheet_does_not_steal_focus_rearmed_behind_it() {
+    use muta_contracts::PermissionRequest;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    runtime
+        .pending_permission
+        .lock()
+        .await
+        .push_back(PermissionRequest {
+            id: "p1".into(),
+            tool: "bash".into(),
+            label: "Run tests".into(),
+            description: String::new(),
+            arguments: "{}".into(),
+            scope: String::new(),
+            elevation: false,
+            one_off: false,
+            origin: None,
+            hazard: None,
+            submission: None,
+        });
+    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    assert_eq!(app.active_sheet(), Some(crate::sheet::SheetKind::Permission));
+    assert!(!app.transcript_focused, "parked at mount");
+
+    // The user clicks the transcript behind the pass-through sheet — the
+    // mouse path legitimately re-arms browse focus (mouse.rs).
+    app.transcript_focused = true;
+
+    // A later sync frame must not clear it again (no re-mount occurs —
+    // the sheet is already up).
+    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    assert!(
+        app.transcript_focused,
+        "browse focus re-armed behind the pass-through sheet must survive"
+    );
+}

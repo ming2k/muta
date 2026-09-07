@@ -420,6 +420,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     messages: transcript,
                                     commands: session.commands().await,
                                     round_interrupts: session.round_interrupts().await,
+                                    retry_resolutions: session.retry_resolutions().await,
                                 });
                                 // The live provider tracks the opened session's
                                 // own provider pin (or the global default).
@@ -780,9 +781,14 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     label.clone().unwrap_or_else(|| "process".to_string()),
                                     command.clone(),
                                 ),
-                                muta_contracts::JobSpec::Runner {
-                                    role, description, ..
-                                } => (format!("runner ({role})"), description.clone()),
+                                muta_contracts::JobSpec::Timer {
+                                    label, prompt, ..
+                                } => (
+                                    label
+                                        .clone()
+                                        .unwrap_or_else(|| "timer".to_string()),
+                                    prompt.clone(),
+                                ),
                             };
                             let status_str = match &j.state {
                                 muta_contracts::JobState::Queued => "Queued".to_string(),
@@ -792,6 +798,9 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     } else {
                                         "Running".to_string()
                                     }
+                                }
+                                muta_contracts::JobState::Ready { .. } => {
+                                    "Ready (service)".to_string()
                                 }
                                 muta_contracts::JobState::Succeeded { duration_ms, .. } => {
                                     format!("✓ Passed ({}s)", duration_ms / 1000)

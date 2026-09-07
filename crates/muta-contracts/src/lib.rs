@@ -85,8 +85,8 @@ pub use effort::{
     EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
     EffortLevel,
 };
-pub mod thinking;
-pub use thinking::{ThinkingMode, ThinkingSupport};
+pub mod reasoning;
+pub use reasoning::{ReasoningMode, ReasoningSupport};
 pub mod dynamic;
 pub mod events;
 pub mod hooks;
@@ -178,8 +178,9 @@ pub use events::{
     HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind,
     NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
-    ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RoundEvent, RoundInterrupt,
-    RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot, SessionDetail,
+    ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RetryResolution, RoundEvent,
+    RoundInterrupt, RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot,
+    SessionDetail,
     SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest,
     ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
     WebSearchConfigUpdate, WebSearchConfigView,
@@ -202,7 +203,8 @@ pub use hooks::{
 };
 pub use identity::AgentIdentity;
 pub use job::{
-    BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, JobId, JobSpec, JobState,
+    AdoptionInfo, BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, CrateChildBridge,
+    JobId, JobKind, JobSpec, JobState, Readiness, RestartPolicy,
 };
 pub use master::{
     MASTER_CODE_ANALYST, MASTER_DEVELOPER, MasterPreset, MasterPresetDelegation, MasterPresetId,

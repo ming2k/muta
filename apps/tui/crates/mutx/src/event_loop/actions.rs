@@ -1547,7 +1547,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             drop(messages);
                         }
                     }
-                    InteractiveTargetKind::Thinking => {
+                    InteractiveTargetKind::Reasoning => {
                         let mut messages = runtime.messages.write().await;
                         let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
                         drop(messages);

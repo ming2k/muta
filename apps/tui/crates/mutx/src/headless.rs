@@ -79,6 +79,7 @@ pub async fn run_headless(
             round_counter,
             history,
             round_interrupts: _,
+            retry_resolutions: _,
             provider,
             model,
             command_catalog: _,

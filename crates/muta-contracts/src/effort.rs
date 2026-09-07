@@ -29,7 +29,7 @@
 //! provider-specific depth shape — they see [`Effort`].
 //!
 //! [`Effort`] controls **depth only** and is orthogonal to the reasoning on/off
-//! switch ([`crate::thinking::ThinkingMode`]); see [`crate::thinking`].
+//! switch ([`crate::reasoning::ReasoningMode`]); see [`crate::reasoning`].
 //!
 //! # Layer B — baseline value-sets (the `EFFORT_*` consts below)
 //!

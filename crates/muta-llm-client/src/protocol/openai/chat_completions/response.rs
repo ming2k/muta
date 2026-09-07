@@ -23,6 +23,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let prompt = usage["prompt_tokens"].as_i64();
     let completion = usage["completion_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
+    let reasoning = usage["completion_tokens_details"]["reasoning_tokens"].as_i64();
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,
@@ -31,6 +32,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
         (Some(p), None, Some(t)) => Some(TokenUsage {
             prompt_tokens: p,
@@ -39,6 +41,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             cache_creation_input_tokens: cache.write_tokens,
             cache_read_input_tokens: cache.read_tokens,
             cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+            reasoning_tokens: reasoning.unwrap_or(0),
         }),
         _ => {
             // Fall back to total_tokens only.
@@ -49,6 +52,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
                 cache_creation_input_tokens: cache.write_tokens,
                 cache_read_input_tokens: cache.read_tokens,
                 cache_miss_input_tokens: cache.miss_tokens.unwrap_or(0),
+                reasoning_tokens: reasoning.unwrap_or(0),
             })
         }
     }

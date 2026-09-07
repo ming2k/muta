@@ -306,7 +306,7 @@ fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usi
 fn is_turn_component(message: &TranscriptMessage) -> bool {
     message.is_tool_step()
         || message.is_runner_task()
-        || message.is_thinking()
+        || message.is_reasoning()
         || message.role == muta_contracts::Role::Assistant
 }
 
@@ -454,7 +454,7 @@ impl<'a, 'f> Stream<'a, 'f> {
         // RenderCtx holds &mut frame/layout_map/counters, only ctx fields move.
         let hovered = self.hovered_step == Some(mi);
         let focused_tool = self.focused_target == Some(InteractiveTarget::tool_step(mi));
-        let focused_thinking = self.focused_target == Some(InteractiveTarget::thinking(mi));
+        let focused_reasoning = self.focused_target == Some(InteractiveTarget::reasoning(mi));
         let focused_command = self.focused_target == Some(InteractiveTarget::command_result(mi));
         let _focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
 
@@ -537,7 +537,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 hovered,
                 focused_tool,
             );
-        } else if msg.is_thinking() {
+        } else if msg.is_reasoning() {
             let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
@@ -557,7 +557,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.cell_selection,
                 &mut self.sticky_steps,
                 hovered,
-                focused_thinking,
+                focused_reasoning,
             );
         } else if msg.is_command_result() {
             let mut ctx = RenderCtx::from_cursor(
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn default_spacing_compacts_only_same_turn_tool_batches() {
-        let thinking = TranscriptMessage::thinking("reasoning").with_turn(4);
+        let thinking = TranscriptMessage::reasoning("reasoning").with_turn(4);
         let mut tool = TranscriptMessage::tool_step("call", "read_text", "{}").with_turn(4);
         tool.set_tool_step_expanded(true);
         let next_tool = TranscriptMessage::tool_step("next", "search_text", "{}").with_turn(4);

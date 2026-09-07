@@ -16,7 +16,7 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
     AnthropicMessagesDialect, ClientProfile, ConnectionAuth, Effort, GoogleGenerateContentDialect,
-    OpenAiChatDialect, OpenAiResponsesDialect, SecretString, ThinkingMode, WireProtocol,
+    OpenAiChatDialect, OpenAiResponsesDialect, SecretString, ReasoningMode, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::{Connection, Connections};
@@ -111,8 +111,8 @@ pub fn derive_channel(
         .and_then(|r| r.effort.as_deref())
         .and_then(Effort::parse);
     let thinking = route_settings.map(|r| match r.thinking {
-        Some(false) => ThinkingMode::Off,
-        _ => ThinkingMode::Adaptive,
+        Some(false) => ReasoningMode::Off,
+        _ => ReasoningMode::Adaptive,
     });
 
     let credentials: std::sync::Arc<dyn muta_contracts::CredentialSource> =
@@ -269,7 +269,7 @@ fn copilot_route(
     connection: &Connection,
     remote: Option<&muta_contracts::RemoteModelMetadata>,
     effort: Option<Effort>,
-    thinking: Option<ThinkingMode>,
+    thinking: Option<ReasoningMode>,
 ) -> Transport {
     let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
         ClientProfile::from_user_agent(ua)

@@ -9,7 +9,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Current wire protocol number (ADR-0134, ADR-0159).
-pub const PROTOCOL_VERSION: u32 = 4;
+///
+/// v5: `Wire::Welcome.retry_resolutions`, `RoundEvent::RetryResolved`,
+/// `AgentEvent::BackgroundJobReady` / `RoundEvent::BackgroundJobReady`
+/// (new variants an older peer cannot deserialize — not additive),
+/// `TokenUsage.reasoning_tokens`, `ToolOutput::Shell.detached_job_id`
+/// (additive sidecars riding the same bump).
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Minimum served wire protocol version.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
@@ -50,6 +56,8 @@ pub enum Wire {
         model: String,
         #[serde(default)]
         round_interrupts: Vec<crate::RoundInterrupt>,
+        #[serde(default)]
+        retry_resolutions: Vec<crate::RetryResolution>,
         #[serde(default)]
         command_catalog: crate::CommandCatalog,
     },

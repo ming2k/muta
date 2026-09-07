@@ -1,14 +1,19 @@
-//! Extended-thinking control — the *on/off* knob for model reasoning, the
+//! Model-reasoning control — the *on/off* knob for extended thinking, the
 //! companion to [`crate::effort::Effort`] (which controls *depth*).
 //!
-//! This is the canonical home for [`ThinkingMode`] because whether and *how* a
+//! Named *reasoning* (ADR-0191): the vendor-neutral accounting term of record
+//! (`reasoning_tokens`) and the majority of the internal vocabulary
+//! (`[model_reasoning]`, the stream events, the render module). "Thinking" is
+//! Anthropic's display word and stays only in user-facing copy.
+//!
+//! This is the canonical home for [`ReasoningMode`] because whether and *how* a
 //! model reasons is a **model capability**, not a transport detail — exactly
 //! the same reason [`crate::effort::Effort`] lives here. The two are
 //! **orthogonal**:
 //!
 //! | concept | meaning | wire surface (Anthropic) |
 //! |---------|---------|--------------------------|
-//! | `ThinkingMode` | reasoning **on/off** (the switch) | `thinking: {type:"adaptive"}` or omit |
+//! | `ReasoningMode` | reasoning **on/off** (the switch) | `thinking: {type:"adaptive"}` or omit |
 //! | `Effort` | reasoning **depth** (the throttle) | `output_config: {effort: "high"}` |
 //!
 //! On the Anthropic Messages API these are genuinely independent: a request
@@ -32,7 +37,7 @@
 ///
 /// See the [module docs](self) for the orthogonality with [`crate::effort::Effort`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThinkingMode {
+pub enum ReasoningMode {
     /// Omit the `thinking` field. On Opus 4.7/4.8 this disables thinking; on
     /// Fable/Mythos it is a no-op (thinking is always on there).
     #[default]
@@ -43,16 +48,16 @@ pub enum ThinkingMode {
     Adaptive,
 }
 
-impl ThinkingMode {
+impl ReasoningMode {
     /// `true` when this mode requests thinking (i.e. emits a `thinking` field
     /// on the wire).
     pub const fn is_on(self) -> bool {
-        matches!(self, ThinkingMode::Adaptive)
+        matches!(self, ReasoningMode::Adaptive)
     }
 }
 
 /// What kind of extended thinking a model supports, and **how it is encoded on
-/// the wire**. [`ThinkingMode`] is the user's on/off *intent*; `ThinkingSupport`
+/// the wire**. [`ReasoningMode`] is the user's on/off *intent*; `ReasoningSupport`
 /// is the model's *capability*, and the two combine at request-build time to
 /// decide which (if any) `thinking` object the Anthropic transport emits.
 ///
@@ -73,7 +78,7 @@ impl ThinkingMode {
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum ThinkingSupport {
+pub enum ReasoningSupport {
     /// The model cannot think. (GPT-4o, Gemini, the conservative fallback.)
     #[default]
     None,
@@ -116,11 +121,11 @@ pub enum ThinkingSupport {
     AnthropicManual,
 }
 
-impl ThinkingSupport {
+impl ReasoningSupport {
     /// `true` when the model reasons at all — the coarse capability used for
     /// display. Everything except [`Self::None`] reasons.
     pub const fn reasons(self) -> bool {
-        !matches!(self, ThinkingSupport::None)
+        !matches!(self, ReasoningSupport::None)
     }
 
     /// `true` when the model fully discloses its reasoning chain — i.e. its
@@ -134,7 +139,7 @@ impl ThinkingSupport {
     pub const fn chain_disclosed(self) -> bool {
         !matches!(
             self,
-            ThinkingSupport::None | ThinkingSupport::ReasoningSummary
+            ReasoningSupport::None | ReasoningSupport::ReasoningSummary
         )
     }
 }

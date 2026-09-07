@@ -6,7 +6,7 @@
 //! the client's [`DiscoveredModel`], and exposes the async entry point the
 //! discovery reconciler calls for `LiveCatalog::ModelsDev` presets.
 
-use muta_contracts::ThinkingSupport;
+use muta_contracts::ReasoningSupport;
 use muta_models_dev::DevModel;
 
 use crate::DiscoveredModel;
@@ -29,7 +29,7 @@ fn from_dev_model(m: DevModel) -> DiscoveredModel {
         // models.dev does not distinguish reasoning-content from summary; the
         // opencode-go relay surfaces it via the OpenAI-compatible stream, so
         // the conservative mapping is `ReasoningContent`.
-        Some(ThinkingSupport::ReasoningContent)
+        Some(ReasoningSupport::ReasoningContent)
     } else {
         None
     };
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(dm.family.as_deref(), Some("glm"));
         assert_eq!(dm.context_window, Some(1_000_000));
         assert_eq!(dm.max_output_tokens, Some(131_072));
-        assert_eq!(dm.thinking, Some(ThinkingSupport::ReasoningContent));
+        assert_eq!(dm.thinking, Some(ReasoningSupport::ReasoningContent));
         assert_eq!(dm.reasoning, Some(true));
         assert_eq!(dm.tool_call, Some(true));
         assert_eq!(dm.vision, Some(false));

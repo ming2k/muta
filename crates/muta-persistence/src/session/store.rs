@@ -149,6 +149,10 @@ impl SessionStore {
         };
         state.path = path;
         state.data = data;
+        // Same staleness hazard as `open`: a fresh session must not inherit
+        // the previous session's projected window, or `append_turn` would
+        // silently drop the first durable delta (length-based delta check).
+        state.invalidate_projection_cache();
         state.defer_persist = true;
         Ok(id)
     }
@@ -194,6 +198,13 @@ impl SessionStore {
         .map_err(|e| format!("session open task failed: {e}"))?;
         state.path = path;
         state.data = data;
+        // ADR-0189: the projection cache belongs to the session being left.
+        // A stale cache made `model_window` return the *previous* session's
+        // window after a switch, and the resume path (`restore_session_runtime`)
+        // then `replace_messages`-ed it over the newly opened session — wiping
+        // the resumed transcript (the `/sessions <id>` restore rendered an
+        // empty view).
+        state.invalidate_projection_cache();
         state.defer_persist = false;
         Ok(())
     }

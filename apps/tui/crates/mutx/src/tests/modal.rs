@@ -8,16 +8,16 @@ fn finalize_streaming_reasoning_freezes_orphaned_traces() {
     // with `duration_ms: None`, which the renderer treats as "running"
     // (breathing spinner). The sweep must stamp every such trace so the
     // spinner stops, while leaving already-finished traces untouched.
-    let streaming = TranscriptMessage::thinking("partial reasoning");
+    let streaming = TranscriptMessage::reasoning("partial reasoning");
     assert!(
-        streaming.is_thinking_streaming(),
+        streaming.is_reasoning_streaming(),
         "a fresh thinking trace should be in the streaming state"
     );
 
-    let mut finished = TranscriptMessage::thinking("done reasoning");
-    finished.set_thinking_duration(1234);
+    let mut finished = TranscriptMessage::reasoning("done reasoning");
+    finished.set_reasoning_duration(1234);
     assert!(
-        !finished.is_thinking_streaming(),
+        !finished.is_reasoning_streaming(),
         "a trace with a stamped duration is not streaming"
     );
 
@@ -28,21 +28,21 @@ fn finalize_streaming_reasoning_freezes_orphaned_traces() {
 
     // The orphaned streaming trace is frozen with the supplied duration.
     assert!(
-        !messages[0].is_thinking_streaming(),
+        !messages[0].is_reasoning_streaming(),
         "streaming trace must be finalized by the sweep"
     );
     assert!(
-        messages[0].thinking_summary().unwrap().contains("500ms"),
+        messages[0].reasoning_summary().unwrap().contains("500ms"),
         "expected the supplied duration to be stamped, got {:?}",
-        messages[0].thinking_summary()
+        messages[0].reasoning_summary()
     );
 
     // The already-finished trace keeps its original duration (no overwrite
     // of real timing with the sweep's value).
     assert!(
-        messages[1].thinking_summary().unwrap().contains("1.2s"),
+        messages[1].reasoning_summary().unwrap().contains("1.2s"),
         "finished trace must keep its original duration, got {:?}",
-        messages[1].thinking_summary()
+        messages[1].reasoning_summary()
     );
 
     // A missing duration falls back to 0 so the trace still leaves the
@@ -50,13 +50,13 @@ fn finalize_streaming_reasoning_freezes_orphaned_traces() {
     let mut messages = vec![streaming];
     finalize_streaming_reasoning(&mut messages, None);
     assert!(
-        !messages[0].is_thinking_streaming(),
+        !messages[0].is_reasoning_streaming(),
         "a None duration must still finalize the trace"
     );
     assert!(
-        messages[0].thinking_summary().unwrap().contains("0ms"),
+        messages[0].reasoning_summary().unwrap().contains("0ms"),
         "expected 0ms fallback, got {:?}",
-        messages[0].thinking_summary()
+        messages[0].reasoning_summary()
     );
 }
 
@@ -1185,7 +1185,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     app.session_chrome.insert(
         "side-9".to_string(),
         crate::app::SessionChrome {
-            phase: Some(crate::phase::Phase::Thinking),
+            phase: Some(crate::phase::Phase::Reasoning),
             responding: true,
             round_count: 1,
             current_turn: 1,
@@ -1198,7 +1198,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     app.enter_side_view("side-9".to_string());
     assert!(matches!(
         app.viewed_chrome().phase,
-        Some(crate::phase::Phase::Thinking)
+        Some(crate::phase::Phase::Reasoning)
     ));
     assert_eq!(app.viewed_chrome().round_count, 1);
 

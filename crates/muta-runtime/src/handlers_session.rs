@@ -356,6 +356,7 @@ pub async fn emit_side_view_opened(
     let messages = s.store.full_transcript().await;
     let commands = s.store.commands().await;
     let round_interrupts = s.store.round_interrupts().await;
+    let retry_resolutions = s.store.retry_resolutions().await;
     let primary_id = primary_session.id().await;
     let _ = resp_tx.send(AgentResponse::SideViewOpened {
         side_id: s.id.clone(),
@@ -363,6 +364,7 @@ pub async fn emit_side_view_opened(
         messages,
         commands,
         round_interrupts,
+        retry_resolutions,
     });
 }
 

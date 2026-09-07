@@ -27,6 +27,19 @@ impl App {
         self.active_sheet = None;
     }
 
+    /// Park the transcript-focus states while an agent-driven sheet (or the
+    /// PreAttach interstitial) mounts. The blocking interruption is a context
+    /// switch: attention borrowed before the sheet appeared must not survive
+    /// it — otherwise the composer re-mounts dim after the sheet closes
+    /// (the stale-`transcript_focused` variant of the stuck-inactive bug).
+    /// Pairs with the `focused_target` clear at every mount site. This does
+    /// *not* touch a browse focus legitimately re-armed *behind* the sheet
+    /// while it is up (the permission sheet's pass-through, ADR-0173 §2).
+    pub(crate) fn park_transcript_focus_for_sheet(&mut self) {
+        self.focused_target = None;
+        self.transcript_focused = false;
+    }
+
     /// Exact identity of the focused retained panel (ADR-0141: a retained
     /// modal).
     pub(crate) fn active_panel(&self) -> Option<crate::surfaces::PanelId> {

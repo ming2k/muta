@@ -1,5 +1,4 @@
 mod episodic;
-pub mod persistent;
 pub mod pipes;
 
 #[cfg(test)]
@@ -20,23 +19,27 @@ struct ExecuteCommandArgs {
     #[tool(desc = "The shell command to execute")]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is detached or killed as a blocked-command guard."
     )]
     timeout: Option<u64>,
-    #[tool(
-        desc = "Optional persistent terminal session identifier to reuse environment variables, cwd, and shell state across commands."
-    )]
-    terminal_id: Option<String>,
-    #[tool(desc = "Set to true to run in a persistent terminal session.")]
-    run_persistent: Option<bool>,
-    #[tool(
-        desc = "Set to true to run this command asynchronously in the background. Returns a job descriptor immediately and notifies upon completion."
-    )]
+    #[tool(desc = "Set to true to run this command asynchronously in the background.")]
     background: Option<bool>,
+    #[tool(
+        desc = "Set to true to start a long-running service (dev server, watcher, daemon). Readiness is reported and you are notified if it dies; do not wait for a service to exit."
+    )]
+    service: Option<bool>,
     #[tool(
         desc = "Optional human-readable label for the background job (e.g. 'cargo-test', 'dev-server')."
     )]
     label: Option<String>,
+    #[tool(
+        desc = "Schedule this command to run later instead of now. Value: seconds from now (e.g. 3600), optionally repeating at that interval when `repeat` is true. When set, `command` runs as a timer task and you are woken with its result at fire time."
+    )]
+    schedule_in_secs: Option<u64>,
+    #[tool(
+        desc = "With schedule_in_secs: re-arm the timer after every fire (interval = schedule_in_secs) instead of firing once."
+    )]
+    repeat: Option<bool>,
 }
 
 #[allow(dead_code)] // tool-schema: dynamic JSON schema generation
@@ -168,7 +171,7 @@ impl Tool for ExecuteCommandTool {
         if self.workspace_sandbox {
             "Execute a shell command inside the isolated workspace. Use for builds, tests, metadata inspection, and contained checks. Host files outside the admitted workspace roots and network access are unavailable."
         } else {
-            "Execute a shell command. Use for build, test, git, or system commands. Supports persistent sessions via run_persistent or terminal_id."
+            "Execute a shell command. Use for build, test, git, or system commands. Long-running services, watchers, daemons, or any command that will not exit on its own MUST use background: true — a foreground call whose sync budget expires while the process is still running detaches it to the background fabric (it keeps running; you get the job id and an automatic completion notification)."
         }
     }
     fn parameters(&self) -> serde_json::Value {
@@ -259,19 +262,22 @@ impl Tool for ExecuteCommandTool {
         if args.background == Some(true) {
             if let Some(ref service) = self.job_service {
                 let info = service
-                    .spawn_process(
+                    .spawn_process_ex(
                         args.command,
                         args.label,
                         None,
                         false,
                         Some(timeout_duration),
+                        muta_contracts::JobKind::Interactive,
+                        None,
+                        None,
                     )
                     .await?;
                 let output = serde_json::json!({
                     "status": "spawned_in_background",
                     "job_id": info.id.0,
                     "state": info.state,
-                    "message": "Command started asynchronously in the background. You will receive an automatic notification when it finishes. You can proceed with other tasks or inspect with process_poll/process_logs.",
+                    "message": "Command started asynchronously in the background. You WILL receive an automatic notification here when it finishes (or fails). You can proceed with other tasks and inspect progress with process_poll/process_logs.",
                 });
                 return Ok(muta_contracts::ToolOutput::text(
                     serde_json::to_string_pretty(&output).unwrap_or_default(),
@@ -283,34 +289,76 @@ impl Tool for ExecuteCommandTool {
             }
         }
 
-        let terminal_id = args.terminal_id.as_deref().or_else(|| {
-            if args.run_persistent == Some(true) {
-                Some("default")
+        if let Some(secs) = args.schedule_in_secs {
+            // ADR-0190 Timer spec: the command runs at fire time as a
+            // one-shot (or repeating) timer task; the mailbox wakes the
+            // session with its digest.
+            if let Some(ref service) = self.job_service {
+                let fire_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64
+                    + secs.saturating_mul(1000);
+                let interval = if args.repeat == Some(true) {
+                    Some(secs.saturating_mul(1000))
+                } else {
+                    None
+                };
+                let label = format!(
+                    "scheduled: {}",
+                    args.label.as_deref().unwrap_or(args.command.split_whitespace().next().unwrap_or(""))
+                );
+                let info = service
+                    .spawn_timer(&label, fire_at_ms, interval, args.command.clone())
+                    .await?;
+                let output = serde_json::json!({
+                    "status": "scheduled",
+                    "job_id": info.id.0,
+                    "fire_at_ms": fire_at_ms,
+                    "recurring": interval.is_some(),
+                    "message": "Timer armed. The command runs at fire time and you will be woken with its result automatically. Proceed with other work meanwhile.",
+                });
+                return Ok(muta_contracts::ToolOutput::text(
+                    serde_json::to_string_pretty(&output).unwrap_or_default(),
+                ));
             } else {
-                None
-            }
-        });
-
-        if let Some(term_id) = terminal_id {
-            if self.shell_isolation() == muta_contracts::ShellIsolation::Workspace {
                 return Err(
-                    "Persistent terminal sessions are disabled in the workspace sandbox; run a non-persistent command instead."
-                        .to_string(),
+                    "Background job service is unavailable in this environment.".to_string()
                 );
             }
-            let env = self
-                .env
-                .clone()
-                .unwrap_or_else(|| env_from_root(&self.root));
-            let root = env.workspace_root().to_path_buf();
-            return persistent::run_persistent_command(
-                &root,
-                term_id,
-                &args.command,
-                timeout_duration,
-                on_stream,
-            )
-            .await;
+        }
+
+        if args.service == Some(true) {
+            // ADR-0190 Service kind: spawn as a service task — readiness is
+            // reported, running is the success state, and an unsolicited
+            // death wakes the session with the crash.
+            if let Some(ref service) = self.job_service {
+                let info = service
+                    .spawn_process_ex(
+                        args.command,
+                        args.label,
+                        None,
+                        false,
+                        None,
+                        muta_contracts::JobKind::Service,
+                        Some(muta_contracts::Readiness::FirstOutput),
+                        None,
+                    )
+                    .await?;
+                let output = serde_json::json!({
+                    "status": "spawned_service",
+                    "job_id": info.id.0,
+                    "state": info.state,
+                    "message": "Service started in the background. You will be notified here when it reports readiness and if it dies unexpectedly. Do not wait for it to exit — it is not supposed to. Inspect with process_logs.",
+                });
+                return Ok(muta_contracts::ToolOutput::text(
+                    serde_json::to_string_pretty(&output).unwrap_or_default(),
+                ));
+            } else {
+                return Err(
+                    "Background job service is unavailable in this environment.".to_string()
+                );
+            }
         }
 
         let env = self
@@ -324,6 +372,7 @@ impl Tool for ExecuteCommandTool {
             env,
             stdin_policy,
             on_stream,
+            self.job_service.clone(),
         )
         .await
     }

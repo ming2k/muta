@@ -357,50 +357,29 @@ async fn workspace_shell_sees_only_runtime_and_exact_workspace() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn test_persistent_terminal_preserves_state() {
+async fn test_background_spawn_via_service() {
+    // ADR-0190: background spawn through the service returns a job id and
+    // interactive-process spec; unknown args (`terminal_id`) are no longer
+    // part of the schema.
     let tool = ExecuteCommandTool::new(None);
-    let res1 = tool
-        .call_structured(r#"{"command":"export MUTA_TEST_VAR=12345", "terminal_id": "test_sess"}"#)
-        .await
-        .expect("set env");
-    assert!(matches!(res1, muta_contracts::ToolOutput::Shell { .. }));
-
-    let res2 = tool
-        .call_structured(r#"{"command":"echo $MUTA_TEST_VAR", "terminal_id": "test_sess"}"#)
-        .await
-        .expect("read env");
-    match res2 {
-        muta_contracts::ToolOutput::Shell { stdout, .. } => {
-            assert_eq!(stdout.trim(), "12345");
-        }
-        other => panic!("expected Shell, got {:?}", other),
-    }
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn test_persistent_terminal_preserves_state() {
-    let tool = ExecuteCommandTool::new(None);
-    let res1 = tool
-        .call_structured(
-            r#"{"command":"$env:MUTA_TEST_VAR = '12345'", "terminal_id": "test_sess_win"}"#,
-        )
-        .await
-        .expect("set env");
-    assert!(matches!(res1, muta_contracts::ToolOutput::Shell { .. }));
-
-    let res2 = tool
-        .call_structured(
-            r#"{"command":"Write-Output $env:MUTA_TEST_VAR", "terminal_id": "test_sess_win"}"#,
-        )
-        .await
-        .expect("read env");
-    match res2 {
-        muta_contracts::ToolOutput::Shell { stdout, .. } => {
-            assert_eq!(stdout.trim(), "12345");
-        }
-        other => panic!("expected Shell, got {:?}", other),
-    }
+    let params = tool.parameters();
+    let props = params.get("properties").expect("schema properties");
+    assert!(
+        props.get("terminal_id").is_none(),
+        "terminal_id must be deleted from the tool surface (M6)"
+    );
+    assert!(
+        props.get("run_persistent").is_none(),
+        "run_persistent must be deleted from the tool surface (M6)"
+    );
+    assert!(
+        props.get("service").is_some(),
+        "service flag must be exposed (ADR-0190)"
+    );
+    assert!(
+        props.get("schedule_in_secs").is_some() && props.get("repeat").is_some(),
+        "timer scheduling must be exposed on the tool surface (ADR-0190 Timer spec)"
+    );
 }
 
 #[test]

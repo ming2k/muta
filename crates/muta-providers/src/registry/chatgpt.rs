@@ -1,7 +1,7 @@
 //! The `chatgpt-oauth` provider preset: GPT-5.x over the ChatGPT
 //! Subscription backend (the Codex Responses API).
 
-use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
@@ -19,7 +19,7 @@ pub const MODELS: &[Model] = &[
         id: "gpt-5.6-sol",
         family: "gpt",
         context_window: 1_050_000,
-        thinking: ThinkingSupport::ReasoningSummary,
+        thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -30,7 +30,7 @@ pub const MODELS: &[Model] = &[
         id: "gpt-5.6-terra",
         family: "gpt",
         context_window: 1_050_000,
-        thinking: ThinkingSupport::ReasoningSummary,
+        thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -41,7 +41,7 @@ pub const MODELS: &[Model] = &[
         id: "gpt-5.6-luna",
         family: "gpt",
         context_window: 1_050_000,
-        thinking: ThinkingSupport::ReasoningSummary,
+        thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -54,7 +54,7 @@ pub const MODELS: &[Model] = &[
         id: "gpt-5.5",
         family: "gpt",
         context_window: 1_000_000,
-        thinking: ThinkingSupport::ReasoningSummary,
+        thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
         protocol: WireProtocol::OpenAiChatCompletions,
@@ -65,7 +65,7 @@ pub const MODELS: &[Model] = &[
         id: "gpt-5.3-codex-spark",
         family: "gpt",
         context_window: 128_000,
-        thinking: ThinkingSupport::ReasoningSummary,
+        thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,

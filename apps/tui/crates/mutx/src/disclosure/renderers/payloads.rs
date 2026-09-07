@@ -714,6 +714,12 @@ fn termination_footer(
             warn_style,
         )),
         T::Cancelled => Some(("command cancelled (interrupted).".to_string(), err_style)),
+        T::Detached => Some((
+            "still running: adopted by the background fabric at the sync \
+             budget — completion will be reported automatically."
+                .to_string(),
+            warn_style,
+        )),
     }
 }
 
@@ -782,6 +788,7 @@ pub(crate) fn draw_command_content(
         exit,
         truncated,
         termination,
+        detached_job_id: None,
         ..
     }) = structured
     {

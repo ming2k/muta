@@ -615,6 +615,7 @@ fn bash_failure_is_classified_failed_from_structured_exit_code() {
         exit: Some(1),
         truncated: false,
         termination: muta_contracts::tool_output::ShellTermination::Exited,
+        detached_job_id: None,
     };
     let text = structured.to_text();
     assert!(
@@ -636,6 +637,7 @@ fn bash_success_is_classified_ok() {
         exit: Some(0),
         truncated: false,
         termination: muta_contracts::tool_output::ShellTermination::Exited,
+        detached_job_id: None,
     };
     let text = structured.to_text();
     assert!(step.finish_tool_step("c", text, structured, 5));
@@ -954,73 +956,54 @@ fn notice_strips_terminal_controls_from_crlf_http_errors() {
     assert!(!n.raw.chars().any(|c| c.is_control() && c != '\n'));
 }
 
-/// Streaming thinking rows read as a live token count (`Thinking  N
-/// tokens`), not an estimate; finished traces settle to the final line with
-/// the duration.
+/// Streaming reasoning rows show activity, never a token count (ADR-0191);
+/// finished traces settle to the milestone/duration line.
 #[test]
-fn thinking_summary_sprays_tokens_then_settles() {
-    // Short stream: exact per-token count.
-    let streaming = TranscriptMessage::thinking("one two three four five");
-    let summary = streaming.thinking_summary().unwrap();
-    assert!(summary.starts_with("Thinking  "), "got: {summary}");
-    assert!(summary.ends_with(" tokens"), "got: {summary}");
-    assert!(!summary.contains('~'), "no estimate tilde: {summary}");
+fn reasoning_summary_shows_activity_then_settles() {
+    // Streaming without milestones: an activity word, not a metric.
+    let streaming = TranscriptMessage::reasoning("one two three four five");
+    let summary = streaming.reasoning_summary().unwrap();
+    assert_eq!(summary, "Thinking…", "no token count while streaming: {summary}");
 
-    // Deep into a trace the count floors to the quantum so the number
-    // climbs in steps instead of strobing every heartbeat.
-    let filler = "lorem ipsum ".repeat(600); // ≈ 1 800 tokens
-    let deep = TranscriptMessage::thinking(&filler);
-    let shown = deep
-        .thinking_summary()
-        .unwrap()
-        .trim_start_matches("Thinking  ")
-        .trim_end_matches(" tokens")
-        .replace(' ', "")
-        .parse::<usize>()
-        .expect("numeric count");
-    let actual = muta_contracts::tokenizer::count_tokens(&filler);
-    assert!(
-        shown <= actual && actual - shown < 25,
-        "shown {shown} vs {actual}"
-    );
+    // Even a long trace shows no count.
+    let filler = "lorem ipsum ".repeat(600);
+    let deep = TranscriptMessage::reasoning(&filler);
+    let summary = deep.reasoning_summary().unwrap();
+    assert!(!summary.contains("tokens"), "no token display: {summary}");
 
-    // Finished trace: exact count, humanized duration.
-    let mut done = TranscriptMessage::thinking(filler);
-    done.set_thinking_duration(2_400);
-    let settled = done.thinking_summary().unwrap();
-    assert!(
-        settled.starts_with(&format!("Thought  {actual} tokens")),
-        "exact count when finished: {settled}"
-    );
-    assert!(settled.ends_with("(2.4s)"), "humanized duration: {settled}");
+    // Finished trace: milestone/duration line, still no count.
+    let mut done = TranscriptMessage::reasoning(filler);
+    done.set_reasoning_duration(2_400);
+    let settled = done.reasoning_summary().unwrap();
+    assert_eq!(settled, "Thought (2.4s)", "settled line: {settled}");
 }
 
 #[test]
-fn thinking_summary_handles_structured_milestones() {
+fn reasoning_summary_handles_structured_milestones() {
     use super::{count_milestones, extract_active_milestone};
 
     // Live streaming with a single milestone heading: normalizes with "Thinking through"
-    let streaming_single = TranscriptMessage::thinking("**Planning architectural changes**\n\n");
+    let streaming_single = TranscriptMessage::reasoning("**Planning architectural changes**\n\n");
     assert_eq!(
-        streaming_single.thinking_summary().as_deref(),
+        streaming_single.reasoning_summary().as_deref(),
         Some("Thinking through the architectural changes")
     );
 
     // Live streaming updating to subsequent milestone heading
-    let streaming_multi = TranscriptMessage::thinking(
+    let streaming_multi = TranscriptMessage::reasoning(
         "**Planning architectural changes**\n\nAnalyzed codebase.\n\n**Executing database migration**\n\n",
     );
     assert_eq!(
-        streaming_multi.thinking_summary().as_deref(),
+        streaming_multi.reasoning_summary().as_deref(),
         Some("Thinking through the database migration")
     );
 
     // Flagship case: "Deconstructing Security Architecture Components"
-    let streaming_flagship = TranscriptMessage::thinking(
+    let streaming_flagship = TranscriptMessage::reasoning(
         "**Deconstructing Security Architecture Components**\n\nAnalyzing system boundaries...",
     );
     assert_eq!(
-        streaming_flagship.thinking_summary().as_deref(),
+        streaming_flagship.reasoning_summary().as_deref(),
         Some("Thinking through the security architecture components")
     );
 
@@ -1037,39 +1020,37 @@ fn thinking_summary_handles_structured_milestones() {
     );
 
     // Finished trace with multiple milestones
-    let mut done_multi = TranscriptMessage::thinking(
+    let mut done_multi = TranscriptMessage::reasoning(
         "**Step 1: Planning**\n\nDetails\n\n**Step 2: Execution**\n\nDetails\n\n**Step 3: Verification**\n\n",
     );
-    done_multi.set_thinking_duration(4_500);
-    let summary = done_multi.thinking_summary().unwrap();
-    assert!(
-        summary.starts_with("Thought through 3 steps  "),
-        "got: {summary}"
+    done_multi.set_reasoning_duration(4_500);
+    assert_eq!(
+        done_multi.reasoning_summary().as_deref(),
+        Some("Thought through 3 steps (4.5s)")
     );
-    assert!(summary.ends_with("(4.5s)"), "got: {summary}");
 
     // Finished trace with single milestone
     let mut done_single =
-        TranscriptMessage::thinking("**Planning architectural changes**\n\nDetails\n\n");
-    done_single.set_thinking_duration(1_200);
+        TranscriptMessage::reasoning("**Planning architectural changes**\n\nDetails\n\n");
+    done_single.set_reasoning_duration(1_200);
     assert_eq!(
-        done_single.thinking_summary().as_deref(),
+        done_single.reasoning_summary().as_deref(),
         Some("Thought through the architectural changes (1.2s)")
     );
 
     // Flagship case finished (even with 0ms duration)
-    let mut done_flagship = TranscriptMessage::thinking(
+    let mut done_flagship = TranscriptMessage::reasoning(
         "**Deconstructing Security Architecture Components**\n\nAnalyzed boundaries.",
     );
-    done_flagship.set_thinking_duration(0);
+    done_flagship.set_reasoning_duration(0);
     assert_eq!(
-        done_flagship.thinking_summary().as_deref(),
+        done_flagship.reasoning_summary().as_deref(),
         Some("Thought through the security architecture components (0ms)")
     );
 }
 
 #[test]
-fn normalize_thinking_topic_edge_cases() {
+fn normalize_reasoning_topic_edge_cases() {
     use super::normalize_thinking_topic;
 
     assert_eq!(
@@ -1107,6 +1088,16 @@ fn normalize_thinking_topic_edge_cases() {
     assert_eq!(
         normalize_thinking_topic("The authentication pipeline"),
         "the authentication pipeline"
+    );
+    // Regression: multi-byte characters must not cause a char-boundary panic
+    // when a redundant prefix's byte length lands inside a multi-byte char.
+    assert_eq!(
+        normalize_thinking_topic("Checking — UTF-8 boundary safety"),
+        "the — UTF-8 boundary safety"
+    );
+    assert_eq!(
+        normalize_thinking_topic("验证 UTF-8 边界安全"),
+        "the 验证 UTF-8 边界安全"
     );
 }
 
@@ -1254,58 +1245,6 @@ fn push_stream_stays_bounded_on_long_streams() {
     );
 }
 
-/// The incremental thinking counter must agree with a full tokenization of
-/// the accumulated content — exactly once the trace is finalized (stream end
-/// or restored session), within the carried-tail slack while streaming.
-#[test]
-fn thinking_counter_matches_full_tokenization() {
-    let mut msg = TranscriptMessage::thinking("");
-    let full = "Analyzing the streaming pipeline. **第一步**：检查增量解析器的冻结前缀。\n\n## Milestone\n\
-                The frozen prefix invariant holds across fences:\n\n```\ncode --\n```\n";
-    for chunk in split_whole_scalars(full, 13) {
-        msg.push_thinking_delta(&chunk);
-    }
-    let MessageKind::Thinking {
-        content,
-        stream_tokens,
-        ..
-    } = &msg.kind
-    else {
-        panic!("not thinking");
-    };
-    let counted = stream_tokens.tokens();
-    let exact = muta_contracts::tokenizer::count_tokens(content);
-    // Streaming: the counter may lag by the carried tail (one open pretoken),
-    // never lead.
-    assert!(
-        counted <= exact && exact - counted <= 16,
-        "{counted} vs {exact}"
-    );
-    msg.finalize_thinking(full);
-    let MessageKind::Thinking { stream_tokens, .. } = &msg.kind else {
-        panic!("not thinking");
-    };
-    assert_eq!(
-        stream_tokens.tokens(),
-        muta_contracts::tokenizer::count_tokens(full)
-    );
-}
-
-/// Split on whole-scalar boundaries (provider deltas never split scalars).
-fn split_whole_scalars(text: &str, size: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        let mut end = (pos + size).min(bytes.len());
-        while end < bytes.len() && !text.is_char_boundary(end) {
-            end += 1;
-        }
-        out.push(text[pos..end].to_string());
-        pos = end;
-    }
-    out
-}
 
 /// The wrap cache must be transparent: cached geometry is bit-for-bit what a
 /// fresh `wrap_text` / code preparation produces, across widths and content
