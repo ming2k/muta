@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.3] - 2026-09-07
+
+### Added
+
+- **Daemon-level task rows in the monitor snapshot (ADR-0190 D6).**
+  `MonitorSnapshot` gains a `tasks` sidecar (`MonitoredTask`: id, label, spec,
+  lifecycle state, owning session, timestamps, latest output line, on-disk log
+  path) and `MonitorEvent` gains `TaskUpdated`/`TaskRemoved`. The registry
+  diffs daemon-level tasks into the snapshot stream — session-scoped tasks
+  stay in their own session's fabric. The control panel surfaces the rows and
+  the TUI folds the new events in (full task view lands in Phase 2).
+- `upsert_task_row` in the runtime client for maintaining the task rows
+  (upsert by id, newest-created first).
+
 ## [0.40.2] - 2026-09-07
 
 ### Added
