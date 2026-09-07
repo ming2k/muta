@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.2] - 2026-09-07
+
+### Added
+
+- **Reasoning tokens as provider-reported telemetry (ADR-0191).**
+  `TokenUsage.reasoning_tokens` is now a first-class diagnostic field — already
+  included in `completion_tokens` (never additive to a total), `0` = the
+  provider reports no such counter. Parsed from the OpenAI Responses
+  `output_tokens_details.reasoning_tokens`, chat-completions
+  `completion_tokens_details.reasoning_tokens`, and Gemini
+  `thoughtsTokenCount`. Threaded through the token ledger
+  (`RequestUsageRecord`, `TokenSourceTotals`, `TokenTurn`) so the usage report
+  can surface the authoritative reasoning volume.
+
+### Changed
+
+- **The thinking-block token display is retired (ADR-0191).**
+  The TUI reasoning summary no longer shows a locally counted token number.
+  A cl100k count of the visible chain is not the billed reasoning volume —
+  hidden-CoT models bill far more than they show, and a number that ranges
+  from exact to 10× off is noise. The summary keeps its milestone/duration
+  vocabulary (`Thinking through the database migration`,
+  `Thought through 3 steps (2.4s)`); the authoritative reasoning-token figure
+  lives in the usage surfaces via `TokenUsage.reasoning_tokens`.
+- **One concept, one name: reasoning.** `MessageKind::Thinking` → `Reasoning`,
+  `ThinkingMode`/`ThinkingSupport` → `ReasoningMode`/`ReasoningSupport`
+  (Rust-type renames only; serde wire values unchanged). User-facing display
+  copy keeps "Thinking" — presentation, not vocabulary.
+- **Wire protocol v5** (ADR-0134 bump): `Wire::Welcome.retry_resolutions`,
+  `RoundEvent::RetryResolved`, and the `BackgroundJobReady` event are new
+  variants an older peer cannot deserialize; `TokenUsage.reasoning_tokens`
+  and `ToolOutput::Shell.detached_job_id` ride the same bump as additive
+  sidecars. Generated TS bindings regenerated.
+
 ## [0.40.1] - 2026-09-07
 
 ### Added
