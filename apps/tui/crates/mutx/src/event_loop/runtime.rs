@@ -151,8 +151,8 @@ impl UiRuntime {
             harness: Arc::new(Mutex::new(HarnessSnapshot {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
-                delegated: false,
-                unconfined: false,
+                unattended: false,
+                confined: true,
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),

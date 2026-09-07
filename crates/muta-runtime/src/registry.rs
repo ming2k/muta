@@ -40,7 +40,7 @@ pub struct HostedSession {
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     pub cancel: CancellationToken,
-    pub shared_unconfined: muta_contracts::SharedUnconfined,
+    pub shared_confinement: muta_contracts::SharedConfinement,
     /// The panel-facing tracker folding this session's event stream
     /// (ADR-0093). Owned here so the broadcast-tap task can fold events in
     /// and the registry can read rows out for snapshots.
@@ -103,7 +103,7 @@ pub struct BoundSession {
     /// value before parking any human request.
     pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
-    pub shared_unconfined: muta_contracts::SharedUnconfined,
+    pub shared_confinement: muta_contracts::SharedConfinement,
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     /// Attach-time state-sync events buffered for this session (see
@@ -547,15 +547,6 @@ impl SessionRegistry {
                 continue;
             }
             // An armed `/schedule` job is work that *will* run unattended
-            // (ADR-0125): suspending the session parks its tick loop, so a
-            // due cron or countdown would silently stop firing — exactly the
-            // autonomy the schedule was created for. Idle-suspension exists
-            // to bound memory, and a session with armed jobs is not idle in
-            // the meaningful sense. The rehost path re-arms these after a
-            // daemon restart; this guard keeps them armed between restarts.
-            if !entry.session.scheduled_jobs().await.is_empty() {
-                continue;
-            }
             // Activity clock: starts at host time and is refreshed below
             // whenever the tap tick advanced since the last sweep, so "idle"
             // means "no folded events for the whole TTL".
@@ -808,7 +799,7 @@ impl SessionRegistry {
             project_root: entry.project_root.clone(),
             human_channel: entry.human_channel.clone(),
             session: entry.session.clone(),
-            shared_unconfined: entry.shared_unconfined.clone(),
+            shared_confinement: entry.shared_confinement.clone(),
             req_tx: entry.req_tx.clone(),
             events: entry.events.clone(),
             sync_buffer: entry.sync_buffer.clone(),
@@ -912,68 +903,6 @@ impl SessionRegistry {
         }
     }
 
-    /// Boot-time rehost of autonomous sessions (ADR-0125): scan every
-    /// project's persisted sessions for armed `/schedule` jobs and
-    /// re-assemble a hosted harness for each, so scheduled prompts keep
-    /// firing across daemon restarts (crash, upgrade, reboot) instead of
-    /// silently waiting for a human to attach.
-    ///
-    /// The scan reads snapshot headers only (no transcript decode), and each
-    /// assembly is the ordinary lazy-resume path — meaning a rehosted
-    /// session is indistinguishable from an attached one: it appears in the
-    /// dashboard, its idle-suspension guard keeps it resident, and its
-    /// scheduler fires from the first tick. A session whose project root no
-    /// longer exists is skipped with a warning (the harness would fail its
-    /// cwd-sensitive tooling anyway); rehost failures never block the daemon
-    /// from starting.
-    pub async fn rehost_armed_sessions(&self) -> Vec<String> {
-        if self.params.is_none() {
-            return Vec::new();
-        }
-        let armed =
-            tokio::task::spawn_blocking(muta_persistence::session::sessions_with_armed_schedules)
-                .await
-                .unwrap_or_default();
-        let mut rehosted = Vec::new();
-        for entry in armed {
-            if self.sessions.lock().await.contains_key(&entry.session_id) {
-                continue; // already hosted (e.g. a client raced the boot scan)
-            }
-            if !entry.project_root.is_dir() {
-                tracing::warn!(
-                    session = %entry.session_id,
-                    project = %entry.project_root.display(),
-                    "rehost: project root is gone; leaving the session dormant"
-                );
-                continue;
-            }
-            match self
-                .assemble_hosted(
-                    crate::startup::SessionStart::Resume(entry.session_id.clone()),
-                    entry.project_root.clone(),
-                    muta_contracts::SessionInitOptions::default(),
-                )
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        session = %entry.session_id,
-                        project = %entry.project_root.display(),
-                        "rehosted session with armed schedule"
-                    );
-                    rehosted.push(entry.session_id);
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        session = %entry.session_id,
-                        ?error,
-                        "rehost: could not re-assemble session; it stays dormant and lazy-resumes on attach"
-                    );
-                }
-            }
-        }
-        rehosted
-    }
     async fn assemble_hosted(
         &self,
         startup: crate::startup::SessionStart,
@@ -1000,8 +929,8 @@ impl SessionRegistry {
             ui,
             startup,
             project_root: Some(project_root.clone()),
-            delegated: init_options.delegated,
-            unconfined: init_options.unconfined,
+            unattended: init_options.unattended,
+            confined: init_options.confined,
             human_channel: Some(Arc::clone(&human_channel)),
             teardown_token: Some(cancel.clone()),
         })
@@ -1132,7 +1061,7 @@ impl SessionRegistry {
             project_root: project_root.clone(),
             human_channel: human_channel.clone(),
             session: session.clone(),
-            shared_unconfined: boot.shared_unconfined.clone(),
+            shared_confinement: boot.shared_confinement.clone(),
             req_tx: req_tx.clone(),
             events: events_tx.clone(),
             sync_buffer: sync_buffer.clone(),
@@ -1144,7 +1073,7 @@ impl SessionRegistry {
             human_channel,
             security: boot.security.clone(),
             session,
-            shared_unconfined: boot.shared_unconfined,
+            shared_confinement: boot.shared_confinement,
             req_tx,
             events: events_tx,
             cancel,
@@ -1173,7 +1102,7 @@ impl SessionRegistry {
             project_root: e.project_root.clone(),
             human_channel: e.human_channel.clone(),
             session: e.session.clone(),
-            shared_unconfined: e.shared_unconfined.clone(),
+            shared_confinement: e.shared_confinement.clone(),
             req_tx: e.req_tx.clone(),
             events: e.events.clone(),
             sync_buffer: e.sync_buffer.clone(),

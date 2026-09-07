@@ -225,7 +225,7 @@ pub struct InMemoryExecutionEnvironment {
     fs: InMemoryFsProvider,
     process: MockProcessRunner,
     workspace_root: PathBuf,
-    unconfined: bool,
+    confined: bool,
 }
 
 impl InMemoryExecutionEnvironment {
@@ -234,12 +234,12 @@ impl InMemoryExecutionEnvironment {
             fs: InMemoryFsProvider::new(),
             process: MockProcessRunner::new(),
             workspace_root: workspace_root.into(),
-            unconfined: false,
+            confined: true,
         }
     }
 
-    pub fn set_unconfined(&mut self, unconfined: bool) {
-        self.unconfined = unconfined;
+    pub fn set_confined(&mut self, confined: bool) {
+        self.confined = confined;
     }
 
     pub fn fs_provider(&self) -> &InMemoryFsProvider {
@@ -252,8 +252,8 @@ impl InMemoryExecutionEnvironment {
 }
 
 impl ExecutionEnvironment for InMemoryExecutionEnvironment {
-    fn is_unconfined(&self) -> bool {
-        self.unconfined
+    fn is_confined(&self) -> bool {
+        self.confined
     }
 
     fn fs(&self) -> &dyn FsProvider {

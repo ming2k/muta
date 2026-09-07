@@ -1,58 +1,8 @@
-use super::schedule_ops::{
-    SessionRoute, parse_delegate_arg, parse_unconfined_arg, session_route, split_schedule_spec,
+use super::session_route::{
+    SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
 };
 use super::security_ops::{TrustRoute, parse_trust_domain, trust_route};
 
-#[cfg(test)]
-mod schedule_spec_tests {
-    use super::split_schedule_spec;
-
-    #[test]
-    fn splits_cron_spec() {
-        let (spec, prompt) = split_schedule_arg("*/5 * * * * run the tests");
-        assert_eq!(spec, "*/5 * * * *");
-        assert_eq!(prompt, "run the tests");
-    }
-
-    #[test]
-    fn splits_compact_countdown() {
-        let (spec, prompt) = split_schedule_arg("10m re-run the tests");
-        assert_eq!(spec, "10m");
-        assert_eq!(prompt, "re-run the tests");
-    }
-
-    #[test]
-    fn splits_verbose_countdown() {
-        let (spec, prompt) = split_schedule_arg("in 2 hours 30 minutes do the thing");
-        assert_eq!(spec, "in 2 hours 30 minutes");
-        assert_eq!(prompt, "do the thing");
-    }
-
-    #[test]
-    fn splits_absolute_clock() {
-        let (spec, prompt) = split_schedule_arg("14:00 ship the build");
-        assert_eq!(spec, "14:00");
-        assert_eq!(prompt, "ship the build");
-    }
-
-    #[test]
-    fn splits_tomorrow_phrase() {
-        let (spec, prompt) = split_schedule_arg("tomorrow 09:00 morning standup");
-        assert_eq!(spec, "tomorrow 09:00");
-        assert_eq!(prompt, "morning standup");
-    }
-
-    fn split_schedule_arg(rest: &str) -> (String, String) {
-        split_schedule_spec(rest).expect("schedule spec must parse")
-    }
-
-    #[test]
-    fn missing_prompt_is_none_not_empty_strings() {
-        assert!(split_schedule_spec("10m").is_none());
-        assert!(split_schedule_spec("14:00").is_none());
-        assert!(split_schedule_spec("").is_none());
-    }
-}
 
 #[cfg(test)]
 mod session_route_tests {
@@ -214,50 +164,50 @@ mod trust_route_tests {
 }
 
 #[cfg(test)]
-mod delegate_arg_tests {
-    use super::parse_delegate_arg;
+mod unattended_arg_tests {
+    use super::parse_unattended_arg;
 
     #[test]
     fn empty_arg_is_toggle() {
-        assert_eq!(parse_delegate_arg(""), Ok(None));
+        assert_eq!(parse_unattended_arg(""), Ok(None));
     }
 
     #[test]
     fn truthy_forms() {
-        for s in ["on", "true", "1", "delegate", "auto", "yolo"] {
-            assert_eq!(parse_delegate_arg(s), Ok(Some(true)), "failed on {s:?}");
+        for s in ["on", "true", "1", "unattended", "auto", "delegate", "yolo"] {
+            assert_eq!(parse_unattended_arg(s), Ok(Some(true)), "failed on {s:?}");
         }
     }
 
     #[test]
     fn falsy_forms() {
-        for s in ["off", "false", "0"] {
-            assert_eq!(parse_delegate_arg(s), Ok(Some(false)), "failed on {s:?}");
+        for s in ["off", "false", "0", "disable", "disabled", "attended"] {
+            assert_eq!(parse_unattended_arg(s), Ok(Some(false)), "failed on {s:?}");
         }
     }
 
     #[test]
     fn unknown_forms_error() {
-        assert!(parse_delegate_arg("yes").is_err());
-        assert!(parse_delegate_arg("no").is_err());
-        assert!(parse_delegate_arg("random").is_err());
+        assert!(parse_unattended_arg("yes").is_err());
+        assert!(parse_unattended_arg("no").is_err());
+        assert!(parse_unattended_arg("random").is_err());
     }
 }
 
 #[cfg(test)]
-mod unconfined_arg_tests {
-    use super::parse_unconfined_arg;
+mod confinement_arg_tests {
+    use super::parse_confinement_arg;
 
     #[test]
     fn empty_arg_is_toggle() {
-        assert_eq!(parse_unconfined_arg(""), Ok(None));
-        assert_eq!(parse_unconfined_arg("   "), Ok(None));
+        assert_eq!(parse_confinement_arg(""), Ok(None));
+        assert_eq!(parse_confinement_arg("   "), Ok(None));
     }
 
     #[test]
     fn enable_forms() {
-        for s in ["on", "true", "1", "enable", "enabled", "unconfine", "unconfined", "escape"] {
-            assert_eq!(parse_unconfined_arg(s), Ok(Some(true)), "failed on {s:?}");
+        for s in ["on", "true", "1", "enable", "enabled", "confine", "confined", "jail"] {
+            assert_eq!(parse_confinement_arg(s), Ok(Some(true)), "failed on {s:?}");
         }
     }
 
@@ -269,19 +219,19 @@ mod unconfined_arg_tests {
             "0",
             "disable",
             "disabled",
-            "confine",
-            "confined",
-            "jail",
+            "unconfine",
+            "unconfined",
+            "escape",
         ] {
-            assert_eq!(parse_unconfined_arg(s), Ok(Some(false)), "failed on {s:?}");
+            assert_eq!(parse_confinement_arg(s), Ok(Some(false)), "failed on {s:?}");
         }
     }
 
     #[test]
     fn unknown_forms_error() {
-        assert!(parse_unconfined_arg("yes").is_err());
-        assert!(parse_unconfined_arg("no").is_err());
-        assert!(parse_unconfined_arg("sandbox").is_err());
+        assert!(parse_confinement_arg("yes").is_err());
+        assert!(parse_confinement_arg("no").is_err());
+        assert!(parse_confinement_arg("sandbox").is_err());
     }
 }
 

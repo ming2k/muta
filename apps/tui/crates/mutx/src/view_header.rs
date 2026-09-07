@@ -85,7 +85,7 @@ impl ViewHints<'_> {
             return true;
         }
         match self.kind {
-            ViewKind::Main => self.asides.is_some(),
+            ViewKind::Session => self.asides.is_some(),
             ViewKind::Btw | ViewKind::Settings => true,
             ViewKind::Runner => false,
         }
@@ -102,7 +102,7 @@ pub(crate) struct AsidesChip {
 /// Which view the header band is describing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewKind {
-    Main,
+    Session,
     Btw,
     Runner,
     Settings,
@@ -111,7 +111,7 @@ pub(crate) enum ViewKind {
 impl From<&ViewHeader<'_>> for ViewKind {
     fn from(header: &ViewHeader<'_>) -> Self {
         match header {
-            ViewHeader::Session(_) => ViewKind::Main,
+            ViewHeader::Session(_) => ViewKind::Session,
             ViewHeader::Btw(_) => ViewKind::Btw,
             ViewHeader::Runner(_) => ViewKind::Runner,
             ViewHeader::Settings => ViewKind::Settings,
@@ -128,13 +128,14 @@ pub(crate) struct SessionHead<'a> {
     /// Tilde-shortened workspace path (e.g. `~/projects/xx`). Already
     /// abbreviated by the caller; rendered as-is.
     pub workspace: &'a str,
-    /// `true` while the session runs in delegated autonomous execution
-    /// mode (`--delegate` / `/delegate on`). Shown as a warning-toned
-    /// `DELEGATED` tag on the right — the session's persistent mode flag.
-    pub delegated: bool,
-    /// `true` while the session runs in unconfined filesystem access mode
-    /// (`--unconfined` / `/unconfined on`). Shown as a warning-toned `UNCONFINED` tag on the right.
-    pub unconfined: bool,
+    /// `true` while the session runs in unattended execution mode
+    /// (`--unattended` / `/unattended on`). Shown as a warning-toned
+    /// `UNATTENDED` tag on the right — the session's persistent mode flag.
+    pub unattended: bool,
+    /// `false` while the session's workspace filesystem confinement is
+    /// disabled (`/confinement off`). Shown as a warning-toned `UNCONFINED`
+    /// tag on the right.
+    pub confined: bool,
     /// When switching to another session, holds the target session id.
     pub switching_target: Option<&'a str>,
 }
@@ -176,10 +177,10 @@ pub(crate) fn draw_view_header(
     let content = match header {
         ViewHeader::Session(head) => {
             let mut action = String::new();
-            if head.delegated {
-                action.push_str("DELEGATED ");
+            if head.unattended {
+                action.push_str("UNATTENDED ");
             }
-            if head.unconfined {
+            if !head.confined {
                 action.push_str("UNCONFINED ");
             }
             let tag = if let Some(target) = head.switching_target {
@@ -383,7 +384,7 @@ pub(crate) fn draw_view_header_hints(
     // Leading descriptive segment (before the keycaps): the main view's live
     // aside chip, the aside view's parent note.
     let note: Option<String> = match hints.kind {
-        ViewKind::Main => hints.asides.as_ref().map(|chip| {
+        ViewKind::Session => hints.asides.as_ref().map(|chip| {
             if chip.running > 0 {
                 format!("btw: {} total ({} active)", chip.total, chip.running)
             } else {
@@ -398,7 +399,7 @@ pub(crate) fn draw_view_header_hints(
     };
 
     let pairs: Vec<crate::components::keycap::KeyAffordance> = match hints.kind {
-        ViewKind::Main => {
+        ViewKind::Session => {
             let mut pairs = Vec::new();
             if hints.asides.is_some() {
                 pairs.push(crate::components::keycap::KeyAffordance::from_key(
@@ -701,7 +702,7 @@ mod tests {
     fn main_hints_legend_omits_interrupt_even_while_running() {
         let theme = Theme::default();
         let hints = ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: None,
             interruptible: true,
             parent_note: "",
@@ -734,14 +735,14 @@ mod tests {
             parent_note: "",
             breadcrumbs: None,
         };
-        assert!(!mk(ViewKind::Main, false).has_content());
-        assert!(mk(ViewKind::Main, true).has_content());
+        assert!(!mk(ViewKind::Session, false).has_content());
+        assert!(mk(ViewKind::Session, true).has_content());
         assert!(mk(ViewKind::Btw, false).has_content());
         assert!(!mk(ViewKind::Runner, false).has_content());
         assert!(!mk(ViewKind::Runner, true).has_content());
 
         let with_crumbs = ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: None,
             interruptible: false,
             parent_note: "",
@@ -754,7 +755,7 @@ mod tests {
     fn main_hints_legend_shows_aside_chip_when_live() {
         let theme = Theme::default();
         let hints = ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: Some(AsidesChip {
                 total: 2,
                 running: 1,
@@ -782,7 +783,7 @@ mod tests {
     fn breadcrumbs_render_in_row_two() {
         let theme = Theme::default();
         let hints = ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: None,
             interruptible: false,
             parent_note: "",
@@ -820,17 +821,17 @@ mod tests {
     }
 
     #[test]
-    fn session_header_shows_id_tail_workspace_and_delegated() {
+    fn session_header_shows_id_tail_workspace_and_unattended() {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            delegated: true,
-            unconfined: false,
+            unattended: true,
+            confined: true,
             switching_target: None,
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
-        let pos = row.find("DELEGATED").expect("mode flag on the right");
+        let pos = row.find("UNATTENDED").expect("mode flag on the right");
         assert!(
             row[pos..].contains("Ctrl+P palette"),
             "palette affordance after the mode flag: {row}"
@@ -843,8 +844,8 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            delegated: false,
-            unconfined: false,
+            unattended: false,
+            confined: true,
             switching_target: Some("7c405d7e"),
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
@@ -860,8 +861,8 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            delegated: true,
-            unconfined: false,
+            unattended: true,
+            confined: true,
             switching_target: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(60, 1);

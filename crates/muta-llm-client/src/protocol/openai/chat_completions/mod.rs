@@ -401,14 +401,18 @@ impl Provider for OpenAiChatCompletionsProvider {
         let label = self.label();
         let body = crate::sse::data_payloads(response, label).map(move |item| {
             let data = item?;
-            if serde_json::from_str::<serde_json::Value>(&data).is_err() {
-                return Err(ProviderError::new(
+            // Parse-once discipline (ADR-0184): the single deserialization
+            // here doubles as the validity check — a non-JSON payload is a
+            // decode error, and the parsed `Value` feeds the stream parser
+            // (which then fans events out through the echo filter).
+            let event: serde_json::Value = serde_json::from_str(&data).map_err(|_| {
+                ProviderError::new(
                     label,
                     ProviderErrorKind::Decode,
                     "Invalid JSON in stream payload",
-                ));
-            }
-            let parsed = response::stream_events(&data);
+                )
+            })?;
+            let parsed = response::stream_events(&event);
             // Recover from a poisoned mutex: a prior panic in this critical
             // section must not take down subsequent stream chunks.
             let mut filter = filter_for_body

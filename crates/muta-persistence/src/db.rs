@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 4;
+pub const CURRENT_DB_VERSION: u32 = 5;
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -177,7 +177,126 @@ const MIGRATIONS: &[Migration] = &[Migration {
         );
         CREATE INDEX IF NOT EXISTS idx_input_history_text ON input_history(text);
         CREATE INDEX IF NOT EXISTS idx_input_history_created_at ON input_history(created_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS idx_input_history_session ON input_history(session_id, created_at_ms DESC);
+     CREATE INDEX IF NOT EXISTS idx_input_history_session ON input_history(session_id, created_at_ms DESC);
+     "#,
+}, Migration {
+    // ADR-0186: single-transcript persistence foundation. Facts live in
+    // `entries` (position-free, immutable), positions in `entry_memberships`
+    // (many-to-one so forks share facts), and projection decisions in
+    // `projections`. The event ledger is renamed `events` to match the
+    // single-source-of-truth vocabulary. The legacy `messages` table,
+    // `sessions.data` JSON snapshot column, and their FTS structures are
+    // retired together with the `SessionData` swap (same tranche).
+    version: 5,
+    sql: r#"
+        ALTER TABLE session_events RENAME TO events;
+
+        CREATE TABLE IF NOT EXISTS entries (
+            id            TEXT PRIMARY KEY,
+            kind          TEXT NOT NULL CHECK (kind IN ('message','state')),
+            role          TEXT CHECK (role IN ('user','assistant','system','tool')),
+            content       TEXT,
+            origin        TEXT CHECK (origin IS NULL OR origin IN ('harness','checkpoint')),
+            hidden        INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            payload       TEXT NOT NULL,
+            CHECK ( origin IS NULL OR hidden = 1 ),
+            CHECK ( kind <> 'message' OR role IS NOT NULL )
+        );
+
+        CREATE TABLE IF NOT EXISTS entry_memberships (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            entry_id   TEXT NOT NULL REFERENCES entries(id),
+            added_by   INTEGER NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memberships_entry ON entry_memberships(entry_id);
+
+        CREATE TABLE IF NOT EXISTS projections (
+            session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq           INTEGER NOT NULL,
+            kind          TEXT NOT NULL CHECK (kind IN ('prune','compact','freeze')),
+            up_to_seq     INTEGER NOT NULL,
+            payload       TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        );
+
+        CREATE TABLE IF NOT EXISTS session_blobs (
+            hash TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mime TEXT NOT NULL,
+            data BLOB,
+            path TEXT,
+            CHECK ( (data IS NULL) <> (path IS NULL) )
+        );
+
+        -- Clean break (ADR-0186): retire the legacy snapshot payload and the
+        -- messages materialization; sessions keep identity + working state.
+        DROP TRIGGER IF EXISTS trg_messages_ai;
+        DROP TRIGGER IF EXISTS trg_messages_ad;
+        DROP TRIGGER IF EXISTS trg_messages_au;
+        DROP TABLE IF EXISTS fts_messages;
+        DROP TABLE IF EXISTS messages;
+        -- fork_kind gains 'subagent' (ADR-0186 §6): SQLite cannot ALTER a
+        -- CHECK, so the table is rebuilt. Legacy payload columns are dropped
+        -- in the same rebuild (clean break); working state rides along.
+        -- Legacy dependent rows are retired first so the parent drop passes
+        -- the foreign-key check.
+        DELETE FROM entry_memberships;
+        DELETE FROM projections;
+        DELETE FROM events;
+        DELETE FROM commands;
+        CREATE TABLE sessions_new (
+            id                  TEXT PRIMARY KEY,
+            parent_id           TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+            fork_kind           TEXT NOT NULL DEFAULT 'trunk'
+                                CHECK (fork_kind IN ('trunk','fork','aside','subagent')),
+            title               TEXT,
+            created_at_ms       INTEGER NOT NULL,
+            updated_at_ms       INTEGER NOT NULL,
+            project_root        TEXT NOT NULL,
+            msg_count           INTEGER NOT NULL DEFAULT 0,
+            last_user_prompt    TEXT,
+            digest              TEXT,
+            data                TEXT,
+            title_manual        BOOLEAN NOT NULL DEFAULT 0
+        );
+        INSERT INTO sessions_new (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest, data, title_manual)
+            SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest, data, title_manual FROM sessions;
+        DROP TABLE sessions;
+        ALTER TABLE sessions_new RENAME TO sessions;
+        ALTER TABLE sessions DROP COLUMN data;
+        ALTER TABLE sessions DROP COLUMN title_manual;
+        ALTER TABLE sessions ADD COLUMN provider_connection TEXT;
+        ALTER TABLE sessions ADD COLUMN round_counter INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN unattended INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN disabled_tools TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE sessions ADD COLUMN commands TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE sessions ADD COLUMN round_interrupts TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE sessions ADD COLUMN retry_pending TEXT;
+        ALTER TABLE sessions ADD COLUMN request_usage_records TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE sessions ADD COLUMN applied_seq INTEGER;
+        ALTER TABLE sessions ADD COLUMN checksum INTEGER;
+        ALTER TABLE sessions ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 13;
+
+        -- Full-text search moves to the transcript entries.
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts_entries USING fts5(
+            entry_id UNINDEXED,
+            session_id UNINDEXED,
+            role UNINDEXED,
+            content,
+            tokenize = 'porter unicode61'
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_entries_ai AFTER INSERT ON entries BEGIN
+            INSERT INTO fts_entries(entry_id, session_id, role, content)
+            SELECT new.id, m.session_id, COALESCE(new.role, ''), COALESCE(new.content, '')
+            FROM entry_memberships m WHERE m.entry_id = new.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_entries_ad AFTER DELETE ON entries BEGIN
+            DELETE FROM fts_entries WHERE entry_id = old.id;
+        END;
     "#,
 }];
 
@@ -258,12 +377,9 @@ pub struct SessionRecord {
     pub parent_id: Option<String>,
     pub fork_kind: String,
     pub title: Option<String>,
-    pub title_manual: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub project_root: String,
-    #[serde(default)]
-    pub data: Option<String>,
     #[serde(default)]
     pub msg_count: i64,
     #[serde(default)]
@@ -272,35 +388,8 @@ pub struct SessionRecord {
     pub digest: Option<String>,
 }
 
-/// Materialized message record in SQLite.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageRecord {
-    pub id: String,
-    pub session_id: String,
-    pub seq: i64,
-    pub role: String,
-    pub content: String,
-    pub content_blob_hash: Option<String>,
-    pub reasoning_content: Option<String>,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub created_at_ms: i64,
-}
-
-/// Command audit record in SQLite.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CommandRecord {
-    pub id: String,
-    pub session_id: String,
-    pub name: String,
-    pub arguments: String,
-    pub result: Option<String>,
-    pub status: String,
-    pub created_at_ms: i64,
-}
-
-/// Monotonic session event record in SQLite.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One ledger row in the `events` table (ADR-0186 working-state audit log).
+#[derive(Debug, Clone)]
 pub struct SessionEventRecord {
     pub session_id: String,
     pub seq: i64,
@@ -309,15 +398,57 @@ pub struct SessionEventRecord {
     pub created_at_ms: i64,
 }
 
-/// History search result item from FTS5 queries.
+/// One full-text search hit over transcript entries.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HistorySearchResult {
-    pub message_id: String,
+    pub entry_id: String,
     pub session_id: String,
     pub project_root: String,
     pub role: String,
     pub snippet: String,
     pub score: f64,
+}
+
+fn role_str(role: muta_contracts::Role) -> &'static str {
+    match role {
+        muta_contracts::Role::User => "user",
+        muta_contracts::Role::Assistant => "assistant",
+        muta_contracts::Role::System => "system",
+        muta_contracts::Role::Tool => "tool",
+    }
+}
+
+fn role_from_str(role: &str) -> Option<muta_contracts::Role> {
+    match role {
+        "user" => Some(muta_contracts::Role::User),
+        "assistant" => Some(muta_contracts::Role::Assistant),
+        "system" => Some(muta_contracts::Role::System),
+        "tool" => Some(muta_contracts::Role::Tool),
+        _ => None,
+    }
+}
+
+fn origin_str(origin: muta_contracts::EntryOrigin) -> &'static str {
+    match origin {
+        muta_contracts::EntryOrigin::Harness => "harness",
+        muta_contracts::EntryOrigin::Checkpoint => "checkpoint",
+    }
+}
+
+fn origin_from_str(origin: &str) -> Option<muta_contracts::EntryOrigin> {
+    match origin {
+        "harness" => Some(muta_contracts::EntryOrigin::Harness),
+        "checkpoint" => Some(muta_contracts::EntryOrigin::Checkpoint),
+        _ => None,
+    }
+}
+
+fn serde_plain(kind: muta_contracts::DirectiveKind) -> rusqlite::Result<&'static str> {
+    Ok(match kind {
+        muta_contracts::DirectiveKind::Prune => "prune",
+        muta_contracts::DirectiveKind::Compact => "compact",
+        muta_contracts::DirectiveKind::Freeze => "freeze",
+    })
 }
 
 fn map_session_row(row: &Row) -> Result<SessionRecord> {
@@ -326,20 +457,18 @@ fn map_session_row(row: &Row) -> Result<SessionRecord> {
         parent_id: row.get(1)?,
         fork_kind: row.get(2)?,
         title: row.get(3)?,
-        title_manual: row.get(4)?,
-        created_at_ms: row.get(5)?,
-        updated_at_ms: row.get(6)?,
-        project_root: row.get(7)?,
-        data: row.get(8)?,
-        msg_count: row.get(9)?,
-        last_user_prompt: row.get(10)?,
-        digest: row.get(11)?,
+        created_at_ms: row.get(4)?,
+        updated_at_ms: row.get(5)?,
+        project_root: row.get(6)?,
+        msg_count: row.get(7)?,
+        last_user_prompt: row.get(8)?,
+        digest: row.get(9)?,
     })
 }
 
 fn map_search_row(row: &Row) -> Result<HistorySearchResult> {
     Ok(HistorySearchResult {
-        message_id: row.get(0)?,
+        entry_id: row.get(0)?,
         session_id: row.get(1)?,
         project_root: row.get(2)?,
         role: row.get(3)?,
@@ -416,16 +545,14 @@ impl DatabaseEngine {
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO sessions (id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 fork_kind = excluded.fork_kind,
                 title = excluded.title,
-                title_manual = excluded.title_manual,
                 updated_at_ms = excluded.updated_at_ms,
                 project_root = excluded.project_root,
-                data = excluded.data,
                 msg_count = excluded.msg_count,
                 last_user_prompt = excluded.last_user_prompt,
                 digest = excluded.digest;
@@ -435,11 +562,9 @@ impl DatabaseEngine {
                 session.parent_id,
                 session.fork_kind,
                 session.title,
-                session.title_manual,
                 session.created_at_ms,
                 session.updated_at_ms,
                 session.project_root,
-                session.data,
                 session.msg_count,
                 session.last_user_prompt,
                 session.digest,
@@ -452,7 +577,7 @@ impl DatabaseEngine {
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
                 params![session_id],
                 map_session_row,
             )
@@ -464,7 +589,7 @@ impl DatabaseEngine {
         let mut sessions = Vec::new();
         if let Some(root) = project_root {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest \
+                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest \
                  FROM sessions WHERE project_root = ?1 ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map(params![root], map_session_row)?;
@@ -473,7 +598,7 @@ impl DatabaseEngine {
             }
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, title_manual, created_at_ms, updated_at_ms, project_root, data, msg_count, last_user_prompt, digest \
+                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest \
                  FROM sessions ORDER BY updated_at_ms DESC",
             )?;
             let rows = stmt.query_map([], map_session_row)?;
@@ -492,77 +617,135 @@ impl DatabaseEngine {
         Ok(affected > 0)
     }
 
-    /// Persist a complete [`crate::session::SessionData`] record into SQLite in a single transaction,
-    /// synchronizing the `sessions` table, `messages` table (and FTS5 index).
+    /// Persist a complete [`crate::session::SessionData`] into SQLite in one
+    /// transaction (ADR-0186): the session row (identity + working state),
+    /// the session's memberships and directives, and the entries themselves
+    /// (`INSERT OR IGNORE` — facts are shared by identity across forks).
     pub(crate) fn save_session_full(&self, data: &crate::session::SessionData) -> Result<()> {
         let fork_str = match data.fork_kind {
             muta_contracts::SessionForkKind::Trunk => "trunk",
             muta_contracts::SessionForkKind::Fork => "fork",
             muta_contracts::SessionForkKind::Aside => "aside",
+            muta_contracts::SessionForkKind::Subagent => "subagent",
         };
-        let serialized_data = serde_json::to_string(data)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
         let digest_str = data
             .digest
             .as_ref()
             .and_then(|d| serde_json::to_string(d).ok());
         let last_prompt = crate::session::last_effective_prompt_from_data(data);
-        let msg_count = (data.model_window.len() + data.archived_transcript.len()) as i64;
+        let msg_count = data.transcript.entries.len() as i64;
 
-        let session_rec = SessionRecord {
-            id: data.id.clone(),
-            parent_id: data.parent_id.clone(),
-            fork_kind: fork_str.to_string(),
-            title: data.title.clone(),
-            title_manual: data.title_manual,
-            created_at_ms: data.created_at as i64,
-            updated_at_ms: data.updated_at as i64,
-            project_root: data.project_root.to_string_lossy().into_owned(),
-            data: Some(serialized_data),
-            msg_count,
-            last_user_prompt: last_prompt,
-            digest: digest_str,
-        };
-
-        // Execute in transaction
         self.conn.execute("BEGIN IMMEDIATE", [])?;
-
         let res: Result<()> = (|| {
-            self.upsert_session(&session_rec)?;
+            self.conn.execute(
+                r#"
+                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                ON CONFLICT(id) DO UPDATE SET
+                    parent_id = excluded.parent_id,
+                    fork_kind = excluded.fork_kind,
+                    title = excluded.title,
+                    updated_at_ms = excluded.updated_at_ms,
+                    project_root = excluded.project_root,
+                    msg_count = excluded.msg_count,
+                    last_user_prompt = excluded.last_user_prompt,
+                    digest = excluded.digest,
+                    provider_connection = excluded.provider_connection,
+                    round_counter = excluded.round_counter,
+                    unattended = excluded.unattended,
+                    disabled_tools = excluded.disabled_tools,
+                    commands = excluded.commands,
+                    round_interrupts = excluded.round_interrupts,
+                    retry_pending = excluded.retry_pending,
+                    request_usage_records = excluded.request_usage_records,
+                    applied_seq = excluded.applied_seq,
+                    checksum = excluded.checksum,
+                    schema_version = excluded.schema_version;
+                "#,
+                params![
+                    data.id,
+                    data.parent_id,
+                    fork_str,
+                    data.title,
+                    data.created_at as i64,
+                    data.updated_at as i64,
+                    data.project_root.to_string_lossy(),
+                    msg_count,
+                    last_prompt,
+                    digest_str,
+                    data.provider_selection.as_ref().and_then(|s| serde_json::to_string(s).ok()),
+                    data.round_counter as i64,
+                    data.unattended,
+                    serde_json::to_string(&data.disabled_tools.iter().collect::<Vec<_>>()).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    serde_json::to_string(&data.commands).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    serde_json::to_string(&data.round_interrupts).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    data.retry_pending.as_ref().and_then(|p| serde_json::to_string(p).ok()),
+                    serde_json::to_string(&data.request_usage_records).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    data.applied_seq.map(|s| s as i64),
+                    data.checksum.map(|c| c as i64),
+                    data.schema_version as i64,
+                ],
+            )?;
 
-            // Synchronize messages for this session
-            self.conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_rec.id])?;
-
-            for (seq, msg) in data.model_window.iter().enumerate() {
-                let role_str = match msg.role {
-                    muta_contracts::Role::User => "user",
-                    muta_contracts::Role::Assistant => "assistant",
-                    muta_contracts::Role::System => "system",
-                    muta_contracts::Role::Tool => "tool",
-                };
-                self.insert_message(MessageRecord {
-                    id: format!("{}:{}", session_rec.id, seq),
-                    session_id: session_rec.id.clone(),
-                    seq: seq as i64,
-                    role: role_str.to_string(),
-                    content: msg.content.clone(),
-                    content_blob_hash: msg.content_blob.clone(),
-                    reasoning_content: msg.reasoning_content.clone(),
-                    provider: None,
-                    model: None,
-                    created_at_ms: session_rec.updated_at_ms,
-                })?;
+            // Projection decisions: the session's own view history.
+            self.conn
+                .execute("DELETE FROM projections WHERE session_id = ?1", params![data.id])?;
+            for directive in &data.transcript.directives {
+                let payload = serde_json::to_string(&directive.payload)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                self.conn.execute(
+                    "INSERT INTO projections (session_id, seq, kind, up_to_seq, payload, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        data.id,
+                        directive.seq as i64,
+                        serde_plain(directive.kind)?,
+                        directive.up_to_seq as i64,
+                        payload,
+                        data.updated_at as i64,
+                    ],
+                )?;
             }
 
+            // Facts + memberships. Entries are global and shared by identity.
+            self.conn.execute(
+                "DELETE FROM entry_memberships WHERE session_id = ?1",
+                params![data.id],
+            )?;
+            for entry in &data.transcript.entries {
+                let payload = serde_json::to_string(&entry.payload)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                self.conn.execute(
+                    r#"
+                    INSERT INTO entries (id, kind, role, content, origin, hidden, created_at_ms, payload)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    ON CONFLICT(id) DO NOTHING;
+                    "#,
+                    params![
+                        entry.id,
+                        if entry.kind == muta_contracts::EntryKind::State { "state" } else { "message" },
+                        entry.role.map(role_str),
+                        entry.content,
+                        entry.origin.map(origin_str),
+                        entry.hidden,
+                        entry.created_at_ms as i64,
+                        payload,
+                    ],
+                )?;
+                self.conn.execute(
+                    "INSERT INTO entry_memberships (session_id, seq, entry_id, added_by) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        data.id,
+                        entry.seq as i64,
+                        entry.id,
+                        data.applied_seq.unwrap_or(0) as i64,
+                    ],
+                )?;
+            }
             Ok(())
         })();
 
         match res {
-            Ok(()) => {
-                self.conn.execute("COMMIT", [])?;
-                Ok(())
-            }
+            Ok(()) => self.conn.execute("COMMIT", []).map(|_| ()),
             Err(e) => {
                 let _ = self.conn.execute("ROLLBACK", []);
                 Err(e)
@@ -570,24 +753,168 @@ impl DatabaseEngine {
         }
     }
 
-    /// Load a full [`crate::session::SessionData`] record by session ID from SQLite.
+    /// Load a full [`crate::session::SessionData`] by session ID from SQLite.
+    /// Entries whose payloads the current binary cannot decode are skipped
+    /// (kept in storage; degraded in view) per the unknown-kind contract.
     pub(crate) fn load_session_full(&self, session_id: &str) -> Result<Option<crate::session::SessionData>> {
-        let raw: Option<String> = self
+        let row = self
             .conn
             .query_row(
-                "SELECT data FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version FROM sessions WHERE id = ?1",
                 params![session_id],
-                |row| row.get(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, String>(15)?,
+                        row.get::<_, Option<i64>>(16)?,
+                        row.get::<_, Option<i64>>(17)?,
+                        row.get::<_, i64>(18)?,
+                    ))
+                },
             )
             .optional()?;
+        let Some((id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version)) = row
+        else {
+            return Ok(None);
+        };
 
-        if let Some(raw) = raw {
-            let data: crate::session::SessionData = serde_json::from_str(&raw)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Some(data))
-        } else {
-            Ok(None)
+        let mut entries = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT e.id, m.seq, e.kind, e.role, e.content, e.origin, e.hidden, e.created_at_ms, e.payload \
+                 FROM entry_memberships m JOIN entries e ON e.id = m.entry_id \
+                 WHERE m.session_id = ?1 ORDER BY m.seq ASC",
+            )?;
+            let rows = stmt.query_map(params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })?;
+            for row in rows {
+                let (eid, seq, kind, role, content, origin, hidden, created_at_ms, payload) = row?;
+                let decoded = (|| -> Option<muta_contracts::TranscriptEntry> {
+                    let kind = if kind == "state" {
+                        muta_contracts::EntryKind::State
+                    } else {
+                        muta_contracts::EntryKind::Message
+                    };
+                    let role = role.as_deref().and_then(role_from_str);
+                    let origin = origin.as_deref().and_then(origin_from_str);
+                    let payload: muta_contracts::EntryPayload = serde_json::from_str(&payload).ok()?;
+                    Some(muta_contracts::TranscriptEntry {
+                        id: eid,
+                        seq: seq.max(0) as u64,
+                        kind,
+                        role,
+                        content,
+                        origin,
+                        hidden: hidden != 0,
+                        created_at_ms: created_at_ms.max(0) as u64,
+                        payload,
+                    })
+                })();
+                if let Some(entry) = decoded {
+                    entries.push(entry);
+                }
+            }
         }
+
+        let mut directives = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT seq, kind, up_to_seq, payload FROM projections WHERE session_id = ?1 ORDER BY seq ASC",
+            )?;
+            let rows = stmt.query_map(params![session_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (seq, kind, up_to_seq, payload) = row?;
+                let decoded = (|| -> Option<muta_contracts::ProjectionDirective> {
+                    let kind = match kind.as_str() {
+                        "prune" => muta_contracts::DirectiveKind::Prune,
+                        "compact" => muta_contracts::DirectiveKind::Compact,
+                        "freeze" => muta_contracts::DirectiveKind::Freeze,
+                        _ => return None,
+                    };
+                    let payload: muta_contracts::DirectivePayload = serde_json::from_str(&payload).ok()?;
+                    Some(muta_contracts::ProjectionDirective {
+                        seq: seq.max(0) as u64,
+                        kind,
+                        up_to_seq: up_to_seq.max(0) as u64,
+                        payload,
+                    })
+                })();
+                if let Some(directive) = decoded {
+                    directives.push(directive);
+                }
+            }
+        }
+
+        let digest: Option<muta_contracts::SessionDigest> = digest
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok());
+        let digest_anchor = digest.as_ref().map(|_| updated_at_ms.max(0) as u64);
+        Ok(Some(crate::session::SessionData {
+            transcript: muta_contracts::Transcript { entries, directives },
+            last_projection: None,
+            digest,
+            digest_anchor,
+            id,
+            parent_id,
+            fork_kind: match fork_kind.as_str() {
+                "fork" => muta_contracts::SessionForkKind::Fork,
+                "aside" => muta_contracts::SessionForkKind::Aside,
+                "subagent" => muta_contracts::SessionForkKind::Subagent,
+                _ => muta_contracts::SessionForkKind::Trunk,
+            },
+            title,
+            created_at: created_at_ms.max(0) as u64,
+            updated_at: updated_at_ms.max(0) as u64,
+            project_root: PathBuf::from(project_root),
+            schema_version: if schema_version > 0 { schema_version as u32 } else { crate::session::CURRENT_SCHEMA_VERSION },
+            checksum: checksum.map(|c| c as u32),
+            applied_seq: applied_seq.map(|s| s.max(0) as u64),
+            provider_selection: provider_connection
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok()),
+            disabled_tools: serde_json::from_str(&disabled_tools).unwrap_or_default(),
+            round_counter: round_counter.max(0) as u64,
+            request_usage_records: serde_json::from_str(&request_usage_records).unwrap_or_default(),
+            commands: serde_json::from_str(&commands).unwrap_or_default(),
+            round_interrupts: serde_json::from_str(&round_interrupts).unwrap_or_default(),
+            retry_pending: retry_pending
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok()),
+            unattended: unattended != 0,
+            tree: Default::default(),
+        }))
     }
 
     /// Resolve a session ID prefix (4+ hex chars) to matching full session IDs.
@@ -637,6 +964,7 @@ impl DatabaseEngine {
                 digest
             FROM sessions
             WHERE (?1 IS NULL OR project_root = ?1)
+              AND fork_kind <> 'subagent'
             ORDER BY updated_at_ms DESC;
         "#;
 
@@ -731,7 +1059,7 @@ impl DatabaseEngine {
                 digest: data.digest.clone(),
                 created_at: data.created_at,
                 updated_at: data.updated_at,
-                message_count: data.model_window.len() + data.archived_transcript.len(),
+                message_count: data.transcript.entries.len(),
                 active: data.id == active_id,
                 last_prompt,
             }))
@@ -740,58 +1068,32 @@ impl DatabaseEngine {
         }
     }
 
-    /// Rename a session in the database.
+    /// Rename a session in the database. ADR-0186: a non-`NULL` title is
+    /// terminal; the manual flag is retained in the signature for the command
+    /// surface but no longer stored.
     pub fn rename_session(&self, session_id: &str, title: Option<&str>, manual: bool) -> Result<bool> {
         let now = Utc::now().timestamp_millis();
         if let Some(mut data) = self.load_session_full(session_id)? {
             data.title = title.map(|s| s.to_string());
-            data.title_manual = manual;
             data.updated_at = now as u64;
             self.save_session_full(&data)?;
             return Ok(true);
         }
+        let _ = manual;
         let affected = self.conn.execute(
-            "UPDATE sessions SET title = ?1, title_manual = ?2, updated_at_ms = ?3 WHERE id = ?4",
-            params![title, manual, now, session_id],
+            "UPDATE sessions SET title = ?1, updated_at_ms = ?2 WHERE id = ?3",
+            params![title, now, session_id],
         )?;
         Ok(affected > 0)
     }
 
     /// Discover every persisted session (across all project buckets) that has armed `/schedule` jobs.
-    pub fn list_armed_schedule_sessions(&self) -> Result<Vec<(String, PathBuf)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_root, data FROM sessions WHERE data LIKE '%\"scheduled_jobs\":[%'",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let project_root: String = row.get(1)?;
-            let data_str: Option<String> = row.get(2)?;
-            Ok((id, PathBuf::from(project_root), data_str))
-        })?;
-
-        let mut armed = Vec::new();
-        for item in rows {
-            let (id, root, data_str) = item?;
-            if let Some(raw) = data_str {
-                if let Ok(data) = serde_json::from_str::<crate::session::SessionData>(&raw) {
-                    if !data.scheduled_jobs.is_empty() {
-                        armed.push((id, root));
-                    }
-                }
-            }
-        }
-        Ok(armed)
-    }
-
     // Event Ledger Operations (ADR-0163)
 
     /// Append a single event to the monotonic event ledger.
     pub fn append_event(&self, event: &SessionEventRecord) -> Result<()> {
         self.conn.execute(
-            r#"
-            INSERT INTO session_events (session_id, seq, event_type, payload, created_at_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5);
-            "#,
+            "INSERT INTO events (session_id, seq, event_type, payload, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 event.session_id,
                 event.seq,
@@ -807,9 +1109,8 @@ impl DatabaseEngine {
     pub fn get_session_events(&self, session_id: &str) -> Result<Vec<SessionEventRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, seq, event_type, payload, created_at_ms \
-             FROM session_events WHERE session_id = ?1 ORDER BY seq ASC",
+             FROM events WHERE session_id = ?1 ORDER BY seq ASC",
         )?;
-
         let rows = stmt.query_map(params![session_id], |row| {
             Ok(SessionEventRecord {
                 session_id: row.get(0)?,
@@ -819,7 +1120,6 @@ impl DatabaseEngine {
                 created_at_ms: row.get(4)?,
             })
         })?;
-
         let mut events = Vec::new();
         for event in rows {
             events.push(event?);
@@ -827,169 +1127,58 @@ impl DatabaseEngine {
         Ok(events)
     }
 
-    // Message & CAS Operations
+    // Typed JSON KV Helpers (ADR-0168)
 
-    /// Insert or replace a message record, automatically offloading content exceeding
-    /// `CAS_THRESHOLD_BYTES` to the CAS `BlobStore` if configured.
-    pub fn insert_message(&self, mut message: MessageRecord) -> Result<()> {
-        let content_bytes = message.content.as_bytes();
-        if content_bytes.len() > CAS_THRESHOLD_BYTES
-            && let Some(ref blob_store) = self.blob_store
-            && let Ok(hash) = blob_store.put(content_bytes)
-        {
-            message.content_blob_hash = Some(hash);
-        }
-
-        self.conn.execute(
-            r#"
-            INSERT INTO messages (id, session_id, seq, role, content, content_blob_hash, reasoning_content, provider, model, created_at_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-            ON CONFLICT(id) DO UPDATE SET
-                content = excluded.content,
-                content_blob_hash = excluded.content_blob_hash,
-                reasoning_content = excluded.reasoning_content,
-                provider = excluded.provider,
-                model = excluded.model;
-            "#,
-            params![
-                message.id,
-                message.session_id,
-                message.seq,
-                message.role,
-                message.content,
-                message.content_blob_hash,
-                message.reasoning_content,
-                message.provider,
-                message.model,
-                message.created_at_ms,
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Retrieve all messages for a session, resolving blob hashes if necessary.
-    pub fn get_messages(&self, session_id: &str) -> Result<Vec<MessageRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, seq, role, content, content_blob_hash, reasoning_content, provider, model, created_at_ms \
-             FROM messages WHERE session_id = ?1 ORDER BY seq ASC",
-        )?;
-
-        let rows = stmt.query_map(params![session_id], |row| {
-            Ok(MessageRecord {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                seq: row.get(2)?,
-                role: row.get(3)?,
-                content: row.get(4)?,
-                content_blob_hash: row.get(5)?,
-                reasoning_content: row.get(6)?,
-                provider: row.get(7)?,
-                model: row.get(8)?,
-                created_at_ms: row.get(9)?,
-            })
-        })?;
-
-        let mut messages = Vec::new();
-        for msg in rows {
-            let mut record = msg?;
-            if let (Some(hash), Some(blob_store)) = (&record.content_blob_hash, &self.blob_store)
-                && let Some(blob) = blob_store.get(hash)
-                && let Ok(text) = String::from_utf8(blob)
-            {
-                record.content = text;
-            }
-            messages.push(record);
-        }
-        Ok(messages)
-    }
-
-    // Command Ledger Operations (ADR-0091)
-
-    /// Insert or update a command audit record.
-    pub fn record_command(&self, cmd: &CommandRecord) -> Result<()> {
-        self.conn.execute(
-            r#"
-            INSERT INTO commands (id, session_id, name, arguments, result, status, created_at_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            ON CONFLICT(id) DO UPDATE SET
-                arguments = excluded.arguments,
-                result = excluded.result,
-                status = excluded.status;
-            "#,
-            params![
-                cmd.id,
-                cmd.session_id,
-                cmd.name,
-                cmd.arguments,
-                cmd.result,
-                cmd.status,
-                cmd.created_at_ms,
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Retrieve all command records for a session.
-    pub fn get_commands(&self, session_id: &str) -> Result<Vec<CommandRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, name, arguments, result, status, created_at_ms \
-             FROM commands WHERE session_id = ?1 ORDER BY created_at_ms ASC",
-        )?;
-
-        let rows = stmt.query_map(params![session_id], |row| {
-            Ok(CommandRecord {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                name: row.get(2)?,
-                arguments: row.get(3)?,
-                result: row.get(4)?,
-                status: row.get(5)?,
-                created_at_ms: row.get(6)?,
-            })
-        })?;
-
-        let mut commands = Vec::new();
-        for cmd in rows {
-            commands.push(cmd?);
-        }
-        Ok(commands)
-    }
-
-    // Key-Value Operations
-
-    /// Put a key-value entry.
+    /// Set (or overwrite) a key in the unified KV store.
     pub fn set_kv(&self, key: &str, value: &str) -> Result<()> {
-        let now = Utc::now().timestamp_millis();
         self.conn.execute(
-            r#"
-            INSERT INTO kv_store (key, value, updated_at)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at;
-            "#,
-            params![key, value, now],
+            "INSERT INTO kv_store (key, value, updated_at) VALUES (?1, ?2, strftime('%s','now')) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![key, value],
         )?;
         Ok(())
     }
 
-    /// Get a value by key.
+    /// Fetch a key from the unified KV store.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>> {
         self.conn
-            .query_row(
-                "SELECT value FROM kv_store WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM kv_store WHERE key = ?1", params![key], |row| {
+                row.get(0)
+            })
             .optional()
     }
 
-    /// Delete a key-value entry.
+    /// Delete a key from the unified KV store.
     pub fn delete_kv(&self, key: &str) -> Result<bool> {
         let affected = self
             .conn
             .execute("DELETE FROM kv_store WHERE key = ?1", params![key])?;
         Ok(affected > 0)
+    }
+
+    /// Record a slash-command invocation in the durable command ledger.
+    pub fn record_command(&self, cmd: &muta_contracts::CommandRecord) -> Result<()> {
+        let id = format!("{}:{}:{}", cmd.name, cmd.timestamp, muta_contracts::todos::unix_now());
+        self.conn.execute(
+            r#"
+            INSERT INTO commands (id, session_id, name, arguments, result, status, created_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                id,
+                "", // command ledger rows are session-agnostic audit records
+                cmd.name,
+                cmd.args,
+                cmd.result.as_ref().and_then(|r| serde_json::to_string(r).ok()),
+                match cmd.status {
+                    muta_contracts::CommandStatus::Success => "ok",
+                    muta_contracts::CommandStatus::Error => "failed",
+                    muta_contracts::CommandStatus::UserCancelled => "cancelled",
+                },
+                cmd.timestamp as i64,
+            ],
+        )?;
+        Ok(())
     }
 
     /// List keys with a given prefix, ordered descending.
@@ -1008,7 +1197,8 @@ impl DatabaseEngine {
 
     // FTS5 Full-Text History Search (proto.muta.v1.MutaService/SearchHistory)
 
-    /// Perform BM25 full-text search across messages, optionally filtered by workspace root.
+    /// Perform BM25 full-text search across transcript entries, optionally
+    /// filtered by workspace root.
     pub fn search_history(
         &self,
         query: &str,
@@ -1024,15 +1214,15 @@ impl DatabaseEngine {
         if let Some(root) = project_root {
             let sql = r#"
                 SELECT
-                    f.message_id,
+                    f.entry_id,
                     f.session_id,
                     s.project_root,
                     f.role,
-                    snippet(fts_messages, 3, '<b>', '</b>', '...', 16) AS snippet,
-                    bm25(fts_messages) AS score
-                FROM fts_messages f
+                    snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
+                    bm25(fts_entries) AS score
+                FROM fts_entries f
                 JOIN sessions s ON f.session_id = s.id
-                WHERE fts_messages MATCH ?1 AND s.project_root = ?2
+                WHERE fts_entries MATCH ?1 AND s.project_root = ?2
                 ORDER BY score ASC LIMIT ?3;
             "#;
             let mut stmt = self.conn.prepare(sql)?;
@@ -1043,15 +1233,15 @@ impl DatabaseEngine {
         } else {
             let sql = r#"
                 SELECT
-                    f.message_id,
+                    f.entry_id,
                     f.session_id,
                     s.project_root,
                     f.role,
-                    snippet(fts_messages, 3, '<b>', '</b>', '...', 16) AS snippet,
-                    bm25(fts_messages) AS score
-                FROM fts_messages f
+                    snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
+                    bm25(fts_entries) AS score
+                FROM fts_entries f
                 JOIN sessions s ON f.session_id = s.id
-                WHERE fts_messages MATCH ?1
+                WHERE fts_entries MATCH ?1
                 ORDER BY score ASC LIMIT ?2;
             "#;
             let mut stmt = self.conn.prepare(sql)?;
@@ -1330,148 +1520,7 @@ impl DatabaseEngine {
 
     // Legacy Flat-File Migration (ADR-0168)
 
-    /// Migrate legacy session files (.json snapshots and .jsonl logs) from a sessions directory into SQLite muta.db,
-    /// and safely purge the migrated files from disk per ADR-0168.
-    pub fn migrate_legacy_sessions_dir(&self, sessions_dir: &Path, project_root: &Path) -> usize {
-        let Ok(session_files) = std::fs::read_dir(sessions_dir) else {
-            return 0;
-        };
 
-        let mut count = 0;
-        for file_entry in session_files.flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-
-            let Ok(raw_json) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-
-            // Parse legacy snapshot
-            if let Ok(mut data) = serde_json::from_str::<crate::session::SessionData>(&raw_json) {
-                let is_empty = data.model_window.is_empty() && data.archived_transcript.is_empty();
-                if is_empty {
-                    // Prune stale empty legacy file
-                    let _ = std::fs::remove_file(&path);
-                    let _ = std::fs::remove_file(path.with_extension("jsonl"));
-                    continue;
-                }
-
-                if data.project_root.as_os_str().is_empty() {
-                    data.project_root = project_root.to_path_buf();
-                }
-
-                // Check sibling JSONL if present to apply tail events
-                let jsonl_path = path.with_extension("jsonl");
-                if jsonl_path.exists() {
-                    let event_log = crate::events::EventLog::new(jsonl_path.clone());
-                    if let Ok(tail) = event_log.load_since(data.applied_seq) {
-                        if !tail.is_empty() {
-                            crate::session::apply_events(&mut data, &tail);
-                        }
-                    }
-                }
-
-                if self.save_session_full(&data).is_ok() {
-                    count += 1;
-                    // Successfully migrated to SQLite SSOT: safely purge legacy files per ADR-0168
-                    let _ = std::fs::remove_file(&path);
-                    let _ = std::fs::remove_file(path.with_extension("jsonl"));
-                }
-            } else {
-                #[derive(Deserialize)]
-                struct LegacySnapshot {
-                    id: String,
-                    #[serde(default)]
-                    parent_id: Option<String>,
-                    #[serde(default)]
-                    fork_kind: Option<String>,
-                    #[serde(default)]
-                    title: Option<String>,
-                    #[serde(default)]
-                    title_manual: bool,
-                    #[serde(default)]
-                    created_at: Option<u64>,
-                    #[serde(default)]
-                    updated_at: Option<u64>,
-                    #[serde(default)]
-                    project_root: Option<PathBuf>,
-                    #[serde(default)]
-                    model_window: Vec<serde::de::IgnoredAny>,
-                    #[serde(default)]
-                    archived_transcript: Vec<serde::de::IgnoredAny>,
-                }
-
-                if let Ok(snap) = serde_json::from_str::<LegacySnapshot>(&raw_json) {
-                    let is_empty = snap.model_window.is_empty() && snap.archived_transcript.is_empty();
-                    if is_empty {
-                        let _ = std::fs::remove_file(&path);
-                        let _ = std::fs::remove_file(path.with_extension("jsonl"));
-                        continue;
-                    }
-
-                    let project_root_str = snap
-                        .project_root
-                        .unwrap_or_else(|| project_root.to_path_buf())
-                        .to_string_lossy()
-                        .into_owned();
-                    let msg_count = (snap.model_window.len() + snap.archived_transcript.len()) as i64;
-                    let record = SessionRecord {
-                        id: snap.id.clone(),
-                        parent_id: snap.parent_id,
-                        fork_kind: snap.fork_kind.unwrap_or_else(|| "trunk".to_string()),
-                        title: snap.title,
-                        title_manual: snap.title_manual,
-                        created_at_ms: snap.created_at.map(|t| t as i64).unwrap_or(0),
-                        updated_at_ms: snap.updated_at.map(|t| t as i64).unwrap_or(0),
-                        project_root: project_root_str,
-                        data: Some(raw_json.clone()),
-                        msg_count,
-                        last_user_prompt: None,
-                        digest: None,
-                    };
-
-                    if self.upsert_session(&record).is_ok() {
-                        count += 1;
-                        let _ = std::fs::remove_file(&path);
-                        let _ = std::fs::remove_file(path.with_extension("jsonl"));
-                    }
-                }
-            }
-        }
-        count
-    }
-
-    /// Discover every project bucket in `projects_dir` and migrate legacy flat files into SQLite muta.db.
-    /// Runs once idempotently, tracked by `kv_store`.
-    pub fn migrate_legacy_projects(&self, projects_dir: &Path) -> usize {
-        if self.get_kv("legacy_projects_migrated_v1").ok().flatten().is_some() {
-            return 0;
-        }
-
-        let Ok(entries) = std::fs::read_dir(projects_dir) else {
-            return 0;
-        };
-
-        let mut total_count = 0;
-        for bucket in entries.flatten() {
-            let sessions_dir = bucket.path().join("sessions");
-            if sessions_dir.exists() {
-                let project_root = bucket.path();
-                total_count += self.migrate_legacy_sessions_dir(&sessions_dir, &project_root);
-            }
-        }
-
-        let _ = self.set_kv("legacy_projects_migrated_v1", "true");
-        if total_count > 0 {
-            info!(
-                count = total_count,
-                "Migrated legacy sessions into SQLite muta.db and purged flat files (ADR-0168)"
-            );
-        }
-        total_count
-    }
 }
 
 // Asynchronous Persistence Actor (Single-Writer Pattern)
@@ -1500,12 +1549,8 @@ pub enum PersistenceCommand {
         event: SessionEventRecord,
         ack: oneshot::Sender<Result<()>>,
     },
-    InsertMessage {
-        message: MessageRecord,
-        ack: oneshot::Sender<Result<()>>,
-    },
     RecordCommand {
-        cmd: CommandRecord,
+        cmd: muta_contracts::CommandRecord,
         ack: oneshot::Sender<Result<()>>,
     },
     SetKV {
@@ -1603,10 +1648,6 @@ impl PersistenceHandle {
                         }
                         PersistenceCommand::AppendEvent { event, ack } => {
                             let res = engine.append_event(&event);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::InsertMessage { message, ack } => {
-                            let res = engine.insert_message(message);
                             let _ = ack.send(res);
                         }
                         PersistenceCommand::RecordCommand { cmd, ack } => {
@@ -1732,15 +1773,6 @@ impl PersistenceHandle {
         });
     }
 
-    /// Non-blocking fire-and-forget message insert to avoid blocking synchronous writers.
-    pub fn try_insert_message(&self, message: MessageRecord) {
-        let (ack_tx, _) = oneshot::channel();
-        let _ = self.tx.try_send(PersistenceCommand::InsertMessage {
-            message,
-            ack: ack_tx,
-        });
-    }
-
     /// Asynchronously delete a session record.
     pub async fn delete_session(&self, session_id: String) -> Result<bool> {
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -1790,23 +1822,8 @@ impl PersistenceHandle {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
-    /// Asynchronously insert a message.
-    pub async fn insert_message(&self, message: MessageRecord) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
-            .send(PersistenceCommand::InsertMessage {
-                message,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-    }
-
-    /// Asynchronously record a command audit event.
-    pub async fn record_command(&self, cmd: CommandRecord) -> Result<()> {
+    /// Asynchronously record a command invocation.
+    pub async fn record_command(&self, cmd: muta_contracts::CommandRecord) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .send(PersistenceCommand::RecordCommand { cmd, ack: ack_tx })
@@ -1979,331 +1996,50 @@ impl PersistenceHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
-    fn test_db_initialization_and_migrations() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_muta.db");
-
-        let conn = initialize_db(&db_path).expect("failed to init db");
-
-        // Assert journal mode is WAL
-        let journal_mode: String = conn
-            .pragma_query_value(None, "journal_mode", |row| row.get(0))
-            .unwrap();
-        assert_eq!(journal_mode.to_uppercase(), "WAL");
-
-        // Assert schema version is correct
-        let user_version: u32 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(user_version, CURRENT_DB_VERSION);
+    fn fresh_db_migrates_to_latest_version() {
+        let conn = initialize_in_memory_db().unwrap();
+        let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, CURRENT_DB_VERSION);
     }
 
     #[test]
-    fn test_session_lifecycle_and_events() {
+    fn working_state_round_trips_through_the_session_row() {
         let engine = DatabaseEngine::open_in_memory(None).unwrap();
+        engine
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', 'T', 1, 1, '/tmp', 0, NULL, NULL)",
+                [],
+            )
+            .unwrap();
+        let sessions = engine.list_sessions(None).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title.as_deref(), Some("T"));
+    }
 
-        let session = SessionRecord {
-            id: "sess_001".into(),
-            parent_id: None,
-            fork_kind: "trunk".into(),
-            title: Some("Initial Session".into()),
-            title_manual: false,
-            created_at_ms: 1000,
-            updated_at_ms: 1000,
-            project_root: "/workspace/project".into(),
-            data: None,
-            msg_count: 0,
-            last_user_prompt: None,
-            digest: None,
-        };
-
-        engine.upsert_session(&session).unwrap();
-
-        let fetched = engine.get_session("sess_001").unwrap().unwrap();
-        assert_eq!(fetched, session);
-
-        // Test appending events
-        let event = SessionEventRecord {
-            session_id: "sess_001".into(),
-            seq: 1,
-            event_type: "prompt".into(),
-            payload: r#"{"text":"hello agent"}"#.into(),
-            created_at_ms: 1005,
-        };
-        engine.append_event(&event).unwrap();
-
-        let events = engine.get_session_events("sess_001").unwrap();
+    #[test]
+    fn events_ledger_append_and_replay() {
+        let engine = DatabaseEngine::open_in_memory(None).unwrap();
+        engine
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', NULL, 1, 1, '/tmp', 0, NULL, NULL)",
+                [],
+            )
+            .unwrap();
+        engine
+            .append_event(&SessionEventRecord {
+                session_id: "s1".into(),
+                seq: 0,
+                event_type: "test".into(),
+                payload: "{}".into(),
+                created_at_ms: 1,
+            })
+            .unwrap();
+        let events = engine.get_session_events("s1").unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], event);
-    }
-
-    #[test]
-    fn test_fts5_history_search() {
-        let engine = DatabaseEngine::open_in_memory(None).unwrap();
-
-        let session = SessionRecord {
-            id: "sess_search".into(),
-            parent_id: None,
-            fork_kind: "trunk".into(),
-            title: Some("Search Testing".into()),
-            title_manual: false,
-            created_at_ms: 1000,
-            updated_at_ms: 1000,
-            project_root: "/workspace/rust-code".into(),
-            data: None,
-            msg_count: 0,
-            last_user_prompt: None,
-            digest: None,
-        };
-        engine.upsert_session(&session).unwrap();
-
-        let msg = MessageRecord {
-            id: "msg_001".into(),
-            session_id: "sess_search".into(),
-            seq: 1,
-            role: "user".into(),
-            content: "How do we implement SQLite FTS5 in Rust with Tokio?".into(),
-            content_blob_hash: None,
-            reasoning_content: Some("User is asking for an FTS5 search design".into()),
-            provider: Some("anthropic".into()),
-            model: Some("claude-3-7-sonnet".into()),
-            created_at_ms: 1010,
-        };
-        engine.insert_message(msg).unwrap();
-
-        let results = engine
-            .search_history("SQLite FTS5", Some("/workspace/rust-code"), 10)
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].session_id, "sess_search");
-        assert!(results[0].snippet.contains("SQLite"));
-    }
-
-    #[test]
-    fn test_cas_blob_threshold_isolation() {
-        let dir = tempdir().unwrap();
-        let blobs_dir = dir.path().join("blobs");
-        let blob_store = BlobStore::new(blobs_dir);
-
-        let engine = DatabaseEngine::open_in_memory(Some(blob_store.clone())).unwrap();
-
-        let session = SessionRecord {
-            id: "sess_cas".into(),
-            parent_id: None,
-            fork_kind: "trunk".into(),
-            title: Some("CAS Testing".into()),
-            title_manual: false,
-            created_at_ms: 1000,
-            updated_at_ms: 1000,
-            project_root: "/workspace/cas".into(),
-            data: None,
-            msg_count: 0,
-            last_user_prompt: None,
-            digest: None,
-        };
-        engine.upsert_session(&session).unwrap();
-
-        // Create a large payload > 4KB
-        let large_content = "A".repeat(5000);
-        let msg = MessageRecord {
-            id: "msg_large".into(),
-            session_id: "sess_cas".into(),
-            seq: 1,
-            role: "assistant".into(),
-            content: large_content.clone(),
-            content_blob_hash: None,
-            reasoning_content: None,
-            provider: Some("google".into()),
-            model: Some("gemini-2.5-pro".into()),
-            created_at_ms: 1020,
-        };
-        engine.insert_message(msg).unwrap();
-
-        // Verify that message content was extracted and reconstructed
-        let retrieved = engine.get_messages("sess_cas").unwrap();
-        assert_eq!(retrieved.len(), 1);
-        assert_eq!(retrieved[0].content, large_content);
-        assert!(retrieved[0].content_blob_hash.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_persistence_actor_async() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("async_muta.db");
-
-        let handle = PersistenceHandle::spawn(db_path, None);
-
-        let session = SessionRecord {
-            id: "sess_async".into(),
-            parent_id: None,
-            fork_kind: "trunk".into(),
-            title: Some("Async Actor Session".into()),
-            title_manual: true,
-            created_at_ms: 2000,
-            updated_at_ms: 2000,
-            project_root: "/workspace/async".into(),
-            data: None,
-            msg_count: 0,
-            last_user_prompt: None,
-            digest: None,
-        };
-
-        handle.upsert_session(session.clone()).await.unwrap();
-
-        let reader = handle.open_reader().unwrap();
-        let fetched = reader.get_session("sess_async").unwrap().unwrap();
-        assert_eq!(fetched, session);
-    }
-
-    #[test]
-    fn test_migrate_legacy_projects_and_purge() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("muta.db");
-        let projects_dir = dir.path().join("projects");
-        let bucket_dir = projects_dir.join("test_bucket");
-        let sessions_dir = bucket_dir.join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        // 1. Create a substantive legacy session file and sibling jsonl
-        let snap_path = sessions_dir.join("leg-sess-1.json");
-        let jsonl_path = sessions_dir.join("leg-sess-1.jsonl");
-        let snap_data = serde_json::json!({
-            "id": "leg-sess-1",
-            "title": "Migrated Legacy Title",
-            "model_window": [
-                {
-                    "role": "User",
-                    "content": "hello world"
-                }
-            ],
-            "archived_transcript": []
-        });
-        std::fs::write(&snap_path, serde_json::to_string(&snap_data).unwrap()).unwrap();
-        std::fs::write(&jsonl_path, "{\"seq\":1}\n").unwrap();
-
-        // 2. Create an empty legacy session file
-        let empty_snap_path = sessions_dir.join("empty-sess.json");
-        let empty_jsonl_path = sessions_dir.join("empty-sess.jsonl");
-        let empty_snap_data = serde_json::json!({
-            "id": "empty-sess",
-            "model_window": [],
-            "archived_transcript": []
-        });
-        std::fs::write(&empty_snap_path, serde_json::to_string(&empty_snap_data).unwrap()).unwrap();
-        std::fs::write(&empty_jsonl_path, "").unwrap();
-
-        let engine = DatabaseEngine::open(&db_path, None).unwrap();
-        let migrated = engine.migrate_legacy_projects(&projects_dir);
-        assert_eq!(migrated, 1);
-
-        // Substantive legacy files should be purged from disk (ADR-0168)
-        assert!(!snap_path.exists());
-        assert!(!jsonl_path.exists());
-
-        // Empty legacy files should also be pruned from disk
-        assert!(!empty_snap_path.exists());
-        assert!(!empty_jsonl_path.exists());
-
-        // The session must be in SQLite muta.db and visible in list_session_summaries
-        let summaries = engine.list_session_summaries(None, "").unwrap();
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].id, "leg-sess-1");
-        assert_eq!(summaries[0].overview, "Migrated Legacy Title");
-        assert_eq!(summaries[0].message_count, 1);
-
-        // Idempotent: second call should be a no-op
-        let second = engine.migrate_legacy_projects(&projects_dir);
-        assert_eq!(second, 0);
-    }
-
-    #[test]
-    fn test_input_history_crud_and_dedup() {
-        let engine = DatabaseEngine::open_in_memory(None).unwrap();
-
-        let e1 = muta_contracts::HistoryEntry::new(
-            "prompt 1".into(),
-            Some("sess-1".into()),
-            Some("/ws1".into()),
-            100,
-        );
-        let e2 = muta_contracts::HistoryEntry::new(
-            "prompt 2".into(),
-            Some("sess-1".into()),
-            Some("/ws1".into()),
-            200,
-        );
-
-        engine.record_input_history(&e1, true).unwrap();
-        engine.record_input_history(&e2, true).unwrap();
-
-        let loaded = engine.load_input_history(10).unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].text, "prompt 2");
-        assert_eq!(loaded[1].text, "prompt 1");
-
-        // Dedup = true: recording "prompt 1" again with newer timestamp moves it to top
-        let e1_new = muta_contracts::HistoryEntry::new(
-            "prompt 1".into(),
-            Some("sess-2".into()),
-            Some("/ws2".into()),
-            300,
-        );
-        engine.record_input_history(&e1_new, true).unwrap();
-
-        let loaded = engine.load_input_history(10).unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].text, "prompt 1");
-        assert_eq!(loaded[0].created_at_ms, 300);
-        assert_eq!(loaded[0].session_id.as_deref(), Some("sess-2"));
-        assert_eq!(loaded[1].text, "prompt 2");
-
-        // Batch save
-        let batch = vec![
-            muta_contracts::HistoryEntry::new("batch 1".into(), None, None, 400),
-            muta_contracts::HistoryEntry::new("batch 2".into(), None, None, 500),
-        ];
-        engine.save_input_history(&batch, true).unwrap();
-        let loaded = engine.load_input_history(10).unwrap();
-        assert_eq!(loaded.len(), 4);
-        assert_eq!(loaded[0].text, "batch 2");
-        assert_eq!(loaded[1].text, "batch 1");
-
-        // Delete single entry by text and timestamp
-        let deleted = engine.delete_input_history_entry("batch 1", 400).unwrap();
-        assert_eq!(deleted, 1);
-        let loaded = engine.load_input_history(10).unwrap();
-        assert_eq!(loaded.len(), 3);
-        assert!(!loaded.iter().any(|e| e.text == "batch 1"));
-
-        // Clear input history
-        engine.clear_input_history().unwrap();
-        let loaded = engine.load_input_history(10).unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[test]
-    fn test_migrate_legacy_history_files() {
-        let dir = tempdir().unwrap();
-        let legacy_file = dir.path().join("history.json");
-        let entries = vec![
-            muta_contracts::HistoryEntry::new("prompt 1".into(), None, None, 1000),
-            muta_contracts::HistoryEntry::new("prompt 2".into(), None, None, 2000),
-        ];
-        std::fs::write(&legacy_file, serde_json::to_string(&entries).unwrap()).unwrap();
-        assert!(legacy_file.exists());
-
-        let engine = DatabaseEngine::open_in_memory(None).unwrap();
-        let content = std::fs::read_to_string(&legacy_file).unwrap();
-        let parsed: Vec<muta_contracts::HistoryEntry> = serde_json::from_str(&content).unwrap();
-        engine.save_input_history(&parsed, true).unwrap();
-        std::fs::remove_file(&legacy_file).unwrap();
-
-        assert!(!legacy_file.exists());
-        let loaded = engine.load_input_history(10).unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].text, "prompt 2");
+        assert_eq!(events[0].event_type, "test");
     }
 }

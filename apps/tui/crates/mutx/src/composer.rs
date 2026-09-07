@@ -99,9 +99,9 @@ fn top_chrome_row(
 
 /// Render plumbing for the composer draw family: frame, target rect,
 /// theme, layout map, scroll state, and selection. Bundled so the three
-/// composer entry points and the shared impl take (view, text, flags)
+/// composer entry points and the shared impl take (props, text, flags)
 /// instead of threading eleven positional args.
-pub struct ComposerView<'a, 'f: 'a> {
+pub struct ComposerProps<'a, 'f: 'a> {
     pub frame: &'a mut Frame<'f>,
     pub input_rect: Rect,
     pub theme: &'a Theme,
@@ -295,7 +295,7 @@ pub fn cursor_screen_pos(
 /// state bar directly below the input, separate from composer state.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_composer(
-    view: ComposerView<'_, '_>,
+    props: ComposerProps<'_, '_>,
     text: ComposerText<'_>,
     focused: bool,
     show_caret: bool,
@@ -305,7 +305,7 @@ pub fn draw_composer(
     hints: crate::components::composer_hints::ComposerHints,
 ) {
     draw_composer_impl(
-        view,
+        props,
         text,
         ComposerDrawOptions {
             focused,
@@ -357,12 +357,12 @@ impl Default for ComposerDrawOptions {
 /// animation ends the caller passes no accent and the ordinary composer
 /// renders. See [`super::effort_ignition`].
 pub fn draw_composer_igniting(
-    view: ComposerView<'_, '_>,
+    props: ComposerProps<'_, '_>,
     text: ComposerText<'_>,
     options: ComposerDrawOptions,
     prompt_accent: (bool, Option<u128>),
 ) {
-    draw_composer_impl(view, text, options, None, Some(prompt_accent));
+    draw_composer_impl(props, text, options, None, Some(prompt_accent));
 }
 
 /// Like [`draw_composer`], but paints the `highlight_len`-byte run at the
@@ -372,12 +372,12 @@ pub fn draw_composer_igniting(
 /// color). The length is clamped per wrapped row so the accent never bleeds
 /// into the argument text when the input wraps.
 pub fn draw_composer_highlighted(
-    view: ComposerView<'_, '_>,
+    props: ComposerProps<'_, '_>,
     text: ComposerText<'_>,
     options: ComposerDrawOptions,
     highlight_len: usize,
 ) {
-    draw_composer_impl(view, text, options, Some(highlight_len), None);
+    draw_composer_impl(props, text, options, Some(highlight_len), None);
 }
 
 /// Paint the ordinary (non-highlighted, non-igniting) composer while honoring
@@ -385,15 +385,15 @@ pub fn draw_composer_highlighted(
 /// keeps its historical always-follow behavior for isolated render callers;
 /// the live event loop uses this entry point because it owns scroll intent.
 pub fn draw_composer_with_options(
-    view: ComposerView<'_, '_>,
+    props: ComposerProps<'_, '_>,
     text: ComposerText<'_>,
     options: ComposerDrawOptions,
 ) {
-    draw_composer_impl(view, text, options, None, None);
+    draw_composer_impl(props, text, options, None, None);
 }
 
 fn draw_composer_impl(
-    view: ComposerView<'_, '_>,
+    props: ComposerProps<'_, '_>,
     text: ComposerText<'_>,
     options: ComposerDrawOptions,
     highlight_len: Option<usize>,
@@ -408,14 +408,14 @@ fn draw_composer_impl(
         paste_count,
         hints,
     } = options;
-    let ComposerView {
+    let ComposerProps {
         frame,
         input_rect,
         theme,
         layout_map,
         input_scroll,
         selection,
-    } = view;
+    } = props;
     let ComposerText { input, byte_cursor } = text;
     // The input box is a flat tinted panel: each text row carries `panel_bg`
     // and is prefixed with `› ` on the first wrapped line / a matching indent

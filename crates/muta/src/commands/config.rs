@@ -126,9 +126,6 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 "daemon.shutdown_grace_secs" => println!("{}", config.daemon.shutdown_grace_secs),
                 "daemon.idle_exit_minutes" => println!("{}", config.daemon.idle_exit_minutes),
                 "daemon.local_auth" => println!("{}", config.daemon.local_auth),
-                "daemon.rehost_armed_schedules" => {
-                    println!("{}", config.daemon.rehost_armed_schedules)
-                }
                 "tui.color_scheme"
                 | "tui.transcript_layout"
                 | "tui.click_outside_dismiss"
@@ -253,11 +250,6 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                     config.daemon.local_auth = value
                         .parse()
                         .map_err(|_| "invalid boolean for daemon.local_auth")?;
-                }
-                "daemon.rehost_armed_schedules" => {
-                    config.daemon.rehost_armed_schedules = value
-                        .parse()
-                        .map_err(|_| "invalid boolean for daemon.rehost_armed_schedules")?;
                 }
                 "tui.color_scheme"
                 | "tui.transcript_layout"

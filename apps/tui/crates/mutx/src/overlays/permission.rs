@@ -7,13 +7,14 @@ use mutx_engine::{
 use muta_contracts::{PermissionRequest, UserQuestionRequest};
 
 use crate::components::options::{ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled};
+use crate::design::MODAL_INNER_H_PADDING;
 use crate::model::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::primitives::{
     FooterHint, contrast_fg, keyvocab, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
 };
 use crate::text_layout::wrap_text;
-use crate::view::Theme;
+use crate::render::Theme;
 use unicode_width::UnicodeWidthStr;
 
 // The permission sheet renders inline, replacing the composer (input box)
@@ -62,11 +63,126 @@ pub fn draw_question_modal(
     slot: Rect,
     theme: &Theme,
 ) -> mutx_engine::Rect {
+    // The minimum body height that keeps the sheet usable. Below this the
+    // body paints zero (or highlight-starved) rows — the "blank sheet that
+    // eats every keypress" failure — so the frame falls back to a
+    // centered panel sized for the content instead.
+    const MIN_BODY_ROWS: u16 = 2;
     // ADR-0173 §3: the question sheet is anchored to the composer slot —
     // the same bottom edge, extended over the hint bar — not centered over
     // the surface. The body scrolls within whatever height the slot leaves.
-    let area = slot;
+    //
+    // The slot's height is only partially ours to spend: a sheet pinned
+    // over the hint bar leaves just the composer's raw height, and the
+    // frame's header/footer/padding chrome is deducted from it. A request
+    // with a header row, a multi-line question, or descriptions per option
+    // does not fit in that budget, and the body would open at (or below)
+    // zero rows — a blank, key-dead sheet. Measure the demand first
+    // (mirroring the wrap passes the body build performs below) and grow
+    // the sheet upward into the transcript when the slot's budget falls
+    // short, capped at the terminal so the header always stays on screen.
+    let measure_width = slot.width.saturating_sub(2 * MODAL_INNER_H_PADDING).max(1) as usize;
+    let demand = request
+        .questions
+        .get(current_question)
+        .map(|q| {
+            let mut rows = 0usize;
+            if let Some(header) = &q.header {
+                rows += wrap_text(header, measure_width).len();
+            }
+            rows += wrap_text(&q.question, measure_width).len();
+            rows += 1; // the blank gap row between the question and the options
+            let q_selected = selected.get(current_question);
+            let other_idx = q.options.len();
+            for (i, option) in q.options.iter().enumerate() {
+                let row = ChoiceOptionRow {
+                    label: &option.label,
+                    description: option.description.as_deref(),
+                    selected: q_selected.is_some_and(|s| s.contains(&i)),
+                    highlighted: false,
+                    tone: ChoiceTone::Flat,
+                    marker: if q.multi_select {
+                        ChoiceMarker::Checkbox
+                    } else {
+                        ChoiceMarker::None
+                    },
+                }
+                .measure_lines(measure_width);
+                rows += row;
+            }
+            // The synthetic "Other" row.
+            rows += ChoiceOptionRow {
+                label: OTHER_OPTION_LABEL,
+                description: None,
+                selected: q_selected.is_some_and(|s| s.contains(&other_idx)),
+                highlighted: false,
+                tone: ChoiceTone::Flat,
+                marker: if q.multi_select {
+                    ChoiceMarker::Checkbox
+                } else {
+                    ChoiceMarker::None
+                },
+            }
+            .measure_lines(measure_width);
+            // The "Other" free-text field (present while it is highlighted),
+            // wrapped at the same 5-column indent budget the body build uses.
+            if highlighted == other_idx {
+                let field = other_text
+                    .get(current_question)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                rows += wrap_text(
+                    field,
+                    measure_width.saturating_sub(OTHER_FIELD_INDENT).max(1),
+                )
+                .len()
+                .max(1);
+            }
+            rows
+        })
+        .unwrap_or(0);
+    let content_h = demand.min(u16::MAX as usize) as u16;
+    let terminal_bottom = frame.area().bottom();
+    let slot_bottom = slot.y.saturating_add(slot.height).min(terminal_bottom);
+    // The `+2` lets the follow nudge keep the highlighted row one row clear
+    // of the scrollbar's bottom cap (`▼`), so the selected option is never
+    // overlapped by the indicator.
+    let desired = content_h.saturating_add(2);
+    // The sheet may grow upward into the transcript, but only up to the top
+    // edge of the terminal — the header must stay on screen. The slot's own
+    // height is the minimum (so a short question still reads as the
+    // drop-in composer replacement it is designed to be).
+    let available_above = slot_bottom.max(1);
+    let desired_h = desired.max(slot.height).min(available_above);
+    let sheet_top = slot_bottom.saturating_sub(desired_h);
+    let area = Rect::new(
+        slot.x,
+        sheet_top,
+        slot.width,
+        slot_bottom.saturating_sub(sheet_top).max(1),
+    );
     let f = modal_frame(frame, area, theme, true, true);
+    // Degrade gracefully rather than silently: if even the enlarged sheet
+    // still cannot show a single option row (an extreme — tiny terminal, or
+    // a resize race that collapsed the slot), the anchored layout would
+    // paint an empty, key-dead panel. Render a minimal centered panel
+    // instead — every key the sheet owns still applies, so the user can
+    // answer and move on. This is the last-line defense for the
+    // "blank sheet that ate my terminal" failure.
+    let body_rows = f.body.height as usize;
+    if body_rows < MIN_BODY_ROWS as usize && area.height >= 3 {
+        return draw_question_modal_fallback(
+            frame,
+            hit_map,
+            request,
+            current_question,
+            selected,
+            highlighted,
+            queue_depth,
+            terminal_bottom,
+            theme,
+        );
+    }
 
     let question = request.questions.get(current_question);
     let total = request.questions.len();
@@ -299,6 +415,171 @@ pub fn draw_question_modal(
         hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
+    area
+}
+
+/// Last-line fallback: a minimal, *usable* rendering of the question sheet
+/// for terminals where the anchored slot collapsed to fewer rows than the
+/// sheet's chrome needs. Draws a small centered panel with the header, the
+/// question line, one option row per line (the highlight marked), and the
+/// decision footer — everything the keyboard flow needs. It records the
+/// same hit-map rows the main renderer would, so mouse clicks keep working.
+#[allow(clippy::too_many_arguments)]
+fn draw_question_modal_fallback(
+    frame: &mut Frame,
+    hit_map: &mut ModalHitMap,
+    request: &UserQuestionRequest,
+    current_question: usize,
+    selected: &[Vec<usize>],
+    highlighted: usize,
+    queue_depth: usize,
+    max_height: u16,
+    theme: &Theme,
+) -> mutx_engine::Rect {
+    let question = request.questions.get(current_question);
+    let total = request.questions.len();
+    let enter_label = if current_question + 1 < total {
+        "next"
+    } else {
+        "submit"
+    };
+
+    // Compact body: the question text (truncated to its first line — the
+    // width is the terminal's, which is what limits us, so the line budget
+    // is what a normal sheet would use at full width), then one row per
+    // option. Options render as `› label` for the highlighted row (the
+    // highlight *is* the selection in single-select) or `[x]/[ ] label` for
+    // multi-select.
+    let mut body_lines: Vec<Line> = Vec::new();
+    let mut option_rows: Vec<(usize, usize, usize)> = Vec::new();
+    let body_width = frame.area().width.saturating_sub(4).max(1) as usize;
+    if let Some(q) = question {
+        if let Some(header) = &q.header {
+            push_wrapped_styled(
+                &mut body_lines,
+                "",
+                "",
+                header,
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD),
+                body_width,
+            );
+        }
+        push_wrapped_styled(
+            &mut body_lines,
+            "",
+            "",
+            &q.question,
+            Style::default().fg(theme.fg()),
+            body_width,
+        );
+        body_lines.push(Line::from(""));
+        let q_selected = selected.get(current_question);
+        for (i, option) in q.options.iter().enumerate() {
+            let row = body_lines.len();
+            let marker = if q.multi_select {
+                ChoiceMarker::Checkbox
+            } else {
+                ChoiceMarker::None
+            };
+            ChoiceOptionRow {
+                label: &option.label,
+                description: None, // descriptions dropped in the fallback
+                selected: q_selected.is_some_and(|s| s.contains(&i)),
+                highlighted: i == highlighted,
+                tone: ChoiceTone::Flat,
+                marker,
+            }
+            .push_lines(&mut body_lines, body_width, theme);
+            option_rows.push((i, row, body_lines.len()));
+        }
+        // The synthetic "Other" row: selectable, but its free-text field is
+        // dropped in the compact fallback (typed text is preserved in the
+        // model and flows into the reply as before).
+        let other_index = q.options.len();
+        let row = body_lines.len();
+        ChoiceOptionRow {
+            label: OTHER_OPTION_LABEL,
+            description: None,
+            selected: q_selected.is_some_and(|s| s.contains(&other_index)),
+            highlighted: highlighted == other_index,
+            tone: ChoiceTone::Flat,
+            marker: if q.multi_select {
+                ChoiceMarker::Checkbox
+            } else {
+                ChoiceMarker::None
+            },
+        }
+        .push_lines(&mut body_lines, body_width, theme);
+        option_rows.push((other_index, row, body_lines.len()));
+    }
+    // Truncate from the top if the terminal cannot hold every line: keep
+    // the options (the decision surface) over the question header.
+    let visible = max_height.saturating_sub(3).max(1) as usize; // chrome rows
+    let skip = body_lines.len().saturating_sub(visible);
+    if skip > 0 {
+        body_lines.drain(..skip);
+        option_rows = option_rows
+            .into_iter()
+            .filter_map(|(i, start, end)| {
+                let s = start.saturating_sub(skip);
+                let e = end.saturating_sub(skip);
+                (end > skip).then_some((i, s, e))
+            })
+            .collect();
+    }
+
+    let body_h = (body_lines.len().min(visible) as u16).max(1);
+    let panel_h = body_h
+        .saturating_add(3) // top pad + footer + bottom pad
+        .min(max_height)
+        .max(3);
+    let full = frame.area();
+    let w = full.width.clamp(20, 80);
+    let x = full.x + full.width.saturating_sub(w) / 2;
+    let y = full.y + full.height.saturating_sub(panel_h) / 2;
+    let area = Rect::new(x, y, w, panel_h);
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(panel_block(theme, theme.brand(), theme.panel()), area);
+
+    let body_rect = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        body_h.min(area.height.saturating_sub(2)),
+    );
+    let mut scroll = 0usize;
+    render_body(
+        frame,
+        body_rect,
+        body_lines,
+        &mut scroll,
+        crate::primitives::BodyRenderOptions::follow(None),
+        theme,
+    );
+    record_question_hits(hit_map, body_rect, &option_rows, scroll);
+
+    let footer_y = area.y.saturating_add(area.height).saturating_sub(1);
+    let hints = vec![
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::key_primary(crate::keymap::Key::ENTER, enter_label),
+        FooterHint::secondary("1-9", "jump"),
+        FooterHint::key_always(crate::keymap::Key::ESC, "cancel"),
+    ];
+    render_modal_footer(
+        frame,
+        Rect::new(
+            area.x.saturating_add(1),
+            footer_y,
+            area.width.saturating_sub(2),
+            1,
+        ),
+        &hints,
+        theme,
+    );
+    let _ = (total, queue_depth); // compact panel skips the paged/queued badges
     area
 }
 

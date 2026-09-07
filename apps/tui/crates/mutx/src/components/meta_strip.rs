@@ -12,7 +12,7 @@ use mutx_engine::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::text_layout::padded_tail;
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Semantic visual tone for a metadata chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

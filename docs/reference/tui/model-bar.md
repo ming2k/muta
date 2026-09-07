@@ -74,7 +74,7 @@ rows).
 
 ## Source
 
-`draw_model_bar` / `ModelBarView` in `chrome.rs`; the returned rects are the
+`draw_model_bar` / `ModelBarProps` in `chrome.rs`; the returned rects are the
 context meter's click target (gauge + `Ctrl+O` hint; opens the token-source
 report) and the rate segment's click target (gauge + `Ctrl+S` hint; opens the
 Performance report).

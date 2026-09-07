@@ -831,7 +831,7 @@ impl RunnerTool {
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        runner.set_delegated(profile.delegated);
+        runner.set_unattended(profile.unattended);
         // ADR-0141: the child inherits the parent's human-channel posture
         // source. An interactive session's runners can ask the user through
         // the parent's channel (permission requests flow up via

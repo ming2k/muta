@@ -123,26 +123,29 @@ fn completions_subcommand_argument_never_triggers_suggestion() {
 #[test]
 fn completions_intent_keywords_suggest_canonical_command() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/timer".to_string();
+    app.input = "/cron-x-intent".to_string();
+    app.cursor_position = app.input.chars().count();
+    // Intent keyword routing: a word that matches a command's intent_keywords
+    // suggests the canonical command. `/resume` maps to `/sessions`.
+    app.input = "/resume".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(
-        labels.contains(&"/schedule"),
-        "typing /timer should suggest /schedule"
+        labels.contains(&"/sessions"),
+        "typing /resume should suggest /sessions"
     );
 
     // Check intent suggestion kind and doc
-    let schedule_cand = completions.iter().find(|c| c.label == "/schedule").unwrap();
+    let sessions_cand = completions.iter().find(|c| c.label == "/sessions").unwrap();
     assert!(matches!(
-        schedule_cand.kind,
+        sessions_cand.kind,
         crate::completion::CompletionItemKind::IntentSuggestion { .. }
     ));
-    assert!(schedule_cand.doc.is_some());
-    let doc = schedule_cand.doc.as_ref().unwrap();
-    assert_eq!(doc.name, "/schedule");
-    assert_eq!(doc.category.as_deref(), Some("Automation"));
+    assert!(sessions_cand.doc.is_some());
+    let doc = sessions_cand.doc.as_ref().unwrap();
+    assert_eq!(doc.name, "/sessions");
 
     // /switch suggests /models and /role
     app.input = "/switch".to_string();
@@ -188,7 +191,7 @@ fn completions_classifies_slash_input_as_slash_kind() {
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
-    assert!(completions.iter().any(|c| c.label == "/repeat"));
+    assert!(completions.iter().any(|c| c.label == "/resume"));
     // Slash candidates replace the whole input.
     for c in &completions {
         assert_eq!(c.replace_start, 0);

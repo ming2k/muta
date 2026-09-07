@@ -32,8 +32,8 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
-        delegated: false,
-        unconfined: false,
+        unattended: false,
+        confined: true,
         teardown_token: None,
     }
 }

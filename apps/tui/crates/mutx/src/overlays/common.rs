@@ -7,7 +7,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::contrast_fg;
-use crate::view::Theme;
+use crate::render::Theme;
 /// Compact relative time for space-constrained surfaces (e.g. the sessions
 /// picker's meta column): `now` / `3m` / `2h` / `5d` / `3w` — no "ago" suffix.
 /// Takes a caller-supplied `now` (seconds since the epoch) so a renderer can

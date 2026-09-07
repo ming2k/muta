@@ -13,7 +13,7 @@ mod tests;
 
 pub use connections::draw_connections_modal;
 pub use editor::{
-    CustomEditorView, draw_custom_provider_editor, draw_model_editor, draw_preset_chooser,
+    CustomEditorProps, draw_custom_provider_editor, draw_model_editor, draw_preset_chooser,
 };
 pub use models::draw_models_modal;
 pub use oauth::draw_oauth_pending;

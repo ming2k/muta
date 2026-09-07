@@ -15,7 +15,7 @@ use crate::primitives::{
     render_modal_footer,
 };
 use crate::providers::{CustomField, PROVIDER_PRESETS, ProviderPreset};
-use crate::view::Theme;
+use crate::render::Theme;
 
 // Effort selector (Faster⇄Smarter node slider)
 
@@ -516,7 +516,7 @@ pub fn draw_preset_chooser(
 }
 
 /// Everything [`draw_custom_provider_editor`] renders, bundled so the call site stays readable.
-pub struct CustomEditorView<'a> {
+pub struct CustomEditorProps<'a> {
     pub fields: &'a [CustomField],
     pub field: u8,
     pub editing: bool,
@@ -533,14 +533,14 @@ pub struct CustomEditorView<'a> {
     pub cursor_position: usize,
 }
 
-/// Draw the provider editor: a per-preset form drawn from [`CustomEditorView::fields`].
+/// Draw the provider editor: a per-preset form drawn from [`CustomEditorProps::fields`].
 pub fn draw_custom_provider_editor(
-    view: CustomEditorView<'_>,
+    props: CustomEditorProps<'_>,
     frame: &mut Frame,
     theme: &Theme,
     scroll: &mut usize,
 ) -> mutx_engine::Rect {
-    let CustomEditorView {
+    let CustomEditorProps {
         fields,
         field,
         editing,
@@ -555,7 +555,7 @@ pub fn draw_custom_provider_editor(
         url_hint,
         input,
         cursor_position,
-    } = view;
+    } = props;
 
     let geometry = ContentModalSpec::CUSTOM_PROVIDER;
     let desired = (fields.len() as u16) + modal_chrome_rows(geometry.modal_spec());

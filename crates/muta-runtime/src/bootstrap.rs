@@ -59,10 +59,10 @@ pub struct BootstrapParams {
     pub startup: SessionStart,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
-    /// `--delegate` at start (delegated autonomous execution): auto-approve all tool permissions.
-    pub delegated: bool,
-    /// `--unconfined` at start (workspace filesystem confinement bypassed): unconfined file access.
-    pub unconfined: bool,
+    /// `--unattended` at start (unattended execution): auto-approve tool permissions.
+    pub unattended: bool,
+    /// Workspace filesystem confinement (default true). False (`--no-confinement`) bypasses confinement.
+    pub confined: bool,
     /// ADR-0141: the human-channel accountant this session reports into.
     /// Attach/detach on the WS layer ORs client postures into it; the
     /// harness's posture gate reads it before parking a human request.
@@ -119,8 +119,8 @@ pub struct Bootstrap {
     /// environment. `/trust` grant/revoke and `/settings reload` recompute
     /// the admitted set through it — effective on the next tool call.
     pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
-    /// Live handle for toggling session-level workspace confinement (jail).
-    pub shared_unconfined: muta_contracts::SharedUnconfined,
+    /// Live handle for toggling session-level workspace confinement.
+    pub shared_confinement: muta_contracts::SharedConfinement,
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
@@ -153,8 +153,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        delegated: delegated_at_start,
-        unconfined: unconfined_at_start,
+        unattended: unattended_at_start,
+        confined: confined_at_start,
         human_channel,
         teardown_token,
     } = params;
@@ -271,20 +271,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Before this the task leaked past teardown and ticked against a dead
     // channel forever. `None` (a plain process-lifetime scheduler) remains
     // available for single-session frontends that tear down with the process.
-    muta_agent::orchestration::start_supervised_schedule_scheduler(
-        Arc::clone(&session),
-        req_tx.clone(),
-        std::time::Duration::from_secs(30),
-        teardown_token.clone(),
-    );
-
     // C6: overlay the session's provider/model pin onto the effective config
     // before building the initial provider. A session that previously ran
     // `/models` reopens on its own provider instead of the global default,
     // so one session's choice never bleeds into another. Done after the session
     // is loaded (and, for resume, after `resume` swapped in its data).
     if let Some(selection) = session.provider_selection().await {
-        config.default_connection = selection.provider;
+        config.default_connection = selection.connection.clone();
         if let Some(model) = selection.model {
             config.default_model = Some(model);
         }
@@ -391,7 +384,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ),
     );
     let shared_additional_roots = execution_env.shared_additional_roots();
-    let shared_unconfined = execution_env.shared_unconfined();
+    let shared_confinement = execution_env.shared_confinement();
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
     let job_service: Arc<dyn muta_contracts::BackgroundJobService> =
         Arc::new(crate::background_jobs::SessionJobService::new(
@@ -420,7 +413,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             additional_roots.clone(),
         ));
         builder.provide(shared_additional_roots.clone());
-        builder.provide(shared_unconfined.clone());
+        builder.provide(shared_confinement.clone());
         builder.build()
     };
     let mut toolset: ToolSet = collect_toolset(&tool_ctx);
@@ -469,7 +462,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // system prompt tells it cross-project paths are legal instead of letting
     // it discover the widened boundary through trial and error.
     agent.set_additional_workspace_roots(additional_roots.clone());
-    agent.bind_shared_unconfined(shared_unconfined.clone());
+    agent.bind_shared_confinement(shared_confinement.clone());
     let agent = Arc::new(agent);
     // Override axis (model): runners are agents on the same model, so they
     // inherit the parent's tool-variant selection. The profile still owns the
@@ -599,17 +592,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime_for_bg.refresh_all().await;
     });
     muta_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
-    if delegated_at_start {
-        agent.set_delegated(true);
-        if let Err(error) = session.set_delegated(true).await {
+    if unattended_at_start {
+        agent.set_unattended(true);
+        if let Err(error) = session.set_unattended(true).await {
             tracing::warn!(
                 error = %error,
-                "could not persist --delegate startup posture"
+                "could not persist --unattended startup posture"
             );
         }
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::DelegatedChanged(true),
+            RoundEvent::UnattendedChanged(true),
         ));
         let _ = resp_tx.send(round_response(
             &session.id().await,
@@ -617,22 +610,22 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 AgentNotice::new(
                     muta_contracts::NoticeKind::CommandAck,
                     muta_contracts::NoticeSeverity::Info,
-                    "Delegated mode ON",
+                    "Unattended mode ON",
                     muta_contracts::NoticeSource::Harness,
                 )
                 .with_surface(muta_contracts::NoticeSurface::Toast)
                 .with_body(
                     "All tool permissions are auto-approved this session.\n\
-                     Use `/delegate off` to return to interactive mode.",
+                     Use `/unattended off` to return to interactive mode.",
                 ),
             ),
         ));
     }
-    if unconfined_at_start {
-        shared_unconfined.set_unconfined(true);
+    if !confined_at_start {
+        shared_confinement.set_confined(false);
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::UnconfinedChanged(true),
+            RoundEvent::ConfinementChanged(false),
         ));
         let _ = resp_tx.send(round_response(
             &session.id().await,
@@ -640,13 +633,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 AgentNotice::new(
                     muta_contracts::NoticeKind::CommandAck,
                     muta_contracts::NoticeSeverity::Warning,
-                    "Unconfined mode ON",
+                    "Workspace Confinement OFF",
                     muta_contracts::NoticeSource::Harness,
                 )
                 .with_surface(muta_contracts::NoticeSurface::Toast)
                 .with_body(
                     "Tools may access and edit any file on the host system.\n\
-                     Use `/unconfined off` to restore workspace confinement.",
+                     Use `/confinement on` to restore workspace confinement.",
                 ),
             ),
         ));
@@ -762,21 +755,21 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.restore_disabled_tools(session.disabled_tools().await);
         agent.restore_round_count(session.round_counter().await);
 
-        // Restore the session-scoped delegated posture (ADR-0132). This is
+        // Restore the session-scoped unattended posture (ADR-0132). This is
         // the daemon-restart recovery path: a session that died unattended
         // reopens unattended — attach, lazy-resume, and boot rehost all flow
-        // through here. `--delegate` ran earlier and may already have set
+        // through here. `--unattended` ran earlier and may already have set
         // the flag live; the store read is idempotent either way (same
-        // value, and `set_delegated` on the store is a no-op guard), but the
+        // value, and `set_unattended` on the store is a no-op guard), but the
         // explicit flag above wins when both apply, matching the user's most
         // recent explicit intent.
-        let persisted_delegated = session.delegated().await;
-        if persisted_delegated && !agent.delegated() {
-            agent.set_delegated(true);
+        let persisted_unattended = session.unattended().await;
+        if persisted_unattended && !agent.unattended() {
+            agent.set_unattended(true);
             let restored_session_id = session.id().await;
             tracing::info!(
                 session = %restored_session_id,
-                "restored delegated-mode posture from session store"
+                "restored unattended-mode posture from session store"
             );
         }
 
@@ -881,7 +874,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime,
         workspace_security: workspace_security.clone(),
         shared_additional_roots: shared_additional_roots.clone(),
-        shared_unconfined: shared_unconfined.clone(),
+        shared_confinement: shared_confinement.clone(),
         command_catalog: command_catalog.clone(),
         lifecycle,
         side,
@@ -910,6 +903,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent: agent_for_session_end.clone(),
         security: workspace_security.clone(),
         shared_additional_roots,
-        shared_unconfined,
+        shared_confinement,
     })
 }

@@ -12,6 +12,7 @@ use crate::model::layout::{BlockRegion, LayoutMap, LinkHit, TableCellHit, TableC
 use crate::model::selection::{
     CellDragInfo, SelectionState, floor_grapheme_boundary, inclusive_grapheme_end,
 };
+use crate::render::BlockWrapCache;
 
 use super::design::{
     BLOCK_SURFACE_H_INSET, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, CODE_BAND_LEFT_INDENT,
@@ -24,7 +25,6 @@ use super::text_layout::{
     CodeGutterParams, RichLineParams, RichTextColors, RichTextRanges, WrappedLine,
     block_selection_range, bold_delim_local_ranges, code_gutter_line, line_selection,
     line_spans_rich, link_delim_local_ranges, markup_hidden_ranges, padded_tail, visible_width,
-    wrap_text,
 };
 use super::time::sent_time_label;
 use super::{TRANSCRIPT_BODY_LEADING_INDENT, Theme};
@@ -254,6 +254,7 @@ pub fn draw_message_body(
     current_y: &mut u16,
     content_lines: &mut usize,
     record_layout: bool,
+    wrap: &mut BlockWrapCache,
 ) {
     for (bi, block) in msg.blocks.iter().enumerate() {
         let sel_range = block_selection_range(selection, mi, bi);
@@ -308,7 +309,7 @@ pub fn draw_message_body(
                 let user_text_width = user_panel_w
                     .saturating_sub(USER_MESSAGE_TEXT_GAP_COLS + USER_MESSAGE_RIGHT_PAD_COLS)
                     .max(1);
-                let lines = wrap_text(
+                let lines = wrap.wrap_text(
                     content,
                     if is_user {
                         user_text_width
@@ -438,7 +439,7 @@ pub fn draw_message_body(
                     }
                 }
 
-                for wl in &lines {
+                for wl in lines.iter() {
                     if *skip_rows > 0 {
                         *skip_rows = skip_rows.saturating_sub(1);
                         continue;
@@ -904,18 +905,18 @@ pub fn draw_message_body(
                 let marker_gap = MATH_MARKER_GAP_COLS;
                 let indent = left_indent + marker.width() + marker_gap;
                 let wrap_width = full_width.saturating_sub(indent + 1).max(1);
-                let lines = wrap_text(content, wrap_width);
+                let lines = wrap.wrap_text(content, wrap_width);
                 let lines = if lines.is_empty() {
-                    vec![WrappedLine {
+                    std::sync::Arc::new(vec![WrappedLine {
                         text: String::new(),
                         start_byte: 0,
                         end_byte: 0,
-                    }]
+                    }])
                 } else {
                     lines
                 };
                 *content_lines += lines.len();
-                for wl in &lines {
+                for wl in lines.iter() {
                     if *skip_rows > 0 {
                         *skip_rows = skip_rows.saturating_sub(1);
                         continue;
@@ -997,16 +998,13 @@ pub fn draw_message_body(
 
                 // Split into logical lines, tracking each one's byte offset
                 // within `content` so semantic selection maps back to the raw
-                // source even after per-line wrapping.
-                let mut logical_lines: Vec<(usize, &str)> = Vec::new();
-                let mut offset = 0usize;
-                for line in content.split('\n') {
-                    logical_lines.push((offset, line));
-                    offset += line.len() + 1; // +1 for the '\n'
-                }
-
-                let gutter_width = logical_lines
-                    .len()
+                // source even after per-line wrapping. The gutter width (and
+                // therefore the wrap width) depends on the line count, so
+                // count lines first, then resolve geometry from the
+                // content-addressed cache (ADR-0184): a frozen code block is
+                // split and wrapped exactly once per width.
+                let line_count = content.bytes().filter(|&b| b == b'\n').count() + 1;
+                let gutter_width = line_count
                     .to_string()
                     .len()
                     .max(CODE_BAND_GUTTER_MIN_WIDTH);
@@ -1018,6 +1016,7 @@ pub fn draw_message_body(
                 let gutter_gap = CODE_BAND_GUTTER_GAP;
                 let indent = left_indent + 1 /* space */ + gutter_width + gutter_gap;
                 let wrap_width = full_width.saturating_sub(indent + 1);
+                let prepared = wrap.prepare_code(content, wrap_width);
 
                 // Subtle language tag on its own dim line above the gutter.
                 if let Some(lang) = language.as_deref().filter(|l| !l.is_empty()) {
@@ -1044,18 +1043,9 @@ pub fn draw_message_body(
                     }
                 }
 
-                for (line_idx, (line_start_byte, logical_line)) in logical_lines.iter().enumerate()
+                for (line_idx, (line_start_byte, wrapped)) in
+                    prepared.logical.iter().enumerate()
                 {
-                    let wrapped = wrap_text(logical_line, wrap_width);
-                    let wrapped: Vec<WrappedLine> = if wrapped.is_empty() {
-                        vec![WrappedLine {
-                            text: String::new(),
-                            start_byte: 0,
-                            end_byte: 0,
-                        }]
-                    } else {
-                        wrapped
-                    };
                     *content_lines += wrapped.len();
                     for (wrap_idx, wl) in wrapped.iter().enumerate() {
                         if *skip_rows > 0 {
@@ -1140,7 +1130,7 @@ pub fn draw_message_body(
                     .fg(theme.heading())
                     .add_modifier(Modifier::BOLD);
                 let continuation = " ".repeat(prefix_cols as usize);
-                let lines = wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
+                let lines = wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
                 *content_lines += lines.len();
                 for (line_index, wl) in lines.iter().enumerate() {
                     if *skip_rows > 0 {
@@ -1234,9 +1224,9 @@ pub fn draw_message_body(
                     link_ranges,
                 } = inline;
                 // 5-col `▎` prefix; the area is already inset so no right gutter.
-                let lines = wrap_text(content, area.width.saturating_sub(5) as usize);
+                let lines = wrap.wrap_text(content, area.width.saturating_sub(5) as usize);
                 *content_lines += lines.len();
-                for wl in &lines {
+                for wl in lines.iter() {
                     if *skip_rows > 0 {
                         *skip_rows = skip_rows.saturating_sub(1);
                         continue;
@@ -1351,7 +1341,8 @@ pub fn draw_message_body(
                 let prefix = format!("   {}{} ", indent, marker);
                 let prefix_cols = display_width_u16(&prefix);
                 let continuation = " ".repeat(prefix_cols as usize);
-                let lines = wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
+                let lines =
+                    wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
                 *content_lines += lines.len();
                 for (line_index, wl) in lines.iter().enumerate() {
                     if *skip_rows > 0 {

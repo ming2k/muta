@@ -30,7 +30,7 @@ use crate::providers::{
     CustomField, ProviderPreset, RankedModel, RankedProvider, edit_fields,
     models_flat_filtered_from, providers_filtered_from,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 use crate::{Modal, TelemetryTab};
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -278,7 +278,7 @@ pub struct App {
     /// instead of O(transcript). Cleared whenever the transcript changes (a
     /// `messages_version` / `side_messages_version` bump) so a cached height is
     /// only ever read while the message's content is unchanged.
-    pub layout_height_cache: crate::view::HeightCache,
+    pub layout_height_cache: crate::render::HeightCache,
     /// True while the user is composing into the `/btw` aside view
     /// (ADR-0017/0103). Drives [`App::focused_messages`] to swap the viewed
     /// transcript to [`App::side_messages`] and reserves the aside header.
@@ -608,11 +608,11 @@ pub struct App {
     pub phase: Option<crate::phase::Phase>,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether all tool permissions are auto-approved this session
-    /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.
-    pub delegated: bool,
-    /// Whether workspace filesystem confinement is bypassed this session
-    /// (`--unconfined` / `/unconfined on`). Mirrored from the harness snapshot.
-    pub unconfined: bool,
+    /// (`--unattended` / `/unattended on`). Mirrored from the harness snapshot.
+    pub unattended: bool,
+    /// Whether workspace filesystem confinement is enforced this session
+    /// (`/confinement on|off`). Mirrored from the harness snapshot.
+    pub confined: bool,
     /// Harness round counter, mirrored each frame.
     pub round_count: u64,
     /// Current turn within the active round (1-indexed for display:
@@ -875,8 +875,8 @@ pub struct App {
     /// Which layout strategy arranges the transcript message stream. Selected
     /// via `[tui] transcript_layout`; defaults to the turn-banded layout (each
     /// tool-bearing ReAct turn grouped under a labelled header). See
-    /// `crate::view::layout::Strategy`.
-    pub transcript_layout: crate::view::layout::Strategy,
+    /// `crate::render::layout::Strategy`.
+    pub transcript_layout: crate::render::layout::Strategy,
     /// Canonical active color-scheme id (`zen`, a built-in preset, or
     /// `custom`). The renderer theme is rebuilt from this value immediately
     /// when the Appearance page applies a choice.
@@ -1117,7 +1117,7 @@ pub struct App {
     /// User-supplied ASCII logo lines loaded at startup from
     /// `$XDG_CONFIG_HOME/muta/logo.txt` (clamped to the empty-state bounding
     /// box). `None` when no user logo is present → built-in wordmark is used.
-    /// Passed into the empty-state hero via `TranscriptView::logo`.
+    /// Passed into the empty-state hero via `TranscriptProps::logo`.
     pub logo: Option<Vec<String>>,
 }
 

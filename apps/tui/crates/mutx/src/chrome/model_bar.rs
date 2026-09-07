@@ -7,14 +7,14 @@ use crate::components::keycap::keycap_style;
 use crate::design::{
     MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP, MODEL_BAR_SEGMENT_GAP,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 pub const CONTEXT_USAGE_WARN_THRESHOLD: f64 = 0.70;
 pub const CONTEXT_USAGE_CRIT_THRESHOLD: f64 = 0.90;
 
 /// Inputs for [`draw_model_bar`]. The split row's halves — context usage
 /// and stream rate on the left, model identity on the right.
-pub struct ModelBarView<'a> {
+pub struct ModelBarProps<'a> {
     pub current_model: &'a str,
     pub model_available: bool,
     pub provider_name: Option<&'a str>,
@@ -25,7 +25,7 @@ pub struct ModelBarView<'a> {
     pub ignition_elapsed_ms: Option<u128>,
 }
 
-impl<'a> Default for ModelBarView<'a> {
+impl<'a> Default for ModelBarProps<'a> {
     fn default() -> Self {
         Self {
             current_model: "",
@@ -98,11 +98,11 @@ pub(crate) fn context_usage_spans(
 pub fn draw_model_bar(
     frame: &mut Frame,
     rect: Rect,
-    view: ModelBarView<'_>,
+    props: ModelBarProps<'_>,
     theme: &Theme,
     key_overrides: &crate::keymap::GlobalOverrides,
 ) -> ModelBarRects {
-    let ModelBarView {
+    let ModelBarProps {
         current_model,
         model_available,
         provider_name,
@@ -111,7 +111,7 @@ pub fn draw_model_bar(
         context_window,
         last_turn_tps,
         ignition_elapsed_ms,
-    } = view;
+    } = props;
 
     let bg = theme.surface();
     let full_w = rect.width as usize;

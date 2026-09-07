@@ -170,7 +170,7 @@ pub enum Recess {
     /// The surface stays mounted and is darkened in place so the centered modal
     /// reads as the focal layer while context (transcript, input, hint bar,
     /// activity bar) remains visible. The brightness factor comes from
-    /// [`Theme::modal_dim_factor`](crate::view::Theme::modal_dim_factor).
+    /// [`Theme::modal_dim_factor`](crate::render::Theme::modal_dim_factor).
     Dim,
     /// Full takeover: the footer collapses to zero height and the surface is
     /// occluded with a solid fill. Reserved for context-switching flows

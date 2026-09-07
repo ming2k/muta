@@ -7,7 +7,7 @@ use muta_contracts::execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation,
 };
-use muta_contracts::{SharedAdditionalRoots, SharedUnconfined};
+use muta_contracts::{SharedAdditionalRoots, SharedConfinement};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -217,7 +217,7 @@ struct WorkspaceFsProvider {
     inner: LocalFsProvider,
     root: PathBuf,
     additional_roots: SharedAdditionalRoots,
-    unconfined: SharedUnconfined,
+    confinement: SharedConfinement,
 }
 
 impl WorkspaceFsProvider {
@@ -227,7 +227,7 @@ impl WorkspaceFsProvider {
             inner: LocalFsProvider::new(),
             root,
             additional_roots: SharedAdditionalRoots::empty(),
-            unconfined: SharedUnconfined::default(),
+            confinement: SharedConfinement::default(),
         }
     }
 
@@ -289,7 +289,7 @@ impl WorkspaceFsProvider {
                 path.display()
             ))
         })?;
-        let admitted = self.unconfined.is_unconfined()
+        let admitted = !self.confinement.is_confined()
             || resolved.starts_with(&self.root)
             || muta_contracts::execution::admits_temp_path(&resolved)
             || muta_contracts::execution::admits_skills_path(&resolved)
@@ -450,9 +450,9 @@ impl WorkspaceExecutionEnvironment {
         self.fs.additional_roots.clone()
     }
 
-    /// The live unconfined (workspace jail bypass) handle.
-    pub fn shared_unconfined(&self) -> SharedUnconfined {
-        self.fs.unconfined.clone()
+    /// The live confinement handle.
+    pub fn shared_confinement(&self) -> SharedConfinement {
+        self.fs.confinement.clone()
     }
 }
 
@@ -479,8 +479,8 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
         self.fs.additional_roots()
     }
 
-    fn is_unconfined(&self) -> bool {
-        self.fs.unconfined.is_unconfined()
+    fn is_confined(&self) -> bool {
+        self.fs.confinement.is_confined()
     }
 
     fn shell_isolation(&self) -> ShellIsolation {
@@ -791,14 +791,14 @@ pub(crate) mod workspace_tests {
     }
 
     #[tokio::test]
-    async fn workspace_fs_unconfined_mode_admits_outside_path() {
+    async fn workspace_fs_confinement_disabled_admits_outside_path() {
         let root = scratch();
         let outside_root = workspace_tests_outside_scratch("unconfined-outside");
         let outside_file = outside_root.join("outside.txt");
         std::fs::write(&outside_file, "unconfined content").unwrap();
 
         let env = WorkspaceExecutionEnvironment::new(root.path());
-        let shared = env.shared_unconfined();
+        let shared = env.shared_confinement();
 
         // Confined by default
         assert!(matches!(
@@ -806,17 +806,17 @@ pub(crate) mod workspace_tests {
             Err(FsError::PermissionDenied(_))
         ));
 
-        // Switch to unconfined
-        shared.set_unconfined(true);
-        assert!(env.is_unconfined());
+        // Disable confinement
+        shared.set_confined(false);
+        assert!(!env.is_confined());
         assert_eq!(
             env.fs().read_to_string(&outside_file).await.unwrap(),
             "unconfined content"
         );
 
         // Switch back to confined
-        shared.set_unconfined(false);
-        assert!(!env.is_unconfined());
+        shared.set_confined(true);
+        assert!(env.is_confined());
         assert!(matches!(
             env.fs().read(&outside_file).await,
             Err(FsError::PermissionDenied(_))

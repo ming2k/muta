@@ -16,8 +16,8 @@ use crate::clipboard_ops;
 use crate::input;
 use crate::model::layout::InteractiveTargetKind;
 use crate::model::selection::SelectionState;
-use crate::view;
-use crate::view::Theme;
+use crate::render;
+use crate::render::Theme;
 use crate::{App, Modal};
 
 use super::runtime::UiRuntime;
@@ -1339,7 +1339,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 } else if !app.telemetry_detail {
                     let has_rounds = app
                         .token_source_report(viewed_session_id)
-                        .map(|report| view::telemetry_round_count(&report) > 0)
+                        .map(|report| render::telemetry_round_count(&report) > 0)
                         .unwrap_or(false);
                     if has_rounds {
                         app.telemetry_detail = true;
@@ -1351,11 +1351,11 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     let round_index = app.modal_index.min(
                         report
                             .as_ref()
-                            .map(|report| view::telemetry_round_count(report).saturating_sub(1))
+                            .map(|report| render::telemetry_round_count(report).saturating_sub(1))
                             .unwrap_or(0),
                     );
                     if let Some(key) = report.as_ref().and_then(|report| {
-                        view::telemetry_attempt_key(report, round_index, app.telemetry_turn_cursor)
+                        render::telemetry_attempt_key(report, round_index, app.telemetry_turn_cursor)
                     }) {
                         app.telemetry_turn = Some(key);
                         app.telemetry_scroll = 0;

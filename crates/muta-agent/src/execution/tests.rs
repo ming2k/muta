@@ -217,8 +217,8 @@ async fn workspace_jail_middleware_blocks_sensitive_roots() {
     assert!(res_tilde.is_err());
     assert!(res_tilde.unwrap_err().contains("Security Denial"));
 
-    // When unconfined, both are allowed
-    env.set_unconfined(true);
+    // When confinement is disabled, both are allowed
+    env.set_confined(false);
     assert!(
         jail.pre_execute("read_text", &jail_args, &env)
             .await

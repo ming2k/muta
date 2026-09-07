@@ -137,10 +137,9 @@ pub struct RunnerPreset {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether a runner spawned under this profile runs in delegated
-    /// autonomous execution mode: auto-approves all permissions without
-    /// human intervention.
-    pub delegated: bool,
+    /// Whether a runner spawned under this profile runs in unattended
+    /// execution mode: auto-approves all permissions without human intervention.
+    pub unattended: bool,
     /// Whether an runner spawned under this profile may have the **model**
     /// supply stdin bytes for an `execute_command` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
@@ -280,7 +279,7 @@ handful of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    delegated: true,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -307,7 +306,7 @@ the title in the same language as the conversation.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    delegated: true,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -390,7 +389,7 @@ of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    delegated: true,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -410,7 +409,7 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
         command_allowlist: &[],
     },
     variant_pins: &[],
-    delegated: true,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -437,7 +436,7 @@ questions of the user; focus strictly on skill discovery and instruction synthes
         command_allowlist: &[],
     },
     variant_pins: &[],
-    delegated: true,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -722,19 +721,18 @@ mod tests {
     // profile value (see the doc comment above), not a computed property.
     #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn code_profile_runs_delegated() {
+    fn code_profile_runs_unattended() {
         use crate::RUNNER_CODE;
-        assert!(RUNNER_CODE.delegated);
+        assert!(RUNNER_CODE.unattended);
     }
 
     #[test]
     fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
         use crate::RUNNER_MCP_SPECIALIST;
-        // Pins the compiled-in profile value (delegation via `runner_mcp` is
-        // the authorization, mirroring RUNNER_CODE above); constant by design.
+        // Pins the compiled-in profile value (running unattended); constant by design.
         #[allow(clippy::assertions_on_constants)]
-        let delegated = RUNNER_MCP_SPECIALIST.delegated;
-        assert!(delegated);
+        let unattended = RUNNER_MCP_SPECIALIST.unattended;
+        assert!(unattended);
         // Dynamic / external tools admitted
         assert!(
             RUNNER_MCP_SPECIALIST

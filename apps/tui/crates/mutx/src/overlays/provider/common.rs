@@ -6,7 +6,7 @@ use mutx_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use super::super::common::{caret_column, field_viewport};
-use crate::view::Theme;
+use crate::render::Theme;
 
 pub(crate) const PICKER_SEARCH_PREFIX: &str = " Search  › ";
 

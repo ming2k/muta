@@ -11,7 +11,7 @@ use crate::model::document::TranscriptMessage;
 use crate::model::layout::BlockRegion;
 use crate::text_layout::{padded_tail, wrap_text};
 use crate::tools::ToolStatus;
-use crate::view::STEP_MIN_WIDTH;
+use crate::render::STEP_MIN_WIDTH;
 
 pub fn draw_runner_inline_step(
     ctx: &mut RenderCtx<'_, '_>,

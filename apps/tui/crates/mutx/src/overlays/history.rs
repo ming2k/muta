@@ -24,7 +24,7 @@ use crate::fuzzy::FuzzyMatch;
 use crate::primitives::{
     ElevationContainer, SCROLL_EDGE_MARGIN, contrast_fg, render_body,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Maximum number of rows the dropdown reserves vertically. Capped so a long
 /// history stays scannable — a Ctrl+R picker is a glance surface, not a full

@@ -2,7 +2,7 @@ use super::common::{draw_picker_search_row, place_picker_search_cursor};
 use super::editor::effort_block_rows;
 use super::*;
 use crate::providers::PROVIDER_PRESETS;
-use crate::view::Theme;
+use crate::render::Theme;
 use mutx_engine::Rect;
 
 /// Render the whole frame buffer back to a single string (rows joined by

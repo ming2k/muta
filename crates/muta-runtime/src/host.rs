@@ -392,20 +392,6 @@ async fn run_inner(
     // the scan is header-only and each assembly is the ordinary lazy-resume
     // path) and yields to an early shutdown trigger so a stop-race cannot
     // strand it mid-scan.
-    if Config::load().daemon.rehost_armed_schedules {
-        let rehost_registry = Arc::clone(&registry);
-        let rehost_gate = gate.clone();
-        let rehosted = tokio::select! {
-            result = rehost_registry.rehost_armed_sessions() => result,
-            _ = rehost_gate.triggered() => Vec::new(),
-        };
-        if !rehosted.is_empty() {
-            tracing::info!(
-                count = rehosted.len(),
-                "boot rehost: autonomous sessions restored"
-            );
-        }
-    }
 
     // Serving
     // Wait for a trigger, or the idle-exit timer (which itself is just

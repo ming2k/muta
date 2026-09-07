@@ -248,29 +248,29 @@ define_builtin_commands! {
         category: Config,
         subcommands: [],
     },
-    Delegate = "/delegate" : {
-        summary: "Toggle delegated autonomous execution mode",
-        usage: ["/delegate", "/delegate on", "/delegate off"],
-        examples: [("/delegate on", "Enable delegated autonomous mode"), ("/delegate off", "Return to interactive confirmation mode")],
-        intent_keywords: ["delegate", "delegation", "auto", "autopilot", "yolo", "autonomous", "unattended", "headless", "skip-confirm", "auto-approve", "bypass"],
+    Unattended = "/unattended" : {
+        summary: "Toggle unattended execution posture",
+        usage: ["/unattended", "/unattended on", "/unattended off"],
+        examples: [("/unattended on", "Enable unattended execution mode"), ("/unattended off", "Return to interactive confirmation mode")],
+        intent_keywords: ["unattended", "auto", "autopilot", "yolo", "delegate", "autonomous", "headless", "skip-confirm", "auto-approve", "bypass"],
         category: Automation,
         subcommands: [
-            ("on", "Enable autonomous decisions and tool auto-approval"),
+            ("on", "Enable unattended decisions and tool auto-approval"),
             ("off", "Return to interactive confirmation mode"),
         ],
     },
-    Unconfine = "/unconfine" : {
-        summary: "Toggle workspace filesystem confinement (unconfined file access)",
-        usage: ["/unconfine", "/unconfine on", "/unconfine off"],
+    Confinement = "/confinement" : {
+        summary: "Toggle workspace filesystem confinement (confine file tools to workspace)",
+        usage: ["/confinement", "/confinement on", "/confinement off"],
         examples: [
-            ("/unconfine on", "Enable unconfined file access (bypass workspace boundaries)"),
-            ("/unconfine off", "Disable unconfined access (confine file tools to workspace)"),
+            ("/confinement on", "Enable workspace confinement (restrict file tools to workspace)"),
+            ("/confinement off", "Disable workspace confinement (allow full host filesystem access)"),
         ],
-        intent_keywords: ["unconfine", "unconfined", "confinement", "jail", "escape", "sandbox"],
+        intent_keywords: ["confinement", "confined", "unconfine", "unconfined", "jail", "escape", "sandbox"],
         category: Automation,
         subcommands: [
-            ("on", "Enable unconfined access (allow full host filesystem access)"),
-            ("off", "Disable unconfined access (confine to workspace)"),
+            ("on", "Enable workspace confinement (confine file tools to workspace)"),
+            ("off", "Disable confinement (allow full host filesystem access)"),
         ],
     },
     Role = "/role" : {
@@ -344,30 +344,6 @@ define_builtin_commands! {
         category: Session,
         subcommands: [
             ("list", "Open the active asides modal"),
-        ],
-    },
-    Repeat = "/repeat" : {
-        summary: "Schedule a recurring 5-field cron prompt",
-        usage: ["/repeat <cron> <prompt>", "/repeat list", "/repeat cancel <id>"],
-        examples: [("/repeat \"*/10 * * * *\" \"check health\"", "Schedule recurring health check")],
-        intent_keywords: ["repeat", "cron", "loop", "interval", "periodic", "recurring"],
-        category: Automation,
-        subcommands: [
-            ("list", "List armed cron schedules"),
-            ("cancel", "Cancel one schedule by id"),
-            ("help", "Show /repeat usage"),
-        ],
-    },
-    Schedule = "/schedule" : {
-        summary: "Schedule a prompt (cron, countdown, or absolute)",
-        usage: ["/schedule <when> <prompt>", "/schedule list", "/schedule cancel <id>"],
-        examples: [("/schedule 15m \"run test suite\"", "Run one-shot in 15 minutes"), ("/schedule \"0 9 * * 1-5\" \"standup\"", "Run every weekday morning")],
-        intent_keywords: ["schedule", "cron", "timer", "alarm", "later", "in", "countdown", "at", "remind", "delay"],
-        category: Automation,
-        subcommands: [
-            ("list", "List scheduled prompts (recurring and one-shot)"),
-            ("cancel", "Cancel one schedule by id"),
-            ("help", "Show /schedule time-form syntax"),
         ],
     },
     Jobs = "/jobs" : {
@@ -464,7 +440,7 @@ define_builtin_commands! {
     Help = "/help" : {
         summary: "Show available commands and keybindings",
         usage: ["/help [topic]"],
-        examples: [("/help", "Open help guide"), ("/help schedule", "Show help for /schedule")],
+        examples: [("/help", "Open help guide"), ("/help sessions", "Show help for /sessions")],
         intent_keywords: ["help", "man", "docs", "guide", "info", "usage", "?", "shortcuts", "keybindings"],
         category: System,
     },
@@ -503,10 +479,10 @@ impl BuiltinCmd {
             "/session" => Some(BuiltinCmd::Sessions),
             // `/config` was renamed to `/settings`; the legacy alias keeps old invocations working.
             "/config" => Some(BuiltinCmd::Settings),
-            // `/yolo`, `/auto`, `/autopilot` are aliases for `/delegate` (delegated autonomous execution).
-            "/yolo" | "/auto" | "/autopilot" => Some(BuiltinCmd::Delegate),
-            // `/unconfined`, `/jail`, `/escape` are aliases for `/unconfine` (workspace confinement bypass).
-            "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Unconfine),
+            // `/auto`, `/delegate`, `/autopilot`, `/yolo` are aliases for `/unattended`.
+            "/auto" | "/delegate" | "/autopilot" | "/yolo" => Some(BuiltinCmd::Unattended),
+            // `/unconfine`, `/unconfined`, `/jail`, `/escape` are aliases for `/confinement`.
+            "/unconfine" | "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Confinement),
             // `/master` and `/preset` are legacy aliases for `/role` (ADR-0183).
             "/master" | "/preset" => Some(BuiltinCmd::Role),
             _ => None,
@@ -649,12 +625,14 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/resume", "/sessions"),
             ("/session", "/sessions"),
             ("/config", "/settings"),
-            ("/yolo", "/delegate"),
-            ("/auto", "/delegate"),
-            ("/autopilot", "/delegate"),
-            ("/unconfined", "/unconfine"),
-            ("/jail", "/unconfine"),
-            ("/escape", "/unconfine"),
+            ("/auto", "/unattended"),
+            ("/delegate", "/unattended"),
+            ("/autopilot", "/unattended"),
+            ("/yolo", "/unattended"),
+            ("/unconfine", "/confinement"),
+            ("/unconfined", "/confinement"),
+            ("/jail", "/confinement"),
+            ("/escape", "/confinement"),
             ("/master", "/role"),
             ("/preset", "/role"),
         ]

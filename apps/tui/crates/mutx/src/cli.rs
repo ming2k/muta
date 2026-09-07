@@ -53,11 +53,10 @@ pub struct CliArgs {
     pub mode: Mode,
     /// `--project <path>`: operate on the project at `<path>`.
     pub project: Option<PathBuf>,
-    /// `--delegate`: auto-approve all tool permissions — delegated autonomous execution mode.
-    pub delegated: bool,
-    /// `--unconfine` (aliases: `--unconfined`, `--no-jail`, `--escape`): run with workspace
-    /// filesystem confinement disabled.
-    pub unconfined: bool,
+    /// `--unattended`: run unattended without interactive human confirmations.
+    pub unattended: bool,
+    /// `--no-confinement`: run with workspace filesystem confinement disabled.
+    pub no_confinement: bool,
     /// `--interactive` / `-i`: force the TUI when headless would apply.
     pub interactive: bool,
     /// `-p`/`--prompt`/`--print` or a positional prompt phrase.
@@ -152,8 +151,8 @@ fn flag_value<'a, I: Iterator<Item = &'a String>>(
 /// Parse the command line. The caller owns error rendering and exit policy.
 pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project = None;
-    let mut delegated = false;
-    let mut unconfined = false;
+    let mut unattended = false;
+    let mut no_confinement = false;
     let mut interactive = false;
     let mut prompt = None;
     let mut prompt_from_flag = false;
@@ -181,8 +180,8 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                     "{name} was removed: use matching MUTA_*_DIR environment variables instead"
                 ));
             }
-            "--delegate" | "--yolo" | "--autopilot" => delegated = true,
-            "--unconfine" | "--unconfined" | "--no-jail" | "--escape" => unconfined = true,
+            "--unattended" => unattended = true,
+            "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
             "--json" | "-j" => json = true,
             "--print" | "--prompt" | "-p" => {
@@ -214,8 +213,8 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let base = |mode| CliArgs {
         mode,
         project: project.clone(),
-        delegated,
-        unconfined,
+        unattended,
+        no_confinement,
         interactive,
         prompt: prompt.clone(),
         prompt_from_flag,
@@ -395,8 +394,8 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -p, --prompt <prompt>  run the prompt non-interactively (headless)\n");
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
-            out.push_str("  --delegate             run in delegated autonomous mode (auto-approving permissions)\n");
-            out.push_str("  --unconfine            disable workspace filesystem confinement (unconfined file access)\n");
+            out.push_str("  --unattended           run unattended without interactive human confirmations\n");
+            out.push_str("  --no-confinement       disable workspace filesystem confinement (unconfined file access)\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
             out.push_str("      --remote <addr>    connect to a remote Muta daemon\n");
             out.push_str("      --token <token>    bearer token for daemon connection\n");
@@ -465,7 +464,7 @@ pub fn completion_script(shell: Shell) -> String {
              \x20   local cur\n\
              \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
              \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --delegate --yolo --autopilot --unconfine --unconfined --no-jail --escape --help --version\" -- \"$cur\"))\n\
+             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --unattended --no-confinement --help --version\" -- \"$cur\"))\n\
              \x20   fi\n\
              }}\n\
              complete -F _mutx mutx\n"
@@ -564,23 +563,26 @@ mod tests {
 
     #[test]
     fn posture_flags_parse_cleanly() {
-        let parsed = parse(&["--delegate"]).unwrap();
-        assert!(parsed.delegated);
-        assert!(!parsed.unconfined);
+        let parsed = parse(&["--unattended"]).unwrap();
+        assert!(parsed.unattended);
+        assert!(!parsed.no_confinement);
 
-        let parsed = parse(&["--delegate", "--unconfine"]).unwrap();
-        assert!(parsed.delegated);
-        assert!(parsed.unconfined);
+        let parsed = parse(&["--unattended", "--no-confinement"]).unwrap();
+        assert!(parsed.unattended);
+        assert!(parsed.no_confinement);
 
-        let parsed = parse(&["--unconfined"]).unwrap();
-        assert!(!parsed.delegated);
-        assert!(parsed.unconfined);
+        let parsed = parse(&["--no-confinement"]).unwrap();
+        assert!(!parsed.unattended);
+        assert!(parsed.no_confinement);
 
-        let parsed = parse(&["--no-jail"]).unwrap();
-        assert!(!parsed.delegated);
-        assert!(parsed.unconfined);
-
-        // Redundant legacy flags -y and --auto are removed
+        // Old flags are completely dropped and error cleanly
+        assert!(parse(&["--delegate"]).is_err());
+        assert!(parse(&["--yolo"]).is_err());
+        assert!(parse(&["--autopilot"]).is_err());
+        assert!(parse(&["--unconfine"]).is_err());
+        assert!(parse(&["--unconfined"]).is_err());
+        assert!(parse(&["--no-jail"]).is_err());
+        assert!(parse(&["--escape"]).is_err());
         assert!(parse(&["-y"]).is_err());
         assert!(parse(&["--auto"]).is_err());
     }

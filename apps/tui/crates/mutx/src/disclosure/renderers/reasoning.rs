@@ -16,9 +16,9 @@ use crate::model::layout::{BlockRegion, THINKING_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
 use crate::text_layout::{
     RichLineParams, RichTextColors, RichTextRanges, WrappedLine, block_selection_range,
-    line_selection, line_spans_rich, padded_tail, wrap_text,
+    line_selection, line_spans_rich, padded_tail,
 };
-use crate::view::{
+use crate::render::{
     REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
     TRANSCRIPT_BODY_LEADING_INDENT,
 };
@@ -57,6 +57,7 @@ pub fn draw_reasoning_trace(
             ctx.y,
             &mut *ctx.content_lines,
             true,
+            ctx.wrap,
         );
         return;
     }
@@ -118,9 +119,9 @@ pub fn draw_reasoning_trace(
                     );
                 }
                 emitted_any_block = true;
-                let lines = wrap_text(content, body_wrap_width);
+                let lines = ctx.wrap.wrap_text(content, body_wrap_width);
                 let sel_range = block_selection_range(selection, mi, bi);
-                for wl in &lines {
+                for wl in lines.iter() {
                     let block_wl = WrappedLine {
                         text: wl.text.clone(),
                         start_byte: wl.start_byte,

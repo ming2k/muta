@@ -2,12 +2,12 @@
 
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
-use super::{ConfigViewProps, render_scrollable};
+use super::{SettingsProps, render_scrollable};
 
 pub(super) fn draw_transcript_detail(
     frame: &mut Frame,
     body: Rect,
-    props: &mut ConfigViewProps<'_>,
+    props: &mut SettingsProps<'_>,
     focused: bool,
 ) {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -21,7 +21,7 @@ pub(super) fn draw_transcript_detail(
             selected_line = Some(lines.len());
         }
         let cursor = if is_sel { "›" } else { " " };
-        let is_band = props.transcript_layout == crate::view::layout::Strategy::TurnBand;
+        let is_band = props.transcript_layout == crate::render::layout::Strategy::TurnBand;
         let mark = if is_band { "●" } else { "○" };
         let row_style = if is_sel && focused {
             Style::default()

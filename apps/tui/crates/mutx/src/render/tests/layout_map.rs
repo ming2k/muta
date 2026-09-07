@@ -24,7 +24,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
         draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -36,7 +36,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,

@@ -259,7 +259,7 @@ pub(super) async fn handle_selection_start(
                 // exactly like the previous behaviour.
                 app.drag.begin_range(
                     &mut app.selection,
-                    SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, byte),
+                    SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, byte),
                 );
             }
             ClickTarget::StepSummary { message_idx, kind } => {
@@ -427,7 +427,7 @@ pub(super) fn handle_selection_end(app: &mut App) {
     // pre-drag caret (the event loop's `probe_input_selection_relay` resolves
     // it when the selection is next touched).
     if let SelectionState::Range { head, .. } = app.selection
-        && head.message_idx == crate::view::INPUT_MSG_IDX
+        && head.message_idx == crate::render::INPUT_MSG_IDX
         && app.caret_owner() == CaretOwner::Composer
     {
         let byte = floor_grapheme_boundary(&app.input, head.byte_offset);
@@ -436,7 +436,7 @@ pub(super) fn handle_selection_end(app: &mut App) {
     // Middle-click-style whole-block select on the input selects the entire
     // buffer; the caret's hidden position is defined as the end (head).
     if let SelectionState::Block {
-        message_idx: crate::view::INPUT_MSG_IDX,
+        message_idx: crate::render::INPUT_MSG_IDX,
         ..
     } = app.selection
     {
@@ -454,7 +454,7 @@ pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
         // Whole-input select (middle-click on the composer): the hidden
         // caret's position is defined as the buffer's end, so a following
         // ←/Backspace relays from there once the selection breaks.
-        if mi == crate::view::INPUT_MSG_IDX {
+        if mi == crate::render::INPUT_MSG_IDX {
             app.set_cursor(app.input.chars().count());
         }
     }

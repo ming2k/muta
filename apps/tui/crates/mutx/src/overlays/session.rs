@@ -13,7 +13,7 @@ use crate::primitives::{
     draw_scrollbar, keyvocab, modal_area, modal_frame, modal_header, modal_header_parts,
     render_centered_body, render_modal_footer, render_modal_footer_with_more, resolve_scroll,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Format an epoch-seconds timestamp as a local absolute date-time
 /// (`YYYY-MM-DD HH:MM`). Used by the session-info sub-view, where a precise

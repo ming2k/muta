@@ -128,7 +128,7 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
             ),
             session,
-            shared_unconfined: muta_contracts::SharedUnconfined::default(),
+            shared_confinement: muta_contracts::SharedConfinement::default(),
             req_tx,
             events: bc_tx,
             cancel: tokio_util::sync::CancellationToken::new(),
@@ -380,7 +380,7 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
                     muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
                 ),
                 session,
-                shared_unconfined: muta_contracts::SharedUnconfined::default(),
+                shared_confinement: muta_contracts::SharedConfinement::default(),
                 req_tx,
                 events: bc_tx,
                 cancel: tokio_util::sync::CancellationToken::new(),
@@ -395,26 +395,6 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
             })
             .await;
     }
-
-    let armed_project = tmp.path().join("armed-project");
-    let armed_session = Arc::new(SessionStore::load_for_project(armed_project.clone()));
-    armed_session
-        .set_scheduled_jobs(vec![muta_contracts::ScheduledJob::once(
-            "nightly".into(),
-            chrono::Utc::now() + chrono::Duration::hours(8),
-            "run the nightly check".into(),
-            chrono::Utc::now(),
-        )])
-        .await
-        .unwrap();
-    armed_session
-        .replace_messages(vec![muta_contracts::Message::new(
-            muta_contracts::Role::User,
-            "arm a schedule",
-        )])
-        .await
-        .unwrap();
-    host_with_session(&registry, armed_session.clone(), &armed_project).await;
 
     let plain_project = tmp.path().join("plain-project");
     let plain_session = Arc::new(SessionStore::load_for_project(plain_project.clone()));
@@ -432,11 +412,6 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         .suspend_idle_sessions_with(Duration::from_millis(0))
         .await;
 
-    let armed_id = armed_session.id().await;
-    assert!(
-        !suspended.contains(&armed_id),
-        "an armed schedule must keep its session resident (suspended: {suspended:?})"
-    );
     let plain_id = plain_session.id().await;
     assert!(
         suspended.contains(&plain_id),

@@ -5,7 +5,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::model::layout::LayoutMap;
 use crate::primitives::{ElevationContainer, contrast_fg, viewport_rect};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw a completion menu anchored above the input box.
 #[allow(clippy::too_many_arguments)] // mirrors the chrome render contract; the layout map is reserved for hit-testing

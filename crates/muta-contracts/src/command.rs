@@ -93,24 +93,10 @@ pub enum CommandResult {
         verdicts: Vec<ReviewVerdict>,
         turns: u64,
     },
-    /// `/schedule` / `/repeat` — a registered scheduled prompt.
-    Scheduled {
-        /// `"cron"` / `"countdown"` / `"absolute"` (from `Schedule::kind_label`).
-        kind: String,
-        /// The short job id shown to the user.
-        id: String,
-        /// Human-readable trigger, e.g. `"every 5 minutes"` / `"in 10 minutes"`.
-        trigger: String,
-        /// Next fire time as `YYYY-MM-DD HH:MM`, plus `" Running now."` for
-        /// recurring cron jobs.
-        next: String,
-    },
     /// `/config reload` — summary of configuration reloaded into the runtime.
     ConfigReload { details: Vec<String> },
     /// `/compact` — confirmation of a compaction run.
     Compacted { rounds_compacted: usize },
-    /// `/schedule list` / `/repeat list` — active scheduled jobs.
-    ScheduledList { entries: Vec<String> },
 }
 
 impl CommandResult {
@@ -180,12 +166,6 @@ impl CommandResult {
                 )
             }
             CommandResult::Review { verdicts, turns } => review_to_text(verdicts, *turns),
-            CommandResult::Scheduled {
-                kind,
-                id,
-                trigger,
-                next,
-            } => format!("Scheduled {kind} job {id} ({trigger}), next {next}."),
             CommandResult::ConfigReload { details } => {
                 if details.is_empty() {
                     "Config reloaded.".to_string()
@@ -195,13 +175,6 @@ impl CommandResult {
             }
             CommandResult::Compacted { rounds_compacted } => {
                 format!("Compacted {rounds_compacted} complete round(s) into transcript archive.")
-            }
-            CommandResult::ScheduledList { entries } => {
-                if entries.is_empty() {
-                    "No scheduled jobs.".to_string()
-                } else {
-                    format!("Scheduled jobs:\n{}", entries.join("\n"))
-                }
             }
         }
     }
@@ -415,20 +388,11 @@ mod tests {
                 }],
                 turns: 2,
             },
-            CommandResult::Scheduled {
-                kind: "cron".to_string(),
-                id: "abcd1234".to_string(),
-                trigger: "every 5 minutes".to_string(),
-                next: "2026-02-18 10:00 Running now.".to_string(),
-            },
             CommandResult::ConfigReload {
                 details: vec!["reloaded".to_string()],
             },
             CommandResult::Compacted {
                 rounds_compacted: 4,
-            },
-            CommandResult::ScheduledList {
-                entries: vec!["job1".to_string()],
             },
         ];
         for case in cases {

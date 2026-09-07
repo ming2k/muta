@@ -60,3 +60,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+# runtime session databases
+crates/muta-runtime/sessions/

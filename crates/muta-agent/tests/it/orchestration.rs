@@ -443,6 +443,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             retry_base_ms: 1,
             retry_max_ms: 10,
             emit_round_completed: false,
+            in_flight_draft: None,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -548,6 +549,7 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
             retry_base_ms: 1,
             retry_max_ms: 10,
             emit_round_completed: false,
+            in_flight_draft: None,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -621,6 +623,7 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
             retry_base_ms: 1,
             retry_max_ms: 10,
             emit_round_completed: false,
+            in_flight_draft: None,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -690,6 +693,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             retry_base_ms: 1,
             retry_max_ms: 10,
             emit_round_completed: false,
+            in_flight_draft: None,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -869,6 +873,7 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
         retry_base_ms: 1,
         retry_max_ms: 10,
         emit_round_completed: false,
+        in_flight_draft: None,
     };
 
     // 1. The fresh round fails terminally.
@@ -1354,8 +1359,8 @@ async fn real_interrupt_of_a_live_round_still_records() {
     );
     // The HangingProvider round was interrupted before model output.
     // The prompt is preserved in session history (never retracted) and records
-    // its admitted round number.
-    assert_eq!(records[0].round, Some(0));
+    // its admitted round number (round 1 for the first round).
+    assert_eq!(records[0].round, Some(1));
     let messages = session.model_window().await;
     assert!(
         messages.iter().any(|m| m.role == muta_contracts::Role::User),
@@ -1485,6 +1490,11 @@ async fn supersede_on_a_silent_stream_still_interrupts() {
     assert_eq!(
         records[0].reason,
         muta_contracts::RoundInterruptReason::Superseded
+    );
+    assert_eq!(
+        records[0].detail.as_deref(),
+        Some("partial answer"),
+        "interrupted streamed text draft must be preserved in detail (ADR-0185)"
     );
     let _ = std::fs::remove_dir_all(directory);
 }

@@ -191,8 +191,8 @@ mod tests {
         assert_eq!(search_path_argument(r#"{"path":"src"}"#), "src");
         assert_eq!(search_path_argument("{}"), ".");
 
-        // When unconfined, external paths are admitted
-        env.shared_unconfined().set_unconfined(true);
+        // When confinement is disabled, external paths are admitted
+        env.shared_confinement().set_confined(false);
         assert!(resolve_search_root(&env, "/opt/secret_root_outside").is_ok());
     }
 

@@ -17,7 +17,7 @@ use super::common::{placeholder, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::{ModalHeader, modal_body_width};
 use crate::primitives::{ContentModalSpec, FooterHint, keyvocab};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the MCP manager modal: a centered, dismissable, selectable list of the
 /// configured MCP servers. Each row shows a status glyph, the server name, a

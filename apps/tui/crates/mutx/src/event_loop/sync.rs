@@ -23,8 +23,8 @@ pub(crate) async fn sync_runtime_state_to_app(
     app.current_model = runtime.current_model.lock().await.clone();
     let harness = runtime.harness.lock().await.clone();
     app.loop_status = harness.loop_status;
-    app.delegated = harness.delegated;
-    app.unconfined = harness.unconfined;
+    app.unattended = harness.unattended;
+    app.confined = harness.confined;
     app.harness_retry_pending = harness.retry_pending;
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.phase = runtime.phase.lock().await.clone();

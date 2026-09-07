@@ -210,11 +210,17 @@ impl WorkspaceSecurityStore {
     }
 
     fn persist(&self, state: &PersistedWorkspaceSecurity) -> Result<(), String> {
-        let engine = crate::db::DatabaseEngine::open(&self.db_path, None)
-            .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
-        engine
-            .set_json("state:workspace_security", state)
-            .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
+        if self.db_path == crate::paths::get().db_file() {
+            crate::db::get_persistence_handle()
+                .set_json_blocking("state:workspace_security", state)
+                .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
+        } else {
+            let engine = crate::db::DatabaseEngine::open(&self.db_path, None)
+                .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
+            engine
+                .set_json("state:workspace_security", state)
+                .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
+        }
     }
 }
 

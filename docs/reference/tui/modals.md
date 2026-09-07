@@ -769,4 +769,4 @@ body, scroll body, footer hints, notification bubble, and question option
 rows. Low-level primitives (`recess_backdrop`, `centered_rect`,
 `modal_frame`, `panel_block`, raw `render_body`) remain in
 `apps/tui/crates/mutx/src/primitives.rs`. The chrome-hiding flag is
-read by `draw_transcript` in `apps/tui/crates/mutx/src/view.rs`.
+read by `draw_transcript` in `apps/tui/crates/mutx/src/render/mod.rs`.

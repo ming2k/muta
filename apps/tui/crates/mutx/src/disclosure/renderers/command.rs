@@ -12,7 +12,7 @@ use crate::model::document::{CommandPhase, TranscriptMessage};
 use crate::model::layout::{BlockRegion, COMMAND_RESULT_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
 use crate::text_layout::wrap_text;
-use crate::view::TRANSCRIPT_BODY_LEADING_INDENT;
+use crate::render::TRANSCRIPT_BODY_LEADING_INDENT;
 
 pub fn draw_command_result(
     ctx: &mut RenderCtx<'_, '_>,
@@ -45,6 +45,7 @@ pub fn draw_command_result(
             ctx.y,
             &mut *ctx.content_lines,
             true,
+            ctx.wrap,
         );
         return;
     }
@@ -122,6 +123,7 @@ pub fn draw_command_result(
                 ctx.y,
                 &mut *ctx.content_lines,
                 true,
+                ctx.wrap,
             );
         }
     }

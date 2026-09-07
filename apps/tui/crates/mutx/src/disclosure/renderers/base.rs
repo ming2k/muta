@@ -4,7 +4,7 @@ use mutx_engine::{Frame, Line, Paragraph, Rect};
 
 use crate::model::layout::{BlockRegion, LayoutMap};
 use crate::text_layout::WrappedLine;
-use crate::view::Theme;
+use crate::render::Theme;
 
 pub(crate) const MARKER_COLLAPSED: &str = "+";
 pub(crate) const MARKER_EXPANDED: &str = "-";
@@ -19,6 +19,8 @@ pub struct RenderCtx<'a, 'f: 'a> {
     pub skip_rows: &'a mut usize,
     pub y: &'a mut u16,
     pub content_lines: &'a mut usize,
+    /// Content-addressed wrap cache (ADR-0184) — see `crate::render::BlockWrapCache`.
+    pub wrap: &'a mut crate::render::BlockWrapCache,
 }
 
 impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
@@ -32,6 +34,7 @@ impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
         skip_rows: &'a mut usize,
         y: &'a mut u16,
         content_lines: &'a mut usize,
+        wrap: &'a mut crate::render::BlockWrapCache,
     ) -> Self {
         Self {
             frame,
@@ -42,6 +45,7 @@ impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
             skip_rows,
             y,
             content_lines,
+            wrap,
         }
     }
 

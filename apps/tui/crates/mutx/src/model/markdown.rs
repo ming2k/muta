@@ -7,7 +7,31 @@ use super::document::{Block, CodeRange, Inline, InlineScan, LinkRange, TableAlig
 type ParsedLink = ((usize, usize), (usize, usize), String);
 
 pub fn parse_blocks(text: &str) -> Vec<Block> {
-    parse_blocks_markdown(text)
+    parse_blocks_tracked(text).0
+}
+
+/// Resume metadata from a tracked parse (ADR-0184): where a later suffix
+/// parse must resume, and how many trailing blocks belong to the still-open
+/// final construct.
+///
+/// Markdown blocks are line-oriented: once a construct is terminated by an
+/// explicit terminator (blank line, closing fence, non-continuation line),
+/// it can never be modified by future input. Only the construct that was
+/// ended by EOF (a streaming tail) is still open — appended deltas can
+/// extend it, join further blocks to its run, or close it and open new
+/// constructs. Re-parsing from `resume_offset` therefore reproduces exactly
+/// the last `live_len` blocks plus everything after it, while every block
+/// before that region is frozen.
+pub(crate) struct ParseResume {
+    /// Byte offset in the parsed text where the open final construct begins;
+    /// `text.len()` when every construct is closed.
+    pub resume_offset: usize,
+    /// Number of trailing blocks produced by that open construct.
+    pub live_len: usize,
+}
+
+pub(crate) fn parse_blocks_tracked(text: &str) -> (Vec<Block>, ParseResume) {
+    parse_blocks_markdown_tracked(text)
 }
 
 /// Parse plain-text input (user messages) into blocks without any markdown
@@ -21,10 +45,36 @@ pub fn parse_blocks_plain(text: &str) -> Vec<Block> {
     vec![Block::Text(Inline::plain(text.to_string()))]
 }
 
-pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
+pub(crate) fn parse_blocks_markdown_tracked(text: &str) -> (Vec<Block>, ParseResume) {
     let mut blocks = Vec::new();
-    let lines: Vec<&str> = text.split('\n').collect();
+    // Each line with its byte offset in `text`, so the live construct's
+    // resume offset can be recorded when it starts.
+    let mut lines: Vec<(&str, usize)> = Vec::with_capacity(text.len() / 8 + 1);
+    let mut line_offset = 0usize;
+    for line in text.split('\n') {
+        lines.push((line, line_offset));
+        line_offset += line.len() + 1;
+    }
     let mut i = 0;
+
+    // Whether every line is terminated by a newline (the final split segment
+    // is the empty trailing line). A construct whose last line lacks the
+    // trailing newline is EOF-ended: the line can still extend, so the
+    // construct stays open to future deltas no matter how "complete" its
+    // syntax looks right now.
+    let ends_with_newline = text.is_empty() || text.ends_with('\n');
+    // The trailing empty split segment (present iff `ends_with_newline`) is
+    // the line terminator of the final line, not a real blank line — it does
+    // not terminate a construct. A run that "breaks" on it is EOF-ended and
+    // stays live (a later delta may continue the run).
+    let trailing_blank =
+        |idx: usize, lines: &[(&str, usize)]| ends_with_newline && idx + 1 == lines.len();
+
+    // The construct that consumed the most recent line, as (start byte
+    // offset, first block index at construct start). `Some` means the
+    // construct was ended by EOF (still open to future deltas); explicit
+    // terminators clear it. Paragraphs set it on their first prose line.
+    let mut live: Option<(usize, usize)> = None;
 
     // Accumulator for a paragraph: the prose lines (already stripped of their
     // block-prefix), joined with soft-break→space / hard-break→`\n` rules.
@@ -56,26 +106,34 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         };
 
     while i < lines.len() {
-        let line = lines[i];
+        let (line, line_off) = lines[i];
         let trimmed = line.trim_start();
 
         // Fenced code block
         if let Some(rest) = trimmed.strip_prefix("```") {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             let lang = rest.trim().to_string();
             let language = if lang.is_empty() { None } else { Some(lang) };
             let mut content = String::new();
             i += 1;
-            while i < lines.len() && !lines[i].trim_start().starts_with("```") {
+            while i < lines.len() && !lines[i].0.trim_start().starts_with("```") {
                 if !content.is_empty() {
                     content.push('\n');
                 }
-                content.push_str(lines[i]);
+                content.push_str(lines[i].0);
                 i += 1;
             }
-            // skip closing fence (if present)
+            // skip closing fence (if present). The close is only frozen when
+            // its line is newline-terminated: an EOF-ended ```` ``` ```` line
+            // can still extend into ```` ```x ```` (a fresh fence opener whose
+            // suffix the full parser would swallow), so the fence stays live
+            // with its resume at the fence start.
             if i < lines.len() {
                 i += 1;
+                if i < lines.len() || ends_with_newline {
+                    live = None; // explicitly closed — frozen
+                }
             }
             push_block(&mut blocks, Block::Code { language, content });
             continue;
@@ -84,6 +142,7 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // Display math block
         if trimmed == "$$" || trimmed.starts_with("$$") || trimmed == "\\[" {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             let closing = if trimmed.starts_with("$$") {
                 "$$"
             } else {
@@ -95,6 +154,12 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                     content.push_str(rest[..end].trim());
                     i += 1;
                     push_block(&mut blocks, Block::Math { content });
+                    // An EOF-ended opening line can still swallow more of the
+                    // line into the discarded post-``$$`` tail, so it stays
+                    // live unless newline-terminated.
+                    if i < lines.len() || ends_with_newline {
+                        live = None; // closed on the opening line
+                    }
                     continue;
                 }
                 let rest = rest.trim();
@@ -104,9 +169,12 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             }
             i += 1;
             while i < lines.len() {
-                let candidate = lines[i].trim();
+                let candidate = lines[i].0.trim();
                 if candidate == closing {
                     i += 1;
+                    if i < lines.len() || ends_with_newline {
+                        live = None; // explicitly closed — frozen
+                    }
                     break;
                 }
                 if closing == "$$"
@@ -117,12 +185,15 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                     }
                     content.push_str(candidate[..end].trim_end());
                     i += 1;
+                    if i < lines.len() || ends_with_newline {
+                        live = None;
+                    }
                     break;
                 }
                 if !content.is_empty() {
                     content.push('\n');
                 }
-                content.push_str(lines[i].trim_end());
+                content.push_str(lines[i].0.trim_end());
                 i += 1;
             }
             push_block(&mut blocks, Block::Math { content });
@@ -132,14 +203,21 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // Horizontal rule
         if is_rule(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             push_block(&mut blocks, Block::Rule);
+            // Closed only when the line is terminated: at EOF the final line
+            // can still extend (`--` → `---`), so the construct stays open.
             i += 1;
+            if i < lines.len() || ends_with_newline {
+                live = None;
+            }
             continue;
         }
 
         // Heading
         if let Some((level, content_line)) = parse_heading(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             push_block(
                 &mut blocks,
                 Block::Heading {
@@ -147,13 +225,19 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                     inline: Inline::scanned(content_line),
                 },
             );
+            // Same EOF rule as the horizontal rule: `# Hea` is a live
+            // heading until a newline (or a later delta) settles the line.
             i += 1;
+            if i < lines.len() || ends_with_newline {
+                live = None;
+            }
             continue;
         }
 
         // Blockquote
         if let Some(content_line) = parse_quote(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             // Collect consecutive quote lines.
             let mut q_lines: Vec<String> = Vec::new();
             let mut q_hard: Vec<bool> = Vec::new();
@@ -161,13 +245,16 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             q_hard.push(false);
             i += 1;
             while i < lines.len() {
-                let t = lines[i].trim_start();
+                let t = lines[i].0.trim_start();
                 if let Some(c) = parse_quote(t) {
                     let hard = q_lines.last().is_some_and(|line| line_ends_hard(line));
                     q_hard.push(hard);
                     q_lines.push(c.to_string());
                     i += 1;
                 } else {
+                    if !trailing_blank(i, &lines) {
+                        live = None; // terminated by a real non-quote line
+                    }
                     break;
                 }
             }
@@ -185,10 +272,11 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // List item
         if parse_list_item(trimmed).is_some() {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             // Collect consecutive list items as a group; push_block's
             // ListItem↔ListItem rule keeps them tight (no Break between).
             while i < lines.len() {
-                let t = lines[i].trim_start();
+                let t = lines[i].0.trim_start();
                 if let Some((m, c, ch)) = parse_list_item(t) {
                     push_block(
                         &mut blocks,
@@ -201,6 +289,9 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                     );
                     i += 1;
                 } else {
+                    if !trailing_blank(i, &lines) {
+                        live = None; // terminated by a real non-item line
+                    }
                     break;
                 }
             }
@@ -210,24 +301,28 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // Table (GFM: | ... | lines with a separator row)
         if trimmed.starts_with('|')
             && i + 1 < lines.len()
-            && is_table_separator(lines[i + 1].trim())
+            && is_table_separator(lines[i + 1].0.trim())
         {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            live = Some((line_off, blocks.len()));
             let mut table = TableAccumulator::default();
             // Header row
             let header_cells = split_table_row(trimmed);
             table.header = header_cells.clone();
             // Alignment from separator
-            table.aligns = parse_table_aligns(lines[i + 1].trim());
+            table.aligns = parse_table_aligns(lines[i + 1].0.trim());
             i += 2;
             // Body rows
             while i < lines.len() {
-                let t = lines[i].trim();
+                let t = lines[i].0.trim();
                 if t.starts_with('|') && !is_table_separator(t) {
                     let cells = split_table_row(t);
                     table.rows.push(cells);
                     i += 1;
                 } else {
+                    if !trailing_blank(i, &lines) {
+                        live = None; // terminated by a real non-row line
+                    }
                     break;
                 }
             }
@@ -258,6 +353,9 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // Blank line: paragraph break
         if trimmed.is_empty() {
             flush_para(&mut para, &mut para_hard, &mut blocks);
+            if !trailing_blank(i, &lines) {
+                live = None; // the paragraph is terminated — frozen
+            }
             i += 1;
             continue;
         }
@@ -267,6 +365,9 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // from the stored text; the `para_hard` flag records that this line
         // ends in a hard break so the join inserts a literal "\n" before the
         // *next* line.
+        if para.is_empty() {
+            live = Some((line_off, blocks.len()));
+        }
         let hard = line_ends_hard(line);
         let stored = trimmed.trim_end_matches([' ', '\t']);
         para.push(stored.to_string());
@@ -280,7 +381,17 @@ pub(crate) fn parse_blocks_markdown(text: &str) -> Vec<Block> {
     while matches!(blocks.last(), Some(Block::Break)) {
         blocks.pop();
     }
-    blocks
+    let resume = match live {
+        Some((offset, first_block)) => ParseResume {
+            resume_offset: offset,
+            live_len: blocks.len().saturating_sub(first_block),
+        },
+        None => ParseResume {
+            resume_offset: text.len(),
+            live_len: 0,
+        },
+    };
+    (blocks, resume)
 }
 
 /// Whether a line is a thematic break (`---`, `***`, `___` with ≥3 same chars).

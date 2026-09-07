@@ -4,6 +4,7 @@
 //! so that selection and copy operate on semantic units (blocks) rather than
 //! terminal grid characters.
 
+use muta_contracts::tokenizer::StreamingCounter;
 use muta_contracts::{Role, RunnerEvent};
 
 use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_ENUMERATE_COLS};
@@ -198,6 +199,15 @@ pub enum MessageKind {
         expanded: bool,
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
+        /// Incremental exact token count (ADR-0184). Fed per streamed delta
+        /// so the per-frame `thinking_summary` never re-tokenizes the whole
+        /// accumulated chain — the previous `count_tokens(content)` call per
+        /// frame made streaming cost O(n²) in the reasoning length.
+        stream_tokens: StreamingCounter,
+        /// Milestone (heading) count, frozen at construction / stream end.
+        /// Only displayed for finished traces, so it never needs per-frame
+        /// recomputation.
+        milestones: usize,
     },
     /// A harness-level notice — errors, turn-pause signals, compaction
     /// summaries, provider switches, and other status lines that previously
@@ -676,6 +686,14 @@ pub struct TranscriptMessage {
     /// Component state revision. Incremented on mutations so the cascade
     /// layout cache instantly detects if remeasurement is required.
     pub rev: u64,
+    /// Incremental parse state (ADR-0184): byte offset in `raw` where the
+    /// still-open final construct begins. Everything before it is a frozen
+    /// prefix whose blocks can never change; `push_stream` re-parses only
+    /// from here, making streaming parse cost O(delta) amortized.
+    resume_byte: usize,
+    /// Number of trailing blocks in `blocks` produced by that open construct
+    /// (the region a suffix parse replaces). The rest of `blocks` is frozen.
+    live_blocks: usize,
 }
 
 impl TranscriptMessage {
@@ -686,10 +704,15 @@ impl TranscriptMessage {
         // does not get mangled into headings/code fences/lists and the
         // transcript stays readable. The raw text becomes a single `Text`
         // block; `wrap_text` preserves intra-block line breaks.
-        let blocks = if role == Role::User {
-            parse_blocks_plain(&raw)
+        let (blocks, resume) = if role == Role::User {
+            let blocks = parse_blocks_plain(&raw);
+            let resume = ParseResume {
+                resume_offset: raw.len(),
+                live_len: 0,
+            };
+            (blocks, resume)
         } else {
-            parse_blocks(&raw)
+            parse_blocks_tracked(&raw)
         };
         Self {
             id: next_message_id(),
@@ -708,6 +731,8 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: resume.resume_offset,
+            live_blocks: resume.live_len,
         }
     }
 
@@ -900,6 +925,8 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
         };
         message.refresh_tool_step();
         message
@@ -976,6 +1003,8 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
         }
     }
 
@@ -1009,6 +1038,10 @@ impl TranscriptMessage {
         } else {
             parse_blocks(&result_text)
         };
+        // Command results never stream; freeze the whole body so a stray
+        // `push_stream` degrades to a safe full re-parse.
+        self.resume_byte = self.raw.len();
+        self.live_blocks = 0;
         *slot = Some(Box::new(result));
         *phase = CommandPhase::Completed;
         true
@@ -1344,10 +1377,7 @@ impl TranscriptMessage {
                     .iter_mut()
                     .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
                 {
-                    if let MessageKind::Thinking { content, .. } = &mut last.kind {
-                        content.push_str(&sanitize_text(delta));
-                    }
-                    last.raw.push_str(&sanitize_text(delta));
+                    last.push_thinking_delta(delta);
                 } else {
                     children.push(TranscriptMessage::thinking(delta));
                 }
@@ -1357,14 +1387,7 @@ impl TranscriptMessage {
                     .iter_mut()
                     .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
                 {
-                    last.raw = sanitize_text(&content.clone()).into_owned();
-                    last.reparse();
-                    if let MessageKind::Thinking {
-                        content: current, ..
-                    } = &mut last.kind
-                    {
-                        *current = sanitize_text(content).into_owned();
-                    }
+                    last.finalize_thinking(content);
                     // No wall clock is available on the folding path; 0 is
                     // the same terminal stamp a resumed session applies, and
                     // what matters is that the trace stops "streaming" so the
@@ -1815,6 +1838,12 @@ impl TranscriptMessage {
 
     pub fn thinking(content: impl Into<String>) -> Self {
         let content = sanitize_text(&content.into()).into_owned();
+        let mut stream_tokens = StreamingCounter::new();
+        // Closed-stream accounting: the full content is already final, so
+        // finish the counter for an exact total (no carried tail).
+        stream_tokens.push(&content);
+        stream_tokens.finish();
+        let milestones = count_milestones(&content);
         let mut message = Self {
             id: next_message_id(),
             role: Role::Assistant,
@@ -1825,6 +1854,8 @@ impl TranscriptMessage {
                 duration_ms: None,
                 expanded: false,
                 user_pinned: false,
+                stream_tokens,
+                milestones,
             },
             delivery: DeliveryStatus::default(),
             insert_id: None,
@@ -1837,10 +1868,53 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
         };
         message.raw = content;
-        message.blocks = parse_blocks(&message.raw);
+        message.relayout();
         message
+    }
+
+    /// Append a reasoning delta to a still-streaming Thinking message
+    /// (ADR-0184): content, raw, and the incremental token counter advance
+    /// together. The counter makes the per-frame summary O(delta) instead of
+    /// re-tokenizing the whole chain every frame.
+    pub fn push_thinking_delta(&mut self, delta: &str) {
+        let sanitized = sanitize_text(delta);
+        let MessageKind::Thinking {
+            content, stream_tokens, ..
+        } = &mut self.kind
+        else {
+            return;
+        };
+        content.push_str(&sanitized);
+        stream_tokens.push(&sanitized);
+        self.raw.push_str(&sanitized);
+        self.bump_rev();
+    }
+
+    /// Replace a streaming Thinking message's content with the authoritative
+    /// full text and close the trace (stream end / restored session).
+    pub fn finalize_thinking(&mut self, content: &str) {
+        let content = sanitize_text(content).into_owned();
+        let milestones = count_milestones(&content);
+        self.raw = content.clone();
+        if let MessageKind::Thinking {
+            content: current,
+            stream_tokens,
+            milestones: slot,
+            ..
+        } = &mut self.kind
+        {
+            // Authoritative replacement: recount from the full text exactly.
+            *stream_tokens = StreamingCounter::new();
+            stream_tokens.push(&content);
+            stream_tokens.finish();
+            *current = content;
+            *slot = milestones;
+        }
+        self.reparse();
     }
 
     pub fn is_thinking(&self) -> bool {
@@ -1946,7 +2020,7 @@ impl TranscriptMessage {
                 }),
                 topic: Some("interrupted".to_string()),
                 title: raw.clone(),
-                detail: None,
+                detail: record.detail.clone(),
             },
         };
         Self::notice(severity, raw).with_notice_parts(parts)
@@ -1990,6 +2064,8 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
         }
     }
 
@@ -2088,6 +2164,8 @@ impl TranscriptMessage {
             sent_at_ms: None,
             injection_origin: None,
             rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
         }
     }
 
@@ -2102,6 +2180,10 @@ impl TranscriptMessage {
         let failure = sanitize_text(&failure.into()).into_owned();
         self.blocks = parse_blocks(&failure);
         self.raw = failure.clone();
+        // Retry notices never stream; freeze the body (safe default for any
+        // stray suffix parse).
+        self.resume_byte = self.raw.len();
+        self.live_blocks = 0;
         if let MessageKind::ProviderRetry {
             attempt: a,
             max_attempts: m,
@@ -2197,14 +2279,19 @@ impl TranscriptMessage {
         let MessageKind::Thinking {
             content,
             duration_ms,
+            stream_tokens,
+            milestones,
             ..
         } = &self.kind
         else {
             return None;
         };
-        let tokens = muta_contracts::tokenizer::count_tokens(content);
+        // Incremental count (ADR-0184): the counter is fed per delta, so this
+        // is O(1) per frame instead of a full BPE pass over the whole chain.
+        // The only inexactness is the counter's carried tail (a single open
+        // pretoken), which closes on the next delta or at stream end.
+        let tokens = stream_tokens.tokens();
         let active_milestone = extract_active_milestone(content);
-        let milestones = count_milestones(content);
 
         Some(match duration_ms {
             None => {
@@ -2225,6 +2312,7 @@ impl TranscriptMessage {
             }
             Some(ms) => {
                 let duration = duration_text(Some(*ms));
+                let milestones = *milestones;
                 if milestones > 1 {
                     format!("Thought through {milestones} steps  {tokens} tokens ({duration})")
                 } else if milestones == 1
@@ -2378,6 +2466,8 @@ impl TranscriptMessage {
                 blocks.push(Block::Text(Inline::plain(out.clone())));
             }
             self.blocks = blocks;
+            self.resume_byte = self.raw.len();
+            self.live_blocks = 0;
         } else {
             let summary = crate::tools::summary_for(name, arguments, profile.as_deref());
             let suffix = match status {
@@ -2394,24 +2484,84 @@ impl TranscriptMessage {
             };
             self.raw = format!("{}{}", summary, suffix);
             self.blocks = parse_blocks(&self.raw);
+            // Tool summaries never stream; freeze the body (safe default for
+            // any stray suffix parse).
+            self.resume_byte = self.raw.len();
+            self.live_blocks = 0;
         }
     }
 
     /// Re-parse blocks from raw text (e.g. after streaming append).
     pub fn reparse(&mut self) {
-        self.blocks = parse_blocks(&self.raw);
+        self.relayout();
         self.bump_rev();
     }
 
-    /// Append streaming text and re-parse.
+    /// Full tracked re-layout of `raw` without bumping the revision (used at
+    /// construction, where the rev is still fresh).
+    fn relayout(&mut self) {
+        let (blocks, resume) = parse_blocks_tracked(&self.raw);
+        self.blocks = blocks;
+        self.resume_byte = resume.resume_offset;
+        self.live_blocks = resume.live_len;
+    }
+
+    /// Append streaming text and re-parse **incrementally** (ADR-0184).
     ///
+    /// Only the still-open tail construct is re-parsed: everything before
+    /// `resume_byte` is a frozen prefix whose blocks can never be modified by
+    /// future input (markdown blocks are line-oriented and, once terminated
+    /// by a blank line / closing fence / non-continuation line, immutable).
     /// Parsing every accumulated chunk keeps the live layout structurally
-    /// consistent with the final layout. The previous append-only Text block
+    /// consistent with the final layout — the previous append-only Text block
     /// path delayed all Markdown structure until StreamEnd, causing the whole
-    /// response to jump when headings, lists, and code fences were discovered.
+    /// response to jump when headings, lists, and code fences were discovered
+    /// — but per-frame cost now grows with the delta, not the message.
     pub fn push_stream(&mut self, delta: &str) {
         self.raw.push_str(&sanitize_text(delta));
-        self.reparse();
+        self.refresh_stream_tail();
+    }
+
+    /// Re-parse only the live tail region and splice it onto the frozen
+    /// prefix. The junction [`Block::Break`] between the frozen prefix and
+    /// the suffix is re-decided here with the same pair rule the parser's
+    /// `push_block` applies, so the result is byte-for-byte what a full
+    /// `parse_blocks(&self.raw)` would produce.
+    fn refresh_stream_tail(&mut self) {
+        if self.resume_byte > self.raw.len() {
+            // Defensive: raw was replaced without a relayout — fall back to
+            // a full re-parse.
+            self.resume_byte = 0;
+            self.live_blocks = 0;
+        }
+        let frozen = self.blocks.len().saturating_sub(self.live_blocks);
+        // Immutable borrow of `raw` while `blocks` is mutated — disjoint
+        // fields, so the live region parses in place without a copy.
+        let (tail, resume) = parse_blocks_tracked(&self.raw[self.resume_byte..]);
+        let junction_break =
+            match (
+                frozen.checked_sub(1).and_then(|i| self.blocks.get(i)),
+                tail.first(),
+            ) {
+                (Some(prev), Some(next)) => {
+                    !matches!(prev, Block::Break)
+                        && !(matches!(prev, Block::ListItem { .. })
+                            && matches!(next, Block::ListItem { .. }))
+                }
+                _ => false,
+            };
+        self.blocks.truncate(frozen);
+        let live_starts_at_zero = tail.len() == resume.live_len;
+        if junction_break {
+            self.blocks.push(Block::Break);
+        }
+        self.blocks.extend(tail);
+        // The junction Break belongs to the live region only when it sits
+        // directly in front of it (the suffix's live region starts at 0);
+        // otherwise it precedes frozen suffix content.
+        self.live_blocks = resume.live_len + usize::from(junction_break && live_starts_at_zero);
+        self.resume_byte += resume.resume_offset;
+        self.bump_rev();
     }
 }
 
@@ -2641,6 +2791,7 @@ pub fn count_milestones(text: &str) -> usize {
 /// text so copying yields exact source.
 pub(crate) use super::markdown::{clamp_link_ranges, clamp_ranges, scan_inline};
 pub use super::markdown::{parse_blocks, parse_blocks_plain};
+use super::markdown::{ParseResume, parse_blocks_tracked};
 
 #[cfg(test)]
 #[path = "document_tests.rs"]

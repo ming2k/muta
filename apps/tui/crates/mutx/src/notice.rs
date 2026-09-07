@@ -16,7 +16,7 @@ use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 
 use super::Theme;
-use super::components::notice::{NoticeView, draw_notice_view};
+use super::components::notice::{NoticeProps, draw_notice_view};
 
 /// Render a notice message: a severity-colored glyph followed by the notice
 /// text, wrapped to the transcript body width. Supports expandable details (like formatted JSON).
@@ -37,7 +37,7 @@ pub fn draw_notice(
     draw_notice_view(
         frame,
         area,
-        NoticeView { message: msg },
+        NoticeProps { message: msg },
         mi,
         layout_map,
         skip_rows,

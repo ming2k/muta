@@ -723,8 +723,7 @@ pub struct Config {
 ///                                # and zero attached clients; 0 = never
 /// local_auth = true             # bearer-token the loopback listener too
 ///                                # (ADR-0105); false = trust local processes
-/// rehost_armed_schedules = true # rehost sessions with armed /schedule jobs
-///                                # at boot (ADR-0125); false = cold start
+/// ///                                # at boot (ADR-0125); false = cold start
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
@@ -750,13 +749,6 @@ pub struct DaemonConfig {
     /// posture; the UDS listener is always exempt (filesystem permissions
     /// are its boundary). Default: true.
     pub local_auth: bool,
-    /// Rehost autonomous sessions at daemon boot (ADR-0125): scan every
-    /// project's persisted sessions and re-assemble a hosted harness for
-    /// each one that still has armed `/schedule` jobs, so a scheduled
-    /// prompt keeps firing across daemon restarts (crash, upgrade, reboot)
-    /// instead of waiting for a human to attach. Default: true. Set `false`
-    /// to start cold every time (the pre-0125 behavior).
-    pub rehost_armed_schedules: bool,
 }
 
 impl Default for DaemonConfig {
@@ -765,7 +757,6 @@ impl Default for DaemonConfig {
             shutdown_grace_secs: 10,
             idle_exit_minutes: 5,
             local_auth: true,
-            rehost_armed_schedules: true,
         }
     }
 }

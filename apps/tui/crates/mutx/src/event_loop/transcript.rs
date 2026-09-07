@@ -3,11 +3,11 @@
 use crate::model::document::{MessageKind, TranscriptMessage};
 use crate::model::selection::{CellDragInfo, SelectionState, get_selected_text};
 use crate::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate};
-use crate::view;
+use crate::render;
 
 /// Apply only the cache invalidation actually caused by the most recent transcript mutation.
 pub(crate) fn apply_height_invalidation(
-    cache: &mut view::HeightCache,
+    cache: &mut render::HeightCache,
     invalidation: HeightInvalidation,
 ) {
     match invalidation {
@@ -162,7 +162,7 @@ pub(crate) fn extract_selection_text(
     cell_info: Option<&CellDragInfo>,
 ) -> Option<String> {
     if let Some((start, end)) = sel.active_normalized_range() {
-        if start.message_idx == crate::view::INPUT_MSG_IDX {
+        if start.message_idx == crate::render::INPUT_MSG_IDX {
             let s = start.byte_offset;
             let e = end.byte_offset;
             if s <= e && e <= input.len() {
@@ -185,7 +185,7 @@ pub(crate) fn extract_selection_text(
             return layout_map.extract_text_for_range(sel);
         }
     } else if let SelectionState::Block { message_idx, .. } = sel
-        && *message_idx == crate::view::INPUT_MSG_IDX
+        && *message_idx == crate::render::INPUT_MSG_IDX
     {
         return Some(input.to_string());
     } else if let SelectionState::Block { message_idx, .. } = sel

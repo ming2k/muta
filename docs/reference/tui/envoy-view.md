@@ -165,7 +165,7 @@ storage. See `document.rs` for both entry points.
 | File | Responsibility |
 |------|----------------|
 | `disclosure/renderers.rs` | `draw_runner_inline_step` |
-| `view/mod.rs` | `RunnerBarInfo`, wiring the zoomed-runner footer via `draw_runner_footer` when `view.runner_bar` is `Some` |
+| `render/mod.rs` | `RunnerBarInfo`, wiring the zoomed-runner footer via `draw_runner_footer` when `props.runner_bar` is `Some` |
 | `app/mod.rs` | `focus_stack`, `focused_messages`, `reset_view_state` |
 | `model/document.rs` | `is_runner_task`, `tool_step_call_id`, `runner_children`, `runner_children_mut`, `runner_profile`, `runner_status_line` |
 | `input/mod.rs` | `in_runner_view` flag on `InputContext`, used so `Enter` on an inline runner step navigates instead of submitting the composer |

@@ -1,7 +1,7 @@
 use super::model_bar::context_usage_spans;
 use super::*;
 use crate::model::layout::LayoutMap;
-use crate::view::Theme;
+use crate::render::Theme;
 use mutx_engine::{Color, Rect};
 
 fn activity_row_text(width: u16, status: &str, phase: usize) -> String {
@@ -21,7 +21,7 @@ fn activity_row_text_with_clause(
             frame,
             Rect::new(0, 0, width, 1),
             None,
-            crate::chrome::ActivityBarView {
+            crate::chrome::ActivityBarProps {
                 status,
                 backoff_clause,
                 awaiting_permission: awaiting,
@@ -58,7 +58,7 @@ fn activity_row_colors_with_clause(
             frame,
             Rect::new(0, 0, width, 1),
             None,
-            crate::chrome::ActivityBarView {
+            crate::chrome::ActivityBarProps {
                 status,
                 backoff_clause,
                 awaiting_permission: awaiting,
@@ -150,7 +150,7 @@ fn activity_bar_carries_no_todos_badge() {
             frame,
             Rect::new(0, 0, 80, 1),
             None,
-            ActivityBarView {
+            ActivityBarProps {
                 status: "Working",
                 backoff_clause: None,
                 awaiting_permission: false,
@@ -177,7 +177,7 @@ fn narrow_runtime_row_keeps_interrupt_keys_without_todos_badge() {
             frame,
             Rect::new(0, 0, 36, 1),
             None,
-            ActivityBarView {
+            ActivityBarProps {
                 status: "retrying a provider request after a detailed transient failure",
                 backoff_clause: None,
                 awaiting_permission: false,
@@ -273,7 +273,7 @@ fn model_bar_orders_context_speed_then_model() {
             draw_model_bar(
                 f,
                 Rect::new(0, 0, width, 1),
-                ModelBarView {
+                ModelBarProps {
                     current_model: "kimi-k2.7-code",
                     model_available: true,
                     provider_name: Some("kimi-code"),
@@ -368,7 +368,7 @@ fn model_bar_renders_model_and_context() {
         draw_model_bar(
             f,
             Rect::new(0, 2, 80, 1),
-            ModelBarView {
+            ModelBarProps {
                 current_model: "mock-model",
                 model_available: true,
                 provider_name: Some("mock-instance"),
@@ -399,7 +399,7 @@ fn model_bar_renders_context_gauge_for_projected_route_context_window() {
         draw_model_bar(
             f,
             Rect::new(0, 2, 100, 1),
-            ModelBarView {
+            ModelBarProps {
                 current_model: "glm-5.3",
                 model_available: true,
                 provider_name: Some("opencode-go"),
@@ -433,7 +433,7 @@ fn model_bar_renders_unavailable_model_indicator() {
         draw_model_bar(
             f,
             Rect::new(0, 0, 80, 1),
-            ModelBarView {
+            ModelBarProps {
                 current_model: "old-delisted-model",
                 model_available: false,
                 provider_name: Some("zai-code"),
@@ -463,7 +463,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
         captured = draw_model_bar(
             f,
             Rect::new(0, 0, 80, 1),
-            ModelBarView {
+            ModelBarProps {
                 current_model: "kimi-k2.7-code",
                 provider_name: None,
                 last_turn_tps: Some(47.8),
@@ -525,7 +525,7 @@ fn model_bar_reasoning_tag_shows_effort_when_set() {
             draw_model_bar(
                 f,
                 Rect::new(0, 0, 80, 1),
-                ModelBarView {
+                ModelBarProps {
                     current_model: "mock",
                     reasoning_effort: effort,
                     ..Default::default()
@@ -567,7 +567,7 @@ fn model_bar_shows_the_instance_suffix_after_the_model_name() {
             draw_model_bar(
                 f,
                 Rect::new(0, 0, 80, 1),
-                ModelBarView {
+                ModelBarProps {
                     current_model: "mock",
                     provider_name,
                     ..Default::default()
@@ -610,7 +610,7 @@ fn model_bar_full_cluster_orders_model_effort_instance() {
         draw_model_bar(
             f,
             Rect::new(0, 0, 120, 1),
-            ModelBarView {
+            ModelBarProps {
                 current_model: "mock",
                 provider_name: Some("kimi-code"),
                 reasoning_effort: Some("max"),
@@ -648,7 +648,7 @@ fn model_bar_ignition_label_takes_over_the_identity_cluster() {
             draw_model_bar(
                 f,
                 Rect::new(0, 0, 100, 1),
-                ModelBarView {
+                ModelBarProps {
                     current_model: "k3",
                     provider_name: Some("kimi-code"),
                     reasoning_effort: Some("max"),
@@ -810,8 +810,8 @@ fn completion_menu_caps_width_and_stays_anchored() {
         ("/models", "Switch the active model"),
         ("/tools", "Manage session tools (enable/disable)"),
         (
-            "/delegate",
-            "Toggle delegated autonomous mode — agent runs without human intervention (on/off)",
+            "/unattended",
+            "Toggle unattended mode — agent runs without human intervention (on/off)",
         ),
     ]
     .iter()
@@ -857,7 +857,7 @@ fn completion_menu_caps_width_and_stays_anchored() {
     let row_text: String = (first..=last)
         .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
         .collect();
-    assert!(row_text.starts_with("/delegate"), "row was {row_text:?}");
+    assert!(row_text.starts_with("/unattended"), "row was {row_text:?}");
 }
 
 #[test]
@@ -885,9 +885,9 @@ fn completion_menu_marks_alias_rows_with_canonical_target() {
     let theme = Theme::default();
     let completions = vec![
         crate::completion::Completion {
-            label: "/delegate".to_string(),
-            description: "Toggle delegated mode".to_string(),
-            insert_text: "/delegate".to_string(),
+            label: "/unattended".to_string(),
+            description: "Toggle unattended mode".to_string(),
+            insert_text: "/unattended".to_string(),
             replace_start: 0,
             replace_end: 2,
             kind: crate::completion::CompletionItemKind::Slash,
@@ -895,13 +895,13 @@ fn completion_menu_marks_alias_rows_with_canonical_target() {
             doc: None,
         },
         crate::completion::Completion {
-            label: "/yolo".to_string(),
-            description: "Toggle delegated mode".to_string(),
-            insert_text: "/delegate".to_string(),
+            label: "/auto".to_string(),
+            description: "Toggle unattended mode".to_string(),
+            insert_text: "/unattended".to_string(),
             replace_start: 0,
             replace_end: 2,
             kind: crate::completion::CompletionItemKind::SlashAlias,
-            alias_of: Some("/delegate".to_string()),
+            alias_of: Some("/unattended".to_string()),
             doc: None,
         },
     ];
@@ -927,12 +927,12 @@ fn completion_menu_marks_alias_rows_with_canonical_target() {
     };
     let alias_row = row_text(9); // popup bottom row = second candidate
     assert!(
-        alias_row.trim_start().starts_with("/yolo [*]"),
+        alias_row.trim_start().starts_with("/auto [*]"),
         "alias shows [*] marker: {alias_row:?}"
     );
     let canonical_row = row_text(8);
     assert!(
-        canonical_row.trim_start().starts_with("/delegate"),
+        canonical_row.trim_start().starts_with("/unattended"),
         "canonical row is plain: {canonical_row:?}"
     );
     assert!(
@@ -1020,20 +1020,20 @@ fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
 fn completion_menu_hover_doc_flyout_shows_alias_to_target_header() {
     let theme = Theme::default();
     let doc = crate::completion::CommandDoc {
-        name: "/delegate".to_string(),
-        summary: "Toggle delegated mode".to_string(),
-        usage: vec!["/delegate".to_string()],
+        name: "/unattended".to_string(),
+        summary: "Toggle unattended mode".to_string(),
+        usage: vec!["/unattended".to_string()],
         category: Some("Agent".to_string()),
         subcommands: vec![],
     };
     let completions = vec![crate::completion::Completion {
-        label: "/yolo".to_string(),
-        description: "Toggle delegated mode".to_string(),
-        insert_text: "/delegate".to_string(),
+        label: "/auto".to_string(),
+        description: "Toggle unattended mode".to_string(),
+        insert_text: "/unattended".to_string(),
         replace_start: 0,
         replace_end: 2,
         kind: crate::completion::CompletionItemKind::SlashAlias,
-        alias_of: Some("/delegate".to_string()),
+        alias_of: Some("/unattended".to_string()),
         doc: Some(doc),
     }];
 
@@ -1057,21 +1057,21 @@ fn completion_menu_hover_doc_flyout_shows_alias_to_target_header() {
             .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
             .collect()
     };
-    // Check that the flyout header contains "/yolo -> /delegate"
+    // Check that the flyout header contains "/auto -> /unattended"
     let full_text: Vec<String> = (0..12).map(row_text).collect();
-    let found_header = full_text.iter().any(|r| r.contains("/yolo -> /delegate"));
+    let found_header = full_text.iter().any(|r| r.contains("/auto -> /unattended"));
     assert!(
         found_header,
-        "flyout header should show `/yolo -> /delegate`, got buffer:\n{}",
+        "flyout header should show `/auto -> /unattended`, got buffer:\n{}",
         full_text.join("\n")
     );
 }
 
 /// Read back the one-row bar as joined text for assertion.
-fn queue_row_text(view: QueueBarView<'_>, width: u16, theme: &Theme) -> String {
+fn queue_row_text(props: QueueBarProps<'_>, width: u16, theme: &Theme) -> String {
     let mut terminal = mutx_engine::TestTerminal::new(width, 1);
     terminal.draw(|f| {
-        draw_queue_bar(f, Rect::new(0, 0, width, 1), view, theme);
+        draw_queue_bar(f, Rect::new(0, 0, width, 1), props, theme);
     });
     let buf = terminal.buffer();
     let mut out = String::new();
@@ -1088,7 +1088,7 @@ fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
     // brand accent on the plain frame surface — no tray glyph, no raised
     // tint — so the two bars read as one quiet family.
     let theme = Theme::default();
-    let item = QueueItemView {
+    let item = QueueItemProps {
         queued_at_ms: 1_700_000_000_000,
         text: "fix the flaky test".to_string(),
     };
@@ -1097,7 +1097,7 @@ fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
         draw_queue_bar(
             f,
             Rect::new(0, 0, 70, 1),
-            QueueBarView {
+            QueueBarProps {
                 items: &[item],
                 paused: false,
                 blocked: false,
@@ -1124,7 +1124,7 @@ fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
 #[test]
 fn queue_bar_empty_state_hints_how_to_stage() {
     let text = queue_row_text(
-        QueueBarView {
+        QueueBarProps {
             items: &[],
             paused: false,
             blocked: false,
@@ -1141,12 +1141,12 @@ fn queue_bar_empty_state_hints_how_to_stage() {
 
 #[test]
 fn queue_bar_previews_next_item_with_count_and_text() {
-    let item = QueueItemView {
+    let item = QueueItemProps {
         queued_at_ms: 1_700_000_000_000,
         text: "fix the flaky test in parser".to_string(),
     };
     let text = queue_row_text(
-        QueueBarView {
+        QueueBarProps {
             items: &[item],
             paused: true,
             blocked: false,
@@ -1185,12 +1185,12 @@ fn queue_bar_never_renders_the_tab_affordance() {
     // The Tab toggle for the insert/next-round send target was removed —
     // a busy Enter always queues for the next round — so the queue bar's
     // legend must never mention Tab.
-    let item = QueueItemView {
+    let item = QueueItemProps {
         queued_at_ms: 1_700_000_000_000,
         text: "add a comment".to_string(),
     };
     let text = queue_row_text(
-        QueueBarView {
+        QueueBarProps {
             items: &[item],
             paused: false,
             blocked: false,

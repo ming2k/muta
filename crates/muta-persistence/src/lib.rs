@@ -29,7 +29,6 @@ pub mod config_check;
 pub mod connection_usage;
 pub mod connections;
 pub mod db;
-pub mod events;
 pub mod fsutil;
 pub mod instances;
 pub mod lock;

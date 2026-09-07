@@ -29,7 +29,7 @@ fn redesigned_components_render_without_panicking() {
                 let _ = draw_transcript(
                     f,
                     &mut layout_map,
-                    TranscriptView {
+                    TranscriptProps {
                         messages: &messages,
                         scroll: 0,
                         selection: &SelectionState::None,
@@ -41,7 +41,7 @@ fn redesigned_components_render_without_panicking() {
                         input: "hello",
                         byte_cursor: 5,
                         chrome_hidden: false,
-                        queue_bar: QueueBarView {
+                        queue_bar: QueueBarProps {
                             items: &[],
                             paused: false,
                             blocked: false,
@@ -63,7 +63,7 @@ fn redesigned_components_render_without_panicking() {
                     },
                 );
                 draw_composer(
-                    ComposerView {
+                    ComposerProps {
                         frame: f,
                         input_rect: Rect::new(0, 21, 80, 3),
                         theme: &theme,
@@ -177,7 +177,7 @@ fn redesigned_components_render_without_panicking() {
         use crate::providers::CustomField;
         let mut scroll = 0;
         draw_custom_provider_editor(
-            CustomEditorView {
+            CustomEditorProps {
                 fields: &[
                     CustomField::Name,
                     CustomField::BaseUrl,
@@ -332,7 +332,7 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
     terminal.draw(|frame| {
         draw_settings_view(
             frame,
-            ConfigViewProps {
+            SettingsProps {
                 category_index: 0,
                 detail_index: 0,
                 focus: ConfigFocus::Categories,
@@ -363,7 +363,7 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
     terminal.draw(|frame| {
         draw_settings_view(
             frame,
-            ConfigViewProps {
+            SettingsProps {
                 category_index: 0,
                 detail_index: 5,
                 focus: ConfigFocus::Detail,
@@ -406,7 +406,7 @@ fn web_settings_split_search_and_reader_into_clear_panels() {
         terminal.draw(|frame| {
             draw_settings_view(
                 frame,
-                ConfigViewProps {
+                SettingsProps {
                     category_index,
                     detail_index: 0,
                     focus: ConfigFocus::Detail,
@@ -455,7 +455,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
             let rendered = draw_transcript(
                 frame,
                 &mut layout_map,
-                TranscriptView {
+                TranscriptProps {
                     messages: &messages,
                     scroll: 0,
                     selection: &SelectionState::None,
@@ -467,7 +467,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
-                    queue_bar: QueueBarView {
+                    queue_bar: QueueBarProps {
                         items: &[],
                         paused: false,
                         blocked: false,
@@ -522,7 +522,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
         render_opt = Some(draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -534,7 +534,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -590,7 +590,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
         render_opt = Some(draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -602,7 +602,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -653,7 +653,7 @@ fn nonempty_session_does_not_render_empty_state() {
         render_opt = Some(draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -665,7 +665,7 @@ fn nonempty_session_does_not_render_empty_state() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -725,7 +725,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
         render_opt = Some(draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -737,7 +737,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -778,7 +778,7 @@ fn main_view_without_asides_renders_a_single_row_head_band() {
         24,
         &[],
         Some(ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: None,
             interruptible: true,
             parent_note: "",
@@ -803,7 +803,7 @@ fn main_view_with_asides_shows_the_legend_row() {
         24,
         &[],
         Some(ViewHints {
-            kind: ViewKind::Main,
+            kind: ViewKind::Session,
             asides: Some(AsidesChip {
                 total: 2,
                 running: 1,
@@ -831,7 +831,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -843,7 +843,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -900,7 +900,7 @@ fn h1_underline_clamps_to_text_extent() {
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -912,7 +912,7 @@ fn h1_underline_clamps_to_text_extent() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -987,7 +987,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -999,7 +999,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -1069,7 +1069,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -1081,7 +1081,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,

@@ -23,7 +23,7 @@ use crate::transcript::{
     finalize_streaming_reasoning, transcript_message_from_core, transcript_messages_from_core,
 };
 use crate::versioned::{TranscriptPatch, TranscriptUpdate};
-use crate::view::Theme;
+use crate::render::Theme;
 use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;
@@ -188,8 +188,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         harness_retry_pending: false,
         phase: None,
         provider_retry: None,
-        delegated: false,
-        unconfined: false,
+        unattended: false,
+        confined: true,
         round_count: 0,
         current_turn: 0,
         round_started_at: None,
@@ -255,7 +255,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         modal_hit_map: crate::model::layout::ModalHitMap::new(),
         hovered_step: None,
         transcript_focused: false,
-        transcript_layout: crate::view::layout::Strategy::default(),
+        transcript_layout: crate::render::layout::Strategy::default(),
         color_scheme: "zen".to_string(),
         custom_color_scheme: muta_contracts::ColorSchemeConfig::default(),
 
@@ -398,7 +398,7 @@ fn app_with_input_selection(input: &str) -> App {
     // The drag-selection shape the composer actually records: middle-click /
     // whole-block select of the live input.
     app.selection = SelectionState::Block {
-        message_idx: crate::view::INPUT_MSG_IDX,
+        message_idx: crate::render::INPUT_MSG_IDX,
         block_idx: 0,
     };
     // The hidden caret parked where the mouse released (the drag's head).

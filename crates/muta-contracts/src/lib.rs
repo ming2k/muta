@@ -15,8 +15,6 @@
 
 pub use async_trait::async_trait;
 
-pub mod cron;
-pub use cron::CronExpr;
 pub mod color_scheme_config;
 pub use color_scheme_config::{
     ColorSchemeConfig, CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig,
@@ -30,10 +28,6 @@ pub use cache::{
     PromptCacheModePreference, PromptCachePreference, PromptCacheSpec, PromptCacheUsage,
     ResolvedCachePlan, read_prompt_cache_usage,
 };
-pub mod repeat;
-pub use repeat::{
-    DEFAULT_MAX_AGE_DAYS, RepeatJob, Schedule, ScheduleAt, ScheduledJob, parse_schedule_arg,
-};
 pub mod usage;
 pub use usage::TokenUsage;
 
@@ -44,6 +38,13 @@ pub use error::{
 
 pub mod message;
 pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, ToolCall, ToolResult};
+
+pub mod transcript;
+pub use transcript::{
+    DirectiveKind, DirectivePayload, EntryKind, EntryOrigin, EntryPayload, MessagePayload,
+    ProjectionDirective, PrunedToolOutput, StatePayload, SubagentRef, Transcript,
+    TranscriptEntry,
+};
 
 pub mod instructions;
 pub use instructions::{InstructionBundle, InstructionSlice, InstructionTier};
@@ -154,7 +155,7 @@ pub use session_tree::{
     CompactionPayload, SessionEntry, SessionEntryId, SessionEntryKind, SessionTree,
 };
 pub mod skills_config;
-pub use shared_roots::{SharedAdditionalRoots, SharedUnconfined};
+pub use shared_roots::{SharedAdditionalRoots, SharedConfinement};
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{

@@ -64,8 +64,8 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     persistence: Mutex<Option<PermissionPersistence>>,
-    /// When true, the agent runs in delegated autonomous mode — all tool permissions are auto-approved.
-    delegated: Mutex<bool>,
+    /// When true, the agent runs in unattended mode — all tool permissions are auto-approved.
+    unattended: Mutex<bool>,
 }
 
 /// Stable on-disk target for one project's permissions.
@@ -84,18 +84,18 @@ impl PermissionStore {
         Self {
             state: Mutex::new(PermissionState::default()),
             persistence: Mutex::new(None),
-            delegated: Mutex::new(false),
+            unattended: Mutex::new(false),
         }
     }
 
-    // delegated (autonomous execution posture)
+    // unattended execution posture
 
-    pub fn delegated(&self) -> bool {
-        *lock(&self.delegated)
+    pub fn unattended(&self) -> bool {
+        *lock(&self.unattended)
     }
 
-    pub fn set_delegated(&self, value: bool) {
-        *lock(&self.delegated) = value;
+    pub fn set_unattended(&self, value: bool) {
+        *lock(&self.unattended) = value;
     }
 
     // Pending-request parking moved to the human-request broker

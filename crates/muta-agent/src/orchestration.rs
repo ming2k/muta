@@ -32,10 +32,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use muta_contracts::{
-    AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
+    AgentEvent, AgentRequest, AgentResponse, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule,
-    repeat::DEFAULT_MAX_AGE_DAYS,
+    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent,
 };
 use muta_persistence::{
     CommitTurn,
@@ -563,8 +562,8 @@ pub fn send_harness_state_running(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status: LoopStatus::Running,
             round_counter,
-            delegated: agent.delegated(),
-            unconfined: agent.is_unconfined(),
+            unattended: agent.unattended(),
+            confined: agent.is_confined(),
             workspace_security: agent.workspace_security(),
             retry_pending: false,
         }),
@@ -596,8 +595,8 @@ pub async fn send_harness_state_for_session(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            delegated: agent.delegated(),
-            unconfined: agent.is_unconfined(),
+            unattended: agent.unattended(),
+            confined: agent.is_confined(),
             workspace_security: agent.workspace_security(),
             retry_pending,
         }),
@@ -629,6 +628,9 @@ pub struct RoundContext {
     /// call `execute_round` internally and must not release a user's paused
     /// next-round outbox between their own continuation iterations.
     pub emit_round_completed: bool,
+    /// In-flight assistant draft text accumulator for preserving partial streamed output
+    /// upon interruption (ADR-0185).
+    pub in_flight_draft: Option<Arc<std::sync::Mutex<String>>>,
 }
 
 /// Which kind of round `execute_round` is about to run — a fresh round, or
@@ -719,7 +721,10 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     // tail — which runs concurrently with this round's own bump — from
     // misattributing its interrupt record to whichever round owns the live
     // counter at tail time.
-    let round_at_admission = context.agent.round_count();
+    let round_at_admission = match &input.driver {
+        RoundDriver::Resume { point } => point.round,
+        RoundDriver::Fresh => context.agent.round_count().saturating_add(1),
+    };
     let RoundBegin {
         token,
         generation,
@@ -766,6 +771,8 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     // The spawned tail records the round-interrupt into its own store handle
     // (C11); `RoundContext` consumes `context.session`, so keep an extra Arc.
     let session_for_tail = Arc::clone(&context.session);
+    let in_flight_draft = Arc::new(std::sync::Mutex::new(String::new()));
+    let in_flight_draft_for_round = in_flight_draft.clone();
 
     tokio::spawn(async move {
         // Supervised round task: the tail below (close_user_input_round →
@@ -790,6 +797,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     retry_base_ms: context.retry_base_ms,
                     retry_max_ms: context.retry_max_ms,
                     emit_round_completed: true,
+                    in_flight_draft: Some(in_flight_draft_for_round),
                 },
                 input,
             );
@@ -832,6 +840,16 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             Ok(RoundCompletion::Completed) | Ok(RoundCompletion::NotStarted) => false,
             Err(_) => true,
         };
+        let draft_detail = {
+            let mut g = in_flight_draft.lock().unwrap_or_else(|e| e.into_inner());
+            let text = g.trim().to_string();
+            g.clear();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        };
         let interrupt_record = if stopped {
             // Attribution: this round's own admitted number, not the live
             // agent counter — by the time a superseded round's tail runs
@@ -848,7 +866,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     reason: parked.reason,
                     at_ms: parked.at_ms,
                     round: result.as_ref().err().map(|_| round_at_admission),
-                    detail: None,
+                    detail: draft_detail,
                 })
                 .or_else(|| {
                     if let Err(error) = &result {
@@ -957,6 +975,7 @@ pub async fn execute_round(
         retry_base_ms,
         retry_max_ms,
         emit_round_completed,
+        in_flight_draft,
     } = context;
     // Bind accounting to the session that admitted this round. The master
     // agent survives `/session open` and `/resume`, so its construction-time
@@ -1215,6 +1234,7 @@ pub async fn execute_round(
         attempt += 1;
         let activity_for_run = tool_activity.clone();
         let streamed_for_run = streamed_text.clone();
+        let draft_for_run = in_flight_draft.clone();
         let accounting_ledger = agent.token_ledger();
         let accounting_session = Arc::clone(&session);
         let accounting_session_id = session_id.clone();
@@ -1226,6 +1246,20 @@ pub async fn execute_round(
                 |event| {
                     if matches!(event, AgentEvent::ToolCall { .. }) {
                         activity_for_run.store(true, Ordering::SeqCst);
+                    }
+                    if let AgentEvent::AssistantDelta { ref delta, .. } = event {
+                        if let Some(ref draft) = draft_for_run {
+                            if let Ok(mut g) = draft.lock() {
+                                g.push_str(delta);
+                            }
+                        }
+                    }
+                    if matches!(event, AgentEvent::ToolCall { .. } | AgentEvent::AssistantEnd(..)) {
+                        if let Some(ref draft) = draft_for_run {
+                            if let Ok(mut g) = draft.lock() {
+                                g.clear();
+                            }
+                        }
                     }
                     if matches!(event, AgentEvent::ModelRequestStarted { .. })
                         && let Some(ledger) = accounting_ledger.clone()
@@ -1361,6 +1395,11 @@ pub async fn execute_round(
     // Only emit saving activity on natural completion. An interrupted or failed
     // round must never re-arm the activity bar that was already idled.
     if result.is_ok() {
+        if let Some(ref draft) = in_flight_draft {
+            if let Ok(mut g) = draft.lock() {
+                g.clear();
+            }
+        }
         let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Activity("saving response".to_string()),
@@ -1541,17 +1580,17 @@ fn maybe_refresh_session_digest(agent: Arc<Agent>, session: Arc<SessionStore>) {
             return; // provider unavailable/timeout: keep the previous digest
         };
         if let Err(error) = session
-            .set_digest(Some(next.clone()), transcript_chars as u64)
+            .set_digest(Some(next.clone()), Some(transcript_chars as u64))
             .await
         {
             tracing::warn!(%error, "could not persist session digest");
             return;
         }
-        // The picker's title row mirrors the digest unless the user locked a
-        // manual title (ADR-0022's lock rule, applied to the title field
-        // only — the digest itself was already stored above).
-        let (_, manual) = session.title().await;
-        if !manual && let Err(error) = session.set_title(Some(next.title), false).await {
+        // A non-`NULL` title is terminal (ADR-0186): the digest-derived title
+        // is written only while no title exists. The digest itself was
+        // already stored above.
+        let (_, has_title) = session.title().await;
+        if !has_title && let Err(error) = session.set_title(Some(next.title), false).await {
             tracing::warn!(%error, "could not persist digest-derived session title");
         }
     });
@@ -1777,11 +1816,11 @@ pub fn relay_agent_event(
         AgentEvent::TodosUpdated(todos) => {
             round_response(session_id, RoundEvent::TodosUpdated(todos))
         }
-        AgentEvent::DelegatedChanged(enabled) => {
-            round_response(session_id, RoundEvent::DelegatedChanged(enabled))
+        AgentEvent::UnattendedChanged(enabled) => {
+            round_response(session_id, RoundEvent::UnattendedChanged(enabled))
         }
-        AgentEvent::UnconfinedChanged(enabled) => {
-            round_response(session_id, RoundEvent::UnconfinedChanged(enabled))
+        AgentEvent::ConfinementChanged(enabled) => {
+            round_response(session_id, RoundEvent::ConfinementChanged(enabled))
         }
         AgentEvent::PermissionRequest(request) => {
             round_response(session_id, RoundEvent::PermissionRequest(request))
@@ -1914,429 +1953,6 @@ pub fn send_compaction(
     ));
 }
 
-// /repeat scheduler
-
-/// One scheduler tick over the session's scheduled-prompt list
-/// (`/schedule` and the legacy `/repeat`):
-///
-/// - prune recurring jobs created more than `DEFAULT_MAX_AGE_DAYS` ago;
-/// - dispatch every job whose `next_fire` is due; for **cron** jobs advance the
-///   schedule *before* enqueueing (so a slow turn cannot cause a double-fire),
-///   and for **once** jobs drop the job (it has fired).
-///
-/// Jobs are **session-scoped**: this ticks the one session the harness is
-/// driving. Resume/fork carries the schedule because it lives on the session.
-pub async fn run_schedule_tick(
-    session: &SessionStore,
-    tx: &mpsc::UnboundedSender<AgentRequest>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<usize, String> {
-    let cutoff = now - chrono::Duration::days(DEFAULT_MAX_AGE_DAYS);
-    let mut jobs = session.scheduled_jobs().await;
-    let initial_len = jobs.len();
-    // Prune expired *recurring* jobs (created too long ago). Once-jobs are
-    // their own expiry — a past once-job is dropped when it fires below — so
-    // they are exempt from the age cutoff.
-    jobs.retain(|j| j.trigger.is_once() || j.created_at >= cutoff);
-
-    let mut dispatched = 0;
-    let mut keep = Vec::with_capacity(jobs.len());
-    for mut job in jobs {
-        if job.next_fire > now {
-            keep.push(job);
-            continue;
-        }
-        match &job.trigger {
-            Schedule::Cron { cron } => {
-                let next = match CronExpr::parse(cron) {
-                    Ok(parsed) => parsed
-                        .next_fire(now)
-                        .unwrap_or(now + chrono::Duration::days(1)),
-                    Err(err) => {
-                        tracing::warn!(
-                            "scheduled job {} has unparseable cron '{cron}': {err}; skipping",
-                            job.id
-                        );
-                        // Keep the broken job so the user can see/cancel it.
-                        keep.push(job);
-                        continue;
-                    }
-                };
-                // Deliver first, mutate second (ADR-0125): if the driver's
-                // channel is gone (session suspended/killed/daemon draining),
-                // the job must stay armed on disk instead of silently
-                // consuming its fire. A dropped send used to advance
-                // `next_fire` — and a dropped once-job is unrecoverable.
-                if tx
-                    .send(AgentRequest::Prompt {
-                        text: job.prompt.clone(),
-                        images: Vec::new(),
-                        sent_at_ms: None,
-                    })
-                    .is_err()
-                {
-                    tracing::warn!(
-                        job = %job.id,
-                        "schedule dispatch failed (session harness gone); job stays armed"
-                    );
-                    keep.push(job);
-                    continue;
-                }
-                job.last_fire = Some(now);
-                job.next_fire = next;
-                keep.push(job);
-                dispatched += 1;
-            }
-            Schedule::Once { .. } => {
-                // One-shot: deliver first, drop second — same ordering
-                // invariant as the cron arm. An undeliverable once-job
-                // stays armed for the next harness (a re-attached session
-                // or a rehosting daemon) instead of vanishing.
-                if tx
-                    .send(AgentRequest::Prompt {
-                        text: job.prompt.clone(),
-                        images: Vec::new(),
-                        sent_at_ms: None,
-                    })
-                    .is_err()
-                {
-                    tracing::warn!(
-                        job = %job.id,
-                        "schedule dispatch failed (session harness gone); once-job stays armed"
-                    );
-                    keep.push(job);
-                    continue;
-                }
-                tracing::info!(job = %job.id, "scheduled once-job fired and removed");
-                dispatched += 1;
-            }
-        }
-    }
-
-    // Only persist if the schedule actually mutated (job pruned/fired/dropped).
-    if initial_len != keep.len() || dispatched > 0 {
-        session.set_scheduled_jobs(keep).await?;
-    }
-    Ok(dispatched)
-}
-
-/// Spawn the scheduled-prompt scheduler bound to `session`. Every
-/// `tick_interval` it prunes expired jobs and fires any that are due,
-/// dispatching each prompt as a normal `AgentRequest::Chat` round through `tx`.
-/// Drives both recurring `/schedule <cron>` jobs and one-shot
-/// `/schedule <countdown|absolute-time>` jobs.
-///
-/// The loop runs until `teardown` fires (or forever when `None` is passed —
-/// the process-lifetime shape a single-session frontend uses). The daemon
-/// passes the session's own cancellation token so suspension/kill stops the
-/// tick: previously the task leaked past teardown and kept ticking against a
-/// dead channel every 30s for as long as the daemon lived.
-pub fn start_schedule_scheduler(
-    session: Arc<SessionStore>,
-    tx: mpsc::UnboundedSender<AgentRequest>,
-    tick_interval: std::time::Duration,
-    teardown: Option<tokio_util::sync::CancellationToken>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(tick_interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {}
-                _ = teardown_cancelled(&teardown) => break,
-            }
-            let now = chrono::Utc::now();
-            if let Err(err) = run_schedule_tick(&session, &tx, now).await {
-                tracing::warn!("schedule scheduler tick failed: {err}");
-            }
-        }
-    })
-}
-
-/// Resolves the optional teardown future for the tick-loop `select!` arm.
-/// `None` means "run for the process lifetime": a future that never resolves.
-async fn teardown_cancelled(teardown: &Option<tokio_util::sync::CancellationToken>) {
-    match teardown {
-        Some(token) => token.cancelled().await,
-        None => std::future::pending().await,
-    }
-}
-
-/// Backoff schedule (ms) for supervised scheduler restarts after a panic.
-const SCHEDULER_RESTART_BACKOFF_MS: [u64; 4] = [250, 1_000, 4_000, 15_000];
-
-/// After this many supervised restarts the scheduler gives up (a job that
-/// panics every tick is a bug; hot-restarting forever would spam the log).
-const SCHEDULER_RESTART_LIMIT: usize = SCHEDULER_RESTART_BACKOFF_MS.len();
-
-/// Panic-supervised variant of [`start_schedule_scheduler`]. The daemon hosts
-/// long-lived sessions whose scheduled jobs (crons, countdowns) must survive
-/// an internal error: before supervision, a panic inside `run_schedule_tick`
-/// killed the scheduler task silently and every job in that session stopped
-/// firing with nothing in the UI to say why. The supervised wrapper restarts
-/// the tick loop with bounded backoff; a persistently panicking tick (the
-/// same job blowing up every tick, say) gives up after
-/// `SCHEDULER_RESTART_LIMIT` attempts rather than hot-restarting forever.
-pub fn start_supervised_schedule_scheduler(
-    session: Arc<SessionStore>,
-    tx: mpsc::UnboundedSender<AgentRequest>,
-    tick_interval: std::time::Duration,
-    teardown: Option<tokio_util::sync::CancellationToken>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let session = std::sync::Arc::new(session);
-        let tx = std::sync::Arc::new(tx);
-        let mut attempt = 0usize;
-        loop {
-            let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
-                tick_loop(&session, &tx, tick_interval, teardown.clone()),
-            ))
-            .await;
-            if outcome.is_ok() {
-                return; // cancelled or otherwise finished cleanly
-            }
-            attempt += 1;
-            if attempt > SCHEDULER_RESTART_LIMIT {
-                tracing::error!(
-                    attempts = attempt,
-                    "schedule scheduler kept panicking; giving up (scheduled jobs in this session will no longer fire)"
-                );
-                return;
-            }
-            let backoff_ms = SCHEDULER_RESTART_BACKOFF_MS
-                [(attempt - 1).min(SCHEDULER_RESTART_BACKOFF_MS.len() - 1)];
-            tracing::warn!(
-                attempt,
-                backoff_ms,
-                "schedule scheduler panicked; restarting with backoff"
-            );
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
-                _ = teardown_cancelled(&teardown) => return,
-            }
-        }
-    })
-}
-
-/// The scheduler's tick loop, factored out so the supervised wrapper can
-/// re-enter it after a panic. Returns on teardown-cancellation; any other
-/// exit is a panic unwinding through it.
-async fn tick_loop(
-    session: &Arc<SessionStore>,
-    tx: &Arc<mpsc::UnboundedSender<AgentRequest>>,
-    tick_interval: std::time::Duration,
-    teardown: Option<tokio_util::sync::CancellationToken>,
-) {
-    let mut ticker = tokio::time::interval(tick_interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {}
-            _ = teardown_cancelled(&teardown) => return,
-        }
-        let now = chrono::Utc::now();
-        if let Err(err) = run_schedule_tick(session, tx, now).await {
-            tracing::warn!("schedule scheduler tick failed: {err}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod schedule_tests {
-    use super::*;
-    use chrono::TimeZone;
-    use muta_contracts::ScheduledJob;
-
-    #[allow(dead_code)]
-    struct AutoCleanSession(SessionStore, tempfile::TempDir);
-    impl AutoCleanSession {
-        fn into_store(self) -> SessionStore {
-            self.0
-        }
-    }
-    impl std::ops::Deref for AutoCleanSession {
-        type Target = SessionStore;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    /// Build an isolated in-memory session for scheduler tests.
-    async fn fresh_session() -> AutoCleanSession {
-        let dir = tempfile::tempdir().unwrap();
-        // `for_path` pins the fresh session file (and its blobs) under the
-        // throwaway dir — `load_for_project` would resolve the real XDG
-        // project bucket and mint files under ~/.local/share/muta.
-        let store = SessionStore::for_path(dir.path().join("session.json"));
-        AutoCleanSession(store, dir)
-    }
-
-    /// Build a cron `ScheduledJob` with an explicit `next_fire` (so the test
-    /// controls exactly when it is due, independent of when the cron would
-    /// naturally next fire). Works even for an intentionally-bad cron string.
-    fn cron_job(
-        cron: &str,
-        prompt: &str,
-        next_fire: chrono::DateTime<chrono::Utc>,
-    ) -> ScheduledJob {
-        ScheduledJob {
-            id: uuid::Uuid::new_v4().to_string(),
-            trigger: Schedule::Cron {
-                cron: cron.to_string(),
-            },
-            prompt: prompt.to_string(),
-            created_at: chrono::Utc::now(),
-            next_fire,
-            last_fire: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn tick_dispatches_and_advances_due_cron_jobs() {
-        let session = fresh_session().await;
-        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        // A job already due (next_fire == now).
-        session
-            .set_scheduled_jobs(vec![cron_job("* * * * *", "run tests", now)])
-            .await
-            .unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<AgentRequest>();
-
-        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
-        assert_eq!(dispatched, 1);
-
-        // The prompt was enqueued as a prompt round.
-        match rx.recv().await {
-            Some(AgentRequest::Prompt { text, .. }) => assert_eq!(text, "run tests"),
-            other => panic!("expected Prompt, got {other:?}"),
-        }
-        // The cron job survives and is no longer due at `now`.
-        let after = session.scheduled_jobs().await;
-        assert_eq!(after.len(), 1);
-        assert!(after.iter().all(|j| j.next_fire > now));
-    }
-
-    #[tokio::test]
-    async fn tick_fires_once_job_and_drops_it() {
-        let session = fresh_session().await;
-        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let once = ScheduledJob::once(
-            "once1".into(),
-            now,
-            "one-shot reminder".into(),
-            chrono::Utc::now(),
-        );
-        session.set_scheduled_jobs(vec![once]).await.unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<AgentRequest>();
-
-        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
-        assert_eq!(dispatched, 1);
-        match rx.recv().await {
-            Some(AgentRequest::Prompt { text, .. }) => assert_eq!(text, "one-shot reminder"),
-            other => panic!("expected Prompt, got {other:?}"),
-        }
-        // The once-job is removed after firing.
-        assert!(session.scheduled_jobs().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn tick_keeps_future_once_job() {
-        let session = fresh_session().await;
-        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let future = now + chrono::Duration::hours(2);
-        let once = ScheduledJob::once(
-            "once1".into(),
-            future,
-            "later reminder".into(),
-            chrono::Utc::now(),
-        );
-        session.set_scheduled_jobs(vec![once]).await.unwrap();
-        let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
-
-        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
-        assert_eq!(dispatched, 0);
-        // Still armed.
-        assert_eq!(session.scheduled_jobs().await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn tick_skips_unparseable_cron() {
-        let session = fresh_session().await;
-        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        // A bogus cron can land here; the tick must skip it rather than panic.
-        session
-            .set_scheduled_jobs(vec![cron_job("not a cron", "p", now)])
-            .await
-            .unwrap();
-        let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
-        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
-        assert_eq!(dispatched, 0);
-    }
-
-    /// Regression (ADR-0125): dispatch is deliver-first, mutate-second. A
-    /// dead driver channel (session suspended/killed, daemon draining) used
-    /// to consume the fire anyway — the cron advanced its `next_fire` and
-    /// the once-job was dropped outright, so the prompt silently never ran
-    /// and no later harness could recover it.
-    #[tokio::test]
-    async fn tick_keeps_jobs_armed_when_the_driver_channel_is_dead() {
-        let session = fresh_session().await;
-        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let once = ScheduledJob::once(
-            "once1".into(),
-            now,
-            "unrecoverable if dropped".into(),
-            chrono::Utc::now(),
-        );
-        session
-            .set_scheduled_jobs(vec![cron_job("* * * * *", "run tests", now), once])
-            .await
-            .unwrap();
-        // Drop the receiver: the sender reports a closed channel, exactly
-        // like a torn-down session harness whose driver is gone.
-        let (tx, rx) = mpsc::unbounded_channel::<AgentRequest>();
-        drop(rx);
-
-        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
-        assert_eq!(dispatched, 0, "nothing was delivered");
-        // Both jobs stay armed with their original due time: the cron did
-        // not advance and the once-job was not consumed.
-        let after = session.scheduled_jobs().await;
-        assert_eq!(after.len(), 2, "both jobs must stay armed");
-        for job in &after {
-            assert!(
-                job.next_fire <= now,
-                "job {} must keep its original due time",
-                job.id
-            );
-        }
-        assert!(
-            after.iter().all(|j| j.last_fire.is_none()),
-            "no fire may be recorded for an undelivered prompt"
-        );
-    }
-
-    /// The scheduler loop stops when the session's teardown token fires —
-    /// the leak this closes: an orphaned tick task kept touching the store
-    /// every 30s for the daemon's remaining lifetime after suspension.
-    #[tokio::test]
-    async fn scheduler_stops_on_teardown() {
-        let session = fresh_session().await;
-        let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
-        let teardown = tokio_util::sync::CancellationToken::new();
-        let handle = start_schedule_scheduler(
-            Arc::new(session.into_store()),
-            tx,
-            std::time::Duration::from_millis(10),
-            Some(teardown.clone()),
-        );
-        assert!(!handle.is_finished());
-        teardown.cancel();
-        // The loop observes the token on its next select arm (≤ a tick).
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(handle.is_finished());
-    }
-}
 
 #[cfg(test)]
 mod digest_tests {
@@ -2449,9 +2065,11 @@ mod digest_tests {
         assert_eq!(digest.title, "Fixing the build");
         assert_eq!(digest.intent, "User wants CI green.");
         assert_eq!(digest.history.len(), 1);
-        let (title, manual) = await_title(&session).await;
+        let (title, has_title) = await_title(&session).await;
         assert_eq!(title.as_deref(), Some("Fixing the build"));
-        assert!(!manual);
+        // A non-NULL title is terminal: the has-title flag doubles as the
+        // former manual-lock signal (ADR-0186).
+        assert!(has_title);
 
         // No transcript growth since the anchor → the throttle skips the
         // Chronicler entirely.

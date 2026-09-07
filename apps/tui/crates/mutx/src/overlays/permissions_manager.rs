@@ -12,7 +12,7 @@ use crate::primitives::{
     ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, keyvocab,
     modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the permissions manager modal: a centered, dismissable list of cached
 /// "always allow" rules. Each row shows `<tool> <scope>`; `Space` revokes the

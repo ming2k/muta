@@ -212,9 +212,12 @@ pub fn into_message(
     }
 }
 
-/// Parse one SSE `data:` payload into provider stream events. Anthropic wraps
-/// each event in `{type, ...}`; the `type` discriminator selects the block/delta
-/// shape.
+/// Parse one already-parsed SSE `data:` payload into provider stream events.
+/// Anthropic wraps each event in `{type, ...}`; the `type` discriminator
+/// selects the block/delta shape. The caller parses each stream payload
+/// exactly once and passes the `Value` here (non-JSON payloads — relay
+/// keep-alives and stray comment lines — are skipped by the caller before
+/// this function ever runs).
 ///
 /// `usage_state` accumulates token counts across the stream (see
 /// [`StreamUsage`]). Events carrying a `usage` object — `message_start`
@@ -226,24 +229,21 @@ pub fn into_message(
 /// Returns `Err` only for an in-stream `error` event; other non-content events
 /// are no-ops that yield no events.
 pub fn stream_events(
-    data: &str,
+    event: &Value,
     usage_state: &mut StreamUsage,
 ) -> Result<Vec<ProviderStreamEvent>, String> {
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return Ok(Vec::new());
-    };
-    let event_type = value["type"].as_str().unwrap_or("");
+    let event_type = event["type"].as_str().unwrap_or("");
     match event_type {
         "error" => {
-            let message = value["error"]["message"]
+            let message = event["error"]["message"]
                 .as_str()
                 .unwrap_or("Anthropic stream error")
                 .to_string();
             Err(message)
         }
         "content_block_start" => {
-            let index = value["index"].as_u64().unwrap_or(0) as usize;
-            let block = &value["content_block"];
+            let index = event["index"].as_u64().unwrap_or(0) as usize;
+            let block = &event["content_block"];
             let block_type = block["type"].as_str().unwrap_or("");
             if block_type == "tool_use" {
                 Ok(vec![ProviderStreamEvent::ToolCallDelta {
@@ -257,8 +257,8 @@ pub fn stream_events(
             }
         }
         "content_block_delta" => {
-            let index = value["index"].as_u64().unwrap_or(0) as usize;
-            let delta = &value["delta"];
+            let index = event["index"].as_u64().unwrap_or(0) as usize;
+            let delta = &event["delta"];
             match delta["type"].as_str().unwrap_or("") {
                 "text_delta" => Ok(delta["text"]
                     .as_str()
@@ -288,8 +288,8 @@ pub fn stream_events(
         // combined counts. `message_start` reports the input side (plus cache
         // counters) up front; `message_delta` reports the final cumulative
         // output right before message_stop.
-        "message_start" => Ok(merge_usage_event(usage_state, &value["message"]["usage"])),
-        "message_delta" => Ok(merge_usage_event(usage_state, &value["usage"])),
+        "message_start" => Ok(merge_usage_event(usage_state, &event["message"]["usage"])),
+        "message_delta" => Ok(merge_usage_event(usage_state, &event["usage"])),
         _ => Ok(Vec::new()),
     }
 }
@@ -329,12 +329,18 @@ pub fn stream_text(data: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Stand-in for the caller-side single parse: production parses each
+    /// stream payload once and hands the `Value` to [`stream_events`].
+    fn parse(data: &str) -> Value {
+        serde_json::from_str(data).expect("test event parses")
+    }
+
     #[test]
     fn stream_parser_extracts_text_and_tool_deltas() {
         let mut state = StreamUsage::default();
         // A text delta event.
         let text_events = stream_events(
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            &parse(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#),
             &mut state,
         )
         .expect("text delta parses");
@@ -345,7 +351,7 @@ mod tests {
 
         // A tool_use block opening: id and name arrive up front.
         let open_events = stream_events(
-            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash"}}"#,
+            &parse(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash"}}"#),
             &mut state,
         )
         .expect("content_block_start parses");
@@ -362,7 +368,7 @@ mod tests {
         // Argument JSON fragments arrive as input_json_delta; the harness
         // concatenates them.
         let frag_events = stream_events(
-            r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"comm"}}"#,
+            &parse(r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"comm"}}"#),
             &mut state,
         )
         .expect("input_json_delta parses");
@@ -380,7 +386,7 @@ mod tests {
     #[test]
     fn stream_parser_extracts_reasoning_deltas() {
         let events = stream_events(
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}"#,
+            &parse(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}"#),
             &mut StreamUsage::default(),
         )
         .expect("thinking_delta parses");
@@ -393,7 +399,7 @@ mod tests {
     #[test]
     fn stream_parser_surfaces_error_events_as_err() {
         let result = stream_events(
-            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+            &parse(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
             &mut StreamUsage::default(),
         );
         assert!(result.is_err());
@@ -405,15 +411,17 @@ mod tests {
 
     #[test]
     fn stream_parser_ignores_non_content_events() {
+        // Parsing lives one layer up (each stream payload is parsed exactly
+        // once, and non-JSON payloads are skipped by the caller before this
+        // function runs) — here only well-formed non-content events matter.
         let mut state = StreamUsage::default();
         for payload in [
             r#"{"type":"message_start","message":{"id":"msg_1"}}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
             r#"{"type":"message_stop"}"#,
             r#"{"type":"content_block_stop","index":0}"#,
-            r#"not-json-at-all"#,
         ] {
-            let events = stream_events(payload, &mut state).expect("non-content event is ok");
+            let events = stream_events(&parse(payload), &mut state).expect("non-content event is ok");
             assert!(
                 events.is_empty(),
                 "non-content event must yield nothing: {payload}"
@@ -430,7 +438,7 @@ mod tests {
         // prompt = 0 and drops the cache counters.
         let mut state = StreamUsage::default();
         let start_events = stream_events(
-            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_creation_input_tokens":100,"cache_read_input_tokens":400,"output_tokens":1}}}"#,
+            &parse(r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_creation_input_tokens":100,"cache_read_input_tokens":400,"output_tokens":1}}}"#),
             &mut state,
         )
         .expect("message_start parses");
@@ -448,7 +456,7 @@ mod tests {
 
         // Content events between the two never re-emit usage.
         let text_events = stream_events(
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+            &parse(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#),
             &mut state,
         )
         .expect("text delta parses");
@@ -459,7 +467,7 @@ mod tests {
 
         // The delta's output-only usage merges with the start's input side.
         let delta_events = stream_events(
-            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#,
+            &parse(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#),
             &mut state,
         )
         .expect("message_delta parses");
@@ -483,12 +491,12 @@ mod tests {
         // delta: it must REPLACE, not add, or the counts double.
         let mut state = StreamUsage::default();
         stream_events(
-            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":1}}}"#,
+            &parse(r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":1}}}"#),
             &mut state,
         )
         .expect("message_start parses");
         let delta_events = stream_events(
-            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":12}}"#,
+            &parse(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":12}}"#),
             &mut state,
         )
         .expect("message_delta parses");
@@ -512,7 +520,7 @@ mod tests {
         // behavior.
         let mut state = StreamUsage::default();
         let events = stream_events(
-            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            &parse(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#),
             &mut state,
         )
         .expect("message_delta parses");

@@ -19,7 +19,7 @@ use mutx_engine::{
 
 use crate::modal::Recess;
 use crate::primitives::{centered_rect_h, modal_frame, recess_backdrop};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Which button in the confirm overlay holds keyboard focus. Mirrors
 /// `crate::app::ProviderDeleteChoice`.

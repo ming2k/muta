@@ -7,10 +7,10 @@ retained cell grid with write-marks-dirty tracking, a back/front diff, and a
 crossterm backend; the **view layer**
 (the view modules of the `mutx` crate — formerly the `mutx-view`
 crate, re-merged by ADR-0079 and re-extracted with the shell by ADR-0098) holds the widget
-tree (entry point `view.rs`) and the semantic document model, rendering
+tree (entry point `render/mod.rs`) and the semantic document model, rendering
 *into* the engine's grid via `Frame::render_widget`; and the **app shell**
 (`apps/tui/crates/mutx/src`) owns `App` state, the event loop, and input
-mapping, driving the view layer through the borrowed `TranscriptView` seam.
+mapping, driving the view layer through the borrowed `TranscriptProps` seam.
 
 ## Frame layout
 
@@ -80,7 +80,7 @@ recall (the same walk as `Alt+P`/`Alt+N`; ADR-0174/0176).
 ## Other reference
 
 - [Architecture](architecture.md) — the engine / view / shell layers, the
-  `TranscriptView` seam, and the component reuse tiers
+  `TranscriptProps` seam, and the component reuse tiers
 - [Color palette](theme.md) — all `Theme` tokens with RGB values
 - [Transcript spacing](transcript-spacing.md) — spacing ownership rules for transcript layouts and components
 - [Key measurements](layout.md#key-measurements) — indents, margins, scroll steps
@@ -96,7 +96,7 @@ ADR-0079; paths below are relative to that directory.
 
 | File | Responsibility |
 |------|---------------|
-| `view.rs` | Draw orchestration: `draw_transcript`, `TranscriptView`, `TranscriptRender`, `transcript_band_rect`, `TRANSCRIPT_H_INSET` |
+| `render/mod.rs` | Draw orchestration: `draw_transcript`, `TranscriptProps`, `TranscriptRender`, `transcript_band_rect`, `TRANSCRIPT_H_INSET` |
 | `design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
 | `theme.rs` | `Theme` (all color tokens) |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |

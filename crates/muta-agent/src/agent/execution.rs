@@ -428,8 +428,8 @@ impl Agent {
             // input panel: no one is going to type into the prompt, so the
             // inline panel would either deadlock or just disrupt.
             // Close stdin instead — the command then fails fast with a non-interactive remedy.
-            if self.delegated() {
-                tracing::info!(command = %command, "interactive command stdin closed in delegated mode");
+            if self.unattended() {
+                tracing::info!(command = %command, "interactive command stdin closed in unattended mode");
                 return StdinPolicy::default();
             }
             if self.skip_interactive_input() {
@@ -503,7 +503,7 @@ impl Agent {
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
-            delegated: self.delegated(),
+            unattended: self.unattended(),
             ctx: self, // Agent: PermissionContext
         };
 
@@ -514,8 +514,8 @@ impl Agent {
                 return output;
             }
             crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
-                if self.delegated() {
-                    // Under delegated mode, missing authority is auto-approved.
+                if self.unattended() {
+                    // Under unattended mode, missing authority is auto-approved.
                 } else {
                     // The single interactive-park path. Both the broker (a
                     // write/execute the user must approve) and the bash
@@ -599,9 +599,9 @@ impl Agent {
                         .to_string(),
                 );
             }
-            if self.delegated() {
+            if self.unattended() {
                 return ToolOutput::Text(
-                    "ask_user is unavailable: this session is running in Delegated mode and no human \
+                    "ask_user is unavailable: this session is running in Unattended mode and no human \
                      is reachable to answer. Resolve the ambiguity yourself — pick the most \
                      reasonable default and proceed."
                         .to_string(),

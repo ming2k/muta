@@ -50,21 +50,30 @@ impl SharedAdditionalRoots {
     }
 }
 
-/// Session-scoped handle for bypassing workspace filesystem confinement (jail).
-#[derive(Debug, Clone, Default)]
-pub struct SharedUnconfined(Arc<std::sync::atomic::AtomicBool>);
+/// Session-scoped handle for workspace filesystem confinement.
+///
+/// Confined by default (`true`). When set to `false`, file tools bypass workspace
+/// path boundaries and admit any host path.
+#[derive(Debug, Clone)]
+pub struct SharedConfinement(Arc<std::sync::atomic::AtomicBool>);
 
-impl SharedUnconfined {
-    pub fn new(unconfined: bool) -> Self {
-        Self(Arc::new(std::sync::atomic::AtomicBool::new(unconfined)))
+impl Default for SharedConfinement {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl SharedConfinement {
+    pub fn new(confined: bool) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicBool::new(confined)))
     }
 
-    pub fn is_unconfined(&self) -> bool {
+    pub fn is_confined(&self) -> bool {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn set_unconfined(&self, unconfined: bool) {
+    pub fn set_confined(&self, confined: bool) {
         self.0
-            .store(unconfined, std::sync::atomic::Ordering::Relaxed);
+            .store(confined, std::sync::atomic::Ordering::Relaxed);
     }
 }

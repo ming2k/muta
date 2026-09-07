@@ -28,13 +28,13 @@ use super::common::{placeholder, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::ModalHeader;
 use crate::primitives::{ContentModalSpec, FooterHint, keyvocab};
-use crate::view::{QueueItemView, Theme};
+use crate::render::{QueueItemProps, Theme};
 use unicode_width::UnicodeWidthStr;
 
 /// Inputs for [`draw_queue_modal`]. The items slice is the viewed session's
 /// outbox in dispatch order.
-pub struct QueueModalView<'a> {
-    pub items: &'a [QueueItemView],
+pub struct QueueModalProps<'a> {
+    pub items: &'a [QueueItemProps],
     /// `true` while the outbox is hard-blocked (the modal auto-blocks on open
     /// for safe editing; `F3` toggles a persistent block). The block state is
     /// explicit in the persistent queue bar, so the modal title stays plain.
@@ -47,7 +47,7 @@ pub struct QueueModalView<'a> {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_queue_modal(
     frame: &mut Frame,
-    view: QueueModalView<'_>,
+    props: QueueModalProps<'_>,
     modal_index: usize,
     scroll: &mut usize,
     follow_selection: bool,
@@ -55,7 +55,7 @@ pub fn draw_queue_modal(
 ) -> mutx_engine::Rect {
     let body_width = crate::components::modal::modal_body_width(frame, ContentModalSpec::QUEUE);
 
-    let QueueModalView { items, blocked } = view;
+    let QueueModalProps { items, blocked } = props;
 
     // Keep the modal title a plain `Follow-ups`: the count and the paused/blocked
     // state are already visible in the persistent queue bar, so echoing them

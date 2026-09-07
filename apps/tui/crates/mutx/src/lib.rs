@@ -18,7 +18,7 @@
 //!   `muta` binary (`mutx`), which stays a thin shell over this
 //!   crate.
 //!
-//! The seam between shell and view is the borrowed `view::TranscriptView`
+//! The seam between shell and view is the borrowed `render::TranscriptProps`
 //! the event loop fills in each frame; the view modules never reach back into
 //! the shell.
 
@@ -72,13 +72,13 @@ pub(crate) mod chrome;
 pub(crate) mod composer;
 pub(crate) mod design;
 pub(crate) mod effort_ignition;
+pub(crate) mod elevation;
 pub(crate) mod empty_state;
 pub(crate) mod footer_stack;
 pub(crate) mod markdown_table;
 pub(crate) mod message_body;
 pub(crate) mod notice;
 pub(crate) mod primitives;
-pub(crate) mod elevation;
 pub(crate) mod view_header;
 
 pub(crate) mod text_layout;
@@ -86,11 +86,11 @@ pub(crate) mod theme;
 pub(crate) mod time;
 
 // Transcript-area renderer (the entry point the shell drives each frame).
-pub(crate) mod view;
+pub(crate) mod render;
 // Re-export the transcript renderer's surface at the `tui` root: the drawing
 // leaves used to reach these via the view crate's root namespace (its lib.rs
 // glob), so this module now stands in as that parent.
-pub(crate) use view::*;
+pub(crate) use render::*;
 
 // Misc helpers shared with the shell.
 pub(crate) mod fuzzy;
@@ -123,8 +123,8 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::model::document::{
-    CommandPhase, DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin,
-    notice_severity_from_core,
+    CommandPhase, DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage,
+    UserMessageOrigin, notice_severity_from_core,
 };
 use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
@@ -133,7 +133,7 @@ use crate::transcript::{
     rebase_transcript_rounds, transcript_commands_from_ledger, transcript_interrupts_from_records,
     transcript_messages_from_core,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Where the session this TUI drives lives. All sessions in the unified
 /// daemon model are remote (daemon-hosted).
@@ -376,8 +376,8 @@ pub async fn run_tui(
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
-        delegated: false,
-        unconfined: false,
+        unattended: false,
+        confined: true,
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         retry_pending: false,
     }));
@@ -1185,7 +1185,9 @@ pub async fn run_tui(
                             // The prompt remains in the transcript and is marked Cancelled.
                             *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            if let Some(user_msg) = msgs.iter_mut().rev().find(|m| m.role == Role::User) {
+                            if let Some(user_msg) =
+                                msgs.iter_mut().rev().find(|m| m.role == Role::User)
+                            {
                                 user_msg.cancel_prompt();
                             }
                             if !routes_to_side {
@@ -1772,14 +1774,14 @@ pub async fn run_tui(
                             finalize_streaming_reasoning(&mut msgs, duration_ms);
                         }
                         RoundEvent::TodosUpdated(_) => {}
-                        RoundEvent::DelegatedChanged(enabled) => {
+                        RoundEvent::UnattendedChanged(enabled) => {
                             if !routes_to_side {
-                                harness_clone.lock().await.delegated = enabled;
+                                harness_clone.lock().await.unattended = enabled;
                             }
                         }
-                        RoundEvent::UnconfinedChanged(enabled) => {
+                        RoundEvent::ConfinementChanged(confined) => {
                             if !routes_to_side {
-                                harness_clone.lock().await.unconfined = enabled;
+                                harness_clone.lock().await.confined = confined;
                             }
                         }
                         RoundEvent::RetryScheduled {
@@ -2349,8 +2351,8 @@ pub async fn run_tui(
         harness_retry_pending: false,
         phase: None,
         provider_retry: None,
-        delegated: false,
-        unconfined: false,
+        unattended: false,
+        confined: true,
         round_count: 0,
         current_turn: 0,
         round_started_at: None,
@@ -2434,7 +2436,7 @@ pub async fn run_tui(
         modal_hit_map: crate::model::layout::ModalHitMap::new(),
         hovered_step: None,
         transcript_focused: false,
-        transcript_layout: crate::view::layout::Strategy::from_config(
+        transcript_layout: crate::render::layout::Strategy::from_config(
             &tui_config.transcript_layout,
         ),
         color_scheme: Theme::normalize_color_scheme(&tui_config.color_scheme).to_string(),
@@ -2619,7 +2621,11 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contrac
 /// any in-flight sending prompt to delivered.
 fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
     messages.retain(|m| !m.is_provider_retry());
-    if let Some(m) = messages.iter_mut().rev().find(|m| m.role == Role::User && m.delivery == DeliveryStatus::Sending) {
+    if let Some(m) = messages
+        .iter_mut()
+        .rev()
+        .find(|m| m.role == Role::User && m.delivery == DeliveryStatus::Sending)
+    {
         m.delivery = DeliveryStatus::Delivered;
         m.rev += 1;
     }
@@ -2796,7 +2802,7 @@ fn load_user_logo() -> Option<Vec<String>> {
     let raw = std::fs::read_to_string(&path).ok()?;
     // Re-use the renderer's parser so the clamp stays defined in one place.
     // The parser already strips CRLF/trailing blanks and truncates to the box.
-    view::parse_logo(&raw)
+    render::parse_logo(&raw)
 }
 
 #[cfg(test)]

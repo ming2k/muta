@@ -6,28 +6,36 @@ resume the work exactly where it stopped: what the user saw, what the model saw,
 which tool calls ran, which results returned, which context was projected out of
 the model window, and which loop-level obligations were still active.
 
-This page explains that durable model. For the request-scoped view sent to a
-provider, see [Model context](model-context.md). For the storage location model,
-see [Platform-native persistence categories](../persistence.md).
+This page explains that durable model (ADR-0186). For the request-scoped view
+sent to a provider, see [Model context](model-context.md). For the storage
+location model, see [Platform-native persistence categories](../persistence.md).
 
-## Durable Scene
+## Single Transcript
 
-The **durable session** is the local source of truth for one coding session. It
-contains both the visible conversation and the hidden machinery needed to make
-that conversation resumable:
+The durable session stores **facts and decisions, never views**. There is
+exactly one transcript — an append-only list of immutable entries plus the
+projection decision history — and every consumer-facing window is a pure
+derivation from it:
 
-- the model window that future provider requests start from,
-- the archived transcript that has been projected out of the model window,
-- user-visible assistant and tool events,
-- hidden harness messages such as compaction checkpoints,
-- task state,
-- the latest context-projection metadata,
-- the local blobs needed to reconstruct large tool results and attachments.
+- **Entries** are the facts: user, assistant, and tool messages; harness
+  injections; compaction checkpoints. Each carries a coarse provenance
+  (`origin`: genuine / harness / checkpoint) and a visibility flag; per-message
+  protocol-private state (e.g. a provider's thinking signature) rides inside
+  the entry's `provider_meta` and is interpreted only by the protocol adapter
+  that produced it. Each assistant message is stamped with its producing
+  provider, so a session that mixed models stays attributable.
+- **Projection directives** are the decisions: a prune (tool-result bodies
+  replaced by placeholders in views), a compaction (a history range replaced
+  by its checkpoint entry), or a freeze (an entry's provider-visible shape is
+  byte-pinned for KV-cache stability). Appending a directive is the only
+  effect a projection has on storage.
+- **Working state** — the todo list (derived from `state` entries), title,
+  digest, provider pin, round counter, interrupt records, the retry point, and
+  the command ledger — lives on the session row in SQLite.
 
-That split is deliberate. The model window is what the provider can still read.
-The archived transcript is what the user and the session store can still
-recover. A message can leave the model window without leaving the durable
-session.
+The model window is `derive(entries, directives)`. So is the presentation the
+TUI renders. Nothing derived is persisted, so nothing derived can disagree
+with the facts.
 
 ## Event Log and Snapshot
 
@@ -69,62 +77,60 @@ state instead of replaying an unsafe half-known action.
 Context pressure changes what the model sees, but it must not erase the
 recoverable scene. muta uses **model-context projection** for that boundary:
 
-- pruning clears stale tool-result bodies while preserving the tool-call chain,
-- compaction replaces older complete rounds with a checkpoint summary,
-- both operations retain the originals in the archived transcript,
-- both operations record which projection operation happened.
+- pruning appends a directive that replaces stale tool-result bodies with
+  informative placeholders in views (originals stay recoverable),
+- compaction appends a checkpoint entry plus a directive that replaces the
+  older complete rounds with it,
+- tool-output shaping appends a freeze directive that byte-pins an entry's
+  provider-visible form (KV-cache prefix stability),
+- all originals remain in the transcript.
 
-The operation tag matters for resume and audit. A resumed session should know
-whether the last projection was a prune, a compaction, or a legacy record whose
-operation was not known. That prevents the next run from treating the session as
-if projection details vanished and pressure relief had to be rediscovered from
-scratch.
+When the agent-computed projection result is exactly reproducible as
+directives, the store appends them; when it is not, the transcript rebuilds
+from the caller's window — correctness over cleverness. A resumed session
+re-derives the exact prior view without re-projection.
 
 For the two projection layers, see [Context pruning](context-pruning.md) and
 [Context compaction](context-compaction.md). For the naming decision, see
-[ADR-0040](../../adr/0040-session-state-and-context-projection.md).
+[ADR-0040](../../adr/0040-session-state-and-context-projection.md); for the
+single-transcript model, see [ADR-0186](../../adr/0186-single-transcript-projection-directives-persistence.md).
 
 ## Resume
 
 Resume starts from the durable session, not from provider memory. Providers are
 stateless; they do not remember previous requests. muta therefore restores the
-local session first, then sends the restored model window on the next provider
-request.
+local session first, then derives the projected view and sends it on the next
+provider request.
 
-The resume path restores the visible transcript, the model window, the archived
-transcript, hidden harness context, projection metadata, task state, and any
-blobs that are still referenced by messages. It also restores the session's
-**round-interrupt records** — one durable entry per round that stopped before
-completing (a user Esc Esc, a superseding message or session switch, or the
-process terminating mid-round), each carrying the reason and the timestamp.
-Like the command ledger these are projection state: they never enter the model
-window, and the transcript re-projects them at their timestamp seams so the
-resumed session shows exactly where and why work was cut short. It also restores
-the session's **provider/model pin** — if the session had switched providers or
+The resume path restores the transcript (entries + directives), the working
+state — round-interrupt records (one durable record per round that stopped
+before completing, each carrying the reason and the timestamp), the todo
+mirror, the title, the digest, the provider pin, the retry point, and the
+command ledger — plus any blobs still referenced by entries. It also restores
+the session's **connection pin**: if the session had switched providers or
 models, resume lands back on that choice rather than the global default, so a
-reopened session talks to the same model it was using. For the dual-write
+reopened session talks to the same connection it was using. For the dual-write
 selection decision, see
-[ADR-0066](../../adr/0066-dual-write-provider-selection.md). Once this state is
-loaded, the next model request uses the restored model window as its live
-conversation history.
+[ADR-0066](../../adr/0066-dual-write-provider-selection.md).
 
-The archived transcript is not blindly reinserted into the provider request.
-Doing so would undo pruning or compaction and push the session back into the
-same pressure state. Instead, archived originals remain available for recovery,
-audit, and future tooling, while the model reads the checkpointed or pruned
-projection that was committed before the restart.
+Projected-out originals are not blindly reinserted into the provider request —
+that would undo pruning or compaction and push the session back into the same
+pressure state. They remain available for recovery, audit, summarization, and
+future tooling, while the model reads the exact projection committed before
+the restart.
 
 ## Correct Recovery Contract
 
 A session is correctly resumable when these conditions hold:
 
-- the model window after resume matches the last committed projection,
-- the archived transcript still contains originals removed by pruning or
-  compaction,
-- tool-call ids still pair assistant calls with tool results,
-- hidden harness messages keep their provenance,
-- unfinished task state is restored before the next round,
-- context-projection metadata says what operation produced the current window.
+- the projected view after resume is byte-identical to the one before exit
+  (guaranteed: the derive is a pure function of the persisted facts and
+  directives),
+- every entry is intact — nothing projected-out was lost, and tool results
+  still pair with their calls,
+- harness-injected messages keep their provenance,
+- working state (todos, title, digest, pin, interrupts, retry point, command
+  ledger) is restored before the next round.
 
 If those conditions hold, a resumed session does not need to re-prune or
 re-compact just to rediscover the state it already had. It may project again

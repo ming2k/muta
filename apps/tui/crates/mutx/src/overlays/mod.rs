@@ -35,7 +35,7 @@ pub mod usage_stats;
 
 #[allow(unused_imports)]
 pub use crate::views::settings::{
-    ConfigCategory, ConfigFocus, ConfigViewProps, build_websearch_provider_dropdown,
+    ConfigCategory, ConfigFocus, SettingsProps, build_websearch_provider_dropdown,
     build_websearch_reader_dropdown, draw_settings_view,
 };
 pub use dashboard::{
@@ -50,21 +50,21 @@ pub use help::draw_help_modal;
 pub use history::draw_history_panel;
 // The old centered `/host` modal (`host.rs`) was superseded by the full-screen
 // `dashboard` surface and removed; `/host` now opens the dashboard.
-pub use btw::{BtwModalView, draw_btw_modal};
+pub use btw::{BtwModalProps, draw_btw_modal};
 pub(crate) use command_palette::draw_command_palette;
 pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal, permission_action_count};
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
-    CustomEditorView, draw_connections_modal, draw_custom_provider_editor, draw_model_editor,
+    CustomEditorProps, draw_connections_modal, draw_custom_provider_editor, draw_model_editor,
     draw_models_modal, draw_oauth_pending, draw_preset_chooser,
 };
 pub use provider_delete_confirm::draw_provider_delete_confirm;
-pub use queue::{QueueModalView, draw_queue_modal};
+pub use queue::{QueueModalProps, draw_queue_modal};
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
 pub use telemetry::{
-    ContextUsageView, draw_telemetry_modal, telemetry_attempt_count, telemetry_attempt_key,
+    ContextUsageProps, draw_telemetry_modal, telemetry_attempt_count, telemetry_attempt_key,
     telemetry_round_count,
 };
 pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};

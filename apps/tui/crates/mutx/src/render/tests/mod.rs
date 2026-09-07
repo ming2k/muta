@@ -2,7 +2,7 @@
 //! (full-view renderer, grid row reader) live here.
 
 use super::*;
-use crate::composer::{ComposerText, ComposerView};
+use crate::composer::{ComposerText, ComposerProps};
 use crate::markdown_table::{build_table_render, shrink_column_widths};
 use crate::text_layout::wrap_text;
 use unicode_width::UnicodeWidthStr;
@@ -20,7 +20,7 @@ fn render_full_view(
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -32,7 +32,7 @@ fn render_full_view(
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -43,8 +43,8 @@ fn render_full_view(
                 session_head: Some(SessionHead {
                     session_id: "sess-01a2b3c4",
                     workspace: "~/projects/xx",
-                    delegated: false,
-                    unconfined: false,
+                    unattended: false,
+                    confined: true,
                     switching_target: None,
                 }),
                 round_started_at: None,

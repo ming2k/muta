@@ -28,7 +28,7 @@ secretly reach into application state.
 │  NEVER depends on the shell modules.                                  │
 └──────────────────────────────────────────────────────────────────────┘
                           ▲  the shell fills in a borrowed
-                          │  TranscriptView<'a> each frame
+                          │  TranscriptProps<'a> each frame
 ┌──────────────────────────────────────────────────────────────────────┐
 │  mutx shell modules  ·  APP SHELL (mutx crate)           │
 │  App state · event loop · input→action mapping · terminal lifecycle · │
@@ -62,7 +62,7 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 
 | Module | Responsibility |
 |--------|----------------|
-| `view/mod.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
+| `render/mod.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptProps`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
 | `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
 | `tools/` | Per-tool-step presenters (execute_command, edit, read, search, web, ask_user, diff, …). |
@@ -92,10 +92,10 @@ the `mutx` crate since ADR-0098; the shell addresses the view as
 | `clipboard.rs` / `clipboard_ops.rs` | OSC52 + system clipboard, async copy. |
 | `question_model.rs` | Question-modal state machine. |
 
-## The seam — `TranscriptView<'a>`
+## The seam — `TranscriptProps<'a>`
 
 The shell and the view layer communicate through one borrowed struct,
-`view::TranscriptView<'a>`, that the event loop fills in each frame. It
+`render::TranscriptProps<'a>`, that the event loop fills in each frame. It
 carries **only borrowed data** — `&[TranscriptMessage]`, `&SelectionState`,
 `&Theme`, scroll/activity/todo snapshots — and crucially **no
 reference to `App`**. This is what keeps the view layer a pure rendering
@@ -105,7 +105,7 @@ only draw what the shell chose to hand it.
 `draw_transcript(frame, &mut LayoutMap, view)` is the single entry point
 for the transcript; the per-modal overlays (`draw_models_modal`,
 `draw_permission_sheet`, …) take their own small borrowed view structs
-(`ActivityModalView`, `CustomEditorView`, …) the same way.
+(`ActivityModalView`, `CustomEditorProps`, …) the same way.
 The shell calls the view and never the reverse.
 
 ## Surface routing and shared presentation discriminants

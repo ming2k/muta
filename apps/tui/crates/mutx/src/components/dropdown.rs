@@ -11,7 +11,7 @@ use mutx_engine::{
     Rect, Span, Style,
 };
 
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Visual status indicator for a dropdown entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

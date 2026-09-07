@@ -216,7 +216,7 @@ Every transcript-area component is inset by `TRANSCRIPT_H_INSET = 2` cols
 on each side so no band, bar, or text touches the terminal frame. The two
 gutters stay `app_bg` via the global frame fill. Solid-background regions
 (code blocks, child tool steps) render into `transcript_band_rect`
-(`view.rs`), which is the transcript area minus both gutters; user
+(`render/mod.rs`), which is the transcript area minus both gutters; user
 panels and code blocks render their own equivalent gutters; markdown text
 wraps with `TRANSCRIPT_H_INSET` cells of slack on the right.
 
@@ -294,7 +294,7 @@ with the transcript content above.
 
 | File | Responsibility |
 |------|----------------|
-| `view/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
+| `render/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `footer_stack.rs` | Declarative footer stack — row list, `measure`/`place` single-pass layout, hit-rect registry (`FooterRowId`) |
 | `design.rs` | All non-color layout tokens: `TRANSCRIPT_H_INSET`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `MODEL_BAR_ROWS`, `ENVOY_FOOTER_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |

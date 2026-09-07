@@ -1103,7 +1103,7 @@ fn adopt_caret_head_and_tail_break_selection() {
 
     // Re-arm and adopt the tail edge.
     app.selection = SelectionState::Block {
-        message_idx: crate::view::INPUT_MSG_IDX,
+        message_idx: crate::render::INPUT_MSG_IDX,
         block_idx: 0,
     };
     assert!(app.adopt_caret_from_input_selection(SelectionEdge::Tail));
@@ -1112,8 +1112,8 @@ fn adopt_caret_head_and_tail_break_selection() {
 
     // Range selection: head is the release point, tail is the anchor point.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 1),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 4),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 1),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 4),
     };
     assert!(app.adopt_caret_from_input_selection(SelectionEdge::Head));
     assert_eq!(app.cursor_position, 4, "head edge adopts head cursor");
@@ -1121,8 +1121,8 @@ fn adopt_caret_head_and_tail_break_selection() {
 
     // Backward drag: anchor is 4, head is 1 (mouse released at 1).
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 4),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 1),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 4),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 1),
     };
     assert!(app.adopt_caret_from_input_selection(SelectionEdge::Head));
     assert_eq!(app.cursor_position, 1, "head edge adopts release position");
@@ -1294,20 +1294,20 @@ fn config_view_navigation_and_theme_preview() {
 
     // Up/down in detail pane previews themes
     crate::event_loop::handle_modal_down(&mut app, "s1");
-    let schemes = crate::view::Theme::available_color_schemes();
+    let schemes = crate::render::Theme::available_color_schemes();
     let previewed_scheme = &schemes[app.config_detail_index % schemes.len()];
     assert_eq!(
         app.theme.surface(),
-        crate::view::Theme::from_color_scheme(&previewed_scheme.id, &app.custom_color_scheme)
+        crate::render::Theme::from_color_scheme(&previewed_scheme.id, &app.custom_color_scheme)
             .surface()
     );
 
     // Revert preview on exit to categories
-    app.theme = crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
+    app.theme = crate::render::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
     app.config_focus = crate::overlays::ConfigFocus::Categories;
     assert_eq!(
         app.theme.surface(),
-        crate::view::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme)
+        crate::render::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme)
             .surface()
     );
 

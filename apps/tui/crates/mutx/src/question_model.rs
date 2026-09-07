@@ -1148,7 +1148,7 @@ mod tests {
     /// instead of a tool step. Returns only the painted rows so the snapshot
     /// stays compact and diffable.
     fn render_question_grid(model: &QuestionModel, width: u16, height: u16) -> String {
-        use crate::view::{Theme, draw_question_modal};
+        use crate::render::{Theme, draw_question_modal};
 
         let mut terminal = mutx_engine::TestTerminal::new(width, height);
         terminal.draw(|f| {

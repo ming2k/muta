@@ -421,13 +421,16 @@ impl<'a, 'f> Stream<'a, 'f> {
         let _focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
 
         let body_before = self.content_lines;
+        // Streaming Thinking messages participate in the height cache like
+        // every other live message (ADR-0184): their rev advances per delta,
+        // so a cached height is only ever read while the trace is unchanged —
+        // the old hard `skippable == false` rule existed only because the
+        // rev was never bumped on reasoning deltas.
         let skippable = (msg.is_notice() && !msg.is_provider_retry())
             || (!msg.is_runner_task()
                 && if msg.is_tool_step() {
                     !msg.tool_step_status()
                         .is_some_and(|status| status.is_running())
-                } else if msg.is_thinking() {
-                    !msg.is_thinking_streaming()
                 } else {
                     !msg.is_provider_retry()
                 });
@@ -470,6 +473,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
+                &mut self.height_cache.wrap,
             );
             super::disclosure::draw_runner_inline_step(&mut ctx, msg, mi, hovered, focused_tool);
         } else if msg.is_tool_step() {
@@ -482,6 +486,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
+                &mut self.height_cache.wrap,
             );
             super::disclosure::draw_tool_step(
                 &mut ctx,
@@ -504,6 +509,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
+                &mut self.height_cache.wrap,
             );
             super::disclosure::draw_reasoning_trace(
                 &mut ctx,
@@ -525,6 +531,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
+                &mut self.height_cache.wrap,
             );
             super::disclosure::draw_command_result(
                 &mut ctx,
@@ -549,6 +556,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.current_y,
                 &mut self.content_lines,
                 true,
+                &mut self.height_cache.wrap,
             );
         }
 

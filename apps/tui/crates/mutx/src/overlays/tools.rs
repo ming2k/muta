@@ -19,7 +19,7 @@ use super::common::{placeholder, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::{ModalHeader, modal_body_width};
 use crate::primitives::{ContentModalSpec, FooterHint, keyvocab};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the tools manager modal: a centered, dismissable, selectable list of
 /// the session's tools. Each row shows an enabled glyph, the tool name, its

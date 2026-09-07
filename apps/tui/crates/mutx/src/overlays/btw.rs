@@ -20,14 +20,14 @@ use super::common::{placeholder, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::ModalHeader;
 use crate::primitives::{ContentModalSpec, FooterHint, keyvocab};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Inputs for [`draw_btw_modal`]. `asides` is the mirrored
 /// [`muta_contracts::BtwAsideSummary`] list, newest first; `running` is a
 /// parallel per-row liveness vector (derived from the TUI's per-session
 /// running set, fresher than the list snapshot); `active_id` is the
 /// currently-viewed aside (rendered with an `open` marker), if any.
-pub struct BtwModalView<'a> {
+pub struct BtwModalProps<'a> {
     pub asides: &'a [muta_contracts::BtwAsideSummary],
     pub running: &'a [bool],
     pub active_id: Option<&'a str>,
@@ -39,7 +39,7 @@ pub struct BtwModalView<'a> {
 #[allow(clippy::too_many_arguments)] // showcase parity with other modal renderers
 pub fn draw_btw_modal(
     frame: &mut Frame,
-    view: BtwModalView<'_>,
+    props: BtwModalProps<'_>,
     modal_index: usize,
     scroll: &mut usize,
     follow_selection: bool,
@@ -49,11 +49,11 @@ pub fn draw_btw_modal(
 ) -> mutx_engine::Rect {
     let body_width = crate::components::modal::modal_body_width(frame, ContentModalSpec::BTW);
 
-    let BtwModalView {
+    let BtwModalProps {
         asides,
         running,
         active_id,
-    } = view;
+    } = props;
 
     let title = if asides.is_empty() {
         "Asides".to_string()

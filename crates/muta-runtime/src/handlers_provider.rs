@@ -138,7 +138,7 @@ pub(crate) async fn switch(
     // Best-effort: a failed pin does not block the live switch.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
-            provider: provider_type.clone(),
+            connection: provider_type.clone(),
             model: Some(model.clone()),
         }))
         .await
@@ -364,7 +364,7 @@ pub(crate) async fn add(
     // also a live switch, so it is pinned like `/models`.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
-            provider: id.clone(),
+            connection: id.clone(),
             model: Some(active_model.clone()),
         }))
         .await
@@ -788,11 +788,11 @@ pub async fn reapply_session_selection(
     let selection = session.provider_selection().await;
     let (provider_id, model_id): (String, Option<String>) = match &selection {
         Some(sel) => {
-            effective.default_connection = sel.provider.clone();
+            effective.default_connection = sel.connection.clone();
             if let Some(model) = &sel.model {
                 effective.default_model = Some(model.clone());
             }
-            (sel.provider.clone(), sel.model.clone())
+            (sel.connection.clone(), sel.model.clone())
         }
         None => (
             catalog::default_connection_id(config).to_string(),

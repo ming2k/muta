@@ -36,24 +36,24 @@ impl Agent {
         *self.round_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
-    pub fn delegated(&self) -> bool {
-        self.permissions.delegated()
+    pub fn unattended(&self) -> bool {
+        self.permissions.unattended()
     }
 
-    pub fn is_unconfined(&self) -> bool {
-        self.unconfined.is_unconfined()
+    pub fn is_confined(&self) -> bool {
+        self.confinement.is_confined()
     }
 
-    pub fn set_unconfined(&self, unconfined: bool) {
-        self.unconfined.set_unconfined(unconfined);
+    pub fn set_confined(&self, confined: bool) {
+        self.confinement.set_confined(confined);
     }
 
-    pub fn shared_unconfined(&self) -> muta_contracts::SharedUnconfined {
-        self.unconfined.clone()
+    pub fn shared_confinement(&self) -> muta_contracts::SharedConfinement {
+        self.confinement.clone()
     }
 
-    pub fn bind_shared_unconfined(&mut self, unconfined: muta_contracts::SharedUnconfined) {
-        self.unconfined = unconfined;
+    pub fn bind_shared_confinement(&mut self, confinement: muta_contracts::SharedConfinement) {
+        self.confinement = confinement;
     }
 
     /// ADR-0141: whether a human can currently answer this agent's parked
@@ -94,9 +94,9 @@ impl Agent {
         self.interaction.set_human_posture(posture);
     }
 
-    pub fn set_delegated(&self, enabled: bool) {
-        self.permissions.set_delegated(enabled);
-        self.interaction.set_delegated(enabled);
+    pub fn set_unattended(&self, enabled: bool) {
+        self.permissions.set_unattended(enabled);
+        self.interaction.set_unattended(enabled);
     }
 
     pub fn set_workspace_security(&self, snapshot: muta_contracts::WorkspaceSecuritySnapshot) {
@@ -256,7 +256,7 @@ impl Agent {
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
-        self.set_delegated(profile.delegated);
+        self.set_unattended(profile.unattended);
     }
 
     /// Legacy alias for [`Self::apply_profile`].

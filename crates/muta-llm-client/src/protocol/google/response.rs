@@ -159,16 +159,21 @@ pub fn stream_events(payload: &str) -> Vec<ProviderStreamEvent> {
 /// Parse one `streamGenerateContent` SSE payload into normalized provider
 /// events plus any Google thought signatures attached to function-call parts.
 pub fn stream_payload(payload: &str) -> StreamPayload {
-    let value: Value = match serde_json::from_str(payload) {
-        Ok(value) => value,
-        Err(_) => {
-            return StreamPayload {
-                events: Vec::new(),
-                thought_signatures: Vec::new(),
-                text_thought_signature: None,
-            };
-        }
-    };
+    // Single-parse entry point (ADR-0184): callers holding an already-parsed
+    // payload should prefer [`stream_payload_value`] to avoid re-parsing.
+    match serde_json::from_str(payload) {
+        Ok(value) => stream_payload_value(&value),
+        Err(_) => StreamPayload {
+            events: Vec::new(),
+            thought_signatures: Vec::new(),
+            text_thought_signature: None,
+        },
+    }
+}
+
+/// Assemble the stream payload from an already-parsed JSON value — the
+/// single-parse path used by the SSE executor (ADR-0184).
+pub fn stream_payload_value(value: &Value) -> StreamPayload {
     let root = value.get("response").unwrap_or(&value);
     let mut events = Vec::new();
     let mut thought_signatures = Vec::new();

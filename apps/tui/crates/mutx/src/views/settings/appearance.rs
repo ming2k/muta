@@ -4,14 +4,14 @@ use std::path::Path;
 
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
-use super::{ConfigViewProps, render_scrollable};
+use super::{SettingsProps, render_scrollable};
 use crate::theme::mix;
-use crate::view::Theme;
+use crate::render::Theme;
 
 pub(super) fn draw_appearance_detail(
     frame: &mut Frame,
     body: Rect,
-    props: &mut ConfigViewProps<'_>,
+    props: &mut SettingsProps<'_>,
     focused: bool,
 ) {
     let mut lines: Vec<Line<'static>> = Vec::new();

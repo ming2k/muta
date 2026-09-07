@@ -17,8 +17,8 @@ Project and user-defined commands are covered under
 | `/compact` | Compact older complete rounds now |
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
-| `/delegate [on\|off]` | Toggle delegated autonomous execution mode (aliases: `/auto`, `/yolo`) |
-| `/unconfine [on\|off]` | Toggle workspace filesystem confinement (unconfined file access) for this session (aliases: `/unconfined`, `/jail`, `/escape`) |
+| `/unattended [on\|off]` | Toggle unattended execution mode (aliases: `/auto`, `/delegate`) |
+| `/confinement [on\|off]` | Toggle workspace filesystem confinement for this session (aliases: `/unconfine`, `/jail`) |
 | `/role <code\|architect\|reviewer\|security>` | Switch the agent role preset — changes persona and capability scope (alias: `/master`) |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
@@ -29,8 +29,6 @@ Project and user-defined commands are covered under
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / suspend / kill / prompt / create, plus the console's `@N text` addressing and `/kill` `/interrupt` `/suspend` `/new` `/help` verbs (ADR-0096; layout per ADR-0097). `Esc` leaves the screen; `Ctrl+C` follows the app-wide double-press quit. `/host` is a hidden alias |
 | `/usage` | Open the usage-statistics overlay — daily token totals, per-model breakdown, and the recent request event log, aggregated over the durable store at `data/usage/` that survives session cleanup (ADR-0122) |
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
-| `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
-| `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/jobs [list\|kill id\|logs id]` | Inspect and manage background processes and sub-runners |
 | `/init [path]` | Initialize a `.muta/` config tree |
 | `/trust [all\|mcp\|skills\|hooks\|rules\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
@@ -85,42 +83,7 @@ row extends the steering without growing the executable command surface.
 
 ## Subcommands
 
-### `/schedule`
 
-| Form | Effect |
-|------|--------|
-| `/schedule <when> <prompt>` | Schedule `<prompt>` to run at `<when>` (see below) |
-| `/schedule list` | List scheduled jobs (id, kind, trigger, next fire, prompt) |
-| `/schedule cancel <id>` | Cancel a scheduled job |
-| `/schedule help` | Show syntax help |
-
-`<when>` is one of:
-
-- **a cron** — five fields `minute hour day month weekday`, recurring (e.g.
-  `*/5 * * * *` every 5 min, `0 9 * * 1-5` 09:00 on weekdays);
-- **a countdown** — one or more `<number><unit>` pairs from now
-  (`10m`, `2h30m`, `1d12h`, `in 10 minutes`, `in 2 hours 30 minutes`;
-  units: `s`/`m`/`h`/`d` and their long forms);
-- **an absolute time** — `HH:MM` today (or tomorrow if already passed),
-  `today HH:MM`, `tomorrow HH:MM`, `tomorrow`, `at HH:MM`,
-  `YYYY-MM-DD HH:MM`, or `YYYY-MM-DDTHH:MM`.
-
-Cron jobs **recur** (and fire their first run immediately); countdown and
-absolute jobs fire **once** and are then removed. Jobs are durable (survive
-restarts). Recurring cron jobs auto-expire after 30 days. `/schedule` is the
-clock-driven scheduler for delegated runs, reminders, and one-shot timers.
-
-### `/repeat`
-
-| Form | Effect |
-|------|--------|
-| `/repeat <cron> <prompt>` | Schedule `<prompt>` on the five-field `<cron>` and run it now (cron-only alias for `/schedule`) |
-| `/repeat list` | List scheduled jobs (id, kind, trigger, next fire, prompt) |
-| `/repeat cancel <id>` | Cancel a scheduled job |
-| `/repeat help` | Show cron syntax help |
-
-`/repeat` is retained as a cron-only alias for `/schedule`. Use `/schedule` for
-countdown (`10m`) or absolute-time (`14:00`, `tomorrow 09:00`) one-shots.
 
 ### `/sessions`
 
@@ -173,15 +136,25 @@ accent, success, warning, and error colors. Valid custom colors preview live;
 `Enter` saves and applies the palette, while `Esc` cancels the draft. Changes
 apply immediately and persist in the `[tui]` table of `config.toml`.
 
-### `/delegate`
+### `/unattended`
 
 | Form | Effect |
 |------|--------|
-| `/delegate` | Toggle delegated autonomous mode on/off (aliases: `/auto`, `/yolo`) |
-| `/delegate on` | Empower AI to make autonomous decisions and auto-approve tool permissions without prompts |
-| `/delegate off` | Restore interactive confirmation and question prompts |
+| `/unattended` | Toggle unattended autonomous mode on/off (aliases: `/auto`, `/delegate`) |
+| `/unattended on` | Empower AI to run unattended and auto-approve tool permissions without prompts |
+| `/unattended off` | Restore interactive confirmation and question prompts |
 
-When on, the agent is granted full delegation: tool executions and file modifications are automatically approved without prompting, and ambiguity questions (`ask_user`) are resolved self-reliantly by the model. Dangerous command hard denies (such as root-level destructive commands) remain blocked. The posture is persisted on the session: a daemon crash, kill, upgrade, or reboot reopens the session in the same posture.
+When on, the agent runs unattended: tool executions and file modifications are automatically approved without prompting, and ambiguity questions (`ask_user`) are resolved self-reliantly by the model. Dangerous command hard denies (such as root-level destructive commands) remain blocked. The posture is persisted on the session: a daemon crash, kill, upgrade, or reboot reopens the session in the same posture.
+
+### `/confinement`
+
+| Form | Effect |
+|------|--------|
+| `/confinement` | Toggle workspace filesystem confinement on/off (aliases: `/unconfine`, `/jail`) |
+| `/confinement on` | Enable workspace confinement (confine file tools to workspace root and temp) |
+| `/confinement off` | Disable workspace confinement (allow full host filesystem access) |
+
+When confinement is disabled (`off`), file tools can read and write any path on the host system bounded only by the OS user permissions of the daemon. When enabled (`on`, default), file operations outside admitted workspace roots are blocked.
 
 ### `/role`
 

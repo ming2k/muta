@@ -134,7 +134,7 @@ impl Agent {
             workspace_security: Arc::new(std::sync::Mutex::new(
                 muta_contracts::WorkspaceSecuritySnapshot::default(),
             )),
-            unconfined: muta_contracts::SharedUnconfined::default(),
+            confinement: muta_contracts::SharedConfinement::default(),
             project_rules: Arc::new(std::sync::RwLock::new(String::new())),
             skills_registry,
             thread_id,

@@ -4,7 +4,7 @@ use mutx_engine::Color;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Number of distinct luminance steps in one breathing cycle. At the 100ms
 /// spinner tick this is ~1.2s per cycle — calm, not frantic.

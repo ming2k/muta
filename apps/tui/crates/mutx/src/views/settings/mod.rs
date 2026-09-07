@@ -25,7 +25,7 @@ use mutx_engine::{
 };
 
 use crate::primitives::{ElevationContainer, SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
-use crate::view::Theme;
+use crate::render::Theme;
 use crate::view_header::{
     ViewHeader, ViewHints, ViewKind, draw_view_header, draw_view_header_hints,
 };
@@ -163,13 +163,13 @@ pub struct ConfigRects {
 }
 
 /// Properties passed to render the complete Settings View.
-pub struct ConfigViewProps<'a> {
+pub struct SettingsProps<'a> {
     pub category_index: usize,
     pub detail_index: usize,
     pub focus: ConfigFocus,
     pub color_scheme: &'a str,
     pub custom_color_scheme: &'a ColorSchemeConfig,
-    pub transcript_layout: crate::view::layout::Strategy,
+    pub transcript_layout: crate::render::layout::Strategy,
     pub expand_auto_scroll: bool,
     pub click_outside_dismiss: bool,
     pub websearch: Option<&'a muta_contracts::WebSearchConfigView>,
@@ -181,7 +181,7 @@ pub struct ConfigViewProps<'a> {
 }
 
 /// Draw the full-screen Settings View.
-pub fn draw_settings_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> ConfigRects {
+pub fn draw_settings_view(frame: &mut Frame, mut props: SettingsProps<'_>) -> ConfigRects {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -347,7 +347,7 @@ fn truncate_ellipsis(text: &str, max_width: usize) -> String {
     result
 }
 
-fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut ConfigViewProps<'_>) {
+fn draw_categories_pane(frame: &mut Frame, area: Rect, props: &mut SettingsProps<'_>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let is_focused = props.focus == ConfigFocus::Categories;
 

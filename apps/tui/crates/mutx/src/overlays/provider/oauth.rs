@@ -11,7 +11,7 @@ use crate::primitives::{
     ContentModalSpec, FooterHint, content_modal_area, content_modal_probe, hierarchical_breadcrumb,
     modal_chrome_rows, modal_frame, modal_header_parts, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the OAuth-in-progress sheet: instruction, URL, optional user code, status.
 #[allow(clippy::too_many_arguments)]

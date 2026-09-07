@@ -149,8 +149,8 @@ pub struct PolicyContext<'a> {
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
-    /// When true (delegated autonomous execution mode), all permissions are auto-approved.
-    pub delegated: bool,
+    /// When true (unattended execution mode), all permissions are auto-approved.
+    pub unattended: bool,
     /// Agent capabilities (hooks, bash policy, permission parking). Sync
     /// policies ignore this; async policies call through it.
     pub ctx: &'a dyn PermissionContext,
@@ -309,7 +309,7 @@ impl PermissionPolicy for ScopeGatePolicy {
         "scope-gate"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.delegated || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
+        if ctx.unattended || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
         if ctx.operation_scope.allows(&ctx.scope_target) {
@@ -375,8 +375,8 @@ impl PermissionPolicy for BashPolicy {
             BashVerdict::Allow => PolicyDecision::Pass,
             BashVerdict::Deny { output } => PolicyDecision::Deny { output },
             BashVerdict::Confirm { match_ } => {
-                if ctx.delegated {
-                    // Under delegated mode, dangerous commands requiring confirmation are auto-approved.
+                if ctx.unattended {
+                    // Under unattended mode, dangerous commands requiring confirmation are auto-approved.
                     PolicyDecision::Pass
                 } else {
                     // Build the one-off dangerous-command prompt.
@@ -420,7 +420,7 @@ impl PermissionPolicy for BrokerPolicy {
         "broker"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.delegated {
+        if ctx.unattended {
             return PolicyDecision::Approve;
         }
         let submission = ctx.tool.permission_submission(ctx.arguments);
@@ -563,7 +563,7 @@ mod tests {
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
-        delegated: bool,
+        unattended: bool,
         op: muta_contracts::OperationScope,
         disabled: HashSet<String>,
         scoped: ScopedToolDisable,
@@ -580,7 +580,7 @@ mod tests {
             operation_scope: params.op,
             disabled: params.disabled,
             scoped_disabled: params.scoped,
-            delegated: params.delegated,
+            unattended: params.unattended,
             ctx: params.ctx,
         }
     }
@@ -615,7 +615,7 @@ mod tests {
             name: "execute_command",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -628,7 +628,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_out_of_scope_passes_when_delegated() {
+    async fn scope_gate_out_of_scope_passes_when_unattended() {
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -648,7 +648,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            delegated: true, // delegated
+            unattended: true, // unattended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -681,7 +681,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            delegated: false, // attended
+            unattended: false, // attended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_in_scope_passes_regardless_of_delegated() {
+    async fn scope_gate_in_scope_passes_regardless_of_unattended() {
         // Inside the granted scope → always passes (broker applies as usual).
         let (granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
@@ -715,7 +715,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(inside),
-            delegated: true,
+            unattended: true,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -751,7 +751,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -787,7 +787,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -798,7 +798,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_delegated_approves_automatically() {
+    async fn broker_unattended_approves_automatically() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
@@ -814,7 +814,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
-            delegated: true, // delegated
+            unattended: true, // unattended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -843,7 +843,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
-            delegated: true,
+            unattended: true,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -872,7 +872,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -908,7 +908,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -942,7 +942,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(inside),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -971,7 +971,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1001,7 +1001,7 @@ mod tests {
             name: "read_text",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            delegated: false,
+            unattended: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1035,7 +1035,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            delegated: false, // attended
+            unattended: false, // attended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1049,7 +1049,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chain_out_of_scope_delegated_approves() {
+    async fn chain_out_of_scope_unattended_approves() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -1068,7 +1068,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            delegated: true, // delegated
+            unattended: true, // unattended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1153,7 +1153,7 @@ mod tests {
             name: "view_file",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            delegated: false,
+            unattended: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -1176,7 +1176,7 @@ mod tests {
             name: "execute_command",
             args: "cargo test",
             target: ScopeTarget::Command("cargo test".to_string()),
-            delegated: false,
+            unattended: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -1216,7 +1216,7 @@ mod tests {
             name: "execute_command",
             args: "cargo build",
             target: ScopeTarget::Command("cargo build".to_string()),
-            delegated: false,
+            unattended: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),

@@ -13,7 +13,7 @@ pub mod queue_bar;
 mod tests;
 
 #[allow(unused_imports)]
-pub use activity_bar::{ActivityBarView, draw_activity_bar};
+pub use activity_bar::{ActivityBarProps, draw_activity_bar};
 #[allow(unused_imports)]
 pub use common::{
     Liveness, SPINNER_PHASES, breathing_color, classify_liveness, dot_color, format_elapsed,
@@ -22,7 +22,7 @@ pub use common::{
 pub use completion_menu::draw_completion_menu;
 #[allow(unused_imports)]
 pub use model_bar::{
-    CONTEXT_USAGE_CRIT_THRESHOLD, CONTEXT_USAGE_WARN_THRESHOLD, ModelBarRects, ModelBarView,
+    CONTEXT_USAGE_CRIT_THRESHOLD, CONTEXT_USAGE_WARN_THRESHOLD, ModelBarRects, ModelBarProps,
     draw_model_bar, format_token_count,
 };
-pub use queue_bar::{QueueBarView, QueueItemView, draw_queue_bar};
+pub use queue_bar::{QueueBarProps, QueueItemProps, draw_queue_bar};

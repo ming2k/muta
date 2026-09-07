@@ -19,7 +19,7 @@ use crate::model::selection::SelectionState;
 use crate::primitives::{
     FixedModalSpec, FooterHint, modal_area, modal_frame, modal_header, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Target action for a command palette entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,8 +59,6 @@ fn humanize_command_name(name: &str) -> String {
         "/fork" => "Fork Session".to_string(),
         "/diff" => "Workspace Diff".to_string(),
         "/undo" => "Undo Turn".to_string(),
-        "/repeat" => "Schedule Recurring Prompt".to_string(),
-        "/schedule" => "Schedule Prompt".to_string(),
         "/jobs" => "Background Jobs".to_string(),
         "/init" => "Initialize Project Config".to_string(),
         "/trust" => "Trust Project Assets".to_string(),
@@ -422,7 +420,6 @@ mod tests {
         // Harness commands present
         assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/compact")));
         assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/undo")));
-        assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/schedule")));
         assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/custom-check")));
     }
 
@@ -450,8 +447,6 @@ mod tests {
         let compact = entries.iter().find(|e| e.slash.as_deref() == Some("/compact")).unwrap();
         assert!(matches!(compact.action, PaletteAction::Harness { requires_args: false, .. }));
 
-        let schedule = entries.iter().find(|e| e.slash.as_deref() == Some("/schedule")).unwrap();
-        assert!(matches!(schedule.action, PaletteAction::Harness { requires_args: true, .. }));
     }
 
     #[test]

@@ -10,8 +10,8 @@ pub async fn run_headless(
     prompt: String,
     json: bool,
     project_override: Option<PathBuf>,
-    delegated: bool,
-    unconfined: bool,
+    unattended: bool,
+    confined: bool,
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -61,7 +61,7 @@ pub async fn run_headless(
             muta_contracts::human_request::HumanChannelPosture::Autonomous
         });
     }
-    let init_options = muta_contracts::SessionInitOptions::new(delegated, unconfined);
+    let init_options = muta_contracts::SessionInitOptions::new(unattended, confined);
     let action = AttachAction::New(if init_options.is_default() {
         None
     } else {
@@ -228,7 +228,7 @@ pub async fn run_headless(
                     }
                 }
                 RoundEvent::PermissionRequest(req) => {
-                    handle_permission_request(&tx, req, delegated, is_tty).await?;
+                    handle_permission_request(&tx, req, unattended, is_tty).await?;
                 }
                 RoundEvent::UserQuestionRequest(req) => {
                     handle_user_question_request(&tx, req, is_tty).await?;
@@ -363,10 +363,10 @@ async fn declare_session_end(
 async fn handle_permission_request(
     tx: &tokio::sync::mpsc::UnboundedSender<AgentRequest>,
     req: PermissionRequest,
-    delegated: bool,
+    unattended: bool,
     is_tty: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if delegated {
+    if unattended {
         let _ = tx.send(AgentRequest::PermissionReply {
             request_id: req.id,
             decision: PermissionDecision::Once,

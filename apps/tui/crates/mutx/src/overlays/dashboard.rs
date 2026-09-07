@@ -38,7 +38,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::primitives::{
     ElevationContainer, LayoutTier, SCROLL_EDGE_MARGIN, resolve_scroll, viewport_rect,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Which zone of the dashboard currently owns the keyboard.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -511,6 +511,9 @@ fn dock_card_line(
         muta_contracts::SessionForkKind::Trunk => String::new(),
         muta_contracts::SessionForkKind::Aside => "⑂aside ".to_string(),
         muta_contracts::SessionForkKind::Fork => "⑂fork ".to_string(),
+        // Subagent sessions never surface in the dashboard (filtered at the
+        // listing layer), but the pattern must stay exhaustive.
+        muta_contracts::SessionForkKind::Subagent => String::new(),
     };
     let lineage_w = lineage.chars().count();
     let name_budget = name_w.saturating_sub(lineage_w);

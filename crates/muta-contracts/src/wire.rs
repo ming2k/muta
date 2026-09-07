@@ -90,27 +90,40 @@ pub enum Wire {
 }
 
 /// Initial options and postures when creating a session.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct SessionInitOptions {
-    /// `--delegate` / delegated autonomous execution posture.
+    /// `--unattended` / unattended execution posture.
     #[serde(default)]
-    pub delegated: bool,
-    /// Whether workspace filesystem confinement is bypassed (`/unconfined on` / `--unconfined`).
-    #[serde(default)]
-    pub unconfined: bool,
+    pub unattended: bool,
+    /// Whether workspace filesystem confinement is enforced (default true).
+    #[serde(default = "default_confined")]
+    pub confined: bool,
+}
+
+const fn default_confined() -> bool {
+    true
+}
+
+impl Default for SessionInitOptions {
+    fn default() -> Self {
+        Self {
+            unattended: false,
+            confined: true,
+        }
+    }
 }
 
 impl SessionInitOptions {
-    pub fn new(delegated: bool, unconfined: bool) -> Self {
+    pub fn new(unattended: bool, confined: bool) -> Self {
         Self {
-            delegated,
-            unconfined,
+            unattended,
+            confined,
         }
     }
 
     pub fn is_default(&self) -> bool {
-        !self.delegated && !self.unconfined
+        !self.unattended && self.confined
     }
 }
 
@@ -247,11 +260,11 @@ mod tests {
 
         // Structured new with options
         let opts = SessionInitOptions {
-            delegated: true,
-            unconfined: true,
+            unattended: true,
+            confined: false,
         };
         let with_opts = serde_json::to_string(&AttachAction::New(Some(opts.clone()))).unwrap();
-        assert_eq!(with_opts, r#"{"new":{"delegated":true,"unconfined":true}}"#);
+        assert_eq!(with_opts, r#"{"new":{"unattended":true,"confined":false}}"#);
         let parsed: AttachAction = serde_json::from_str(&with_opts).unwrap();
         assert_eq!(parsed, AttachAction::New(Some(opts)));
     }

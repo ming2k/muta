@@ -47,7 +47,7 @@ fn runner_view_groups_children_into_turn_bands() {
         let _ = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &children,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -59,7 +59,7 @@ fn runner_view_groups_children_into_turn_bands() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -155,7 +155,7 @@ fn runner_step_and_view_render_without_panicking() {
         let _ = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &root_messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -167,7 +167,7 @@ fn runner_step_and_view_render_without_panicking() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -198,7 +198,7 @@ fn runner_step_and_view_render_without_panicking() {
         let _ = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &children,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -210,7 +210,7 @@ fn runner_step_and_view_render_without_panicking() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -303,7 +303,7 @@ fn height_cache_skip_path_matches_full_layout() {
             let r = draw_transcript(
                 f,
                 &mut layout_map,
-                TranscriptView {
+                TranscriptProps {
                     messages: &messages,
                     scroll,
                     selection: &SelectionState::None,
@@ -315,7 +315,7 @@ fn height_cache_skip_path_matches_full_layout() {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
-                    queue_bar: QueueBarView {
+                    queue_bar: QueueBarProps {
                         items: &[],
                         paused: false,
                         blocked: false,
@@ -411,7 +411,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
             let r = draw_transcript(
                 f,
                 &mut layout_map,
-                TranscriptView {
+                TranscriptProps {
                     messages: &messages,
                     scroll,
                     selection: &SelectionState::None,
@@ -423,7 +423,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
-                    queue_bar: QueueBarView {
+                    queue_bar: QueueBarProps {
                         items: &[],
                         paused: false,
                         blocked: false,
@@ -497,7 +497,7 @@ fn completed_diff_cache_survives_height_invalidation_and_resize() {
 fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     let theme = Theme::default();
     let messages = vec![TranscriptMessage::new(muta_contracts::Role::User, "hello")];
-    let queue_items = [crate::chrome::QueueItemView {
+    let queue_items = [crate::chrome::QueueItemProps {
         queued_at_ms: 1_700_000_000_000,
         text: "next".into(),
     }];
@@ -508,7 +508,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
         render_opt = Some(draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -520,7 +520,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: crate::chrome::QueueBarView {
+                queue_bar: crate::chrome::QueueBarProps {
                     items: &queue_items,
                     paused: false,
                     blocked: false,
@@ -658,7 +658,7 @@ fn checklist_tool_step_renders_with_active_selection_without_panic() {
             let _ = draw_transcript(
                 f,
                 &mut layout_map,
-                TranscriptView {
+                TranscriptProps {
                     messages: &messages,
                     scroll: 0,
                     selection,
@@ -670,7 +670,7 @@ fn checklist_tool_step_renders_with_active_selection_without_panic() {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
-                    queue_bar: QueueBarView {
+                    queue_bar: QueueBarProps {
                         items: &[],
                         paused: false,
                         blocked: false,

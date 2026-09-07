@@ -231,11 +231,12 @@ pub trait ExecutionEnvironment: Send + Sync {
         Vec::new()
     }
 
-    /// Whether path confinement (workspace jail) is bypassed for this environment.
-    /// When unconfined, file tools resolve any absolute path on the host,
+    /// Whether path confinement is enforced for this environment.
+    /// By default `true` (file tools are strictly confined to workspace roots).
+    /// When disabled (`false`), file tools resolve any absolute path on the host,
     /// bounded only by host OS / daemon user permissions.
-    fn is_unconfined(&self) -> bool {
-        false
+    fn is_confined(&self) -> bool {
+        true
     }
 
     /// Required containment for shell-capable tools.
@@ -247,8 +248,8 @@ pub trait ExecutionEnvironment: Send + Sync {
     /// this environment's admitted workspace roots.
     ///
     /// Relative paths resolve against `workspace_root()`. Leading `~` is expanded
-    /// to the user's home directory. Returns the resolved path if unconfined, if
-    /// it falls within `workspace_root()`, or within any entry in `additional_roots()`
+    /// to the user's home directory. Returns the resolved path if confinement is disabled,
+    /// if it falls within `workspace_root()`, or within any entry in `additional_roots()`
     /// (plus the implicit platform temp roots — scratch files must be readable),
     /// or `FsError::PermissionDenied` if it attempts to escape containment.
     fn resolve_path(&self, raw: &str) -> Result<PathBuf, FsError> {
@@ -261,7 +262,7 @@ pub trait ExecutionEnvironment: Send + Sync {
 
         let normalized = lexical_normalize(&target);
         let root_norm = lexical_normalize(self.workspace_root());
-        let admitted = self.is_unconfined()
+        let admitted = !self.is_confined()
             || normalized.starts_with(&root_norm)
             || admits_temp_path(&target)
             || admits_skills_path(&target)
@@ -452,7 +453,7 @@ mod tests {
     struct MockEnv {
         root: PathBuf,
         additional: Vec<PathBuf>,
-        unconfined: bool,
+        confined: bool,
     }
 
     struct MockFs;
@@ -524,8 +525,8 @@ mod tests {
         fn additional_roots(&self) -> Vec<PathBuf> {
             self.additional.clone()
         }
-        fn is_unconfined(&self) -> bool {
-            self.unconfined
+        fn is_confined(&self) -> bool {
+            self.confined
         }
     }
 
@@ -550,7 +551,7 @@ mod tests {
         let env = MockEnv {
             root: PathBuf::from("/home/user/project"),
             additional: vec![PathBuf::from("/home/user/optics")],
-            unconfined: false,
+            confined: true,
         };
 
         // Relative path inside primary root
@@ -578,14 +579,14 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_path_unconfined_mode() {
+    fn test_resolve_path_confinement_disabled() {
         let env = MockEnv {
             root: PathBuf::from("/home/user/project"),
             additional: Vec::new(),
-            unconfined: true,
+            confined: false,
         };
 
-        // Any absolute path is admitted when unconfined
+        // Any absolute path is admitted when confinement is disabled
         assert_eq!(
             env.resolve_path("/etc/hosts").unwrap(),
             PathBuf::from("/etc/hosts")
@@ -624,7 +625,7 @@ mod tests {
         let env = MockEnv {
             root: PathBuf::from("/home/user/project"),
             additional: Vec::new(),
-            unconfined: false,
+            confined: true,
         };
         let tmp = std::env::temp_dir().join("muta-resolve-probe/build.log");
         env.resolve_path(tmp.to_str().unwrap()).unwrap();

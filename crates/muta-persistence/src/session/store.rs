@@ -111,6 +111,14 @@ impl SessionStore {
         self.state.lock().await.data.id.clone()
     }
 
+    /// Test-only: lock the session state (same crate sibling module access).
+    #[cfg(test)]
+    pub(crate) async fn state_lock_for_test(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, SessionState> {
+        self.state.lock().await
+    }
+
     /// `true` while this session has never been persisted **and** still holds
     /// no user-facing content in memory (see
     /// `SessionData::is_user_facing_empty`). Such a session is "deferred":
@@ -251,19 +259,19 @@ impl SessionStore {
         let overview = match data.title.as_deref().filter(|t| !t.trim().is_empty()) {
             Some(title) => truncate_preview(title, 64),
             None => data
-                .model_window
-                .iter()
+                .transcript
+                .project()
+                .into_iter()
                 .rev()
-                .chain(data.archived_transcript.iter().rev())
-                .find(|m| m.role == muta_contracts::Role::User && !m.hidden)
-                .map(|m| truncate_preview(&m.content, 64))
+                .find(|(_, m)| m.role == muta_contracts::Role::User && !m.hidden)
+                .map(|(_, m)| truncate_preview(&m.content, 64))
                 .unwrap_or_else(|| "(empty session)".to_string()),
         };
         SessionSummary {
             id: data.id.clone(),
             parent_id: data.parent_id.clone(),
             fork_kind: data.fork_kind,
-            message_count: data.model_window.len() + data.archived_transcript.len(),
+            message_count: data.transcript.entries.len(),
             updated_at: data.updated_at,
             created_at: data.created_at,
             overview,

@@ -16,7 +16,7 @@ use crate::model::selection::SelectionState;
 use crate::primitives::{
     FixedModalSpec, FooterHint, modal_area, modal_frame, modal_header, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the dynamic Help modal derived from `COMMAND_REGISTRY`.
 pub fn draw_help_modal(

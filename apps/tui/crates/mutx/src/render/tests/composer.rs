@@ -52,7 +52,7 @@ fn input_box_grows_with_wrapped_content() {
             let r = draw_transcript(
                 f,
                 &mut layout_map,
-                TranscriptView {
+                TranscriptProps {
                     messages,
                     scroll: 0,
                     selection: &SelectionState::None,
@@ -64,7 +64,7 @@ fn input_box_grows_with_wrapped_content() {
                     input,
                     byte_cursor: input.len(),
                     chrome_hidden: false,
-                    queue_bar: QueueBarView {
+                    queue_bar: QueueBarProps {
                         items: &[],
                         paused: false,
                         blocked: false,
@@ -119,7 +119,7 @@ fn draw_composer_records_region_for_empty_input() {
     let input_rect = Rect::new(0, 0, 30, 3);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect,
                 theme: &theme,
@@ -162,7 +162,7 @@ fn draw_composer_wraps_and_positions_caret() {
     let input = "aaaa bbbb cccc dddd eeee";
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 20, 8),
                 theme: &theme,
@@ -213,7 +213,7 @@ fn draw_composer_caret_flush_against_final_grapheme() {
         let mut terminal = mutx_engine::TestTerminal::new(20, 5);
         terminal.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: Rect::new(0, 0, 20, 4),
                     theme: &theme,
@@ -260,7 +260,7 @@ fn draw_composer_highlighted_accents_only_the_command_token() {
     let input = "/repeat every minute";
     terminal.draw(|f| {
         draw_composer_highlighted(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 30, 3),
                 theme: &theme,
@@ -316,7 +316,7 @@ fn draw_composer_highlight_clamps_at_wrap_boundary() {
     let input = "/sessions abc";
     terminal.draw(|f| {
         draw_composer_highlighted(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 15, 5),
                 theme: &theme,
@@ -370,7 +370,7 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
     let mut terminal = mutx_engine::TestTerminal::new(120, 5);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 120, 3),
                 theme: &theme,
@@ -464,7 +464,7 @@ fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
     let mut terminal = mutx_engine::TestTerminal::new(100, 5);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 100, 3),
                 theme: &theme,
@@ -529,7 +529,7 @@ fn draw_composer_colors_only_backed_chips_when_mixed() {
     let mut terminal = mutx_engine::TestTerminal::new(100, 5);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 100, 3),
                 theme: &theme,
@@ -607,7 +607,7 @@ fn draw_composer_chip_keeps_identity_color_under_selection() {
     };
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 80, 3),
                 theme: &theme,
@@ -660,7 +660,7 @@ fn draw_composer_chip_pill_continues_across_wrap() {
     let mut terminal = mutx_engine::TestTerminal::new(16, 6);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 16, 5),
                 theme: &theme,
@@ -738,7 +738,7 @@ fn cursor_screen_pos_matches_drawn_caret() {
         let mut terminal = mutx_engine::TestTerminal::new(24, 8);
         terminal.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: rect,
                     theme: &theme,
@@ -817,7 +817,7 @@ fn composer_render_preserves_scroll_excursion_until_caret_follow_rearms() {
     let mut terminal = mutx_engine::TestTerminal::new(rect.width, rect.height);
     terminal.draw(|f| {
         draw_composer_with_options(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: rect,
                 theme: &theme,
@@ -867,7 +867,7 @@ fn composer_render_preserves_scroll_excursion_until_caret_follow_rearms() {
     let mut follow_terminal = mutx_engine::TestTerminal::new(rect.width, rect.height);
     follow_terminal.draw(|f| {
         draw_composer_with_options(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: rect,
                 theme: &theme,
@@ -916,7 +916,7 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
     let mut terminal = mutx_engine::TestTerminal::new(20, 5);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 20, 4),
                 theme: &theme,
@@ -981,7 +981,7 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
 
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 16, 4),
                 theme: &theme,
@@ -1059,7 +1059,7 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
     let mut rec = mutx_engine::TestTerminal::new(20, 5);
     rec.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: rect,
                 theme: &theme,
@@ -1095,7 +1095,7 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
         let mut t = mutx_engine::TestTerminal::new(20, 5);
         t.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: rect,
                     theme,
@@ -1184,7 +1184,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
         let render = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -1196,7 +1196,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                 input: &long_input,
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -1219,7 +1219,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
         );
         let mut input_scroll = 0;
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: render.input_rect,
                 theme: &theme,
@@ -1344,7 +1344,7 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
         let mut terminal = mutx_engine::TestTerminal::new(30, 6);
         terminal.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: Rect::new(0, 0, 30, 4),
                     theme: &theme,
@@ -1395,7 +1395,7 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
     let mut terminal = mutx_engine::TestTerminal::new(30, 6);
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 30, 4),
                 theme: &theme,
@@ -1445,7 +1445,7 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
         let _ = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -1457,7 +1457,7 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -1536,7 +1536,7 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
         let _ = draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -1548,7 +1548,7 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -1700,7 +1700,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
         let _ = draw_transcript(
             f,
             &mut LayoutMap::new(),
-            TranscriptView {
+            TranscriptProps {
                 messages: &messages,
                 scroll: 0,
                 selection: &SelectionState::None,
@@ -1712,7 +1712,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,
@@ -1778,7 +1778,7 @@ fn draw_frame_composer(
     let theme = Theme::default();
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect: Rect::new(0, 0, 60, 4),
                 theme: &theme,
@@ -1874,7 +1874,7 @@ fn composer_overflow_indicates_hidden_lines_and_position() {
         let mut terminal = mutx_engine::TestTerminal::new(60, 6);
         terminal.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: Rect::new(0, 0, 60, 4),
                     theme: &theme,
@@ -1969,7 +1969,7 @@ fn composer_panel_degrades_gracefully_on_narrow_widths() {
         let mut terminal = mutx_engine::TestTerminal::new(width, 6);
         terminal.draw(|f| {
             draw_composer(
-                ComposerView {
+                ComposerProps {
                     frame: f,
                     input_rect: Rect::new(0, 0, width, 4),
                     theme: &theme,
@@ -2035,7 +2035,7 @@ fn draw_composer_records_composer_rect_enabling_whole_component_focus() {
 
     terminal.draw(|f| {
         draw_composer(
-            ComposerView {
+            ComposerProps {
                 frame: f,
                 input_rect,
                 theme: &theme,

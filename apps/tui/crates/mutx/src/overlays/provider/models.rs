@@ -17,7 +17,7 @@ use crate::primitives::{
     render_modal_footer_with_more,
 };
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Properties for rendering the Models modal.
 pub struct ModelsModalProps<'a> {

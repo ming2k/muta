@@ -119,19 +119,18 @@ pub fn message(choice: &Value, content_filter: impl FnOnce(&str, bool) -> String
     }
 }
 
-/// Parse one streaming chat-completion `data:` payload into provider stream
-/// events. The terminal chunk (carrying `finish_reason`) may include a
+/// Parse one already-parsed streaming chat-completion event into provider
+/// stream events. The caller deserializes each SSE `data:` payload exactly
+/// once (surfacing a decode error for non-JSON payloads) and passes the
+/// `Value` here. The terminal chunk (carrying `finish_reason`) may include a
 /// top-level `usage` object when `stream_options: {include_usage: true}` was
 /// set — forwarded as a [`ProviderStreamEvent::Usage`].
-pub fn stream_events(data: &str) -> Vec<ProviderStreamEvent> {
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return Vec::new();
-    };
+pub fn stream_events(event: &Value) -> Vec<ProviderStreamEvent> {
     let mut events = Vec::new();
-    if let Some(usage) = usage(&value["usage"]) {
+    if let Some(usage) = usage(&event["usage"]) {
         events.push(ProviderStreamEvent::Usage(usage));
     }
-    let delta = &value["choices"][0]["delta"];
+    let delta = &event["choices"][0]["delta"];
     if let Some(content) = delta["content"].as_str().filter(|value| !value.is_empty()) {
         events.push(ProviderStreamEvent::TextDelta(content.to_string()));
     }
@@ -174,11 +173,17 @@ pub fn stream_text(data: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Stand-in for the caller-side single parse: production deserializes
+    /// each stream payload once and hands the `Value` to [`stream_events`].
+    fn parse(data: &str) -> Value {
+        serde_json::from_str(data).expect("test event parses")
+    }
+
     #[test]
     fn stream_parser_preserves_tool_call_fragments() {
-        let events = stream_events(
+        let events = stream_events(&parse(
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_","arguments":"{\"pa"}}]}}]}"#,
-        );
+        ));
         assert_eq!(
             events,
             vec![ProviderStreamEvent::ToolCallDelta {

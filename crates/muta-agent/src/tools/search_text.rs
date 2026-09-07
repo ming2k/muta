@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_search_admits_outside_path_when_unconfined() {
+    async fn tool_search_admits_outside_path_when_confinement_disabled() {
         let ws_dir = tempfile::tempdir().unwrap();
         let out_dir = tempfile::tempdir().unwrap();
         let outside_file = out_dir.path().join("outside.txt");
@@ -428,7 +428,7 @@ mod tests {
         ));
         let tool = SearchTextTool::with_env(env.clone());
 
-        env.shared_unconfined().set_unconfined(true);
+        env.shared_confinement().set_confined(false);
         let res_unconfined = tool
             .call(&format!(
                 r#"{{"query":"secret_content_123","path":"{}"}}"#,

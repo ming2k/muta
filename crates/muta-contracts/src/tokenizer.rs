@@ -467,7 +467,7 @@ impl Tokenizer {
 /// }
 /// assert_eq!(counter.finish(), 3); // == Tokenizer::new().count("hello world!")
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StreamingCounter {
     /// The unfinished trailing pretoken (empty when the stream sits at a
     /// pretoken boundary).

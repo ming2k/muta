@@ -407,10 +407,20 @@ impl Provider for AnthropicMessagesProvider {
             let events: Vec<Result<ProviderStreamEvent, muta_contracts::ProviderError>> = match item
             {
                 Ok(payload) => {
-                    sig_stash.capture(&payload);
-                    match response::stream_events(&payload, &mut usage_state) {
-                        Ok(parsed) => parsed.into_iter().map(Ok).collect(),
-                        Err(e) => vec![Err(ProviderError::protocol("Anthropic", e))],
+                    // Parse-once discipline (ADR-0184): each payload is
+                    // deserialized here and the resulting `Value` is handed
+                    // to every consumer — the signature stash and the stream
+                    // parser alike. Non-JSON payloads (relay keep-alives,
+                    // stray comment lines) are skipped, not errors.
+                    match serde_json::from_str::<serde_json::Value>(&payload) {
+                        Ok(event) => {
+                            sig_stash.on_event(&event);
+                            match response::stream_events(&event, &mut usage_state) {
+                                Ok(parsed) => parsed.into_iter().map(Ok).collect(),
+                                Err(e) => vec![Err(ProviderError::protocol("Anthropic", e))],
+                            }
+                        }
+                        Err(_) => Vec::new(),
                     }
                 }
                 Err(e) => vec![Err(e)],

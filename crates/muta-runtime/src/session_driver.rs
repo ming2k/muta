@@ -73,8 +73,8 @@ pub struct SessionDriver {
     /// Live additional-roots handle: trust decisions recompute the admitted
     /// set through it, effective on the next confined tool call.
     pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
-    /// Live handle for toggling session-level workspace confinement (jail).
-    pub shared_unconfined: muta_contracts::SharedUnconfined,
+    /// Live handle for toggling session-level workspace confinement.
+    pub shared_confinement: muta_contracts::SharedConfinement,
     /// Backend-owned command vocabulary used by both attach metadata and the
     /// composer completion engine.
     pub command_catalog: muta_contracts::CommandCatalog,
@@ -142,7 +142,7 @@ impl SessionDriver {
             mcp_runtime,
             workspace_security,
             shared_additional_roots,
-            shared_unconfined,
+            shared_confinement,
             command_catalog,
             lifecycle,
             side,
@@ -827,7 +827,7 @@ impl SessionDriver {
                             mcp_runtime: &mcp_runtime,
                             workspace_security: &workspace_security,
                             shared_additional_roots: &shared_additional_roots,
-                            shared_unconfined: &shared_unconfined,
+                            shared_confinement: &shared_confinement,
                             resp_tx: &resp_tx,
                             session: &session,
                             lifecycle: &lifecycle,
@@ -1382,11 +1382,11 @@ mod tests {
     #[tokio::test]
     async fn activity_reconcile_fires_only_for_control_plane_requests_with_no_live_round() {
         let lifecycle = Arc::new(RoundLifecycle::new());
-        let delegated = AgentRequest::SlashCommand("/delegate on".to_string());
+        let unattended = AgentRequest::SlashCommand("/unattended on".to_string());
 
         // Idle harness + control-plane request → the driver must reconcile.
         assert!(
-            needs_activity_reconcile(&delegated, &lifecycle).await,
+            needs_activity_reconcile(&unattended, &lifecycle).await,
             "idle + slash command needs the reconcile"
         );
 
@@ -1409,14 +1409,14 @@ mod tests {
         // alone so the round's timer/turn counters are not reset.
         let begin = lifecycle.begin().await;
         assert!(
-            !needs_activity_reconcile(&delegated, &lifecycle).await,
+            !needs_activity_reconcile(&unattended, &lifecycle).await,
             "live round suppresses the reconcile"
         );
         assert!(lifecycle.finish(begin.generation).await);
 
         // Back to idle → the reconcile is armed again.
         assert!(
-            needs_activity_reconcile(&delegated, &lifecycle).await,
+            needs_activity_reconcile(&unattended, &lifecycle).await,
             "idle again → reconcile re-arms"
         );
     }

@@ -26,7 +26,7 @@
 
 use crate::model::layout::{LayoutMap, SemanticCursor, TableCellSegment};
 use crate::step_interaction::{self, StepKind};
-use crate::view::INPUT_MSG_IDX;
+use crate::render::INPUT_MSG_IDX;
 
 /// The type of clickable region a screen point resolved to.
 ///

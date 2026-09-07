@@ -6,19 +6,19 @@ use unicode_width::UnicodeWidthStr;
 use crate::components::keycap::keycap_span;
 use crate::design::{BAR_LEGEND_GAP_MIN, JOIN_ENUMERATE_COLS};
 use crate::keymap::Key;
-use crate::view::Theme;
+use crate::render::Theme;
 
-/// One queued outbox item projected for the [`QueueBarView`] / queue modal.
+/// One queued outbox item projected for the [`QueueBarProps`] / queue modal.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QueueItemView {
+pub struct QueueItemProps {
     pub queued_at_ms: u64,
     pub text: String,
 }
 
 /// Inputs for [`draw_queue_bar`]: the persistent one-row outbox summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct QueueBarView<'a> {
-    pub items: &'a [QueueItemView],
+pub struct QueueBarProps<'a> {
+    pub items: &'a [QueueItemProps],
     pub paused: bool,
     pub blocked: bool,
 }
@@ -38,14 +38,14 @@ enum LegendDensity {
 pub fn draw_queue_bar(
     frame: &mut Frame,
     rect: Rect,
-    view: QueueBarView<'_>,
+    props: QueueBarProps<'_>,
     theme: &Theme,
 ) -> Rect {
-    let QueueBarView {
+    let QueueBarProps {
         items,
         paused,
         blocked,
-    } = view;
+    } = props;
 
     let full_w = rect.width as usize;
     let next = items.first();

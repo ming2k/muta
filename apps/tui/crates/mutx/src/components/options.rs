@@ -106,6 +106,22 @@ impl ChoiceStyle {
     }
 }
 
+/// The marker prefix's display width for a given marker/selection pair —
+/// the layout twin of [`ChoiceStyle::marker_glyph`], for callers that must
+/// measure a row's wrap budget before the row's style exists.
+pub(crate) fn style_marker_width(marker: ChoiceMarker, selected: bool) -> usize {
+    match marker {
+        ChoiceMarker::Checkbox => {
+            if selected {
+                "[x] ".width()
+            } else {
+                "[ ] ".width()
+            }
+        }
+        ChoiceMarker::None => 0,
+    }
+}
+
 /// Resolve the row palette from a tone + cursor flag. This is the one function
 /// every selectable surface routes through.
 pub(crate) fn choice_style(tone: ChoiceTone, highlighted: bool, theme: &Theme) -> ChoiceStyle {
@@ -149,6 +165,23 @@ pub(crate) struct ChoiceOptionRow<'a> {
 }
 
 impl<'a> ChoiceOptionRow<'a> {
+    /// How many body rows this row will occupy when pushed at `body_width`
+    /// — the same wrap passes `push_lines` performs, without building the
+    /// spans. Callers that must size their frame before building the body
+    /// (the question sheet grows upward into the transcript) measure the
+    /// demand here instead of rendering a throwaway copy.
+    pub(crate) fn measure_lines(&self, body_width: usize) -> usize {
+        let marker_w = style_marker_width(self.marker, self.selected);
+        let wrap_width = body_width.saturating_sub(marker_w).max(1);
+        let mut rows = wrap_text(self.label, wrap_width).len().max(1);
+        if let Some(desc) = self.description {
+            rows += wrap_text(desc, body_width.saturating_sub(5).max(1))
+                .len()
+                .max(1);
+        }
+        rows
+    }
+
     pub(crate) fn push_lines(
         self,
         lines: &mut Vec<Line<'static>>,

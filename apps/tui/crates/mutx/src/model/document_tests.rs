@@ -1109,3 +1109,251 @@ fn normalize_thinking_topic_edge_cases() {
         "the authentication pipeline"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Incremental streaming equivalence (ADR-0184)
+// ---------------------------------------------------------------------------
+
+/// Deterministic LCG so the corpus/delta splits are stable across runs.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 >> 11
+    }
+}
+
+/// Streaming a document through `push_stream` must produce — at *every*
+/// intermediate step, not just the end — exactly the blocks a full
+/// `parse_blocks(raw)` would produce. This is the correctness contract the
+/// frozen-prefix incremental parser hangs its O(delta) cost on.
+#[test]
+fn push_stream_matches_full_parse_at_every_step() {
+    // Corpus exercising every construct the parser knows: fences (open and
+    // closed), math, tables, lists, quotes, rules, headings, hard breaks,
+    // inline markup, blank-line rhythm, CJK text, trailing whitespace.
+    let corpus = "\
+# Report
+
+Intro paragraph with `inline code` and **bold** and a https://example.com link.
+
+```rust
+fn main() {
+    println!(\"hi\");
+}
+```
+
+$$
+\\int_0^1 x^2 dx
+$$
+
+| A | B |
+|---|---|
+| 1 | 2 |
+| 中文 | ok |
+
+- first
+- second
+  - nested
+
+> quoted line
+> another quote
+
+---
+
+Step 1: prepare the environment.
+Step 2: run the suite with trailing spaces  \n\n1. ordered one\n2. ordered two\n\n```\nunclosed fence content\nand more\n\nTail paragraph with CJK 中文与英文混排。\n";
+    let bytes = corpus.as_bytes();
+
+    let mut rng = Lcg(0xDEADBEEF);
+    for trial in 0..16 {
+        let mut msg = TranscriptMessage::new(Role::Assistant, "");
+        let mut pos = 0usize;
+        while pos < bytes.len() {
+            // Random delta size in 1..=48 bytes, snapped to a char boundary
+            // (provider deltas always arrive whole-scalar).
+            let mut take = (rng.next() as usize % 48) + 1;
+            if pos + take > bytes.len() {
+                take = bytes.len() - pos;
+            }
+            while pos + take < bytes.len() && !corpus.is_char_boundary(pos + take) {
+                take += 1;
+            }
+            let delta = &corpus[pos..pos + take];
+            msg.push_stream(delta);
+            pos += take;
+            let full = parse_blocks(&msg.raw);
+            assert_eq!(
+                msg.blocks, full,
+                "trial {trial}: incremental blocks diverged at byte {pos}"
+            );
+        }
+    }
+}
+
+/// The full parse of the final raw must equal a from-scratch message.
+#[test]
+fn streamed_message_equals_freshly_parsed_message() {
+    let corpus = "# Title\n\ntext `code` **bold**\n\n- a\n- b\n\n```\nbody\n```\n\ntail";
+    let mut streamed = TranscriptMessage::new(Role::Assistant, "");
+    for chunk in corpus.as_bytes().chunks(7) {
+        // Snap to char boundary.
+        let mut end = chunk.len();
+        while !corpus.is_char_boundary(
+            corpus
+                .as_bytes()
+                .len()
+                .min(end + streamed.raw.len()),
+        ) {
+            end -= 1;
+        }
+        let start = streamed.raw.len();
+        let end = start + end;
+        if end > corpus.len() {
+            break;
+        }
+        let delta = &corpus[start..end];
+        streamed.push_stream(delta);
+    }
+    let fresh = TranscriptMessage::new(Role::Assistant, corpus);
+    assert_eq!(streamed.raw, fresh.raw);
+    assert_eq!(streamed.blocks, fresh.blocks);
+}
+
+/// Perf guard for ADR-0184: per-frame cost must be O(live construct), not
+/// O(whole message). A representative long stream — bounded paragraphs,
+/// regular structure — pushed in small deltas must complete in bounded time.
+/// The pre-ADR full-reparse behavior re-parsed the entire accumulated message
+/// every push (~O(n²) total) and blows past this budget by an order of
+/// magnitude. The bound is deliberately generous (slow CI) so the test never
+/// flakes on healthy incremental code while still catching a regression to
+/// whole-message re-parsing.
+#[test]
+fn push_stream_stays_bounded_on_long_streams() {
+    let mut msg = TranscriptMessage::new(Role::Assistant, "");
+    let delta = "word ".repeat(20); // 100 bytes per push
+    let started = std::time::Instant::now();
+    for i in 0..6000 {
+        let mut chunk = delta.clone();
+        if i % 1000 == 0 {
+            chunk = format!("\n\n## Section {i}\n\n");
+        } else if i % 100 == 0 {
+            // Paragraph boundary every ~10 KB, like normal prose.
+            chunk = format!("\n\nContinuing with fresh material {i}. ");
+        }
+        msg.push_stream(&chunk);
+    }
+    let elapsed = started.elapsed();
+    // 600 KB streamed in 6000 deltas: incremental cost is ~1s; the
+    // full-reparse regression measures ~9s here (worse on slow CI).
+    assert!(
+        elapsed.as_secs() < 5,
+        "push_stream regressed to super-linear cost: {elapsed:?} for 600 KB"
+    );
+    assert!(msg.blocks.len() > 100, "structure must have been discovered");
+}
+
+/// The incremental thinking counter must agree with a full tokenization of
+/// the accumulated content — exactly once the trace is finalized (stream end
+/// or restored session), within the carried-tail slack while streaming.
+#[test]
+fn thinking_counter_matches_full_tokenization() {
+    let mut msg = TranscriptMessage::thinking("");
+    let full = "Analyzing the streaming pipeline. **第一步**：检查增量解析器的冻结前缀。\n\n## Milestone\n\
+                The frozen prefix invariant holds across fences:\n\n```\ncode --\n```\n";
+    for chunk in split_whole_scalars(full, 13) {
+        msg.push_thinking_delta(&chunk);
+    }
+    let MessageKind::Thinking {
+        content,
+        stream_tokens,
+        ..
+    } = &msg.kind
+    else {
+        panic!("not thinking");
+    };
+    let counted = stream_tokens.tokens();
+    let exact = muta_contracts::tokenizer::count_tokens(content);
+    // Streaming: the counter may lag by the carried tail (one open pretoken),
+    // never lead.
+    assert!(counted <= exact && exact - counted <= 16, "{counted} vs {exact}");
+    msg.finalize_thinking(full);
+    let MessageKind::Thinking {
+        stream_tokens, ..
+    } = &msg.kind
+    else {
+        panic!("not thinking");
+    };
+    assert_eq!(stream_tokens.tokens(), muta_contracts::tokenizer::count_tokens(full));
+}
+
+/// Split on whole-scalar boundaries (provider deltas never split scalars).
+fn split_whole_scalars(text: &str, size: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        let mut end = (pos + size).min(bytes.len());
+        while end < bytes.len() && !text.is_char_boundary(end) {
+            end += 1;
+        }
+        out.push(text[pos..end].to_string());
+        pos = end;
+    }
+    out
+}
+
+/// The wrap cache must be transparent: cached geometry is bit-for-bit what a
+/// fresh `wrap_text` / code preparation produces, across widths and content
+/// shapes (including CJK and empty input).
+#[test]
+fn wrap_cache_is_transparent() {
+    use crate::render::BlockWrapCache;
+    let samples = [
+        "",
+        "short",
+        "A much longer paragraph that will definitely wrap across several lines \
+         when the width is small enough, with 中文混排 and `code spans` too.",
+        "line one\nline two\n\nline four",
+    ];
+    let mut cache = BlockWrapCache::default();
+    for text in samples {
+        for width in [1usize, 8, 40, 200] {
+            let cached = cache.wrap_text(text, width);
+            let fresh = crate::text_layout::wrap_text(text, width);
+            assert_eq!(cached.len(), fresh.len());
+            for (c, f) in cached.iter().zip(fresh.iter()) {
+                assert_eq!((c.text.as_str(), c.start_byte, c.end_byte),
+                           (f.text.as_str(), f.start_byte, f.end_byte));
+            }
+        }
+    }
+    // Code preparation: same logical split, same per-line wrap.
+    let code = "fn main() {\n    let s = \"中文字符串很长的确会换行\";\n}\n";
+    for width in [20usize, 60] {
+        let prepared = cache.prepare_code(code, width);
+        let mut fresh: Vec<(usize, Vec<_>)> = Vec::new();
+        let mut offset = 0usize;
+        for line in code.split('\n') {
+            let mut wrapped = crate::text_layout::wrap_text(line, width);
+            if wrapped.is_empty() {
+                wrapped.push(crate::text_layout::WrappedLine {
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 0,
+                });
+            }
+            fresh.push((offset, wrapped));
+            offset += line.len() + 1;
+        }
+        assert_eq!(prepared.logical.len(), fresh.len());
+        for ((po, pw), (fo, fw)) in prepared.logical.iter().zip(fresh.iter()) {
+            assert_eq!(po, fo);
+            assert_eq!(pw.len(), fw.len());
+            for (c, f) in pw.iter().zip(fw.iter()) {
+                assert_eq!((c.text.as_str(), c.start_byte, c.end_byte),
+                           (f.text.as_str(), f.start_byte, f.end_byte));
+            }
+        }
+    }
+}

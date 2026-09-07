@@ -327,9 +327,10 @@ export class DaemonStore {
   public todos = $state<TodoList>({ items: [], next_id: 1, updated_at_round: 0 });
   public contextTokens = $state<number | null>(null);
 
-  /** Harness-reported state (Welcome + HarnessState/DelegatedChanged events). */
+  /** Harness-reported state (Welcome + HarnessState/UnattendedChanged/ConfinementChanged events). */
   public roundCounter = $state<number>(0);
-  public delegated = $state<boolean>(false);
+  public unattended = $state<boolean>(false);
+  public confined = $state<boolean>(true);
   /** Last live activity line ("waiting for model", …) from Activity events. */
   public activity = $state<string | null>(null);
   /** 0-indexed model-request position within the round (TurnStarted). */
@@ -1057,20 +1058,16 @@ export class DaemonStore {
       this.contextTokens = event.ContextTokens.tokens;
     } else if ("HarnessState" in event) {
       this.roundCounter = event.HarnessState.round_counter;
-      this.delegated = event.HarnessState.delegated ?? (event.HarnessState as unknown as { yolo?: boolean }).yolo ?? false;
+      this.unattended = event.HarnessState.unattended ?? false;
+      this.confined = event.HarnessState.confined ?? true;
       if (event.HarnessState.loop_status === "idle") {
         this.activity = null;
         this.currentTurn = null;
       }
-    } else if ("DelegatedChanged" in event) {
-      this.delegated = event.DelegatedChanged;
-    } else if ("YoloChanged" in event || "AutopilotChanged" in event) {
-      // Legacy wire spellings (pre-rename daemons) — read dynamically so the
-      // generated types stay the source of truth for the current name only.
-      this.delegated =
-        (event as unknown as { YoloChanged?: boolean }).YoloChanged ??
-        (event as unknown as { AutopilotChanged?: boolean }).AutopilotChanged ??
-        false;
+    } else if ("UnattendedChanged" in event) {
+      this.unattended = event.UnattendedChanged;
+    } else if ("ConfinementChanged" in event) {
+      this.confined = event.ConfinementChanged;
     } else if ("RoundCompleted" in event) {
       this.lastRound = event.RoundCompleted;
       this.roundCounter = event.RoundCompleted.round;
@@ -1504,7 +1501,8 @@ export class DaemonStore {
     this.todos = { items: [], next_id: 1, updated_at_round: 0 };
     this.contextTokens = null;
     this.roundCounter = 0;
-    this.delegated = false;
+    this.unattended = false;
+    this.confined = true;
     this.activity = null;
     this.currentTurn = null;
     this.lastRound = null;

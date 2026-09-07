@@ -70,8 +70,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let CliArgs {
         mode,
         project: project_override,
-        delegated: delegated_at_start,
-        unconfined: unconfined_at_start,
+        unattended: unattended_at_start,
+        no_confinement,
         interactive,
         prompt,
         json: _,
@@ -79,6 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         token,
         ..
     } = parsed;
+    let confined_at_start = !no_confinement;
 
     match mode {
         Mode::Version => {
@@ -96,7 +97,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Mode::Dashboard => {
-            run_dashboard(project_override, delegated_at_start, unconfined_at_start).await
+            run_dashboard(project_override, unattended_at_start, confined_at_start).await
         }
         Mode::Settings { category } => {
             let cat_str = category.or_else(|| {
@@ -113,8 +114,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None,
                 true,
                 project_override,
-                delegated_at_start,
-                unconfined_at_start,
+                unattended_at_start,
+                confined_at_start,
                 mutx::StartupOverlay::Settings { category: cat },
                 prompt,
             )
@@ -127,8 +128,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 false,
                 project_override,
-                delegated_at_start,
-                unconfined_at_start,
+                unattended_at_start,
+                confined_at_start,
                 overlay,
                 None,
             )
@@ -143,8 +144,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     None,
                     true,
                     project_override,
-                    delegated_at_start,
-                    unconfined_at_start,
+                    unattended_at_start,
+                    confined_at_start,
                     overlay,
                     Some(prompt),
                 )
@@ -154,8 +155,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     prompt,
                     parsed.json,
                     project_override,
-                    delegated_at_start,
-                    unconfined_at_start,
+                    unattended_at_start,
+                    confined_at_start,
                     remote,
                     token,
                 )
@@ -169,8 +170,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None,
                 true,
                 project_override,
-                delegated_at_start,
-                unconfined_at_start,
+                unattended_at_start,
+                confined_at_start,
                 overlay,
                 prompt,
             )
@@ -228,8 +229,8 @@ async fn save_history_bounded(history: Vec<muta_contracts::HistoryEntry>, dedup:
 /// a carrier session just to display an empty dashboard.
 async fn run_dashboard(
     project_override: Option<PathBuf>,
-    delegated_at_start: bool,
-    unconfined_at_start: bool,
+    unattended_at_start: bool,
+    confined_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
         .clone()
@@ -269,8 +270,8 @@ async fn run_dashboard(
         Some(carrier),
         false,
         project_override,
-        delegated_at_start,
-        unconfined_at_start,
+        unattended_at_start,
+        confined_at_start,
         mutx::StartupOverlay::Dashboard,
         None,
     )
@@ -286,8 +287,8 @@ async fn run_attached(
     session_id: Option<String>,
     fresh: bool,
     project_override: Option<PathBuf>,
-    delegated_at_start: bool,
-    unconfined_at_start: bool,
+    unattended_at_start: bool,
+    confined_at_start: bool,
     initial_overlay: mutx::StartupOverlay,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -313,10 +314,8 @@ async fn run_attached(
     // the first TUI entry only; a `/host` switch re-attaches into an ordinary
     // conversation view (the overlay does not re-arm).
     let mut startup_overlay_pending = initial_overlay;
-    let init_options = muta_contracts::SessionInitOptions::new(
-        delegated_at_start,
-        unconfined_at_start,
-    );
+    let init_options =
+        muta_contracts::SessionInitOptions::new(unattended_at_start, confined_at_start);
     // Re-attach loop: returning from the TUI with a `/host` switch target
     // re-connects to that session instead of exiting (ADR-0096).
     loop {

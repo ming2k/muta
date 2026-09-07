@@ -15,7 +15,7 @@ use crate::text_layout::{
     line_selection, line_spans, padded_tail, wrap_text,
 };
 use crate::tools::{DiffCache, DiffHunk, DiffOp, ResultKind};
-use crate::view::{
+use crate::render::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
     Theme,
 };

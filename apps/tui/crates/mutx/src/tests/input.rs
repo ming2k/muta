@@ -259,15 +259,15 @@ fn has_input_selection_detects_both_block_and_range() {
 
     // An active Range on INPUT_MSG_IDX is an input selection.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 2),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 0),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 2),
     };
     assert!(app.has_input_selection());
 
     // A collapsed Range (anchor == head) is not active and does not count.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 0),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 0),
     };
     assert!(!app.has_input_selection());
 }
@@ -361,7 +361,7 @@ fn input_edge_autoscroll_arms_beyond_text_rows_and_extends_selection() {
     // A selection drag anchored in the composer's second row.
     app.drag.begin_range(
         &mut app.selection,
-        crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 2),
+        crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 2),
     );
 
     // Pointer above the text rows (the panel's own breathing row counts as

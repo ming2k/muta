@@ -455,19 +455,17 @@ export type HarnessSnapshot = { loop_status: LoopStatus,
  */
 round_counter: number, 
 /**
- * Whether tool permission prompts are bypassed this session
- * (`-y` / `/delegate on`). The TUI mirrors this into a
- * visible badge so the elevated state is never silent.
+ * Whether the agent runs in unattended execution mode
+ * (`--unattended` / `/unattended on`). The TUI mirrors this into an `UNATTENDED` badge.
  */
-delegated: boolean, 
+unattended: boolean, 
 /**
- * Whether workspace filesystem confinement is bypassed this session
- * (`/unconfined on` / `--unconfined`). The TUI mirrors this into an `UNCONFINED` badge so the
- * elevated filesystem access is never silent.
+ * Whether workspace filesystem confinement is enforced this session (default true).
+ * (`--no-confinement` / `/confinement off`). The TUI mirrors false into an `UNCONFINED` badge.
  */
-unconfined: boolean, 
+confined: boolean, 
 /**
- * Workspace authority is independent from the attended/delegated posture.
+ * Workspace authority is independent from the attended/unattended posture.
  * Frontends surface this state continuously so authority is never implicit.
  */
 workspace_security: WorkspaceSecuritySnapshot, 
@@ -1352,7 +1350,7 @@ name: string,
 /**
  * Raw argument remainder after the command word.
  */
-args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "DelegatedChanged": boolean } | { "UnconfinedChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
+args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "UnattendedChanged": boolean } | { "ConfinementChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
 /**
  * 1-indexed enclosing user round.
  */
@@ -1586,13 +1584,13 @@ export type SessionHosting = "hosted";
  */
 export type SessionInitOptions = { 
 /**
- * `--delegate` / delegated autonomous execution posture.
+ * `--unattended` / unattended execution posture.
  */
-delegated: boolean, 
+unattended: boolean, 
 /**
- * Whether workspace filesystem confinement is bypassed (`/unconfined on` / `--unconfined`).
+ * Whether workspace filesystem confinement is enforced (default true).
  */
-unconfined: boolean, };
+confined: boolean, };
 
 /**
  * A row in the sessions picker: enough to identify, describe and order a past

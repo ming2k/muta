@@ -20,7 +20,7 @@ use mutx_engine::{
 };
 
 use crate::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Semantic hierarchy level of a visual surface (ADR-0181).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

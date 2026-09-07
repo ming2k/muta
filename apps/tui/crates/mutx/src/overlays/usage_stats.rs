@@ -29,7 +29,7 @@ use crate::primitives::{
     ContentModalSpec, FooterHint, HeaderPart, content_modal_area, content_modal_probe, keyvocab,
     modal_chrome_rows, modal_frame, modal_header_parts, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// How many daily rows the bar chart covers (two weeks, newest at the right).
 const CHART_DAYS: usize = 14;

@@ -12,11 +12,11 @@ use crate::text_layout::wrap_text;
 
 use super::super::Theme;
 
-pub(crate) struct NoticeView<'a> {
+pub(crate) struct NoticeProps<'a> {
     pub message: &'a TranscriptMessage,
 }
 
-impl<'a> NoticeView<'a> {
+impl<'a> NoticeProps<'a> {
     fn severity(&self) -> Option<NoticeSeverity> {
         match &self.message.kind {
             MessageKind::Notice { severity, .. } => Some(*severity),
@@ -102,7 +102,7 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
 /// heuristic parse of the raw text (local notices, restored sessions).
 /// A structured notice with an empty title degrades to the parse too.
 fn notice_content<'v>(
-    view: &'v NoticeView<'_>,
+    notice: &'v NoticeProps<'_>,
     parsed: &'v NoticeContent,
     dynamic_title: &'v mut Option<String>,
     dynamic_detail: &'v mut Option<String>,
@@ -112,7 +112,7 @@ fn notice_content<'v>(
         max_attempts,
         retry_at,
         ..
-    } = &view.message.kind
+    } = &notice.message.kind
     {
         let now = std::time::Instant::now();
         let title = if now < *retry_at {
@@ -142,7 +142,7 @@ fn notice_content<'v>(
         return ("retry", dynamic_title.as_deref(), dynamic_detail.as_deref());
     }
 
-    match view.parts() {
+    match notice.parts() {
         Some(parts) if !parts.title.trim().is_empty() => (
             parts.topic.as_deref().unwrap_or("notification"),
             Some(parts.title.as_str()),
@@ -203,7 +203,7 @@ fn notice_header_line(
 pub(crate) fn draw_notice_view(
     frame: &mut Frame,
     area: Rect,
-    notice: NoticeView<'_>,
+    notice: NoticeProps<'_>,
     mi: usize,
     layout_map: &mut LayoutMap,
     skip_rows: &mut usize,
@@ -426,7 +426,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         let mut frame = Frame::new(&mut grid);
         let area = Rect::new(0, 0, 60, 10);
         let msg = TranscriptMessage::notice(NoticeSeverity::Error, "Connection refused");
-        let notice = NoticeView { message: &msg };
+        let notice = NoticeProps { message: &msg };
         let mut layout_map = LayoutMap::default();
         let mut skip_rows = 0;
         let mut current_y = 0;
@@ -486,7 +486,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         // paragraphs are separated by a blank line.
         let raw = "Trust changed\nQuarantined pending review.\n\n/trust re-trusts all.";
         let msg = TranscriptMessage::notice(NoticeSeverity::Warning, raw);
-        let notice = NoticeView { message: &msg };
+        let notice = NoticeProps { message: &msg };
         let mut layout_map = LayoutMap::default();
         let mut skip_rows = 0;
         let mut current_y = 0;
@@ -544,7 +544,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         let mut grid = mutx_engine::Grid::new(60, 10);
         let mut frame = Frame::new(&mut grid);
         let area = Rect::new(0, 0, 60, 10);
-        let notice = NoticeView { message: &msg };
+        let notice = NoticeProps { message: &msg };
         let mut layout_map = LayoutMap::default();
         let mut skip_rows = 0;
         let mut current_y = 0;
@@ -598,7 +598,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         draw_notice_view(
             &mut frame_large,
             area_large,
-            NoticeView { message: &msg },
+            NoticeProps { message: &msg },
             0,
             &mut layout_map_large,
             &mut skip_rows_large,
@@ -621,7 +621,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         draw_notice_view(
             &mut frame_small,
             area_small,
-            NoticeView { message: &msg },
+            NoticeProps { message: &msg },
             0,
             &mut layout_map_small,
             &mut skip_rows_small,
@@ -644,7 +644,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         draw_notice_view(
             &mut frame_scrolled,
             area_scrolled,
-            NoticeView { message: &msg },
+            NoticeProps { message: &msg },
             0,
             &mut layout_map_scrolled,
             &mut skip_rows_scrolled,
@@ -681,7 +681,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         draw_notice_view(
             &mut frame,
             area,
-            NoticeView { message: &msg },
+            NoticeProps { message: &msg },
             0,
             &mut layout_map,
             &mut skip_rows,

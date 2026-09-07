@@ -1,12 +1,12 @@
 //! Transcript-area renderer: draws the transcript (and footer chrome) into the
 //! mutx-engine grid while recording semantic-to-screen layout
 //! information. This is the entry point the app drives each frame
-//! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
+//! ([`draw_transcript`] / [`TranscriptProps`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::chrome::{ActivityBarView, draw_activity_bar};
+pub use crate::chrome::{ActivityBarProps, draw_activity_bar};
 pub use crate::chrome::{
-    ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar, draw_queue_bar,
+    ModelBarProps, QueueBarProps, QueueItemProps, draw_completion_menu, draw_model_bar, draw_queue_bar,
 };
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
@@ -37,7 +37,6 @@ pub(crate) use crate::footer_stack::{
 };
 /// Transcript arrangement strategy (`turn_band`).
 pub(crate) use crate::layout;
-pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::*;
 pub use crate::primitives::recess_backdrop;
@@ -141,7 +140,7 @@ fn draw_too_small_notice(frame: &mut Frame, area: Rect, theme: &Theme) {
     );
 }
 
-pub struct TranscriptView<'a> {
+pub struct TranscriptProps<'a> {
     pub messages: &'a [TranscriptMessage],
     pub scroll: u16,
     pub selection: &'a SelectionState,
@@ -177,7 +176,7 @@ pub struct TranscriptView<'a> {
     /// Its `items` slice is the viewed session's queued dispatches; an empty
     /// slice renders a muted empty state so the bar is always present (the
     /// permanent home for queue affordances).
-    pub queue_bar: QueueBarView<'a>,
+    pub queue_bar: QueueBarProps<'a>,
     /// When set, the view is zoomed into an runner task: a contextual page
     /// header is rendered and `messages` is the focused task's child stream.
     pub runner_bar: Option<RunnerBarInfo>,
@@ -189,7 +188,7 @@ pub struct TranscriptView<'a> {
     /// legend (ADR-0103 §3). `None` suppresses the legend entirely (non-app
     /// contexts).
     pub page_hints: Option<view_header::ViewHints<'a>>,
-    /// Session identity for the Main view's head row: the persistent-id tail
+    /// Session identity for the Session view's head row: the persistent-id tail
     /// plus the tilde-shortened workspace on the left, and the session mode
     /// (`DELEGATED`) on the right. `None` only in non-session contexts
     /// (tests/showcase) where no ambient session exists.
@@ -262,6 +261,10 @@ pub struct HeightCache {
     /// patches. Unlike height entries, these survive structural transcript
     /// invalidation and resize; their own source identity controls reuse.
     pub(crate) diff_cache: tools::DiffCache,
+    /// Content-addressed wrapped-line cache (ADR-0184). Keyed by (content,
+    /// width), so it survives transcript invalidation and resizes without an
+    /// invalidation pass; only capacity eviction retires entries.
+    pub wrap: BlockWrapCache,
 }
 
 impl HeightCache {
@@ -346,6 +349,148 @@ impl HeightCache {
     }
 }
 
+/// Content-addressed cache of wrapped lines (ADR-0184).
+///
+/// Streaming re-draws the live message every frame; without this cache every
+/// frame re-wrapped *all* of the message's blocks, making per-frame cost
+/// O(message length) and the whole stream O(n²). Entries are keyed by
+/// (content hash, content length, wrap width) and verified by full content
+/// equality on hit, so a cached wrap is bit-for-bit what a fresh
+/// [`crate::text_layout::wrap_text`] would produce — frozen blocks (the
+/// majority of a long transcript) wrap exactly once per width for the
+/// session's lifetime. Width is part of the key, so a resize needs no
+/// invalidation pass.
+#[derive(Default)]
+pub struct BlockWrapCache {
+    lines: std::collections::HashMap<WrapKey, std::sync::Arc<CachedWrap>>,
+    /// Prepared code-band geometry: per logical line, the wrapped rows (with
+    /// byte offsets local to the logical line) plus the gutter width — the
+    /// full per-frame re-derivation this replaces for `Block::Code`.
+    code: std::collections::HashMap<WrapKey, std::sync::Arc<PreparedCode>>,
+    /// FIFO eviction order; the cache is a perf aid, not a semantic store.
+    order: std::collections::VecDeque<(WrapKind, WrapKey)>,
+}
+
+const WRAP_CACHE_LINES_CAP: usize = 2048;
+const WRAP_CACHE_CODE_CAP: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum WrapKind {
+    Lines,
+    Code,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct WrapKey {
+    hash: u64,
+    len: u32,
+    width: u32,
+}
+
+struct CachedWrap {
+    content: String,
+    lines: std::sync::Arc<Vec<crate::text_layout::WrappedLine>>,
+}
+
+pub(crate) struct PreparedCode {
+    content: String,
+    /// (byte offset of the logical line in `content`, wrapped rows with
+    /// offsets local to that logical line).
+    pub logical: Vec<(usize, Vec<crate::text_layout::WrappedLine>)>,
+}
+
+fn wrap_key(content: &str, width: usize) -> WrapKey {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(content.as_bytes());
+    WrapKey {
+        hash: hasher.finish(),
+        len: content.len() as u32,
+        width: width as u32,
+    }
+}
+
+impl BlockWrapCache {
+    /// Cached [`crate::text_layout::wrap_text`]. Hits are verified by full
+    /// content equality, so a (hash, length) collision can never return wrong
+    /// geometry.
+    pub(crate) fn wrap_text(
+        &mut self,
+        content: &str,
+        width: usize,
+    ) -> std::sync::Arc<Vec<crate::text_layout::WrappedLine>> {
+        let key = wrap_key(content, width);
+        if let Some(entry) = self.lines.get(&key)
+            && entry.content == content
+        {
+            return std::sync::Arc::clone(&entry.lines);
+        }
+        let lines = crate::text_layout::wrap_text(content, width);
+        let shared = std::sync::Arc::new(lines);
+        self.lines.insert(
+            key,
+            std::sync::Arc::new(CachedWrap {
+                content: content.to_string(),
+                lines: std::sync::Arc::clone(&shared),
+            }),
+        );
+        self.touch(WrapKind::Lines, key);
+        shared
+    }
+
+    /// Cached code-band preparation: logical-line split, gutter width, and
+    /// per-logical-line wrapping. Byte offsets are local to each logical
+    /// line, exactly as a fresh wrap would produce.
+    pub(crate) fn prepare_code(&mut self, content: &str, width: usize) -> std::sync::Arc<PreparedCode> {
+        let key = wrap_key(content, width);
+        if let Some(entry) = self.code.get(&key)
+            && entry.content == content
+        {
+            return std::sync::Arc::clone(entry);
+        }
+        let mut logical: Vec<(usize, Vec<crate::text_layout::WrappedLine>)> = Vec::new();
+        let mut offset = 0usize;
+        for line in content.split('\n') {
+            let wrapped = crate::text_layout::wrap_text(line, width);
+            let wrapped = if wrapped.is_empty() {
+                vec![crate::text_layout::WrappedLine {
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 0,
+                }]
+            } else {
+                wrapped
+            };
+            logical.push((offset, wrapped));
+            offset += line.len() + 1; // +1 for the '\n'
+        }
+        let prepared = std::sync::Arc::new(PreparedCode {
+            content: content.to_string(),
+            logical,
+        });
+        self.code.insert(key, std::sync::Arc::clone(&prepared));
+        self.touch(WrapKind::Code, key);
+        prepared
+    }
+
+    fn touch(&mut self, kind: WrapKind, key: WrapKey) {
+        self.order.push_back((kind, key));
+        while self.lines.len() > WRAP_CACHE_LINES_CAP || self.code.len() > WRAP_CACHE_CODE_CAP {
+            let Some((kind, key)) = self.order.pop_front() else {
+                break;
+            };
+            match kind {
+                WrapKind::Lines => {
+                    self.lines.remove(&key);
+                }
+                WrapKind::Code => {
+                    self.code.remove(&key);
+                }
+            }
+        }
+    }
+}
+
 /// Page-header context for an Runner view (shown when zoomed into a task).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerBarInfo {
@@ -414,9 +559,9 @@ pub struct StickyInfo {
 pub fn draw_transcript(
     frame: &mut Frame,
     layout_map: &mut LayoutMap,
-    view: TranscriptView<'_>,
+    props: TranscriptProps<'_>,
 ) -> TranscriptRender {
-    let TranscriptView {
+    let TranscriptProps {
         messages,
         scroll,
         selection,
@@ -443,7 +588,7 @@ pub fn draw_transcript(
         key_overrides,
         layout,
         height_cache,
-    } = view;
+    } = props;
     // Outside the app loop (tests/showcase) no persistent cache is supplied;
     // fall back to a throwaway so every lookup simply misses and the renderer
     // behaves exactly as before the cache existed.
@@ -837,7 +982,7 @@ pub fn draw_transcript(
                 frame,
                 rect,
                 round_started_at,
-                ActivityBarView {
+                ActivityBarProps {
                     status: activity,
                     backoff_clause,
                     awaiting_permission,

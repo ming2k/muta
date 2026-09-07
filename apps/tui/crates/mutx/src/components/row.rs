@@ -469,7 +469,7 @@ mod tests {
 
     use super::*;
     use crate::components::options::{ChoiceTone, choice_style};
-    use crate::view::Theme;
+    use crate::render::Theme;
     use mutx_engine::Span;
     use unicode_width::UnicodeWidthStr;
 

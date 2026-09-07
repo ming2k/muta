@@ -6,9 +6,8 @@ use super::SlashEnv;
 use super::record::{
     record_ack, record_command, record_command_with_duration, record_error, record_invocation,
 };
-use super::schedule_ops::{
-    SessionRoute, add_scheduled_job, cancel_scheduled_job, list_scheduled_jobs, parse_delegate_arg,
-    parse_unconfined_arg, session_route, split_schedule_spec,
+use super::session_route::{
+    SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
 };
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
@@ -30,8 +29,8 @@ use muta_agent::orchestration::{
     send_harness_state_for_session,
 };
 use muta_contracts::{
-    AgentRequest, AgentResponse, CommandResult, CronExpr, LoopStatus, Message, RoundEvent,
-    ScheduledJob, Tool, TrustDomain, estimate_tokens, repeat::parse_schedule_arg,
+    AgentRequest, AgentResponse, CommandResult, LoopStatus, Message, RoundEvent, Tool,
+    TrustDomain, estimate_tokens,
 };
 use muta_skills::ListSkillsTool;
 
@@ -44,7 +43,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         mcp_runtime,
         workspace_security,
         shared_additional_roots,
-        shared_unconfined,
+        shared_confinement,
         resp_tx,
         session,
         lifecycle,
@@ -107,32 +106,32 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 .await;
             }
         }
-        Some(BuiltinCmd::Delegate) => {
+        Some(BuiltinCmd::Unattended) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-            let next = match parse_delegate_arg(&arg) {
+            let next = match parse_unattended_arg(&arg) {
                 Ok(next) => next,
                 Err(msg) => {
                     record_error(session, resp_tx, name, args, msg).await;
                     return;
                 }
             };
-            // A bare `/delegate` (`None`) toggles the current state.
-            let enabled = next.unwrap_or_else(|| !agent.delegated());
-            agent.set_delegated(enabled);
-            if let Err(error) = session.set_delegated(enabled).await {
+            // A bare `/unattended` (`None`) toggles the current state.
+            let enabled = next.unwrap_or_else(|| !agent.unattended());
+            agent.set_unattended(enabled);
+            if let Err(error) = session.set_unattended(enabled).await {
                 tracing::warn!(
                     error = %error,
-                    "could not persist delegated posture; it will not survive a restart"
+                    "could not persist unattended posture; it will not survive a restart"
                 );
             }
             // The ack is a headline plus dimmed explanation lines (never a
             // `•`-joined one-row squeeze); the command entry settles in place
             // with this body, so the mode change owns its own durable row.
-            // The current posture is carried by the `DelegatedChanged` chip, not a
+            // The current posture is carried by the `UnattendedChanged` chip, not a
             // second transcript entry.
             let (title, detail) = if enabled {
                 (
-                    "Delegated mode ON",
+                    "Unattended mode ON",
                     vec![
                         "Autonomous decision-making & tool execution enabled".to_string(),
                         "Ambiguities resolved self-reliantly without interruptions".to_string(),
@@ -140,7 +139,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 )
             } else {
                 (
-                    "Delegated mode OFF",
+                    "Unattended mode OFF",
                     vec![
                         "Interactive confirmation prompts restored".to_string(),
                         "Questions and approval prompts are available".to_string(),
@@ -158,42 +157,38 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 },
             )
             .await;
-            // No notice twin: the command entry's Ack body IS the durable,
-            // surfaced record of this posture change (ADR-0091/0111); the
-            // live posture chip is `DelegatedChanged` below. A second inline
-            // notice would double-render the same title + detail.
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::DelegatedChanged(enabled),
+                RoundEvent::UnattendedChanged(enabled),
             ));
         }
-        Some(BuiltinCmd::Unconfine) => {
+        Some(BuiltinCmd::Confinement) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-            let next = match parse_unconfined_arg(&arg) {
+            let next = match parse_confinement_arg(&arg) {
                 Ok(next) => next,
                 Err(msg) => {
                     record_error(session, resp_tx, name, args, msg).await;
                     return;
                 }
             };
-            // A bare `/unconfine` (`None`) toggles the current state.
-            let next_unconfined = next.unwrap_or_else(|| !shared_unconfined.is_unconfined());
-            shared_unconfined.set_unconfined(next_unconfined);
+            // A bare `/confinement` (`None`) toggles the current state.
+            let next_confined = next.unwrap_or_else(|| !shared_confinement.is_confined());
+            shared_confinement.set_confined(next_confined);
 
-            let (title, detail) = if next_unconfined {
+            let (title, detail) = if next_confined {
                 (
-                    "Unconfined mode ON (Workspace Confinement Bypassed)",
+                    "Workspace Confinement ON",
                     vec![
-                        "Tools may access and edit any file on the host system".to_string(),
-                        "Constrained only by daemon OS user permissions".to_string(),
+                        "File tools are confined to workspace root and temp paths".to_string(),
+                        "Escapes outside admitted roots will be blocked".to_string(),
                     ],
                 )
             } else {
                 (
-                    "Unconfined mode OFF (Workspace Confined)",
+                    "Workspace Confinement OFF (Unconfined File Access)",
                     vec![
-                        "File tools are confined to workspace root and temp paths".to_string(),
-                        "Escapes outside admitted roots will be blocked".to_string(),
+                        "Tools may access and edit any file on the host system".to_string(),
+                        "Constrained only by daemon OS user permissions".to_string(),
                     ],
                 )
             };
@@ -210,7 +205,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             .await;
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::UnconfinedChanged(next_unconfined),
+                RoundEvent::ConfinementChanged(next_confined),
             ));
         }
         Some(BuiltinCmd::Role) => {
@@ -240,10 +235,10 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
                 Some(role) => match agent.apply_role(role) {
                     Some(resolved) => {
-                        let _ = session.set_delegated(agent.delegated()).await;
+                        let _ = session.set_unattended(agent.unattended()).await;
                         let _ = resp_tx.send(round_response(
                             &session.id().await,
-                            RoundEvent::DelegatedChanged(agent.delegated()),
+                            RoundEvent::UnattendedChanged(agent.unattended()),
                         ));
                         record_command(
                             session,
@@ -370,7 +365,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         mcp_runtime: env.mcp_runtime,
                         workspace_security: env.workspace_security,
                         shared_additional_roots: env.shared_additional_roots,
-                        shared_unconfined: env.shared_unconfined,
+                        shared_confinement: env.shared_confinement,
                         base_tools_for_side: env.base_tools_for_side,
                         skills_registry: env.skills_registry,
                         req_tx_for_commands: env.req_tx_for_commands,
@@ -693,238 +688,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
             }
             agent.fire_post_compact().await;
-        }
-        Some(BuiltinCmd::Repeat) => {
-            // `/repeat` is retained as a cron-only alias for the unified
-            // `/schedule` command. It only accepts a five-field cron expression
-            // plus a prompt; for countdown / absolute-time one-shots use
-            // `/schedule`. `list` / `cancel` / `help` are shared verbatim.
-            let rest = cmd.strip_prefix("/repeat").unwrap_or("").trim();
-            if rest.is_empty() || rest == "help" {
-                record_command(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    CommandResult::Text(
-                        "Usage: /repeat <cron> <prompt>  (cron-only alias for /schedule)\n\
-                         cron is five fields: minute hour day month weekday \
-                         (e.g. `*/5 * * * *` = every 5 min, `0 9 * * 1-5` = 09:00 weekdays).\n\
-                         For one-shot timers use /schedule <countdown|time> <prompt>.\n\
-                         Also: /repeat list, /repeat cancel <id>."
-                            .to_string(),
-                    ),
-                )
-                .await;
-                return;
-            }
-            if rest == "list" {
-                list_scheduled_jobs(session, resp_tx, name, args).await;
-                return;
-            }
-            if let Some(id) = rest.strip_prefix("cancel ") {
-                cancel_scheduled_job(session, id.trim(), resp_tx, name, args).await;
-                return;
-            }
-            // `/repeat <5-field cron> <prompt>` — enforce cron shape.
-            let tokens: Vec<&str> = rest.split_whitespace().collect();
-            if tokens.len() < 6 {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "Usage: /repeat <5-field cron> <prompt>. \
-                      Example: /repeat */5 * * * * check the deploy",
-                )
-                .await;
-                return;
-            }
-            let cron = tokens[0..5].join(" ");
-            let prompt = tokens[5..].join(" ");
-            if let Err(error) = CronExpr::parse(&cron) {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    format!(
-                        "/repeat takes a cron expression; got '{cron}': {error}. \
-                         Use /schedule for countdown / absolute-time one-shots."
-                    ),
-                )
-                .await;
-                return;
-            }
-            add_scheduled_job(
-                session,
-                &cron,
-                &prompt,
-                resp_tx,
-                req_tx_for_commands,
-                name,
-                args,
-            )
-            .await;
-        }
-        Some(BuiltinCmd::Schedule) => {
-            // `/schedule` is the unified scheduled-prompt command. Its time
-            // argument is one of:
-            //   - a five-field cron expression (recurring),
-            //   - a relative countdown (`10m`, `in 2 hours 30 minutes`),
-            //   - an absolute time (`14:00`, `tomorrow 09:00`,
-            //     `2026-03-15 14:00`).
-            // followed by the prompt to run. `list` / `cancel <id>` / `help`
-            // are shared with `/repeat`.
-            let rest = cmd.strip_prefix("/schedule").unwrap_or("").trim();
-            if rest.is_empty() || rest == "help" {
-                record_command(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    CommandResult::Text(
-                        "Usage: /schedule <when> <prompt>\n\
-                         <when> is one of:\n\
-                         - a cron: `*/5 * * * *`, `0 9 * * 1-5`\n\
-                         - a countdown: `10m`, `2h30m`, `in 2 hours 30 minutes`\n\
-                         - an absolute time: `14:00`, `tomorrow 09:00`, `2026-03-15 14:00`\n\
-                         Cron jobs recur; countdown / absolute jobs fire once.\n\
-                         Also: /schedule list, /schedule cancel <id>."
-                            .to_string(),
-                    ),
-                )
-                .await;
-                return;
-            }
-            if rest == "list" {
-                list_scheduled_jobs(session, resp_tx, name, args).await;
-                return;
-            }
-            if let Some(id) = rest.strip_prefix("cancel ") {
-                cancel_scheduled_job(session, id.trim(), resp_tx, name, args).await;
-                return;
-            }
-            // Split the time spec from the prompt. The time spec is either:
-            //   - exactly five cron fields, or
-            //   - everything up to the first run of alphabetic/non-numeric text
-            //     that begins the prompt. We detect by: if the first five
-            //     whitespace tokens parse as cron, the time spec is those five
-            //     fields; otherwise the time spec is the first token (a compact
-            //     countdown like `10m` / `2h30m`) OR a small fixed phrase
-            //     (`in …`, `today …`, `tomorrow …`, `at …`, `YYYY-MM-DD…`).
-            let now = chrono::Utc::now();
-            let (time_spec, prompt) = match split_schedule_spec(rest) {
-                Some(pair) => pair,
-                None => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        "Usage: /schedule <when> <prompt>. \
-                         Example: /schedule 10m re-run the tests",
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let prompt = prompt.trim();
-            if prompt.is_empty() {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "Usage: /schedule <when> <prompt>. The prompt is required.",
-                )
-                .await;
-                return;
-            }
-            let when = match parse_schedule_arg(&time_spec, now) {
-                Some(w) => w,
-                None => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        format!(
-                            "Could not parse `{time_spec}` as a cron, countdown, or absolute time.\n\
-                             Try `*/5 * * * *`, `10m`, `in 2 hours`, `14:00`, `tomorrow 09:00`, \
-                             or `2026-03-15 14:00`."
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let (trigger, next) = match when.resolve(now) {
-                Some(pair) => pair,
-                None => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        "That schedule never fires (the time already passed or the cron is \
-                         impossible).",
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let mut jobs = session.scheduled_jobs().await;
-            let id = uuid::Uuid::new_v4().to_string();
-            let short_id = id[..8.min(id.len())].to_string();
-            let job = ScheduledJob {
-                id: id.clone(),
-                trigger: trigger.clone(),
-                prompt: prompt.to_string(),
-                created_at: now,
-                next_fire: next,
-                last_fire: None,
-            };
-            jobs.push(job);
-            match session.set_scheduled_jobs(jobs).await {
-                Ok(()) => {
-                    let kind = trigger.kind_label();
-                    let next_str = format!("{}", next.format("%Y-%m-%d %H:%M"));
-                    record_command(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        CommandResult::Scheduled {
-                            kind: kind.to_string(),
-                            id: short_id,
-                            trigger: trigger.display(),
-                            next: format!(
-                                "{next_str}{}",
-                                if trigger.is_once() {
-                                    String::new()
-                                } else {
-                                    " Running now.".to_string()
-                                }
-                            ),
-                        },
-                    )
-                    .await;
-                    // Recurring cron jobs fire the first run immediately (the
-                    // scheduler handles the rest); one-shot jobs wait for their
-                    // scheduled fire time and are NOT run now.
-                    if !trigger.is_once() {
-                        let _ = req_tx_for_commands.send(AgentRequest::Prompt {
-                            text: prompt.to_string(),
-                            images: Vec::new(),
-                            sent_at_ms: None,
-                        });
-                    }
-                }
-                Err(error) => {
-                    record_error(session, resp_tx, name, args, error).await;
-                }
-            }
         }
         Some(BuiltinCmd::Jobs) => {
             let sub = parts.get(1).copied().unwrap_or("list");

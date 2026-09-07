@@ -588,7 +588,7 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     Some(std::path::Path::new(&app.current_workspace))
                 };
                 let count = match app.config_category {
-                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path)
+                    0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
                         .len()
                         .max(1),
                     1 => 5usize,
@@ -606,11 +606,11 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 }
                 if app.config_category == 0 {
                     let schemes =
-                        crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                        crate::render::Theme::available_color_schemes_with_workspace(ws_path);
                     if let Some(scheme) =
                         schemes.get(app.config_detail_index % schemes.len().max(1))
                     {
-                        app.theme = crate::view::Theme::from_color_scheme_with_workspace(
+                        app.theme = crate::render::Theme::from_color_scheme_with_workspace(
                             &scheme.id,
                             &app.custom_color_scheme,
                             ws_path,
@@ -750,7 +750,7 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     Some(std::path::Path::new(&app.current_workspace))
                 };
                 let count = match app.config_category {
-                    0 => crate::view::Theme::available_color_schemes_with_workspace(ws_path)
+                    0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
                         .len()
                         .max(1),
                     1 => 5usize,
@@ -768,11 +768,11 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 }
                 if app.config_category == 0 {
                     let schemes =
-                        crate::view::Theme::available_color_schemes_with_workspace(ws_path);
+                        crate::render::Theme::available_color_schemes_with_workspace(ws_path);
                     if let Some(scheme) =
                         schemes.get(app.config_detail_index % schemes.len().max(1))
                     {
-                        app.theme = crate::view::Theme::from_color_scheme_with_workspace(
+                        app.theme = crate::render::Theme::from_color_scheme_with_workspace(
                             &scheme.id,
                             &app.custom_color_scheme,
                             ws_path,

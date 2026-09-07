@@ -10,7 +10,7 @@ use super::common::{placeholder, relative_time_at, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::{ModalHeader, modal_body_width};
 use crate::primitives::{ContentModalSpec, FooterHint, keyvocab};
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// A flattened display row for the visual tree representation.
 #[derive(Debug, Clone)]

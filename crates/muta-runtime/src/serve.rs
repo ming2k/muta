@@ -924,7 +924,7 @@ async fn handle_wire_stream(
     // The session's own provider/model pin when set (C6), otherwise the
     // config default — the pair the picker and hint bar should boot into.
     let (provider, model) = match bound.session.provider_selection().await {
-        Some(sel) => (sel.provider, sel.model.unwrap_or_default()),
+        Some(sel) => (sel.connection.clone(), sel.model.unwrap_or_default()),
         None => {
             let config = muta_persistence::config::Config::load();
             let provider = muta_agent::catalog::default_provider_id(&config).to_string();
@@ -988,8 +988,8 @@ async fn handle_wire_stream(
         let snapshot = muta_contracts::HarnessSnapshot {
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
-            delegated: bound.session.delegated().await,
-            unconfined: bound.shared_unconfined.is_unconfined(),
+            unattended: bound.session.unattended().await,
+            confined: bound.shared_confinement.is_confined(),
             workspace_security: bound.security.snapshot(bound.project_root()),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };

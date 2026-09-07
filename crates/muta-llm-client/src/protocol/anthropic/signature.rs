@@ -25,19 +25,18 @@ impl SignatureStash {
         std::sync::Arc::new(Self::new())
     }
 
-    /// Scan one SSE data payload for a `signature_delta` and, if found, append
-    /// its fragment to the accumulated signature. No-op for any other event.
-    pub fn capture(&self, data: &str) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
-            return;
-        };
-        if value["type"].as_str() != Some("content_block_delta") {
-            return;
-        }
-        if value["delta"]["type"].as_str() != Some("signature_delta") {
+    /// Inspect one already-parsed SSE event for a `signature_delta` and, if
+    /// found, append its fragment to the accumulated signature. No-op for any
+    /// other event. The event is parsed by the caller (each stream payload is
+    /// parsed exactly once); this never re-parses raw strings.
+    pub fn on_event(&self, event: &serde_json::Value) {
+        if event["type"].as_str() != Some("content_block_delta") {
             return;
         }
-        if let Some(frag) = value["delta"]["signature"].as_str() {
+        if event["delta"]["type"].as_str() != Some("signature_delta") {
+            return;
+        }
+        if let Some(frag) = event["delta"]["signature"].as_str() {
             let mut guard = self.signature.lock().unwrap_or_else(|e| e.into_inner());
             guard.get_or_insert_with(String::new).push_str(frag);
         }
@@ -68,18 +67,40 @@ mod tests {
     fn fragments_accumulate_into_stash() {
         // Streaming with display:"omitted" delivers the signature as one or
         // more `signature_delta` events; capture must concatenate them in
-        // arrival order.
+        // arrival order. The stash consumes already-parsed events — the same
+        // `Value` the stream parser sees, never a re-parsed string.
         let stash = SignatureStash::shared();
-        stash.capture(
+        let parse =
+            |data: &str| serde_json::from_str::<serde_json::Value>(data).expect("test event");
+        stash.on_event(&parse(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EosnCk"}}"#,
-        );
-        stash.capture(
+        ));
+        stash.on_event(&parse(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"XyZ"}}"#,
-        );
+        ));
         // A non-signature event must not disturb the stash.
-        stash.capture(
+        stash.on_event(&parse(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
-        );
+        ));
         assert_eq!(stash.take().as_deref(), Some("EosnCkXyZ"));
+    }
+
+    #[test]
+    fn non_signature_event_kinds_are_ignored() {
+        // The delta type gates the stash: a signature inside any other event
+        // shape (wrong `type`, wrong `delta.type`) must not be captured.
+        let stash = SignatureStash::shared();
+        let parse =
+            |data: &str| serde_json::from_str::<serde_json::Value>(data).expect("test event");
+        stash.on_event(&parse(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+        ));
+        stash.on_event(&parse(
+            r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hm"}}"#,
+        ));
+        stash.on_event(&parse(
+            r#"{"type":"content_block_start","content_block":{"type":"text"}}"#,
+        ));
+        assert_eq!(stash.take(), None);
     }
 }

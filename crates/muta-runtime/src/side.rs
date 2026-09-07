@@ -98,12 +98,12 @@ impl SideSession {
         let agent = Arc::new(agent);
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
-        // An aside is a quick aside; run it delegated — without human
+        // An aside is a quick aside; run it unattended — without human
         // intervention — so it never raises a permission modal whose reply
         // could not be routed back to the side `Agent` through the shared
         // permission channel. This mirrors the runner policy (`runner_tool.rs`
-        // sets `delegated: true`).
-        agent.set_delegated(true);
+        // sets `unattended: true`).
+        agent.set_unattended(true);
 
         Ok(Self {
             id: side_id,

@@ -103,6 +103,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             retry_base_ms: 1,
             retry_max_ms: 1,
             emit_round_completed: false,
+            in_flight_draft: None,
         },
         RoundInput {
             prompt: prompt.to_string(),

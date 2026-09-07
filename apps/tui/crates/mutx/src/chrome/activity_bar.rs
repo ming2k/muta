@@ -9,9 +9,9 @@ use super::common::{
 };
 use crate::components::keycap::keycap_warn_span;
 use crate::keymap::Key;
-use crate::view::Theme;
+use crate::render::Theme;
 
-pub struct ActivityBarView<'a> {
+pub struct ActivityBarProps<'a> {
     /// Master-slot label (the typed phase's text).
     pub status: &'a str,
     /// Transport-setback clause rendered beside the label, warning-tinted. `None`
@@ -25,15 +25,15 @@ pub fn draw_activity_bar(
     frame: &mut Frame,
     rect: Rect,
     round_started_at: Option<Instant>,
-    view: ActivityBarView<'_>,
+    props: ActivityBarProps<'_>,
     spinner_phase: usize,
     theme: &Theme,
 ) -> Option<Rect> {
-    let ActivityBarView {
+    let ActivityBarProps {
         status,
         backoff_clause,
         awaiting_permission,
-    } = view;
+    } = props;
     let status_active = !status.is_empty() && status != "idle";
     let dim = Style::default().fg(theme.muted());
 

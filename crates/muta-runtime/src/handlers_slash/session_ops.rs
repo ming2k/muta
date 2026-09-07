@@ -65,7 +65,7 @@ pub async fn teardown_sides_for_session_switch(
 }
 
 pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
-    let (side, session, config, agent, lifecycle, resp_tx, provider_for_task, shared_unconfined) = (
+    let (side, session, config, agent, lifecycle, resp_tx, provider_for_task, shared_confinement) = (
         env.side,
         env.session,
         env.config,
@@ -73,7 +73,7 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
         env.lifecycle,
         env.resp_tx,
         env.provider_for_task,
-        env.shared_unconfined,
+        env.shared_confinement,
     );
     let provider_usage = &mut *env.provider_usage;
     supersede_for_session_switch(lifecycle, agent, resp_tx).await;
@@ -81,17 +81,17 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
     agent.clear_todos();
     match session.reset().await {
         Ok(id) => {
-            let fresh_posture = session.delegated().await;
-            if agent.delegated() != fresh_posture {
-                agent.set_delegated(fresh_posture);
+            let fresh_posture = session.unattended().await;
+            if agent.unattended() != fresh_posture {
+                agent.set_unattended(fresh_posture);
                 let _ = resp_tx.send(round_response(
                     &id,
-                    RoundEvent::DelegatedChanged(fresh_posture),
+                    RoundEvent::UnattendedChanged(fresh_posture),
                 ));
             }
-            if shared_unconfined.is_unconfined() {
-                shared_unconfined.set_unconfined(false);
-                let _ = resp_tx.send(round_response(&id, RoundEvent::UnconfinedChanged(false)));
+            if !shared_confinement.is_confined() {
+                shared_confinement.set_confined(true);
+                let _ = resp_tx.send(round_response(&id, RoundEvent::ConfinementChanged(true)));
             }
             agent.restore_round_count(session.round_counter().await);
             crate::handlers_provider::reapply_session_selection(
@@ -141,15 +141,15 @@ pub(crate) async fn restore_session_runtime(
     agent.restore_disabled_tools(session.disabled_tools().await);
     agent.restore_round_count(session.round_counter().await);
 
-    let mut restored_delegated = session.delegated().await;
+    let mut restored_unattended = session.unattended().await;
     let mut restored_from_ledger = false;
-    if !restored_delegated {
+    if !restored_unattended {
         let commands = session.commands().await;
-        let was_delegated_on = commands
+        let was_unattended_on = commands
             .iter()
             .rev()
             .find_map(|rec| {
-                if (rec.name == "yolo" || rec.name == "autopilot" || rec.name == "delegate")
+                if (rec.name == "unattended" || rec.name == "auto" || rec.name == "delegate" || rec.name == "autopilot" || rec.name == "yolo")
                     && let Some(CommandResult::Ack { title, .. }) = &rec.result
                 {
                     let title = title.to_lowercase();
@@ -162,26 +162,26 @@ pub(crate) async fn restore_session_runtime(
                 None
             })
             .unwrap_or(false);
-        if was_delegated_on {
-            restored_delegated = true;
+        if was_unattended_on {
+            restored_unattended = true;
             restored_from_ledger = true;
-            let _ = session.set_delegated(true).await;
+            let _ = session.set_unattended(true).await;
         }
     }
 
-    if agent.delegated() != restored_delegated {
-        agent.set_delegated(restored_delegated);
+    if agent.unattended() != restored_unattended {
+        agent.set_unattended(restored_unattended);
         if restored_from_ledger {
             let notice = AgentNotice::new(
                 muta_contracts::NoticeKind::CommandAck,
                 muta_contracts::NoticeSeverity::Warning,
-                "Delegated mode restored",
+                "Unattended mode restored",
                 muta_contracts::NoticeSource::Harness,
             )
             .with_surface(muta_contracts::NoticeSurface::Inline)
             .with_body(
-                "This session was previously running in delegated auto-approve mode. \
-                 Use `/delegate off` to return to interactive mode.",
+                "This session was previously running in unattended execution mode. \
+                 Use `/unattended off` to return to interactive mode.",
             );
             let _ = resp_tx.send(round_response(
                 &session.id().await,
@@ -190,7 +190,7 @@ pub(crate) async fn restore_session_runtime(
         }
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::DelegatedChanged(restored_delegated),
+            RoundEvent::UnattendedChanged(restored_unattended),
         ));
     }
 

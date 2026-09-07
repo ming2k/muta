@@ -2,10 +2,11 @@
 //! `run_app_loop`'s `if needs_draw` stage (it was a ~1000-line closure).
 
 use crate::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
-use crate::composer::{ComposerText, ComposerView};
+use crate::composer::{ComposerText, ComposerProps};
 use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
-use crate::view;
+use crate::render;
+use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ConfirmChoice;
 use crate::{App, Modal, ProviderDeleteChoice, Recess};
 
 use super::actions::effective_reasoning_effort;
@@ -49,7 +50,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         );
 
         let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
-        let drawn_modal_rect = view::draw_sessions_modal(
+        let drawn_modal_rect = render::draw_sessions_modal(
             f,
             crate::overlays::session::SessionsModalProps {
                 sessions: &app.sessions_overview,
@@ -172,7 +173,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // `/btw` aside page-header context (ADR-0017/0103): shown only while the
     // aside view is active. Runner zoom and the aside view are mutually
     // exclusive, so the two modes never coexist.
-    let side_banner = app.in_side_view.then_some(view::BtwHead {
+    let side_banner = app.in_side_view.then_some(render::BtwHead {
         parent: app.parent_status,
     });
     // Row-2 affordance legend inputs (ADR-0103 §3): the aside chip is
@@ -198,7 +199,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         let idx = tasks
             .iter()
             .position(|message| message.tool_step_call_id() == Some(current.call_id.as_str()))?;
-        Some(view::RunnerBarInfo {
+        Some(render::RunnerBarInfo {
             role: tasks.get(idx)?.runner_role(),
             label: tasks.get(idx)?.runner_description(),
             index: idx + 1,
@@ -213,15 +214,15 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     } else {
         None
     };
-    let page_hints = view::ViewHints {
+    let page_hints = render::ViewHints {
         kind: if side_banner.is_some() {
-            view::ViewKind::Btw
+            render::ViewKind::Btw
         } else if app.in_runner_view() {
-            view::ViewKind::Runner
+            render::ViewKind::Runner
         } else {
-            view::ViewKind::Main
+            render::ViewKind::Session
         },
-        asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(view::AsidesChip {
+        asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(render::AsidesChip {
             total: app.btw_list.len(),
             running: aside_running,
         }),
@@ -249,11 +250,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .any(|row| row.key_ready || app.key_status.get(&row.id).copied().unwrap_or(true))
         || app.provider_picker.rows.is_empty();
     let guidance = if let Some(ref target) = app.switching_session {
-        view::EmptyStateGuidance::LoadingSession(target.clone())
+        render::EmptyStateGuidance::LoadingSession(target.clone())
     } else if has_keyed_provider {
-        view::EmptyStateGuidance::Tour
+        render::EmptyStateGuidance::Tour
     } else {
-        view::EmptyStateGuidance::NeedsProvider
+        render::EmptyStateGuidance::NeedsProvider
     };
 
     // Suppress the hover affordance whenever a full-overlay modal is
@@ -275,21 +276,21 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // transcript-owned and never passes through
     // the outbox (ADR-0126), so there is no `steering` slice to
     // exclude from the modal either.
-    let queue_items: Vec<view::QueueItemView> = app
+    let queue_items: Vec<render::QueueItemProps> = app
         .pending_dispatch
         .iter()
         .filter(|item| item.session_id == viewed_session_id)
-        .map(|item| view::QueueItemView {
+        .map(|item| render::QueueItemProps {
             queued_at_ms: item.queued_at_ms,
             text: item.text.clone(),
         })
         .collect();
-    let queue_modal_items: Vec<view::QueueItemView> = queue_items.clone();
+    let queue_modal_items: Vec<render::QueueItemProps> = queue_items.clone();
 
-    let transcript_render = view::draw_transcript(
+    let transcript_render = render::draw_transcript(
         f,
         &mut layout_map,
-        view::TranscriptView {
+        render::TranscriptProps {
             messages: view_messages,
             scroll: app.scroll,
             selection: &app.selection,
@@ -307,7 +308,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             input: &masked_input,
             byte_cursor: masked_byte_cursor,
             chrome_hidden,
-            queue_bar: view::QueueBarView {
+            queue_bar: render::QueueBarProps {
                 items: &queue_items,
                 paused: app.pending_count(viewed_session_id) > 0
                     && app.idle_sessions.contains(viewed_session_id)
@@ -318,11 +319,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             runner_bar,
             side_banner,
             page_hints: Some(page_hints),
-            session_head: Some(view::SessionHead {
+            session_head: Some(render::SessionHead {
                 session_id: viewed_session_id,
                 workspace: &app.current_workspace,
-                delegated: app.delegated,
-                unconfined: app.unconfined,
+                unattended: app.unattended,
+                confined: app.confined,
                 switching_target: app.switching_session.as_deref(),
             }),
             // View-scoped: the elapsed-timer origin belongs to the viewed
@@ -388,10 +389,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
         let _ = can_retry; // retry affordance now renders on the composer keys row
-        let model_bar_rects = view::draw_model_bar(
+        let model_bar_rects = render::draw_model_bar(
             f,
             hint_rect,
-            view::ModelBarView {
+            render::ModelBarProps {
                 current_model: &app.current_model,
                 model_available,
                 provider_name: hint_instance,
@@ -435,7 +436,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     input_rect.width,
                     input_rect.height + crate::design::COMPOSER_HINT_GAP_ROWS + hint_rect.height,
                 );
-                let max_scroll = view::draw_permission_sheet(
+                let max_scroll = render::draw_permission_sheet(
                     f,
                     &mut app.modal_hit_map,
                     request,
@@ -514,7 +515,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let busy = app.running_sessions.contains(viewed_session_id);
             let active_extension = app.active_composer_extension();
             let composer_hints = {
-                use crate::components::composer_hints::{ComposerHints, compose_target_for_extension};
+                use crate::components::composer_hints::{
+                    ComposerHints, compose_target_for_extension,
+                };
                 ComposerHints {
                     compose_target: compose_target_for_extension(
                         busy,
@@ -528,7 +531,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         .effective_binding(crate::keymap::SurfaceVerb::ToggleSendMode),
                 }
             };
-            let composer_options = view::ComposerDrawOptions {
+            let composer_options = render::ComposerDrawOptions {
                 focused: !step_focused,
                 show_caret,
                 follow_caret: app.input_scroll_follow_cursor,
@@ -538,8 +541,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 hints: composer_hints,
             };
             match slash_len {
-                Some(len) => view::draw_composer_highlighted(
-                    ComposerView {
+                Some(len) => render::draw_composer_highlighted(
+                    ComposerProps {
                         frame: f,
                         input_rect,
                         theme: &app.theme,
@@ -555,8 +558,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     len,
                 ),
                 None => match prompt_accent {
-                    Some(accent) => view::draw_composer_igniting(
-                        ComposerView {
+                    Some(accent) => render::draw_composer_igniting(
+                        ComposerProps {
                             frame: f,
                             input_rect,
                             theme: &app.theme,
@@ -571,8 +574,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         composer_options,
                         accent,
                     ),
-                    None if app.input_scroll_follow_cursor => view::draw_composer(
-                        ComposerView {
+                    None if app.input_scroll_follow_cursor => render::draw_composer(
+                        ComposerProps {
                             frame: f,
                             input_rect,
                             theme: &app.theme,
@@ -591,8 +594,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         paste_count,
                         composer_hints,
                     ),
-                    None => view::draw_composer_with_options(
-                        ComposerView {
+                    None => render::draw_composer_with_options(
+                        ComposerProps {
                             frame: f,
                             input_rect,
                             theme: &app.theme,
@@ -625,12 +628,12 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Hit-test rects for the footer bars, resolved from the one registry the
     // renderer placed this frame (`TranscriptRender::footer`) — one source
     // of truth instead of per-bar plumbing.
-    app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
+    app.queue_rect = render::footer_rect(&transcript_render.footer, render::FooterRowId::Queue);
     // The composer panel's own rect, for the spatial mouse router (wheel
     // ticks and selection edge-autoscroll inside the box drive the input's
     // viewport, not the transcript). Zero-height / absent rows resolve to
     // `None` — a collapsed or hidden composer owns no pointer cell.
-    app.input_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Composer);
+    app.input_rect = render::footer_rect(&transcript_render.footer, render::FooterRowId::Composer);
     match sticky {
         Some(info) => {
             app.sticky_step = Some(info.message_idx);
@@ -680,7 +683,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 input_rect,
                 app.completion_kind(),
             );
-            view::draw_completion_menu(
+            render::draw_completion_menu(
                 f,
                 &mut layout_map,
                 Some(&mut app.modal_hit_map),
@@ -713,7 +716,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Done after the transcript + chrome are drawn and before the modal
     // panel so the panel overpaints its own crisp area on top of the
     // recessed background.
-    view::recess_backdrop(f, recess, &app.theme);
+    render::recess_backdrop(f, recess, &app.theme);
 
     let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
 
@@ -727,7 +730,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     let drawn_modal_rect = match app.active_modal() {
         Modal::Connections => {
             let providers = app.providers_filtered();
-            Some(view::draw_connections_modal(
+            Some(render::draw_connections_modal(
                 f,
                 &mut layout_map,
                 crate::overlays::provider::connections::ConnectionsModalProps {
@@ -751,7 +754,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         }
         Modal::Models => {
             let models = app.models_flat_filtered();
-            Some(view::draw_models_modal(
+            Some(render::draw_models_modal(
                 f,
                 crate::overlays::provider::models::ModelsModalProps {
                     models: &models,
@@ -775,9 +778,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // the bar's exact footprint this frame (None when idle,
             // height 0).
             let activity_height =
-                view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity)
+                render::footer_rect(&transcript_render.footer, render::FooterRowId::Activity)
                     .map_or(0, |r| r.height);
-            view::draw_history_panel(
+            render::draw_history_panel(
                 f,
                 crate::overlays::history::HistoryPanelProps {
                     history: &app.input_history,
@@ -831,7 +834,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let overrides = app
                 .editor_model_settings_only
                 .then_some((app.editor_vision_override, app.editor_tool_override));
-            Some(view::draw_model_editor(
+            Some(render::draw_model_editor(
                 f,
                 &title,
                 &app.input,
@@ -845,7 +848,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &app.theme,
             ))
         }
-        Modal::ProviderPreset => Some(view::draw_preset_chooser(
+        Modal::ProviderPreset => Some(render::draw_preset_chooser(
             app.preset_choice,
             f,
             &app.theme,
@@ -859,7 +862,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
                 muta_contracts::ConnectionAuth::ApiKey => "OAuth",
             };
-            Some(view::draw_oauth_pending(
+            Some(render::draw_oauth_pending(
                 title,
                 &app.oauth_pending_message,
                 &app.oauth_pending_url,
@@ -881,8 +884,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             } else {
                 crate::preset_label_for(app.custom_preset_id.as_deref())
             };
-            Some(view::draw_custom_provider_editor(
-                view::CustomEditorView {
+            Some(render::draw_custom_provider_editor(
+                render::CustomEditorProps {
                     fields: &app.custom_fields,
                     field: app.custom_field,
                     editing,
@@ -919,7 +922,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 queue_count: app.pending_dispatch.len(),
                 has_focused_target: app.focused_target.is_some(),
             };
-            Some(view::draw_help_modal(
+            Some(render::draw_help_modal(
                 f,
                 &mut app.help_scroll,
                 &app_ctx,
@@ -928,7 +931,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &mut layout_map,
             ))
         }
-        Modal::Sessions => Some(view::draw_sessions_modal(
+        Modal::Sessions => Some(render::draw_sessions_modal(
             f,
             crate::overlays::session::SessionsModalProps {
                 sessions: &app.sessions_overview,
@@ -949,7 +952,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &mut layout_map,
         )),
         Modal::Host => {
-            let rects = view::draw_dashboard(
+            let rects = render::draw_dashboard(
                 f,
                 crate::overlays::dashboard::DashboardProps {
                     rows: &app.host_sessions,
@@ -977,7 +980,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // it floats on top.
             if let Some(preview_id) = &app.host_preview {
                 let row = app.host_sessions.iter().find(|r| &r.id == preview_id);
-                view::draw_session_preview(f, row, &mut app.host_preview_scroll, &app.theme);
+                render::draw_session_preview(f, row, &mut app.host_preview_scroll, &app.theme);
             }
             Some(rects.area)
         }
@@ -989,10 +992,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let report = app.token_source_report(viewed_session_id);
             let loading = app.token_ledger.is_none() && report.is_none();
             let report = report.unwrap_or_default();
-            Some(view::draw_telemetry_modal(
+            Some(render::draw_telemetry_modal(
                 f,
                 &report,
-                view::ContextUsageView {
+                render::ContextUsageProps {
                     snapshot: app.context_tokens,
                     window_tokens: Some(app.active_model_context_window()),
                     draft_content_tokens: muta_contracts::count_tokens(&app.input),
@@ -1000,7 +1003,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 },
                 app.telemetry_tab,
                 app.modal_index
-                    .min(view::telemetry_round_count(&report).saturating_sub(1)),
+                    .min(render::telemetry_round_count(&report).saturating_sub(1)),
                 app.telemetry_detail,
                 app.telemetry_turn,
                 app.telemetry_turn_cursor,
@@ -1018,7 +1021,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // `QueryUsageStats` reply lands.
             let loading = app.usage_stats.is_none();
             let report = app.usage_stats.clone().unwrap_or_default();
-            Some(view::draw_usage_stats_modal(
+            Some(render::draw_usage_stats_modal(
                 f,
                 &report,
                 loading,
@@ -1028,7 +1031,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &mut layout_map,
             ))
         }
-        Modal::Tools => Some(view::draw_tools_modal(
+        Modal::Tools => Some(render::draw_tools_modal(
             f,
             app.session_context.as_ref(),
             app.modal_index,
@@ -1036,7 +1039,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.session_modal_follow,
             &app.theme,
         )),
-        Modal::Mcp => Some(view::draw_mcp_modal(
+        Modal::Mcp => Some(render::draw_mcp_modal(
             f,
             app.session_context.as_ref(),
             app.modal_index,
@@ -1044,7 +1047,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.session_modal_follow,
             &app.theme,
         )),
-        Modal::Skills => Some(view::draw_skills_modal(
+        Modal::Skills => Some(render::draw_skills_modal(
             f,
             app.session_context.as_ref(),
             app.modal_index,
@@ -1052,7 +1055,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &mut app.session_scroll,
             &app.theme,
         )),
-        Modal::Permissions => Some(view::draw_permissions_manager(
+        Modal::Permissions => Some(render::draw_permissions_manager(
             f,
             app.session_context.as_ref(),
             app.modal_index,
@@ -1067,9 +1070,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             } else {
                 "Main › Settings"
             };
-            let rects = view::draw_settings_view(
+            let rects = render::draw_settings_view(
                 f,
-                view::ConfigViewProps {
+                render::SettingsProps {
                     category_index: app.config_category,
                     detail_index: app.config_detail_index,
                     focus: app.config_focus,
@@ -1091,9 +1094,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             }
             Some(rects.area)
         }
-        Modal::Queue => Some(view::draw_queue_modal(
+        Modal::Queue => Some(render::draw_queue_modal(
             f,
-            view::QueueModalView {
+            render::QueueModalProps {
                 items: &queue_modal_items,
                 blocked: app.pending_count(viewed_session_id) > 0
                     && app.is_queue_blocked(viewed_session_id),
@@ -1103,9 +1106,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.queue_modal_follow,
             &app.theme,
         )),
-        Modal::Btw => Some(view::draw_btw_modal(
+        Modal::Btw => Some(render::draw_btw_modal(
             f,
-            view::BtwModalView {
+            render::BtwModalProps {
                 asides: &app.btw_list,
                 // Derived from the per-session running set (live via
                 // HarnessState) rather than the list snapshot, so a round
@@ -1124,7 +1127,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &app.selection,
             &mut layout_map,
         )),
-        Modal::Tree => Some(view::draw_tree_modal(
+        Modal::Tree => Some(render::draw_tree_modal(
             f,
             &app.session_tree,
             app.modal_index,
@@ -1185,12 +1188,12 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             .find(|r| &r.id == pending_id)
             .map(|r| r.name.clone())
             .unwrap_or_else(|| pending_id.clone());
-        app.provider_delete_rect = Some(view::draw_provider_delete_confirm(
+        app.provider_delete_rect = Some(render::draw_provider_delete_confirm(
             f,
             &provider_name,
             match app.provider_delete_focus {
-                ProviderDeleteChoice::Cancel => view::ProviderDeleteChoiceView::Cancel,
-                ProviderDeleteChoice::Delete => view::ProviderDeleteChoiceView::Delete,
+                ProviderDeleteChoice::Cancel => ConfirmChoice::Cancel,
+                ProviderDeleteChoice::Delete => ConfirmChoice::Delete,
             },
             &app.theme,
         ));
@@ -1215,7 +1218,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                             + crate::design::COMPOSER_HINT_GAP_ROWS
                             + hint_rect.height,
                     );
-                    view::draw_question_modal(
+                    render::draw_question_modal(
                         f,
                         &mut app.modal_hit_map,
                         qmodel.request(),
@@ -1233,7 +1236,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             }
             Some(crate::sheet::SheetKind::InputInjection) => {
                 if let Some(ref req) = app.pending_input {
-                    view::draw_input_injection(
+                    render::draw_input_injection(
                         f,
                         req,
                         &app.input,
@@ -1251,11 +1254,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // take precedence over informational toasts (copy, command acknowledgment)
     // so active safety prompts are never obscured.
     if app.esc_armed() {
-        view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
+        render::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     } else if app.ctrl_c_armed() {
-        view::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
+        render::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
     } else if app.copy_toast_until.is_some() {
-        view::draw_copy_toast(
+        render::draw_copy_toast(
             f,
             &app.copy_toast_message,
             app.copy_toast_failed,
@@ -1265,7 +1268,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // A toast-surfaced command acknowledgment (e.g.
         // `/delegate on`). Rendered only when no higher-priority toast is
         // showing, since they share the same top-right slot.
-        view::draw_notice_toast(
+        render::draw_notice_toast(
             f,
             &app.notice_toast_message,
             app.notice_toast_severity,

@@ -95,6 +95,7 @@ fn render_grid(msg: &TranscriptMessage, width: u16, height: u16) -> String {
         let mut current_y = area.y;
         let mut content_lines = 0usize;
         let mut sticky = Vec::new();
+        let mut wrap_cache = crate::render::BlockWrapCache::default();
         let mut ctx = crate::disclosure::renderers::RenderCtx::from_cursor(
             f,
             area,
@@ -104,6 +105,7 @@ fn render_grid(msg: &TranscriptMessage, width: u16, height: u16) -> String {
             &mut skip_rows,
             &mut current_y,
             &mut content_lines,
+            &mut wrap_cache,
         );
         draw_tool_step(
             &mut ctx,
@@ -562,7 +564,7 @@ fn render_transcript_frame(
     scroll: u16,
     height_cache: Option<&mut super::HeightCache>,
 ) -> RenderedTranscript {
-    use super::{EmptyStateGuidance, QueueBarView, Theme, TranscriptView, draw_transcript};
+    use super::{EmptyStateGuidance, QueueBarProps, Theme, TranscriptProps, draw_transcript};
     use crate::model::layout::LayoutMap;
 
     let theme = Theme::default();
@@ -574,7 +576,7 @@ fn render_transcript_frame(
         render = Some(draw_transcript(
             f,
             &mut layout_map,
-            TranscriptView {
+            TranscriptProps {
                 messages,
                 scroll,
                 selection: &selection,
@@ -586,7 +588,7 @@ fn render_transcript_frame(
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
-                queue_bar: QueueBarView {
+                queue_bar: QueueBarProps {
                     items: &[],
                     paused: false,
                     blocked: false,

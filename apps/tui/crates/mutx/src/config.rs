@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::view::tools::presenter_for;
+use crate::render::tools::presenter_for;
 use muta_contracts::ColorSchemeConfig;
 
 pub const THINKING_KEY: &str = "thinking";

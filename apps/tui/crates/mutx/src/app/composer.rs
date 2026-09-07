@@ -168,7 +168,7 @@ impl App {
             .drag
             .anchor
             .as_ref()
-            .is_some_and(|a| a.message_idx == crate::view::INPUT_MSG_IDX);
+            .is_some_and(|a| a.message_idx == crate::render::INPUT_MSG_IDX);
         if !(self.drag.active && anchored_in_input) {
             return None;
         }
@@ -246,7 +246,7 @@ impl App {
         };
         self.drag.update_to_cursor(
             &mut self.selection,
-            crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, byte),
+            crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, byte),
         );
         if target == 0 || target == max {
             // The pointer is still held, but no hidden row remains in this
@@ -282,13 +282,13 @@ impl App {
             return false;
         }
         match &self.selection {
-            SelectionState::Block { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,
+            SelectionState::Block { message_idx, .. } => *message_idx == crate::render::INPUT_MSG_IDX,
             SelectionState::TableCell { message_idx, .. } => {
-                *message_idx == crate::view::INPUT_MSG_IDX
+                *message_idx == crate::render::INPUT_MSG_IDX
             }
             SelectionState::Range { anchor, head } => {
-                anchor.message_idx == crate::view::INPUT_MSG_IDX
-                    && head.message_idx == crate::view::INPUT_MSG_IDX
+                anchor.message_idx == crate::render::INPUT_MSG_IDX
+                    && head.message_idx == crate::render::INPUT_MSG_IDX
             }
             SelectionState::None => false,
         }
@@ -352,7 +352,7 @@ impl App {
         }
         match &self.selection {
             SelectionState::Block { message_idx, .. }
-                if *message_idx == crate::view::INPUT_MSG_IDX =>
+                if *message_idx == crate::render::INPUT_MSG_IDX =>
             {
                 self.input.clear();
                 self.selection = SelectionState::None;

@@ -1,7 +1,7 @@
 use super::model::*;
-use super::view::*;
+use super::draw::*;
 use crate::modal::TelemetryTab;
-use crate::view::Theme;
+use crate::render::Theme;
 use muta_contracts::{
     RequestPerformance, RequestUsageKey, RequestUsageRecord, RequestUsageSource,
     RequestUsageStatus, TokenSourceReport, TokenSourceRow,
@@ -188,7 +188,7 @@ fn test_build_attempt_inspector_waterfall_nodes() {
         &rounds,
         1,
         1,
-        ContextUsageView {
+        ContextUsageProps {
             window_tokens: Some(200_000),
             ..Default::default()
         },
@@ -276,7 +276,7 @@ fn test_build_overview_and_sticky_table_headers() {
     let overview = build_overview_body(
         &report,
         &rounds,
-        ContextUsageView {
+        ContextUsageProps {
             snapshot: Some(muta_contracts::ContextTokenSnapshot {
                 tokens: 24_500,
                 source: muta_contracts::ContextTokenSource::Api,
@@ -424,7 +424,7 @@ fn test_telemetry_burst_arrival_defensible_tps_fallback() {
     assert!((round_tps - 133.33).abs() < 1.0);
 
     let report = TokenSourceReport::default();
-    let overview = build_overview_body(&report, &rounds, ContextUsageView::default(), 80, &theme);
+    let overview = build_overview_body(&report, &rounds, ContextUsageProps::default(), 80, &theme);
     let ov_text = overview
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))

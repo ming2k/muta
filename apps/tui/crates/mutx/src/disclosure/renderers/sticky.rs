@@ -5,7 +5,7 @@ use mutx_engine::{Color, Frame, Paragraph, Rect};
 use super::base::MARKER_EXPANDED;
 use super::payloads::tool_summary_line;
 use super::reasoning::reasoning_summary_line;
-use crate::view::{StickyInfo, Theme};
+use crate::render::{StickyInfo, Theme};
 
 /// Information needed to draw the sticky summary header for an expanded step
 /// whose summary has scrolled above the viewport but whose body is still

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 /// View properties for contextual tokens when displaying context limits.
 #[derive(Debug, Clone, Copy, Default)]
 #[allow(dead_code)]
-pub struct ContextUsageView {
+pub struct ContextUsageProps {
     pub snapshot: Option<muta_contracts::ContextTokenSnapshot>,
     pub window_tokens: Option<usize>,
     pub draft_content_tokens: usize,
@@ -245,7 +245,7 @@ pub(crate) fn fmt_tps(tps: Option<f64>) -> String {
 
 pub(crate) fn status_style(
     status: RequestUsageStatus,
-    theme: &crate::view::Theme,
+    theme: &crate::render::Theme,
 ) -> mutx_engine::Style {
     match status {
         RequestUsageStatus::Completed => mutx_engine::Style::default().fg(theme.success),

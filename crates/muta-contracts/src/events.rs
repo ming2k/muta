@@ -1271,16 +1271,14 @@ pub enum RoundEvent {
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
     TodosUpdated(crate::todos::TodoList),
-    /// The delegated-autonomous toggle changed. `true` = the agent runs in full
-    /// auto-approve mode (all permissions bypassed). Emitted by `/delegate` so
+    /// The unattended execution toggle changed. `true` = the agent runs in unattended
+    /// mode (suppresses interactive human confirmations). Emitted by `/unattended` so
     /// the TUI can refresh its badge without waiting for the next harness snapshot.
-    #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
-    DelegatedChanged(bool),
-    /// The workspace confinement toggle changed. `true` = unconfined
-    /// (confinement bypassed). Emitted by `/unconfined` so the TUI can refresh its
+    UnattendedChanged(bool),
+    /// The workspace confinement toggle changed. `true` = confined to workspace,
+    /// `false` = confinement disabled. Emitted by `/confinement` so the TUI can refresh its
     /// badge without waiting for the next harness snapshot.
-    #[serde(alias = "JailChanged")]
-    UnconfinedChanged(bool),
+    ConfinementChanged(bool),
     RetryScheduled {
         attempt: usize,
         max_attempts: usize,
@@ -1423,17 +1421,15 @@ pub struct HarnessSnapshot {
     /// transcript messages, which may have been compacted.
     #[serde(default)]
     pub round_counter: u64,
-    /// Whether tool permission prompts are bypassed this session
-    /// (`-y` / `/delegate on`). The TUI mirrors this into a
-    /// visible badge so the elevated state is never silent.
-    #[serde(default, alias = "yolo", alias = "autopilot")]
-    pub delegated: bool,
-    /// Whether workspace filesystem confinement is bypassed this session
-    /// (`/unconfined on` / `--unconfined`). The TUI mirrors this into an `UNCONFINED` badge so the
-    /// elevated filesystem access is never silent.
-    #[serde(default, alias = "jail_disabled")]
-    pub unconfined: bool,
-    /// Workspace authority is independent from the attended/delegated posture.
+    /// Whether the agent runs in unattended execution mode
+    /// (`--unattended` / `/unattended on`). The TUI mirrors this into an `UNATTENDED` badge.
+    #[serde(default)]
+    pub unattended: bool,
+    /// Whether workspace filesystem confinement is enforced this session (default true).
+    /// (`--no-confinement` / `/confinement off`). The TUI mirrors false into an `UNCONFINED` badge.
+    #[serde(default = "default_confined")]
+    pub confined: bool,
+    /// Workspace authority is independent from the attended/unattended posture.
     /// Frontends surface this state continuously so authority is never implicit.
     #[serde(default)]
     pub workspace_security: crate::WorkspaceSecuritySnapshot,
@@ -1445,6 +1441,10 @@ pub struct HarnessSnapshot {
     /// instead of scanning the transcript for error notices.
     #[serde(default)]
     pub retry_pending: bool,
+}
+
+const fn default_confined() -> bool {
+    true
 }
 
 /// A row in the sessions picker: enough to identify, describe and order a past
@@ -1490,6 +1490,9 @@ pub enum SessionForkKind {
     Fork,
     /// A `/btw` aside: forked from the trunk, running alongside it.
     Aside,
+    /// A subagent run's own durable session (ADR-0186 §6): spawned by a
+    /// runner tool call in a parent session, never surfaced in the picker.
+    Subagent,
 }
 
 /// Full detail for one session, requested on demand (the session-info
@@ -1871,12 +1874,10 @@ pub enum AgentEvent {
     /// The task list changed (`todo` / `todo_update`). The TUI uses this to refresh the
     /// unified sticky panel above the input box.
     TodosUpdated(crate::todos::TodoList),
-    /// The delegated-autonomous toggle changed (via `/delegate`).
-    #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
-    DelegatedChanged(bool),
-    /// The unconfined (jail bypass) toggle changed (via `/jail`).
-    #[serde(alias = "JailChanged")]
-    UnconfinedChanged(bool),
+    /// The unattended execution toggle changed (via `/unattended`).
+    UnattendedChanged(bool),
+    /// The workspace confinement toggle changed (via `/confinement`).
+    ConfinementChanged(bool),
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
     /// An interactive `bash` command needs a line of stdin from the operator.

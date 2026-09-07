@@ -1891,8 +1891,8 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 Some(format!("tool-stream {} {:?}", id, stream))
             }
             AgentEvent::ToolCancelled { name, .. } => Some(format!("tool-cancelled {name}")),
-            AgentEvent::DelegatedChanged(enabled) => Some(format!("delegated {enabled}")),
-            AgentEvent::UnconfinedChanged(enabled) => Some(format!("unconfined {enabled}")),
+            AgentEvent::UnattendedChanged(enabled) => Some(format!("unattended {enabled}")),
+            AgentEvent::ConfinementChanged(enabled) => Some(format!("confinement {enabled}")),
             AgentEvent::PermissionRequest(request) => Some(format!(
                 "permission-request {} {}",
                 request.tool, request.scope
@@ -2219,7 +2219,7 @@ async fn doom_guard_suppressed_when_disabled() {
 }
 
 #[tokio::test]
-async fn command_policy_confirm_auto_approves_when_delegated() {
+async fn command_policy_confirm_auto_approves_when_unattended() {
     let command = RecordingTool::read("execute_command", "COMMAND-OUT");
     let calls = command.calls_handle();
     let agent = Arc::new(Agent::new(
@@ -2230,7 +2230,7 @@ async fn command_policy_confirm_auto_approves_when_delegated() {
         vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_delegated(true);
+    agent.set_unattended(true);
 
     let mut messages = vec![Message::new(Role::User, "discard changes")];
     let outcome = agent
@@ -2430,9 +2430,9 @@ async fn ask_user_tool_unblocks_with_a_cancelled_result() {
 }
 
 #[tokio::test]
-async fn delegated_reclaims_ask_user_and_short_circuits_stale_calls() {
+async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
     // The model still names ask_user (carried from an older tool list), but
-    // in delegated mode the harness must not park on it. The call short-
+    // in unattended mode the harness must not park on it. The call short-
     // circuits with a refusal, no user-question event fires, and the round
     // completes without a human.
     let ask_args = serde_json::json!({
@@ -2454,7 +2454,7 @@ async fn delegated_reclaims_ask_user_and_short_circuits_stale_calls() {
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_delegated(true);
+    agent.set_unattended(true);
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2535,7 +2535,7 @@ async fn execution_policy_blocks_ask_user_for_child_agents() {
 }
 
 #[tokio::test]
-async fn delegated_preserves_schema_and_intercepts_ask_user_at_runtime() {
+async fn unattended_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),
         vec![Arc::new(crate::tools::AskUserTool)],
@@ -2544,12 +2544,12 @@ async fn delegated_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let visible_before = agent.visible_tools();
     let names_before: Vec<&str> = visible_before.iter().map(|t| t.name()).collect();
     assert!(names_before.contains(&"ask_user"));
-    agent.set_delegated(true);
+    agent.set_unattended(true);
     let visible_after = agent.visible_tools();
     let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
     assert!(
         names_after.contains(&"ask_user"),
-        "ask_user schema is preserved in delegated mode for KV-cache stability, got {names_after:?}"
+        "ask_user schema is preserved in unattended mode for KV-cache stability, got {names_after:?}"
     );
 }
 

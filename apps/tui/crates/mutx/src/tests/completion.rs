@@ -361,17 +361,17 @@ fn accept_slash_completion_does_not_append_trailing_space() {
     // of "Enter/Tab finishes the completion". The user opts into subcommand
     // discovery by typing a space themselves.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/re".to_string();
+    app.input = "/ses".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let idx = completions
         .iter()
-        .position(|c| c.label == "/repeat")
-        .expect("/repeat in candidates");
+        .position(|c| c.label == "/sessions")
+        .expect("/sessions in candidates");
     app.accept_completion(idx);
     // The label is spliced verbatim — no trailing space.
-    assert_eq!(app.input, "/repeat");
-    assert_eq!(app.cursor_position, "/pursue".chars().count());
+    assert_eq!(app.input, "/sessions");
+    assert_eq!(app.cursor_position, "/sessions".chars().count());
     // A slash accept is a terminal commit: the popup must stay hidden and
     // no subcommand menu may fire. This holds for BOTH Tab and Enter since
     // both route through accept_completion for slash commands.
@@ -905,8 +905,8 @@ fn delete_input_selection_clears_buffer_and_selection() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "hello world".to_string();
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 10),
     };
     assert!(app.delete_input_selection());
     assert_eq!(app.input, "hello ");
@@ -920,8 +920,8 @@ fn range_selection_left_arrow_breaks_selection_at_release_position() {
     app.input = "hello world".to_string();
     // Drag forward from 'w' (6) to 'd' (10/11): mouse released at 11.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 11),
     };
     app.cursor_position = 11;
 
@@ -939,8 +939,8 @@ fn range_selection_left_arrow_breaks_selection_at_release_position() {
 
     // Backward drag: drag from 'd' (11) to 'w' (6): mouse released at 6.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 11),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
     };
     app.cursor_position = 6;
 
@@ -963,8 +963,8 @@ fn range_selection_right_arrow_breaks_selection_at_release_position() {
     app.input = "hello world".to_string();
     // Backward drag: drag from 'd' (11) to 'w' (6): mouse released at 6.
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 11),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
     };
     app.cursor_position = 6;
 
@@ -986,8 +986,8 @@ fn range_selection_up_and_down_restore_caret_at_release_position() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "hello world".to_string();
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 11),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
     };
     app.cursor_position = 1; // stale
 
@@ -1002,8 +1002,8 @@ fn range_selection_home_and_end_jump_to_selection_edges() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "hello world".to_string();
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 10),
     };
 
     let action = relay_probe(&mut app, crossterm::event::KeyCode::Home);
@@ -1012,8 +1012,8 @@ fn range_selection_home_and_end_jump_to_selection_edges() {
     assert_eq!(app.cursor_position, 6, "Home jumps to start of range");
 
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 10),
     };
 
     let action = relay_probe(&mut app, crossterm::event::KeyCode::End);
@@ -1029,8 +1029,8 @@ fn range_selection_cjk_left_arrow_snaps_grapheme() {
     // Drag backwards from '界' (byte 9..12, char 3..4) to '好' (byte 3..6, char 1..2).
     // Mouse released at byte 3 (char 1).
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 12),
-        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 3),
+        anchor: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 12),
+        head: crate::model::layout::SemanticCursor::new(crate::render::INPUT_MSG_IDX, 0, 3),
     };
     app.cursor_position = 1;
 

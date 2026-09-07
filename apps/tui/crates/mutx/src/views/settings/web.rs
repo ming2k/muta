@@ -2,7 +2,7 @@
 
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
-use super::{ConfigViewProps, render_scrollable};
+use super::{SettingsProps, render_scrollable};
 
 /// Build a floating dropdown picker for Web Search backends.
 pub fn build_websearch_provider_dropdown(
@@ -291,7 +291,7 @@ pub fn reader_item_count(ws: Option<&muta_contracts::WebSearchConfigView>) -> us
 pub(super) fn draw_search_detail(
     frame: &mut Frame,
     body: Rect,
-    props: &mut ConfigViewProps<'_>,
+    props: &mut SettingsProps<'_>,
     focused: bool,
 ) {
     draw_web_detail(frame, body, props, focused, WebPanel::Search);
@@ -300,7 +300,7 @@ pub(super) fn draw_search_detail(
 pub(super) fn draw_reader_detail(
     frame: &mut Frame,
     body: Rect,
-    props: &mut ConfigViewProps<'_>,
+    props: &mut SettingsProps<'_>,
     focused: bool,
 ) {
     draw_web_detail(frame, body, props, focused, WebPanel::Reader);
@@ -315,7 +315,7 @@ enum WebPanel {
 fn draw_web_detail(
     frame: &mut Frame,
     body: Rect,
-    props: &mut ConfigViewProps<'_>,
+    props: &mut SettingsProps<'_>,
     focused: bool,
     panel: WebPanel,
 ) {
@@ -502,7 +502,7 @@ fn section_heading(
     lines: &mut Vec<Line<'static>>,
     title: &str,
     note: &str,
-    props: &ConfigViewProps<'_>,
+    props: &SettingsProps<'_>,
 ) {
     lines.push(Line::from(vec![
         Span::styled(
@@ -527,7 +527,7 @@ fn push_setting_row(
     value: &str,
     badge: &str,
     help: &str,
-    props: &ConfigViewProps<'_>,
+    props: &SettingsProps<'_>,
 ) {
     let selected = index == selected_index;
     if selected {
@@ -572,7 +572,7 @@ fn push_connection_row(
     state: &str,
     state_ok: bool,
     id: &str,
-    props: &ConfigViewProps<'_>,
+    props: &SettingsProps<'_>,
 ) {
     let selected = index == selected_index;
     if selected {
@@ -622,7 +622,7 @@ fn push_action_row(
     selected_index: usize,
     focused: bool,
     label: &str,
-    props: &ConfigViewProps<'_>,
+    props: &SettingsProps<'_>,
 ) {
     let selected = index == selected_index;
     if selected {
@@ -649,14 +649,14 @@ fn push_action_row(
     }
 }
 
-fn empty_connections(lines: &mut Vec<Line<'static>>, text: &str, props: &ConfigViewProps<'_>) {
+fn empty_connections(lines: &mut Vec<Line<'static>>, text: &str, props: &SettingsProps<'_>) {
     lines.push(Line::from(vec![
         Span::raw("     "),
         Span::styled(text.to_string(), Style::default().fg(props.theme.dim())),
     ]));
 }
 
-fn cursor_span(selected: bool, props: &ConfigViewProps<'_>) -> Span<'static> {
+fn cursor_span(selected: bool, props: &SettingsProps<'_>) -> Span<'static> {
     Span::styled(
         if selected { " ›  " } else { "    " },
         Style::default().fg(if selected {
@@ -667,7 +667,7 @@ fn cursor_span(selected: bool, props: &ConfigViewProps<'_>) -> Span<'static> {
     )
 }
 
-fn selectable_style(selected: bool, focused: bool, props: &ConfigViewProps<'_>) -> Style {
+fn selectable_style(selected: bool, focused: bool, props: &SettingsProps<'_>) -> Style {
     Style::default()
         .fg(if selected && focused {
             props.theme.brand()
@@ -677,7 +677,7 @@ fn selectable_style(selected: bool, focused: bool, props: &ConfigViewProps<'_>) 
         .add_modifier(Modifier::BOLD)
 }
 
-fn help_line(text: &str, props: &ConfigViewProps<'_>) -> Line<'static> {
+fn help_line(text: &str, props: &SettingsProps<'_>) -> Line<'static> {
     Line::from(vec![
         Span::raw("       "),
         Span::styled(text.to_string(), Style::default().fg(props.theme.muted())),

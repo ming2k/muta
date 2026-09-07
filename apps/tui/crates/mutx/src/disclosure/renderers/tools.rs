@@ -14,7 +14,7 @@ use crate::model::document::TranscriptMessage;
 use crate::model::selection::{CellDragInfo, SelectionState};
 use crate::text_layout::{padded_tail, wrap_text};
 use crate::tools::{ArgLayout, DiffCache, ToolStatus};
-use crate::view::{
+use crate::render::{
     STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
     TOOL_STEP_CHILDREN_GAP_ROWS,
 };
@@ -92,6 +92,7 @@ pub fn draw_tool_step(
             ctx.y,
             &mut *ctx.content_lines,
             true,
+            ctx.wrap,
         );
         return;
     }
@@ -217,6 +218,7 @@ pub fn draw_tool_step(
                         ctx.y,
                         &mut *ctx.content_lines,
                         false,
+                        ctx.wrap,
                     );
                 }
             }

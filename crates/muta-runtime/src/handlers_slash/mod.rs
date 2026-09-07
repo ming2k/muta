@@ -2,7 +2,7 @@
 
 pub mod dispatch;
 pub mod record;
-pub mod schedule_ops;
+pub mod session_route;
 pub mod security_ops;
 pub mod session_ops;
 
@@ -35,7 +35,7 @@ pub struct SlashEnv<'a> {
     pub mcp_runtime: &'a Arc<McpRuntime>,
     pub workspace_security: &'a Arc<WorkspaceSecurityStore>,
     pub shared_additional_roots: &'a muta_contracts::SharedAdditionalRoots,
-    pub shared_unconfined: &'a muta_contracts::SharedUnconfined,
+    pub shared_confinement: &'a muta_contracts::SharedConfinement,
     pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
     pub session: &'a Arc<SessionStore>,
     pub lifecycle: &'a Arc<RoundLifecycle>,

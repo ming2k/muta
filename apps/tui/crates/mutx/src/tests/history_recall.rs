@@ -1125,7 +1125,7 @@ fn test_shift_delete_and_bare_delete_dispatch() {
 #[test]
 fn test_composer_hints_history_search_density() {
     use crate::components::composer_hints::{hint_row_parts, ComposeTarget, ActionDensity};
-    use crate::view::Theme;
+    use crate::render::Theme;
 
     let theme = Theme::default();
     let key = crate::keymap::Key::TAB;

@@ -63,9 +63,14 @@
   </div>
 
   <div class="actions">
-    {#if daemon.delegated}
-      <span class="badge delegated" title="Delegated: permission prompts are bypassed">
-        delegated
+    {#if daemon.unattended}
+      <span class="badge unattended" title="Unattended: permission prompts are bypassed">
+        unattended
+      </span>
+    {/if}
+    {#if !daemon.confined}
+      <span class="badge unconfined" title="Unconfined: host-wide file access enabled">
+        unconfined
       </span>
     {/if}
     {#if daemon.providerInfo}
@@ -149,7 +154,8 @@
     flex-shrink: 0;
   }
 
-  .badge.delegated {
+  .badge.unattended,
+  .badge.unconfined {
     font-family: var(--font-mono);
     font-size: 10px;
     padding: 2px 6px;

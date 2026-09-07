@@ -31,7 +31,7 @@ use crate::components::options::push_wrapped_styled;
 use crate::primitives::contrast_fg;
 use crate::question_model::{QuestionAction, QuestionEffect, QuestionModel};
 use crate::trust_gate;
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Width budget for the centered trust panel, as a fraction of the
 /// terminal width. Clamped so the panel stays readable both on very
@@ -178,6 +178,9 @@ impl PreAttachState {
     /// result back.
     pub fn apply(&mut self, action: QuestionAction) -> Option<PreAttachDecision> {
         if self.submitting {
+            if matches!(action, QuestionAction::Cancel) {
+                return Some(PreAttachDecision::Quit);
+            }
             return None;
         }
         // Clone-aside pattern: take the model, update, write back.
@@ -274,6 +277,15 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             INDENT,
             INDENT,
             "Enabling configurations and entering session...",
+            Style::default().fg(theme.muted()),
+            body_width,
+        );
+        lines.push(Line::default());
+        push_wrapped_styled(
+            &mut lines,
+            INDENT,
+            INDENT,
+            "Press [Esc] to cancel and keep quarantined.",
             Style::default().fg(theme.muted()),
             body_width,
         );

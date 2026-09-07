@@ -15,7 +15,7 @@ use crate::primitives::{
     ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, content_modal_probe,
     keyvocab, modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Draw the skills modal.
 ///

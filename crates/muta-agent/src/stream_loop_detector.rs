@@ -191,6 +191,20 @@ pub struct StreamLoopDetector {
     digit_budget_spent: usize,
     trail: DwellTrail,
     max_degenerate_budget_chars: usize,
+    /// Incremental window accounting (ADR-0184): chars currently in the
+    /// sliding window and how many of them are digit-like (`0-9.,`). Updated
+    /// on push/drain so the per-push density classification is O(delta)
+    /// instead of a full window rescan with a fresh `Vec<char>`.
+    window_chars: usize,
+    window_digitish: usize,
+    /// Reused scratch buffers — steady-state pushes allocate nothing.
+    scratch_chars: Vec<char>,
+    scratch_skeletons: Vec<String>,
+}
+
+/// The digit-density class used by the flood budget.
+fn is_digitish(c: char) -> bool {
+    c.is_ascii_digit() || c == '.' || c == ','
 }
 
 impl Default for StreamLoopDetector {
@@ -208,6 +222,10 @@ impl StreamLoopDetector {
             digit_budget_spent: 0,
             trail: DwellTrail::default(),
             max_degenerate_budget_chars: MAX_DEGENERATE_BUDGET_CHARS,
+            window_chars: 0,
+            window_digitish: 0,
+            scratch_chars: Vec::new(),
+            scratch_skeletons: Vec::new(),
         }
     }
 
@@ -221,12 +239,24 @@ impl StreamLoopDetector {
         let pushed_chars = chunk.chars().count();
 
         self.buffer.push_str(chunk);
+        for c in chunk.chars() {
+            self.window_chars += 1;
+            if is_digitish(c) {
+                self.window_digitish += 1;
+            }
+        }
         if self.buffer.len() > self.window_size {
             let excess = self.buffer.len() - self.window_size;
             // Drain at a char boundary.
             let mut cut = excess;
             while !self.buffer.is_char_boundary(cut) && cut < self.buffer.len() {
                 cut += 1;
+            }
+            for c in self.buffer[..cut].chars() {
+                self.window_chars -= 1;
+                if is_digitish(c) {
+                    self.window_digitish -= 1;
+                }
             }
             self.buffer.drain(..cut);
         }
@@ -235,27 +265,32 @@ impl StreamLoopDetector {
         // Density is evaluated first and *shields* the periodic trail: a
         // window of raw data needs no continuity analysis (its danger is
         // volumetric), and repeating numeric columns must not double-count.
-        match Self::classify_digit_density(&self.buffer) {
-            Some(length) => {
-                // While the recent window stays data-dense, every streamed
-                // char is degenerate spend.
-                self.digit_budget_spent = self.digit_budget_spent.saturating_add(pushed_chars);
-                if self.digit_budget_spent >= self.max_degenerate_budget_chars {
-                    self.digit_budget_spent = 0;
-                    return Some(DegeneratePattern::UnboundedDigitStream { length });
-                }
-                return None;
+        // Maintained incrementally over the sliding window (ADR-0184) —
+        // identical to `classify_digit_density(&self.buffer)`.
+        if self.window_chars >= 64
+            && (self.window_digitish as f32 / self.window_chars as f32) > DIGIT_DENSITY_RATIO
+        {
+            // While the recent window stays data-dense, every streamed
+            // char is degenerate spend.
+            self.digit_budget_spent = self.digit_budget_spent.saturating_add(pushed_chars);
+            if self.digit_budget_spent >= self.max_degenerate_budget_chars {
+                self.digit_budget_spent = 0;
+                return Some(DegeneratePattern::UnboundedDigitStream {
+                    length: self.window_chars,
+                });
             }
-            None => {
-                // Density lapsed: forgive the accrued spend geometrically so
-                // ordinary numeric-heavy prose drains the balance instead of
-                // carrying it forever.
-                self.digit_budget_spent /= 2;
-            }
+            return None;
         }
+        // Density lapsed (or window too small): forgive the accrued spend
+        // geometrically so ordinary numeric-heavy prose drains the balance
+        // instead of carrying it forever.
+        self.digit_budget_spent /= 2;
 
-        // Periodic tail, gated by continuity
-        if let Some(observation) = Self::observe_periodic_tail(&self.buffer) {
+        // Periodic tail, gated by continuity. The scan reuses `scratch_chars`
+        // so the per-push window snapshot allocates nothing in steady state.
+        self.scratch_chars.clear();
+        self.scratch_chars.extend(self.buffer.chars());
+        if let Some(observation) = Self::observe_periodic_tail_chars(&self.scratch_chars) {
             if self
                 .trail
                 .observe(Some(observation), pushed_chars, MIN_DWELL_CHARS)
@@ -273,8 +308,7 @@ impl StreamLoopDetector {
         }
 
         // Monotonic line skeleton
-        if let Some(pat) = Self::advance_monotonic_streak(&self.buffer, &mut self.monotonic_streak)
-        {
+        if let Some(pat) = self.advance_monotonic_streak() {
             return Some(pat);
         }
 
@@ -287,6 +321,8 @@ impl StreamLoopDetector {
         self.monotonic_streak = (None, 0);
         self.digit_budget_spent = 0;
         self.trail = DwellTrail::default();
+        self.window_chars = 0;
+        self.window_digitish = 0;
     }
 
     /// Inspect the buffer's tail for a periodic run.
@@ -305,6 +341,14 @@ impl StreamLoopDetector {
     /// Returns `None` when neither applies; never fires on nominal lengths.
     pub fn observe_periodic_tail(buffer: &str) -> Option<TrailObservation> {
         let chars: Vec<char> = buffer.chars().collect();
+        Self::observe_periodic_tail_chars(&chars)
+    }
+
+    /// Scratch-buffer core of [`Self::observe_periodic_tail`]: identical
+    /// verdicts over a caller-owned char slice, so the hot push path can
+    /// reuse one allocation instead of collecting a fresh `Vec<char>` per
+    /// delta.
+    fn observe_periodic_tail_chars(chars: &[char]) -> Option<TrailObservation> {
         let n = chars.len();
         if n < 18 {
             return None;
@@ -377,54 +421,68 @@ impl StreamLoopDetector {
     /// and their first embedded numbers strictly ascend by one (the sole
     /// progression signature observed in pathological generator streams —
     /// descending or gapped numbering stays legal content).
-    fn advance_monotonic_streak(
-        buffer: &str,
-        streak: &mut (Option<String>, usize),
-    ) -> Option<DegeneratePattern> {
+    ///
+    /// Scratch-backed (ADR-0184): skeleton strings are reused across pushes,
+    /// and only the last eight non-empty lines are materialized tail-first —
+    /// identical observations to the previous `lines().rev().take(8)` path.
+    fn advance_monotonic_streak(&mut self) -> Option<DegeneratePattern> {
         const MONOTONIC_MIN_LINES: usize = 5;
+        const TAIL_LINES: usize = 8;
 
-        let lines: Vec<&str> = buffer
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .collect();
+        if self.scratch_skeletons.len() < TAIL_LINES {
+            self.scratch_skeletons
+                .extend(std::iter::repeat_with(String::new).take(TAIL_LINES));
+        }
+        for skeleton in &mut self.scratch_skeletons {
+            skeleton.clear();
+        }
+        let mut numbers = [f64::NAN; TAIL_LINES];
+        let mut used = 0usize;
 
-        // Skeletons and their embedded numbers for the last comparable lines,
-        // tail-first.
-        let mut skeletons: Vec<String> = Vec::with_capacity(8);
-        let mut numbers: Vec<f64> = Vec::with_capacity(8);
-
-        for line in lines.iter().rev().take(8) {
-            let mut skeleton = String::new();
-            let mut line_nums: Vec<f64> = Vec::new();
+        // Last `TAIL_LINES` non-empty lines, tail-first.
+        for line in self.buffer.lines().rev() {
+            if used >= TAIL_LINES {
+                break;
+            }
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let skeleton = &mut self.scratch_skeletons[used];
             let mut digits = String::new();
-
+            let mut numbered = false;
             for c in line.chars() {
                 if c.is_ascii_digit() {
                     digits.push(c);
                 } else {
                     if !digits.is_empty() {
-                        line_nums.push(digits.parse::<f64>().unwrap_or(0.0));
+                        if !numbered {
+                            numbers[used] = digits.parse::<f64>().unwrap_or(0.0);
+                            numbered = true;
+                        }
                         digits.clear();
                     }
                     let mapped = if c.is_alphanumeric() { 'x' } else { c };
                     skeleton.push(mapped);
                 }
             }
-            if !digits.is_empty() {
-                line_nums.push(digits.parse::<f64>().unwrap_or(0.0));
+            if !digits.is_empty() && !numbered {
+                numbers[used] = digits.parse::<f64>().unwrap_or(0.0);
             }
-            // First embedded number is the sequence position slot.
-            numbers.push(line_nums.first().copied().unwrap_or(f64::NAN));
-            skeletons.push(skeleton);
+            used += 1;
         }
 
-        // How many tail-consecutive lines share the leading skeleton?
-        let Some(first) = skeletons.first() else {
+        let streak = &mut self.monotonic_streak;
+        if used == 0 {
             *streak = (None, 0);
             return None;
-        };
-        let run = skeletons.iter().take_while(|sk| *sk == first).count();
+        }
+        // How many tail-consecutive lines share the leading skeleton?
+        let first = &self.scratch_skeletons[0];
+        let run = self.scratch_skeletons[..used]
+            .iter()
+            .take_while(|sk| *sk == first)
+            .count();
         if streak.0.as_ref() != Some(first) {
             *streak = (Some(first.clone()), run);
         } else {

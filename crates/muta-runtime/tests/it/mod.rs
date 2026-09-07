@@ -1,4 +1,4 @@
-mod delegated_restore_integration;
+mod unattended_restore_integration;
 mod lifecycle_integration;
 mod retry_restore_integration;
 mod serve_integration;

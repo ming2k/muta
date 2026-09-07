@@ -1,5 +1,6 @@
 ---
 source: apps/tui/crates/mutx/src/question_model.rs
+assertion_line: 1296
 expression: film
 ---
 === open: Question 1/2 ===
@@ -7,48 +8,37 @@ expression: film
 
 
 
-
-
-
-
-
-
-
-   Question 1/2
-
-
-   ↑↓ navigate  wheel/Pg scroll  Enter next  Esc cancel
+┃
+┃first?
+┃
+┃   x
+┃   Other
+┃
+┃↑↓ navigate  Enter next  1-9 jump  Esc cancel
 
 === Enter → Question 2/2 ===
 
 
 
 
-
-
-
-
-
-
-
-   Question 2/2
-
-
-   ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
+┃
+┃second?
+┃
+┃   y
+┃   z
+┃   Other
+┃
+┃↑↓ navigate  Enter submit  1-9 jump  Esc cancel
 
 === Shift+Tab → Question 1/2 ===
 
 
 
 
-
-
-
-
-
-
-
-   Question 1/2
-
-
-   ↑↓ navigate  wheel/Pg scroll  Enter next  Esc cancel
+┃
+┃first?
+┃
+┃   x
+┃   Other
+┃
+┃↑↓ navigate  Enter next  1-9 jump  Esc cancel

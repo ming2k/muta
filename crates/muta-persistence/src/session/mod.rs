@@ -1,37 +1,27 @@
-//! Persisted session state: the [`SessionStore`] event-sourced model and
-//! its split submodules.
+//! Persisted session state: the [`SessionStore`] single-transcript model and
+//! its split submodules (ADR-0186).
 //!
-//! The module root keeps the data model (`SessionData`), schema migration,
-//! checksum/blob-offload file plumbing, the free helper functions, and the
-//! pure compaction pipeline; the `impl SessionStore` surface is split by
-//! concern:
+//! The module root keeps the data model (`SessionData`), checksum/blob
+//! plumbing, the free helper functions, and the pure compaction pipeline; the
+//! `impl SessionStore` surface is split by concern:
 //!
 //! - `fields`: typed read/write accessors over session fields.
 //! - `history`: transcript append/replace, rounds, retry bookkeeping,
 //!   fork/lineage queries, and the session tree.
-//! - `store`: construction, load/persist, snapshots, event-log replay,
-//!   armed-schedule scan, list/detail/active views, offline scan tools.
+//! - `store`: construction, load/persist, list/detail/active views, and
+//!   offline scan tools.
 //! - `tests`: embedded test suite.
 //!
-//! Event-sourced session persistence (ADR-0017 / ADR-0022).
-//!
-//! Each session is an append-only JSONL event log (`sessions/<id>.jsonl`)
-//! plus a JSON snapshot cache (`sessions/<id>.json`) with a CRC32C checksum
-//! and a `schema_version` for lazy on-load migration; the log wins on
-//! conflict. Large payloads are offloaded to the content-addressed
-//! [`crate::blobs::BlobStore`]. Sessions are bucketed per project under
-//! `projects/<sha256(cwd)[..16]>/sessions/`. [`SessionStore`] is the facade
-//! for load/save/resume/fork and for committing model-context projections
-//! (pruning and compaction)
-//! checkpoints; it also drives the one-shot legacy layout migrations.
+//! The durable state is the **single transcript** (`Transcript`: immutable
+//! entries + projection directives) plus working state on the session row,
+//! both stored authoritatively in SQLite (ADR-0168 / ADR-0186). Every
+//! consumer-facing window is a pure derive; nothing derived is persisted.
 
 use crate::blobs::BlobStore;
-use crate::events::SessionEvent;
-#[cfg(test)]
-use crate::events::EventLog;
 use crate::paths;
 use muta_contracts::{
-    InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, estimate_tokens,
+    EntryPayload, InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail,
+    estimate_tokens,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -49,18 +39,22 @@ use tokio::sync::Mutex;
 /// `config.toml` or affect other concurrent sessions.
 /// C11 added `round_interrupts` (durable round-interrupt records): a
 /// structural no-op — legacy snapshots load with an empty list.
-/// C12 added `tree` (native incremental DAG session tree).
-const CURRENT_SCHEMA_VERSION: u32 = 12;
+/// v13 (ADR-0186): clean break — the transcript is entries + directives;
+/// legacy pre-transcript snapshots are not migrated and load as empty.
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 13;
 
-/// A session-scoped provider + model pin (C6). When present it overrides the
-/// global `config.default_provider` / `config.default_model` for this session
+/// A session-scoped connection + model pin (C6 / ADR-0186). `connection`
+/// carries the **connection id** (provider + account + endpoint, per
+/// ADR-0066's dual-write selection); it overlays the global
+/// `config.default_connection` / `config.default_model` for this session
 /// only, so one session switching `/models` does not change what any other
-/// session — or the next fresh session — sees. `None` means "follow the global
-/// default"; the session still tracks the provider selection it was started
-/// with until the user switches.
+/// session — or the next fresh session — sees. `None` means "follow the
+/// global default". The serde alias keeps pre-rename snapshots
+/// (`{"provider": ...}`) loading.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderSelection {
-    pub provider: String,
+    #[serde(alias = "provider")]
+    pub connection: String,
     pub model: Option<String>,
 }
 
@@ -93,137 +87,67 @@ pub struct SessionData {
     pub(crate) parent_id: Option<String>,
     /// How this session came to exist relative to its lineage: a root trunk,
     /// an explicit `/fork` branch, or a `/btw` aside forked off the trunk.
-    /// `#[serde(default)]` so legacy snapshots (which predate lineage
-    /// tracking) load as `Trunk` — a parent_id-bearing legacy file degrades
-    /// to `Fork` in the summary layer, preserving whatever lineage the old
-    /// data carried.
     #[serde(default)]
     pub(crate) fork_kind: muta_contracts::SessionForkKind,
     pub(crate) created_at: u64,
     pub(crate) updated_at: u64,
-    pub(crate) model_window: Vec<Message>,
-    pub(crate) archived_transcript: Vec<Message>,
+    /// The single durable transcript (ADR-0186): immutable entries plus the
+    /// projection decision history. The model window and every other read
+    /// model derive from it via `Transcript::project`.
+    #[serde(default)]
+    pub(crate) transcript: muta_contracts::Transcript,
     /// Stats of the most recent model-context projection (prune or compaction).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_projection: Option<ContextProjectionCheckpoint>,
-    /// Working directory this session belongs to. Phase 2 (project isolation)
-    /// uses this to route archived sessions to the right per-project bucket
-    /// during the one-shot legacy migration. Legacy snapshots missing the
-    /// field default to the current cwd.
+    /// Working directory this session belongs to.
     pub(crate) project_root: PathBuf,
-    /// Unified task list, mirrored from `Agent::todos`. The single source of
-    /// truth for "what is left to do." An empty list means
-    /// no active task list. `#[serde(default)]` so legacy snapshots load as
-    /// an empty list with no migration.
-    #[serde(default)]
-    pub(crate) todos: muta_contracts::TodoList,
-    /// Session-scoped scheduled-prompt list (`/schedule`, formerly `/repeat`).
-    /// Each entry is either a recurring cron job or a one-shot (countdown /
-    /// absolute-time) job. The session that created a job owns it; the
-    /// background scheduler polls the live session and dispatches each due job
-    /// as a chat round. `#[serde(default)]` so
-    /// snapshots load with whatever they had and no migration is required for
-    /// the field rename (only the schema bump records the change).
-    #[serde(default)]
-    pub(crate) scheduled_jobs: Vec<muta_contracts::ScheduledJob>,
-    /// Schema version of this session file. Migrations increment this and are
-    /// applied lazily on load.
+    /// Schema version of this session. Migrations are no longer applied —
+    /// ADR-0186 is a clean break and legacy snapshots load as empty.
     pub(crate) schema_version: u32,
     /// CRC32C checksum of the canonical JSON payload (excluding this field).
-    /// `None` for legacy files written before C10; new writes always populate
-    /// it so `muta doctor` and future loaders can detect corruption.
+    #[serde(default)]
     pub(crate) checksum: Option<u32>,
-    /// AI-generated session title (ADR-0022). Displayed in the session picker
-    /// in preference to the first-user-message fallback. `None` for legacy
-    /// snapshots and for sessions that have not yet generated a title.
+    /// AI-generated session title. Non-`NULL` is terminal: AI generation only
+    /// fills `None` (ADR-0186 dropped `title_manual`).
     #[serde(default)]
     pub(crate) title: Option<String>,
-    /// Whether `title` was set manually via `/title <text>` and must not be
-    /// overwritten by automatic or on-demand AI generation (ADR-0022).
-    /// `false` for legacy snapshots and AI-generated titles.
-    #[serde(default)]
-    pub(crate) title_manual: bool,
-    /// AI-generated session digest (title + intent + history checklist) —
-    /// the resume-time working-memory projection shown by the session
-    /// picker's detail view. `None` for legacy snapshots and sessions that
-    /// have not yet generated one.
+    /// AI-generated session digest — the resume-time working-memory
+    /// projection shown by the session picker's detail view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) digest: Option<muta_contracts::SessionDigest>,
-    /// Transcript char count when `digest` was generated — the watermark the
-    /// refresh throttle measures growth against. `None` while `digest` is
-    /// `None`.
+    /// Transcript char count when `digest` was generated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) digest_anchor: Option<u64>,
     /// High-water mark: the `seq` of the last event already folded into this
-    /// snapshot. On load, the snapshot is read as a fast path and only log
-    /// events with `seq > applied_seq` are replayed (the tail), so resuming a
-    /// long session costs O(tail) instead of O(whole-history). `None` on
-    /// legacy snapshots and on the very first persist of a session (before any
-    /// event has been folded); the load path falls back to a full replay.
-    /// Covered by the checksum like every other field, so a tampered watermark
-    /// is rejected as corruption rather than silently skipping events.
+    /// snapshot.
     #[serde(default)]
     pub(crate) applied_seq: Option<u64>,
-    /// Session-scoped provider + model pin (C6). `None` for a session that has
-    /// never run `/models`; the harness then seeds it from the global default
-    /// on first switch. Persisted so resume restores the session's own provider
-    /// instead of whatever global default is current at reopen time.
+    /// Session-scoped provider pin (C6). `None` means "follow the global
+    /// default".
     #[serde(default)]
     pub(crate) provider_selection: Option<ProviderSelection>,
-    /// Session-level disabled-tool mask (ADR-0048 Phase 2). Names here are
-    /// hidden from the model and rejected at dispatch. Mirrored from
-    /// `Agent::disabled_tools` so a user toggle survives restart instead of
-    /// silently resetting. `#[serde(default)]` so legacy snapshots load with
-    /// an empty set (all tools enabled) and no migration.
+    /// Session-level disabled-tool mask (ADR-0048 Phase 2).
     #[serde(default)]
     pub(crate) disabled_tools: std::collections::HashSet<String>,
-    /// Harness round counter, the session-scoped monotonic watermark (ADR-0048
-    /// Phase 2). Bumped at the start of every round; read by the todo
-    /// stale-detector via `updated_at_round`. Persisted so a resumed session's
-    /// staleness comparisons stay valid instead of the counter resetting to 0.
+    /// Harness round counter (ADR-0048 Phase 2).
     #[serde(default)]
     pub(crate) round_counter: u64,
-    /// Per-request token accounting for this session. Unlike the historical
-    /// process-global ledger, these records survive resume and cannot leak
-    /// across `/session open` boundaries.
+    /// Per-request token accounting for this session.
     #[serde(default)]
     pub(crate) request_usage_records: Vec<muta_contracts::RequestUsageRecord>,
-    /// Durable command ledger (ADR-0091): every slash command (and `!cmd`
-    /// passthrough) invocation with its typed result. Commands are operations
-    /// on the session, not conversation turns, so they live here instead of in
-    /// `model_window` / `archived_transcript` — the message stream is pure
-    /// dialogue. Legacy `CommandEcho` messages fold into this list at schema
-    /// migration time (v10). `#[serde(default, skip_serializing_if =
-    /// "Vec::is_empty")]` keeps legacy canonical JSON byte-identical so
-    /// existing stored checksums stay valid.
+    /// Durable command ledger (ADR-0091).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) commands: Vec<muta_contracts::CommandRecord>,
-    /// Durable round-interrupt records (C11): one entry per round stopped
-    /// before its natural terminal path — user interrupt (Esc Esc),
-    /// superseded by newer input, or killed with the process. Pure
-    /// projection state like the command ledger: never enters the model
-    /// window, never reaches the model. Re-projected into the transcript on
-    /// resume by timestamp seam so the user can decide whether to continue.
-    /// `#[serde(default, skip_serializing_if = "Vec::is_empty")]` keeps
-    /// legacy canonical JSON byte-identical so existing checksums stay
-    /// valid.
+    /// Durable round-interrupt records (C11): projection state, never part of
+    /// the transcript (ADR-0186 §3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) round_interrupts: Vec<muta_contracts::RoundInterrupt>,
-    /// The durable `/retry` resume point (C12): the stopped round's
-    /// history watermark, committed-turn count, and paused accumulator.
-    /// `None` on a fresh session and after the parked round completes.
-    /// `#[serde(default, skip_serializing_if = "Option::is_none")]` keeps
-    /// legacy canonical JSON byte-identical.
+    /// The durable `/retry` resume point (C12).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retry_pending: Option<muta_contracts::RetryPoint>,
-    /// Session-scoped delegated posture: `true` means the agent
-    /// runs in full auto-approve mode (bypasses tool permission prompts).
-    #[serde(
-        default,
-        alias = "yolo",
-        alias = "autopilot",
-        skip_serializing_if = "std::ops::Not::not"
-    )]
-    pub(crate) delegated: bool,
+    /// Session-scoped unattended posture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) unattended: bool,
     /// Native DAG session tree (Schema v12).
     #[serde(default)]
     pub(crate) tree: muta_contracts::SessionTree,
@@ -238,16 +162,12 @@ impl Default for SessionData {
             fork_kind: muta_contracts::SessionForkKind::Trunk,
             created_at: now,
             updated_at: now,
-            model_window: Vec::new(),
-            archived_transcript: Vec::new(),
+            transcript: muta_contracts::Transcript::new(),
             last_projection: None,
             project_root: default_project_root(),
-            todos: muta_contracts::TodoList::default(),
-            scheduled_jobs: Vec::new(),
             schema_version: CURRENT_SCHEMA_VERSION,
             checksum: None,
             title: None,
-            title_manual: false,
             digest: None,
             digest_anchor: None,
             applied_seq: None,
@@ -258,11 +178,12 @@ impl Default for SessionData {
             commands: Vec::new(),
             round_interrupts: Vec::new(),
             retry_pending: None,
-            delegated: false,
+            unattended: false,
             tree: muta_contracts::SessionTree::default(),
         }
     }
 }
+
 
 impl SessionData {
     /// The single authority for "this session has no substantive content yet"
@@ -293,10 +214,8 @@ impl SessionData {
     /// dialogue or other substantive state, the flag rides along like every
     /// other session-scoped field.
     fn is_user_facing_empty(&self) -> bool {
-        self.model_window.is_empty()
-            && self.archived_transcript.is_empty()
-            && self.todos.is_empty()
-            && self.scheduled_jobs.is_empty()
+        self.transcript.entries.is_empty()
+            && self.transcript.derive_todos().is_none_or(|t| t.is_empty())
             && self.disabled_tools.is_empty()
             && self.round_counter == 0
     }
@@ -309,99 +228,13 @@ fn default_project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Apply one-shot schema migrations to a [`SessionData`] loaded from disk.
-/// Each migration is guarded by the incoming `schema_version` so repeated
-/// calls are idempotent. The returned value always has
-/// `schema_version == CURRENT_SCHEMA_VERSION`.
+/// ADR-0186 is a clean break: legacy snapshots (pre-transcript `SessionData`
+/// JSON) are **not migrated**. serde's missing-field defaults load them as an
+/// empty transcript — the session content is retired, the identity remains.
+/// `schema_version` is stamped to the current version on load.
 fn migrate_session_data(mut data: SessionData) -> SessionData {
-    // C8: initial schema-version field. No structural migration required yet;
-    // future changes add guarded blocks here.
-    // C2 (ADR-0022): title fields were added with `#[serde(default)]`, so a
-    // legacy snapshot already loads with `title = None` / `title_manual =
-    // false`; no payload transformation is needed, only the version bump.
-    // C4 (ADR-0034): `Message::origin` (`Option<InjectionOrigin>`) was added
-    // with `#[serde(default, skip_serializing_if = "Option::is_none")]`, so a
-    // legacy snapshot and event-log lines already load with `origin = None`
-    // for every message; no payload transformation is needed, only the version
-    // bump. Provenance is henceforth stamped at each injection site going
-    // forward — pre-C4 messages are simply unattributed.
-    // C5 (snapshot fast-path): `applied_seq` was added with
-    // `#[serde(default)]`, so a legacy snapshot loads with
-    // `applied_seq = None` and the load path falls back to a full replay;
-    // no payload transformation is needed, only the version bump. The first
-    // persist after this upgrade folds the full state and records the
-    // watermark, so subsequent loads take the fast path.
-    // C6 (per-session provider/model): `provider_selection` was added with
-    // `#[serde(default)]`, so a legacy snapshot loads with
-    // `provider_selection = None` (follow the global default); no payload
-    // transformation is needed, only the version bump.
-    // schema v8 (repeat-as-session-state): `repeat_jobs` was added with
-    // `#[serde(default)]`, so a legacy snapshot loads with an empty schedule;
-    // no payload transformation is needed, only the version bump. `/repeat`
-    // jobs that previously lived in a separate store are not migrated — they
-    // are rebuildable scheduler state and the new semantics bind a job to
-    // the session that created it.
-    // schema v9 (scheduled-prompt unification): the flat `repeat_jobs: Vec<RepeatJob>`
-    // field was renamed to `scheduled_jobs: Vec<ScheduledJob>` and the event
-    // tag `repeat_jobs_set` renamed to `scheduled_jobs_set`. Both carry serde
-    // aliases for the old names, and `ScheduledJob` deserialises the legacy
-    // flat `cron` shape, so no payload transformation is needed — only the
-    // version bump records the change. The new model also adds one-shot
-    // (countdown / absolute-time) jobs alongside the existing cron jobs.
-    if data.schema_version < 9 {
-        data.schema_version = 9;
-    }
-    // schema v10 (ADR-0091): command records moved out of the message stream
-    // into a dedicated ledger. Legacy sessions may still carry `CommandEcho`
-    // messages (ADR-0050) in `model_window` / `archived_transcript`; fold each
-    // into the ledger as a `CommandRecord` with `result: None` (invocation
-    // recorded, reply never persisted) and drop it from the message vectors so
-    // the stream is pure dialogue again. Guarded by the v10 bump, so repeated
-    // loads are idempotent.
-    if data.schema_version < 10 {
-        let mut records = Vec::new();
-        // Full-transcript order: archived first, then the live window.
-        for message in data
-            .archived_transcript
-            .iter()
-            .chain(data.model_window.iter())
-        {
-            if message.is_command_echo() {
-                records.push(command_record_from_echo(message));
-            }
-        }
-        data.archived_transcript.retain(|m| !m.is_command_echo());
-        data.model_window.retain(|m| !m.is_command_echo());
-        data.commands = records;
-        data.schema_version = 10;
-    }
     data.schema_version = CURRENT_SCHEMA_VERSION;
     data
-}
-
-/// Convert a legacy `CommandEcho` message (ADR-0050) into a ledger
-/// [`CommandRecord`](muta_contracts::CommandRecord) with `result: None`. The echo
-/// text is the literal `/cmd args` or `!cmd args` the user typed; `!`-prefixed
-/// invocations fold under the `"shell"` name, everything else under its
-/// command word.
-fn command_record_from_echo(message: &Message) -> muta_contracts::CommandRecord {
-    let text = message.content.trim();
-    let (name, args) = if let Some(rest) = text.strip_prefix('!') {
-        ("shell", rest.trim().to_string())
-    } else if let Some(rest) = text.strip_prefix('/') {
-        match rest.split_once(char::is_whitespace) {
-            Some((name, args)) => (name, args.trim().to_string()),
-            None => (rest, String::new()),
-        }
-    } else {
-        ("echo", text.to_string())
-    };
-    let mut record = muta_contracts::CommandRecord::new(name, args);
-    record.timestamp = message
-        .timestamp
-        .map(|seconds| seconds.saturating_mul(1000))
-        .unwrap_or_else(|| muta_contracts::todos::unix_now().saturating_mul(1000));
-    record
 }
 
 /// Compute the CRC32C checksum that should be stored for `data`. The checksum
@@ -442,12 +275,8 @@ fn verify_checksum(data: &SessionData) -> Result<(), String> {
 /// Characters above which a message content is moved to the blob store.
 const BLOB_OFFLOAD_THRESHOLD: usize = 4_096;
 
-/// Write `data` to `path` with a freshly computed checksum, offloading large
-/// inline content to the blob store before serialization. Stamps the
-/// [`SessionData::applied_seq`] watermark to the sibling event log's high-water
-/// `seq`, so a later load of this snapshot replays only the tail past it. The
-/// log file is derived from `path` (`.json` → `.jsonl`); a missing or empty log
-/// Legacy snapshot file writer, preserved for test migration fixtures.
+/// Test fixture writer: persist `data` to the SQLite DB next to `path` and
+/// register the path alias, mirroring the production persist path.
 #[cfg(test)]
 pub(crate) fn write_session_file(
     path: &Path,
@@ -464,315 +293,43 @@ pub(crate) fn write_session_file(
             let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
         }
     }
-    crate::fsutil::atomic_write_json(path, &data)
-}
-
-/// Move large `Message.content` strings into the blob store and replace them
-/// with a `content_blob` reference. Operates recursively on nested children.
-fn offload_session_blobs(data: &mut SessionData, blob_store: &BlobStore) -> Result<(), String> {
-    for message in data
-        .model_window
-        .iter_mut()
-        .chain(data.archived_transcript.iter_mut())
-    {
-        offload_message_blobs(message, blob_store)?;
-    }
     Ok(())
 }
 
-fn offload_message_blobs(message: &mut Message, blob_store: &BlobStore) -> Result<(), String> {
-    if message.content.len() > BLOB_OFFLOAD_THRESHOLD && message.content_blob.is_none() {
-        let hash = blob_store.put(message.content.as_bytes())?;
-        message.content_blob = Some(hash);
-        message.content.clear();
-    }
-    if let Some(children) = message.children.as_mut() {
-        for child in children.iter_mut() {
-            offload_message_blobs(child, blob_store)?;
+/// Move large entry bodies into the blob store and replace them with a
+/// `content_blob` reference (ADR-0186: entries, not wire messages).
+fn offload_session_blobs(data: &mut SessionData, blob_store: &BlobStore) -> Result<(), String> {
+    for entry in data.transcript.entries.iter_mut() {
+        let EntryPayload::Message(payload) = &mut entry.payload else {
+            continue;
+        };
+        if let Some(content) = &mut entry.content
+            && content.len() > BLOB_OFFLOAD_THRESHOLD
+            && payload.content_blob.is_none()
+        {
+            let hash = blob_store.put(content.as_bytes())?;
+            payload.content_blob = Some(hash);
+            content.clear();
         }
     }
     Ok(())
 }
 
-/// Rehydrate `content` from `content_blob` references after loading.
+/// Rehydrate entry bodies from `content_blob` references after loading.
 fn load_session_blobs(data: &mut SessionData, blob_store: &BlobStore) -> Result<(), String> {
-    for message in data
-        .model_window
-        .iter_mut()
-        .chain(data.archived_transcript.iter_mut())
-    {
-        load_message_blobs(message, blob_store)?;
-    }
-    Ok(())
-}
-
-fn load_message_blobs(message: &mut Message, blob_store: &BlobStore) -> Result<(), String> {
-    if let Some(hash) = message.content_blob.take() {
+    for entry in data.transcript.entries.iter_mut() {
+        let EntryPayload::Message(payload) = &mut entry.payload else {
+            continue;
+        };
+        let Some(hash) = payload.content_blob.take() else {
+            continue;
+        };
         let bytes = blob_store
             .get(&hash)
             .ok_or_else(|| format!("missing content blob {hash}"))?;
-        message.content = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-    }
-    if let Some(children) = message.children.as_mut() {
-        for child in children.iter_mut() {
-            load_message_blobs(child, blob_store)?;
-        }
+        entry.content = Some(String::from_utf8(bytes).map_err(|e| e.to_string())?);
     }
     Ok(())
-}
-
-/// Apply a sequence of events to a fresh or existing [`SessionData`].
-pub(crate) fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelope]) {
-    for envelope in envelopes {
-        match &envelope.event {
-            SessionEvent::Started {
-                id,
-                parent_id,
-                created_at,
-                project_root,
-                schema_version,
-            } => {
-                data.id = id.clone();
-                data.parent_id = parent_id.clone();
-                data.created_at = *created_at;
-                data.project_root = project_root.clone();
-                data.schema_version = *schema_version;
-            }
-            SessionEvent::MessagesReplaced { messages } => data.model_window = messages.clone(),
-            SessionEvent::MessagesAppended { messages } => {
-                data.model_window.extend(messages.clone())
-            }
-            SessionEvent::CommandsReplaced { commands } => data.commands = commands.clone(),
-            SessionEvent::ContextProjectionCommitted {
-                archived_originals,
-                model_window,
-                checkpoint,
-            } => {
-                data.archived_transcript.extend(archived_originals.clone());
-                data.model_window = model_window.clone();
-                data.last_projection = Some(checkpoint.clone());
-            }
-            SessionEvent::Archived { messages } => {
-                data.archived_transcript.extend(messages.clone())
-            }
-            SessionEvent::TodosSet { todos } => {
-                data.todos = todos.clone();
-            }
-            SessionEvent::ScheduledJobsSet { jobs } => {
-                data.scheduled_jobs = jobs.clone();
-            }
-            SessionEvent::TitleSet { title, manual } => {
-                data.title = title.clone();
-                data.title_manual = *manual;
-            }
-            SessionEvent::DigestSet { digest, anchor } => {
-                data.digest = digest.clone();
-                data.digest_anchor = digest.as_ref().map(|_| *anchor);
-            }
-            SessionEvent::DisabledToolsSet { tools } => {
-                data.disabled_tools = tools.clone();
-            }
-            SessionEvent::RoundCounterSet { counter } => {
-                data.round_counter = *counter;
-            }
-            SessionEvent::RequestUsageUpsert { record } => {
-                if let Some(existing) = data
-                    .request_usage_records
-                    .iter_mut()
-                    .find(|existing| existing.key == record.key)
-                {
-                    *existing = record.clone();
-                } else {
-                    data.request_usage_records.push(record.clone());
-                }
-            }
-            SessionEvent::ProviderSelectionSet { selection } => {
-                data.provider_selection = selection.clone();
-            }
-            SessionEvent::RoundInterruptRecorded { record } => {
-                data.round_interrupts.push(record.clone());
-            }
-            SessionEvent::RoundInterruptsCleared {} => {
-                data.round_interrupts.clear();
-            }
-            SessionEvent::RetryPendingRecorded { point } => {
-                data.retry_pending = Some(point.clone());
-            }
-            SessionEvent::RetryPendingCleared {} => {
-                data.retry_pending = None;
-            }
-            SessionEvent::DelegatedSet { enabled } => {
-                data.delegated = *enabled;
-            }
-            SessionEvent::Reset { id } => {
-                let project_root = data.project_root.clone();
-                let schema_version = data.schema_version;
-                *data = SessionData::default();
-                data.id = id.clone();
-                data.project_root = project_root;
-                data.schema_version = schema_version;
-            }
-            SessionEvent::Forked { id, parent_id } => {
-                data.id = id.clone();
-                data.parent_id = Some(parent_id.clone());
-            }
-        }
-        data.updated_at = envelope.timestamp;
-    }
-}
-
-/// Convert a snapshot into a seed event sequence so legacy files can be
-/// imported into the event log without losing information.
-#[cfg(test)]
-fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
-    let mut events = vec![crate::events::EventEnvelope {
-        seq: 0,
-        timestamp: data.created_at,
-        event: SessionEvent::Started {
-            id: data.id.clone(),
-            parent_id: data.parent_id.clone(),
-            created_at: data.created_at,
-            project_root: data.project_root.clone(),
-            schema_version: data.schema_version,
-        },
-    }];
-    if let Some(checkpoint) = &data.last_projection {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::ContextProjectionCommitted {
-                archived_originals: data.archived_transcript.clone(),
-                model_window: data.model_window.clone(),
-                checkpoint: checkpoint.clone(),
-            },
-        });
-    } else {
-        if !data.archived_transcript.is_empty() {
-            events.push(crate::events::EventEnvelope {
-                seq: events.len() as u64,
-                timestamp: data.updated_at,
-                event: SessionEvent::Archived {
-                    messages: data.archived_transcript.clone(),
-                },
-            });
-        }
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::MessagesReplaced {
-                messages: data.model_window.clone(),
-            },
-        });
-    }
-    if !data.todos.is_empty() {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::TodosSet {
-                todos: data.todos.clone(),
-            },
-        });
-    }
-    if !data.scheduled_jobs.is_empty() {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::ScheduledJobsSet {
-                jobs: data.scheduled_jobs.clone(),
-            },
-        });
-    }
-    if !data.commands.is_empty() {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::CommandsReplaced {
-                commands: data.commands.clone(),
-            },
-        });
-    }
-    if data.title.is_some() {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::TitleSet {
-                title: data.title.clone(),
-                manual: data.title_manual,
-            },
-        });
-    }
-    if let Some(digest) = &data.digest {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::DigestSet {
-                digest: Some(digest.clone()),
-                anchor: data.digest_anchor.unwrap_or(0),
-            },
-        });
-    }
-    if let Some(selection) = &data.provider_selection {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::ProviderSelectionSet {
-                selection: Some(selection.clone()),
-            },
-        });
-    }
-    if !data.disabled_tools.is_empty() {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::DisabledToolsSet {
-                tools: data.disabled_tools.clone(),
-            },
-        });
-    }
-    if data.round_counter > 0 {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::RoundCounterSet {
-                counter: data.round_counter,
-            },
-        });
-    }
-    if data.delegated {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::DelegatedSet { enabled: true },
-        });
-    }
-    for record in &data.request_usage_records {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::RequestUsageUpsert {
-                record: record.clone(),
-            },
-        });
-    }
-    for record in &data.round_interrupts {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::RoundInterruptRecorded {
-                record: record.clone(),
-            },
-        });
-    }
-    if let Some(point) = &data.retry_pending {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::RetryPendingRecorded {
-                point: point.clone(),
-            },
-        });
-    }
-    events
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -851,42 +408,10 @@ fn persist_to(db_path: &Path, data: &SessionData, blob_store: &BlobStore) -> Res
     }
 }
 
-/// Once the append-only event log holds more than this many events it is
-/// rewritten to a single seed derived from the session's current full
-/// snapshot. A no-op when the log is small or does not exist.
-#[cfg(test)]
-const LOG_COMPACTION_THRESHOLD: usize = 1024;
-
-/// Compact the event log at `log_path` to a single seed when it has grown past
-/// [`LOG_COMPACTION_THRESHOLD`]. A no-op when the file does not exist or is small.
-#[cfg(test)]
-fn compact_log_if_needed(log_path: &Path, data: &SessionData) -> Result<(), String> {
-    if !log_path.exists() {
-        return Ok(());
-    }
-    let len = match std::fs::metadata(log_path) {
-        Ok(m) => m.len() as usize,
-        Err(_) => return Ok(()),
-    };
-    if len < LOG_COMPACTION_THRESHOLD * 64 {
-        return Ok(());
-    }
-    let log = EventLog::new(log_path.to_path_buf());
-    let envelopes = log.load()?;
-    if envelopes.len() < LOG_COMPACTION_THRESHOLD {
-        return Ok(());
-    }
-    log.rewrite(snapshot_to_events(data))?;
-    tracing::debug!(
-        path = %log_path.display(),
-        events = envelopes.len(),
-        "compacted event log to a single seed"
-    );
-    Ok(())
-}
-
 /// Load the session for `session_id` directly from SQLite (SSOT).
-/// If not present in SQLite, checks for a legacy flat-file snapshot/log for one-time migration.
+/// A session not present in SQLite (or one stored under the pre-transcript
+/// schema) loads as a brand-new empty session — ADR-0186 retires legacy
+/// content instead of migrating it.
 fn load_or_seed(
     db_path: &Path,
     session_id: &str,
@@ -896,7 +421,7 @@ fn load_or_seed(
 ) -> SessionData {
     let engine_opt = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone())).ok();
 
-    // Check path alias in kv_store if legacy_file path is provided
+    // Path alias in kv_store maps a legacy snapshot path to its session id.
     let mapped_id = if let Some(path) = legacy_file {
         if let Some(ref engine) = engine_opt {
             let key = format!("path:{}", path.display());
@@ -910,45 +435,22 @@ fn load_or_seed(
 
     let target_id = mapped_id.as_deref().unwrap_or(session_id);
 
-    // 1. Primary path: load directly from SQLite (SSOT)
+    // Primary path: load directly from SQLite (SSOT).
     if let Some(ref engine) = engine_opt {
         if let Ok(Some(mut data)) = engine.load_session_full(target_id) {
             if let Err(error) = load_session_blobs(&mut data, blob_store) {
                 tracing::warn!(error = %error, "could not load session blobs from sqlite");
             }
-            if data.schema_version < CURRENT_SCHEMA_VERSION {
-                data = migrate_session_data(data);
-            }
+            data = migrate_session_data(data);
             return data;
         }
     }
 
-    // 2. Legacy fallback: import from disk .json if present
-    if let Some(path) = legacy_file {
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                if let Ok(mut data) = serde_json::from_str::<SessionData>(&content) {
-                    if let Err(error) = load_session_blobs(&mut data, blob_store) {
-                        tracing::warn!(error = %error, "could not load session blobs from snapshot");
-                    }
-                    if data.schema_version < CURRENT_SCHEMA_VERSION {
-                        data = migrate_session_data(data);
-                    }
-                    let _ = persist_to(db_path, &data, blob_store);
-                    if let Some(ref engine) = engine_opt {
-                        let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
-                    }
-                    return data;
-                }
-            }
-        }
-    }
-
-    // 3. Brand-new empty session
+    // Legacy flat-file snapshots are retired, not migrated: the path alias
+    // pins one fresh identity so the caller's path keeps resolving to the
+    // same (empty) session.
     let id = if target_id.len() >= 32
-        && target_id
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || c == '-')
+        && target_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
     {
         target_id.to_string()
     } else {
@@ -964,84 +466,6 @@ fn load_or_seed(
         project_root: project_root.to_path_buf(),
         ..Default::default()
     }
-}
-
-/// A dormant session with armed scheduled work, discovered on disk by
-/// [`sessions_with_armed_schedules`]: the session id and the project root it
-/// belongs to (read from the snapshot itself — project bucket names are a
-/// one-way hash, so the path cannot be recovered from the directory name).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArmedSession {
-    pub session_id: String,
-    pub project_root: PathBuf,
-}
-
-/// Minimal projection of a session snapshot for autonomous-work discovery:
-/// everything else (the huge `model_window` / `archived_transcript` arrays)
-/// is skipped by the `RawValue` deferral, so scanning every session on disk
-/// costs a header read per file, not a transcript decode.
-#[derive(Default, Deserialize)]
-struct ScheduleProbeHeader {
-    id: String,
-    #[serde(default)]
-    project_root: PathBuf,
-    #[serde(default)]
-    scheduled_jobs: Vec<muta_contracts::ScheduledJob>,
-}
-
-/// Discover every persisted session (across all project buckets) that still
-/// has armed `/schedule` jobs. The daemon calls this once at boot to rehost
-/// autonomous sessions (ADR-0125) — the durable-schedule feature's contract
-/// is "the prompt fires even if the daemon that armed it is gone", and a
-/// schedule that stops firing because the daemon restarted breaks it.
-///
-/// Files that cannot be read or parsed are skipped silently: this is a
-/// best-effort rehost scan, and a corrupt snapshot must not block the daemon
-/// from starting (its session still lazy-resumes on attach, where the full
-/// error surface applies).
-pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
-    let mut found = Vec::new();
-    let db_path = paths::get().db_file();
-    if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
-        if let Ok(armed) = engine.list_armed_schedule_sessions() {
-            for (id, root) in armed {
-                found.push(ArmedSession {
-                    session_id: id,
-                    project_root: root,
-                });
-            }
-        }
-    }
-
-    let projects_dir = paths::get().projects_dir();
-    let Ok(buckets) = fs::read_dir(&projects_dir) else {
-        return found;
-    };
-    for bucket in buckets.flatten() {
-        let sessions_dir = bucket.path().join("sessions");
-        let Ok(entries) = fs::read_dir(&sessions_dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|v| v.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(content) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(header) = serde_json::from_str::<ScheduleProbeHeader>(&content) else {
-                continue;
-            };
-            if !header.scheduled_jobs.is_empty() && !found.iter().any(|a| a.session_id == header.id) {
-                found.push(ArmedSession {
-                    session_id: header.id,
-                    project_root: header.project_root,
-                });
-            }
-        }
-    }
-    found
 }
 
 pub(crate) fn truncate_preview(text: &str, max: usize) -> String {
@@ -1063,42 +487,18 @@ pub(crate) fn truncate_preview(text: &str, max: usize) -> String {
 }
 
 pub(crate) fn last_effective_prompt_from_data(data: &SessionData) -> Option<String> {
-    data.model_window
-        .iter()
+    data.transcript
+        .project()
+        .into_iter()
         .rev()
-        .chain(data.archived_transcript.iter().rev())
-        .find(|m| {
+        .find(|(_, m)| {
             let is_echo = m
                 .origin
                 .as_ref()
-                .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
-            m.role == muta_contracts::Role::User && !m.hidden && !is_echo
+                .is_some_and(|o| o.kind == InjectionKind::CommandEcho);
+            m.role == Role::User && !m.hidden && !is_echo
         })
-        .map(|m| m.content.clone())
-}
-
-#[allow(dead_code)]
-pub(crate) fn summary_from_data(data: &SessionData, active: bool) -> SessionSummary {
-    const MAX: usize = 64;
-    let overview = if let Some(title) = data.title.as_deref().filter(|t| !t.trim().is_empty()) {
-        truncate_preview(title, MAX)
-    } else {
-        match last_effective_prompt_from_data(data) {
-            Some(content) => truncate_preview(&content, MAX),
-            None => "(empty session)".to_string(),
-        }
-    };
-    SessionSummary {
-        id: data.id.clone(),
-        parent_id: data.parent_id.clone(),
-        fork_kind: data.fork_kind,
-        message_count: data.model_window.len() + data.archived_transcript.len(),
-        updated_at: data.updated_at,
-        created_at: data.created_at,
-        overview,
-        active,
-        digest: data.digest.clone(),
-    }
+        .map(|(_, m)| m.content)
 }
 
 pub(crate) fn unix_timestamp() -> u64 {
@@ -1715,103 +1115,37 @@ fn truncate_summary_to_token_budget(text: String, max_tokens: usize) -> String {
     prefix.trim_end().to_string()
 }
 
-/// Diagnostic scan of stored session files. When `project_root` is `None`
-/// every project bucket is inspected; when supplied only that project's bucket
-/// is checked. Prints one line per file and a summary.
+/// Diagnostic scan of stored sessions. SQLite is the only store; every row is
+/// checked for presence of the authoritative tables (ADR-0186). Prints one
+/// line per session and a summary.
 pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), String> {
-    struct Report {
-        examined: usize,
-        corrupt: usize,
-    }
-
-    impl Report {
-        fn record(&mut self, path: &std::path::Path, result: Result<&SessionData, String>) {
-            self.examined += 1;
-            match result {
-                Ok(data) => {
-                    let message_count = data.model_window.len() + data.archived_transcript.len();
-                    println!(
-                        "ok       {} (schema {}, checksum={}, {} messages)",
-                        path.display(),
-                        data.schema_version,
-                        data.checksum
-                            .map(|c| format!("{:#010x}", c))
-                            .unwrap_or_else(|| "none".to_string()),
-                        message_count
-                    );
-                }
-                Err(error) => {
-                    self.corrupt += 1;
-                    println!("corrupt  {}: {}", path.display(), error);
-                }
+    let db_path = paths::get().db_file();
+    let engine = crate::db::DatabaseEngine::open(&db_path, None)
+        .map_err(|e| format!("cannot open {}: {e}", db_path.display()))?;
+    let mut examined = 0usize;
+    let mut corrupt = 0usize;
+    for session in engine
+        .list_sessions(project_root.map(|p| p.to_string_lossy().into_owned()).as_deref())
+        .map_err(|e| e.to_string())?
+    {
+        examined += 1;
+        match engine.load_session_full(&session.id) {
+            Ok(Some(data)) => println!(
+                "ok       {} (schema {}, {} entries)",
+                session.id, data.schema_version, data.transcript.entries.len()
+            ),
+            Ok(None) => {
+                corrupt += 1;
+                println!("corrupt  {} (session row without transcript)", session.id);
             }
-        }
-    }
-
-    fn inspect(path: &std::path::Path, report: &mut Report) {
-        let raw = match fs::read_to_string(path) {
-            Ok(r) => r,
             Err(error) => {
-                report.record(path, Err(error.to_string()));
-                return;
-            }
-        };
-        let result = serde_json::from_str::<SessionData>(&raw)
-            .map_err(|error| error.to_string())
-            .and_then(|data| verify_checksum(&data).map(|_| data));
-        match result {
-            Ok(data) => report.record(path, Ok(&data)),
-            Err(error) => report.record(path, Err(error)),
-        }
-    }
-
-    fn scan_bucket(path: &std::path::Path, report: &mut Report) {
-        // ADR-0018: every session lives under `sessions/<id>.json` with its
-        // matching `<id>.jsonl` log. A stray root `session.json` (left by an
-        // older layout) is still reported so the operator can spot it.
-        let legacy_active = path.join("session.json");
-        if legacy_active.exists() {
-            inspect(&legacy_active, report);
-        }
-        let sessions_dir = path.join("sessions");
-        if let Ok(entries) = fs::read_dir(&sessions_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                inspect(&path, report);
-                // Verify the matching event log exists; flag its absence as a
-                // soft note rather than corruption (it will be seeded on open).
-                let log = path.with_extension("jsonl");
-                if !log.exists() {
-                    println!("note     {} (no event log; seeded on open)", log.display());
-                }
+                corrupt += 1;
+                println!("corrupt  {}: {}", session.id, error);
             }
         }
     }
-
-    let dirs = paths::get();
-    let mut report = Report {
-        examined: 0,
-        corrupt: 0,
-    };
-
-    if let Some(root) = project_root {
-        scan_bucket(&dirs.project_dir(root), &mut report);
-    } else {
-        if let Ok(entries) = fs::read_dir(dirs.projects_dir()) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    scan_bucket(&path, &mut report);
-                }
-            }
-        }
-    }
-
     println!("---");
-    println!("examined: {}, corrupt: {}", report.examined, report.corrupt);
+    println!("examined: {}, corrupt: {}", examined, corrupt);
     Ok(())
 }
 

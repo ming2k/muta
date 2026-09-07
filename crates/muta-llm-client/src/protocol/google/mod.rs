@@ -315,14 +315,18 @@ impl GoogleProvider {
             move |item| {
                 let events: Vec<Result<ProviderStreamEvent, ProviderError>> = match item {
                     Ok(payload) => {
-                        if serde_json::from_str::<serde_json::Value>(&payload).is_err() {
-                            vec![Err(ProviderError::new(
+                        // Single parse (ADR-0184): parse once, hand the value
+                        // to the payload assembler. Non-JSON data payloads
+                        // (heartbeats aside — those are filtered upstream)
+                        // surface the same decode error as before.
+                        match serde_json::from_str::<serde_json::Value>(&payload) {
+                            Err(_) => vec![Err(ProviderError::new(
                                 "Google",
                                 ProviderErrorKind::Decode,
                                 "Invalid JSON in stream payload",
-                            ))]
-                        } else {
-                            let parsed = response::stream_payload(&payload);
+                            ))],
+                            Ok(parsed_json) => {
+                                let parsed = response::stream_payload_value(&parsed_json);
                             if !parsed.thought_signatures.is_empty() {
                                 let mut guard =
                                     thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
@@ -396,6 +400,7 @@ impl GoogleProvider {
                                     event => Ok(event),
                                 })
                                 .collect()
+                            }
                         }
                     }
                     Err(error) => vec![Err(error)],

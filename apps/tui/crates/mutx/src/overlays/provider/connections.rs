@@ -19,7 +19,7 @@ use crate::primitives::{
     render_body, render_centered_body, render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::RankedProvider;
-use crate::view::Theme;
+use crate::render::Theme;
 
 /// Properties for rendering the Connections modal.
 pub struct ConnectionsModalProps<'a> {

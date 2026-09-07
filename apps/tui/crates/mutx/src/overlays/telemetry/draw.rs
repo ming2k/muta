@@ -15,13 +15,13 @@ use crate::primitives::{
     content_modal_area, content_modal_probe, hierarchical_breadcrumb, keyvocab, modal_chrome_rows,
     modal_frame, modal_header_parts, render_body, render_modal_footer,
 };
-use crate::view::Theme;
+use crate::render::Theme;
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_telemetry_modal(
     frame: &mut Frame,
     report: &TokenSourceReport,
-    context: ContextUsageView,
+    context: ContextUsageProps,
     tab: TelemetryTab,
     selected: usize,
     detail: bool,
@@ -336,7 +336,7 @@ pub(crate) fn tab_strip_line(
 pub(crate) fn build_overview_body(
     report: &TokenSourceReport,
     rounds: &[TelemetryRound],
-    context: ContextUsageView,
+    context: ContextUsageProps,
     _width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
@@ -871,7 +871,7 @@ pub(crate) fn build_attempt_inspector_body(
     rounds: &[TelemetryRound],
     target_round: u32,
     target_attempt: u32,
-    context: ContextUsageView,
+    context: ContextUsageProps,
     _width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {

@@ -207,8 +207,8 @@ pub struct Agent {
     /// Workspace authority is orthogonal to interaction posture. Shared with
     /// spawned runners so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
-    /// Session-scoped workspace confinement bypass handle.
-    unconfined: muta_contracts::SharedUnconfined,
+    /// Session-scoped workspace confinement handle.
+    confinement: muta_contracts::SharedConfinement,
     /// Content-attested project instructions from the Rules asset domain.
     /// Replaced live when `/trust` or `/untrust` changes admission.
     project_rules: Arc<std::sync::RwLock<String>>,
@@ -1487,7 +1487,7 @@ mod tests {
         use muta_contracts::{AgentEvent, StdinPolicy};
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_delegated(false);
+        agent.set_unattended(false);
         agent.set_skip_interactive_input(true);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -1511,7 +1511,7 @@ mod tests {
         use muta_contracts::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_delegated(false);
+        agent.set_unattended(false);
         agent.set_skip_interactive_input(false);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();

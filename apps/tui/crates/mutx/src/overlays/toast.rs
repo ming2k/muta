@@ -4,7 +4,7 @@ use mutx_engine::{Color, Frame};
 
 use crate::components::toast::{ToastBubble, ToastKind};
 use crate::model::document::NoticeSeverity;
-use crate::view::Theme;
+use crate::render::Theme;
 
 pub fn draw_armed_toast(frame: &mut Frame, message: &str, theme: &Theme) {
     ToastBubble {

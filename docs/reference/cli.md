@@ -64,8 +64,8 @@ mutx [OPTIONS] <COMMAND>
 | `--token <token>` | `mutx` | Supply the bearer token required by `--remote` |
 | `-p`, `--prompt`, `--print <text>` | `mutx` | Run `<text>` as a headless one-shot |
 | `-i`, `--interactive` | `mutx` | Force the TUI even when a `-p` prompt is given |
-| `--delegate` | `mutx` | Run in delegated autonomous mode (without confirmations or questions) |
-| `--unconfine` | `mutx` | Run with workspace filesystem confinement disabled (alias: `--unconfined`) |
+| `--unattended` | `mutx` | Run in unattended execution mode (without confirmations or questions) |
+| `--no-confinement` | `mutx` | Run with workspace filesystem confinement disabled (allow host-wide file access) |
 | `-j`, `--json` | Both | Emit machine-readable output where supported |
 | `-h`, `--help` | Both | Print help |
 | `-V`, `--version` | Both | Print that binary's version and exit |

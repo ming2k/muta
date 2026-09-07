@@ -967,37 +967,34 @@ mod tests {
 
         // After a declared parent + space, verbs complete with their own copy.
         let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(30, "/schedule ".into(), 10).await
+            engine.complete(30, "/permissions ".into(), 13).await
         else {
             panic!("unexpected response")
         };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec!["/schedule list", "/schedule cancel", "/schedule help"]
-        );
+        assert_eq!(labels, vec!["/permissions clear"]);
         for item in &items {
             assert_ne!(
-                item.description, "Schedule a prompt (cron, countdown, or absolute)",
+                item.description, "Show or clear always-allowed tool rules",
                 "verb rows must not parrot the parent summary"
             );
         }
-        let cancel = items
+        let clear = items
             .iter()
-            .find(|i| i.label == "/schedule cancel")
+            .find(|i| i.label == "/permissions clear")
             .unwrap();
-        assert!(cancel.description.contains("by id"));
+        assert!(clear.description.to_lowercase().contains("clear"));
         // Insert restores the typed parent exactly and appends the verb.
-        assert_eq!(cancel.insert_text, "/schedule cancel");
+        assert_eq!(clear.insert_text, "/permissions clear");
 
         // Prefix filter on the verb token.
         let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(31, "/schedule c".into(), 11).await
+            engine.complete(31, "/permissions c".into(), 11).await
         else {
             panic!("unexpected response")
         };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["/schedule cancel"]);
+        assert_eq!(labels, vec!["/permissions"]);
 
         // Depth guard: three tokens deep is NOT a subcommand position
         // (`/debug trace ` already completed `trace`; the next slot belongs
