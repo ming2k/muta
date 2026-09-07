@@ -9,7 +9,8 @@ impl SessionStore {
     /// from. The single source of truth for message truth is the transcript;
     /// this is its pure derivation.
     pub async fn model_window(&self) -> Vec<Message> {
-        self.state.lock().await.data.transcript.project_messages()
+        let mut state = self.state.lock().await;
+        state.get_or_project_messages().to_vec()
     }
 
     /// The full factual transcript — every message entry, unprojected (no

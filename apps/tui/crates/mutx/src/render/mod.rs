@@ -893,7 +893,9 @@ pub fn draw_transcript(
             message_end = window.message_end;
             content_lines = window.prefix_lines;
             skip_rows = window.skip_rows;
-            virtual_total_lines = Some(window.total_lines);
+            if window.is_full {
+                virtual_total_lines = Some(window.total_lines);
+            }
         }
 
         // Delegate message arrangement to the selected layout strategy. The

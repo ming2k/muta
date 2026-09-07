@@ -50,7 +50,7 @@ impl PersistentTerminalSession {
         timeout: Duration,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
     ) -> Result<muta_contracts::ToolOutput, String> {
-        use muta_contracts::tool_output::{ShellLine, normalize_carriage_returns, strip_ansi};
+        use muta_contracts::tool_output::{normalize_carriage_returns, strip_ansi};
 
         let sentinel_id = format!(
             "__MUTA_PERSISTENT_TERM_DONE_{}__",
@@ -68,8 +68,7 @@ impl PersistentTerminalSession {
             .await
             .map_err(|e| format!("Failed to flush persistent terminal: {e}"))?;
 
-        let mut lines = Vec::new();
-        let mut stdout_str = String::new();
+        let mut collector = super::pipes::OutputCollector::new();
         let mut exit_code = 0;
         let sentinel_prefix = format!("{}:", sentinel_id);
 
@@ -82,37 +81,43 @@ impl PersistentTerminalSession {
                     break;
                 }
                 let clean = normalize_carriage_returns(&strip_ansi(&line));
-                stdout_str.push_str(&clean);
-                stdout_str.push('\n');
-                lines.push(ShellLine {
-                    stream: muta_contracts::tool_output::ShellStream::Out,
-                    text: clean.clone(),
-                });
-                on_stream(muta_contracts::ToolStream::Stdout(format!("{}\n", clean)));
+                collector.push_line(
+                    muta_contracts::tool_output::ShellStream::Out,
+                    clean,
+                    on_stream,
+                );
             }
+            collector.flush_stream(on_stream);
             Ok::<_, String>(())
         };
 
         match tokio::time::timeout(timeout, read_future).await {
-            Ok(Ok(())) => Ok(muta_contracts::ToolOutput::Shell {
-                command: command.to_string(),
-                stdout: stdout_str,
-                stderr: String::new(),
-                exit: Some(exit_code),
-                truncated: false,
-                termination: muta_contracts::ShellTermination::Exited,
-                lines,
-            }),
+            Ok(Ok(())) => {
+                let (stdout, stderr, lines, truncated) = collector.apply_caps(Some(exit_code));
+                Ok(muta_contracts::ToolOutput::Shell {
+                    command: command.to_string(),
+                    stdout,
+                    stderr,
+                    exit: Some(exit_code),
+                    truncated,
+                    termination: muta_contracts::ShellTermination::Exited,
+                    lines,
+                })
+            }
             Ok(Err(e)) => Err(e),
-            Err(_) => Ok(muta_contracts::ToolOutput::Shell {
-                command: command.to_string(),
-                stdout: stdout_str,
-                stderr: String::new(),
-                exit: None,
-                truncated: false,
-                termination: muta_contracts::ShellTermination::Timeout,
-                lines,
-            }),
+            Err(_) => {
+                collector.flush_stream(on_stream);
+                let (stdout, stderr, lines, truncated) = collector.apply_caps(None);
+                Ok(muta_contracts::ToolOutput::Shell {
+                    command: command.to_string(),
+                    stdout,
+                    stderr,
+                    exit: None,
+                    truncated,
+                    termination: muta_contracts::ShellTermination::Timeout,
+                    lines,
+                })
+            }
         }
     }
 }

@@ -50,6 +50,40 @@ fn virtual_index_uses_segmented_same_turn_geometry() {
 }
 
 #[test]
+fn virtual_index_prefix_skips_settled_history_during_streaming_tail() {
+    // 5 settled messages forming separate chunks, plus a 6th unmeasured streaming tail message.
+    let mut messages = Vec::new();
+    for i in 0..5 {
+        messages.push(TranscriptMessage::new(
+            muta_contracts::Role::User,
+            format!("user prompt {i}"),
+        ));
+    }
+    // 6th message is actively streaming (not in HeightCache)
+    let streaming_tail = TranscriptMessage::new(
+        muta_contracts::Role::Assistant,
+        "streaming in progress...",
+    );
+    messages.push(streaming_tail);
+
+    let mut cache = HeightCache::default();
+    cache.prepare(80);
+    // Only the first 5 messages have cached heights.
+    for m in &messages[..5] {
+        cache.set(m.id, 3);
+    }
+
+    // When scrolled to the bottom (viewing the streaming tail), settled history must be skipped in O(1).
+    let window = cache
+        .virtual_window(&messages, crate::layout::Strategy::TurnBand, 100, 20)
+        .expect("prefix virtual index must resolve even with live unmeasured tail");
+
+    assert_eq!(window.message_start, 5, "must skip all 5 settled messages");
+    assert_eq!(window.message_end, 6, "must target the streaming tail");
+    assert!(!window.is_full);
+}
+
+#[test]
 fn line_selection_intersects_wrapped_lines() {
     use crate::model::layout::SemanticCursor;
     let sel = SelectionState::Range {

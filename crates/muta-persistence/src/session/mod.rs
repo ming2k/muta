@@ -164,6 +164,42 @@ pub struct SessionData {
     pub(crate) unknown_directives: Vec<UnknownDirectiveRow>,
 }
 
+impl SessionData {
+    /// Clone working state and metadata while omitting the factual transcript history.
+    ///
+    /// Hot-path incremental turn commits use this to send only new delta rows to
+    /// SQLite, completely eliminating O(N) memory allocations inside the session mutex.
+    pub(crate) fn clone_metadata_without_history(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            parent_id: self.parent_id.clone(),
+            fork_kind: self.fork_kind,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            transcript: muta_contracts::Transcript::default(),
+            last_projection: self.last_projection.clone(),
+            project_root: self.project_root.clone(),
+            schema_version: self.schema_version,
+            checksum: self.checksum,
+            title: self.title.clone(),
+            digest: self.digest.clone(),
+            digest_anchor: self.digest_anchor,
+            generation: self.generation.clone(),
+            provider_selection: self.provider_selection.clone(),
+            disabled_tools: self.disabled_tools.clone(),
+            round_counter: self.round_counter,
+            request_usage_records: self.request_usage_records.clone(),
+            commands: self.commands.clone(),
+            round_interrupts: self.round_interrupts.clone(),
+            retry_pending: self.retry_pending.clone(),
+            unknown_entries: Vec::new(),
+            unknown_directives: Vec::new(),
+            tree: self.tree.clone(),
+            unattended: self.unattended,
+        }
+    }
+}
+
 /// A transcript entry preserved verbatim because its payload kind is unknown
 /// to this binary (ADR-0187). The envelope columns are stored raw and are
 /// written back unchanged; the payload JSON is opaque.
@@ -277,27 +313,73 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     data
 }
 
+#[derive(Serialize)]
+struct SessionRowChecksumView<'a> {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    commands: &'a Vec<muta_contracts::CommandRecord>,
+    created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    digest: Option<&'a muta_contracts::SessionDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    digest_anchor: Option<u64>,
+    disabled_tools: &'a std::collections::HashSet<String>,
+    fork_kind: muta_contracts::SessionForkKind,
+    generation: &'a str,
+    id: &'a str,
+    parent_id: Option<&'a str>,
+    project_root: &'a Path,
+    provider_selection: Option<&'a ProviderSelection>,
+    request_usage_records: &'a Vec<muta_contracts::RequestUsageRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_pending: Option<&'a muta_contracts::RetryPoint>,
+    round_counter: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    round_interrupts: &'a Vec<muta_contracts::RoundInterrupt>,
+    schema_version: u32,
+    title: Option<&'a str>,
+    tree: &'a muta_contracts::SessionTree,
+    unattended: bool,
+    updated_at: u64,
+}
+
+impl<'a> From<&'a SessionData> for SessionRowChecksumView<'a> {
+    fn from(data: &'a SessionData) -> Self {
+        Self {
+            commands: &data.commands,
+            created_at: data.created_at,
+            digest: data.digest.as_ref(),
+            digest_anchor: data.digest_anchor,
+            disabled_tools: &data.disabled_tools,
+            fork_kind: data.fork_kind,
+            generation: &data.generation,
+            id: &data.id,
+            parent_id: data.parent_id.as_deref(),
+            project_root: &data.project_root,
+            provider_selection: data.provider_selection.as_ref(),
+            request_usage_records: &data.request_usage_records,
+            retry_pending: data.retry_pending.as_ref(),
+            round_counter: data.round_counter,
+            round_interrupts: &data.round_interrupts,
+            schema_version: data.schema_version,
+            title: data.title.as_deref(),
+            tree: &data.tree,
+            unattended: data.unattended,
+            updated_at: data.updated_at,
+        }
+    }
+}
+
 /// Compute the CRC32C checksum over the session **row** — the working state
 /// (ADR-0187). The transcript and the verbatim unknown rows are excluded:
 /// they live in their own append-only tables with primary-key integrity, so
 /// the row checksum covers exactly the data a single UPSERT writes. Returns
-/// `Err` on serialization failure rather than a sentinel `0` (a sentinel
-/// would look like a valid checksum and let verification accept corruption).
+/// `Err` on serialization failure rather than a sentinel `0`.
+///
+/// Implemented via a zero-copy row view [`SessionRowChecksumView`] so hot-path
+/// turn commits never serialize or clone the multi-megabyte `transcript`.
 fn compute_checksum(data: &SessionData) -> Result<u32, String> {
-    let mut value = serde_json::to_value(data).map_err(|e| e.to_string())?;
-    if let Some(obj) = value.as_object_mut() {
-        // Fields not part of the session row (or recomputed after load).
-        for excluded in [
-            "transcript",
-            "unknown_entries",
-            "unknown_directives",
-            "checksum",
-            "last_projection",
-        ] {
-            obj.remove(excluded);
-        }
-    }
-    let bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+    let view = SessionRowChecksumView::from(data);
+    let bytes = serde_json::to_vec(&view).map_err(|e| e.to_string())?;
     Ok(crc32c::crc32c(&bytes))
 }
 
@@ -371,16 +453,52 @@ pub struct SessionSummary {
 /// reader and writer. There is no second lock to deadlock against.
 pub(crate) struct SessionState {
     /// Absolute path of this session's snapshot: `<sessions_dir>/<id>.json`.
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     /// In-memory session, authoritative between writes.
-    data: SessionData,
+    pub(crate) data: SessionData,
     /// `true` only for a **fresh** primary session (`pin_fresh`): defer the
     /// first durable write until the session gains user-facing content, so
     /// starting and exiting without a round leaves no empty-file litter
     /// (ADR-0018). `false` for an explicitly pinned path (`for_path`, and any
     /// store loaded from an existing snapshot): there the caller has already
     /// materialised the session, so every write persists eagerly.
-    defer_persist: bool,
+    pub(crate) defer_persist: bool,
+    /// In-memory cache of projected messages, avoiding repetitive full-history
+    /// projections on ReAct turn hot paths.
+    pub(crate) projected_cache: Option<Vec<muta_contracts::Message>>,
+}
+
+impl SessionState {
+    pub(crate) fn new(path: PathBuf, data: SessionData, defer_persist: bool) -> Self {
+        Self {
+            path,
+            data,
+            defer_persist,
+            projected_cache: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_or_project_messages(&mut self) -> &[muta_contracts::Message] {
+        if self.projected_cache.is_none() {
+            self.projected_cache = Some(self.data.transcript.project_messages());
+        }
+        self.projected_cache.as_deref().unwrap_or(&[])
+    }
+
+    #[inline]
+    pub(crate) fn invalidate_projection_cache(&mut self) {
+        self.projected_cache = None;
+    }
+
+    #[inline]
+    pub(crate) fn append_to_projection_cache(&mut self, new_messages: &[muta_contracts::Message]) {
+        if let Some(ref mut cache) = self.projected_cache {
+            cache.extend_from_slice(new_messages);
+        } else {
+            self.projected_cache = Some(self.data.transcript.project_messages());
+        }
+    }
 }
 
 pub struct SessionStore {
@@ -500,18 +618,43 @@ pub(crate) fn truncate_preview(text: &str, max: usize) -> String {
 }
 
 pub(crate) fn last_effective_prompt_from_data(data: &SessionData) -> Option<String> {
-    data.transcript
-        .project()
-        .into_iter()
-        .rev()
-        .find(|(_, m)| {
+    // Reverse scan without materializing the full projection view.
+    // Respect compaction watermark so archived head entries are elided.
+    let compact_watermark = data
+        .transcript
+        .directives
+        .iter()
+        .filter_map(|d| {
+            if matches!(d.payload, muta_contracts::DirectivePayload::Compact { .. }) {
+                Some(d.up_to_seq)
+            } else {
+                None
+            }
+        })
+        .max();
+
+    for entry in data.transcript.entries.iter().rev() {
+        if entry.is_hidden_kind() || entry.hidden {
+            continue;
+        }
+        if let Some(watermark) = compact_watermark
+            && entry.seq <= watermark
+        {
+            break;
+        }
+        if entry.role == Some(Role::User)
+            && let Some(m) = entry.to_message()
+        {
             let is_echo = m
                 .origin
                 .as_ref()
                 .is_some_and(|o| o.kind == InjectionKind::CommandEcho);
-            m.role == Role::User && !m.hidden && !is_echo
-        })
-        .map(|(_, m)| m.content)
+            if !m.hidden && !is_echo {
+                return Some(m.content);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn unix_timestamp() -> u64 {

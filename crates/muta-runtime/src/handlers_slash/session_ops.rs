@@ -81,6 +81,7 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
     agent.clear_todos();
     match session.reset().await {
         Ok(id) => {
+            agent.set_thread_id(&id);
             let fresh_posture = session.unattended().await;
             if agent.unattended() != fresh_posture {
                 agent.set_unattended(fresh_posture);

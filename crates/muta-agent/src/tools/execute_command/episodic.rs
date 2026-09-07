@@ -126,6 +126,7 @@ pub async fn run_episodic_command(
         let _ = readers.stdout_task.await;
         let _ = readers.stderr_task.await;
     }
+    collector.flush_stream(on_stream);
 
     let exit = if timed_out || idle_blocked {
         None

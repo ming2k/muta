@@ -1151,3 +1151,94 @@ async fn oauth_browser_login_validates_oidc_nonce() {
         matches!(tok_bad, Err(muta_providers::oauth::AuthError::Authorization(msg)) if msg.contains("OIDC nonce mismatch"))
     );
 }
+
+#[tokio::test]
+async fn opencode_go_wire_request_carries_session_and_client_headers() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/zen/go/v1/chat/completions", server.url());
+
+    let _mock = server
+        .mock("POST", "/zen/go/v1/chat/completions")
+        .match_header("x-opencode-session", "ses_wire_affinity_999")
+        .match_header("x-opencode-client", "cli")
+        .match_header(
+            "user-agent",
+            muta_contracts::client_identity::OPENCODE_USER_AGENT,
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"content":"response from opencode-go"}}]}"#)
+        .create_async()
+        .await;
+
+    let channel = Channel {
+        id: "glm-5.2".into(),
+        label: "GLM-5.2".into(),
+        transport: Transport::OpenAi {
+            base_url: url,
+            client_profile: muta_contracts::ClientProfile::OpenCode,
+            effort: None,
+            dialect: Default::default(),
+        },
+        credentials: muta_contracts::static_credential("opencode-token"),
+        model: "glm-5.2".into(),
+        remote: None,
+        user_overrides: None,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
+        prompt_cache_preference: Default::default(),
+    };
+
+    let provider = build_provider_for_channel(&channel, "opencode-go", Some("ses_wire_affinity_999"));
+    let msg = provider
+        .chat(vec![Message::new(Role::User, "hello")].into())
+        .await
+        .expect("opencode-go provider chat must succeed")
+        .message;
+    assert_eq!(msg.content, "response from opencode-go");
+}
+
+#[tokio::test]
+async fn opencode_go_anthropic_wire_request_carries_session_headers() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/zen/go/v1/messages", server.url());
+
+    let _mock = server
+        .mock("POST", "/zen/go/v1/messages")
+        .match_header("x-opencode-session", "ses_anthropic_wire_777")
+        .match_header("x-opencode-client", "cli")
+        .match_header(
+            "user-agent",
+            muta_contracts::client_identity::OPENCODE_USER_AGENT,
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"content":[{"type":"text","text":"minimax response"}]}"#)
+        .create_async()
+        .await;
+
+    let channel = Channel {
+        id: "minimax-m3".into(),
+        label: "MiniMax M3".into(),
+        transport: Transport::Anthropic {
+            base_url: url,
+            client_profile: muta_contracts::ClientProfile::OpenCode,
+            effort: None,
+            thinking: None,
+            dialect: Default::default(),
+        },
+        credentials: muta_contracts::static_credential("opencode-token"),
+        model: "minimax-m3".into(),
+        remote: None,
+        user_overrides: None,
+        prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
+        prompt_cache_preference: Default::default(),
+    };
+
+    let provider = build_provider_for_channel(&channel, "opencode-go", Some("ses_anthropic_wire_777"));
+    let msg = provider
+        .chat(vec![Message::new(Role::User, "hello")].into())
+        .await
+        .expect("opencode-go minimax provider chat must succeed")
+        .message;
+    assert_eq!(msg.content, "minimax response");
+}

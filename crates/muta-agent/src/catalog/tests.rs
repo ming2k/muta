@@ -159,8 +159,8 @@ fn opencode_go_routes_models_by_wire_format() {
         &Credentials::default(),
     );
     assert!(
-        matches!(&glm.transport, Transport::OpenAi { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/chat/completions"),
-        "glm-5.2 must route to OpenAI chat-completions"
+        matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/zen/go/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
+        "glm-5.2 must route to OpenAI chat-completions with OpenCode client profile"
     );
     let minimax = derive_channel(
         &go,

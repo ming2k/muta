@@ -78,6 +78,7 @@ pub mod connection_detail;
 pub mod provider_state;
 pub use client_identity::{
     ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile, ClientProfileSpec,
+    MUTA_USER_AGENT, OPENCODE_CLIENT_HEADERS, OPENCODE_USER_AGENT, OPENCODE_VERSION,
 };
 pub mod effort;
 pub use effort::{

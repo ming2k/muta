@@ -206,6 +206,11 @@ impl GoogleProvider {
         self
     }
 
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.endpoint = self.endpoint.with_session_id(session_id);
+        self
+    }
+
     pub fn with_dialect(mut self, dialect: muta_contracts::GoogleGenerateContentDialect) -> Self {
         self.dialect = dialect;
         self
@@ -566,10 +571,18 @@ impl GoogleProvider {
             reqwest::header::HeaderValue::from_static("application/json"),
         );
 
-        for (k, v) in self.endpoint.headers() {
+        let client_headers = self
+            .endpoint
+            .headers()
+            .into_iter()
+            .map(|(k, v)| (k, v.to_string()));
+        let affinity_headers = self
+            .endpoint
+            .session_affinity_headers(self.prompt_cache.routing_key());
+        for (k, v) in client_headers.chain(affinity_headers) {
             if let (Ok(hname), Ok(hval)) = (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                reqwest::header::HeaderValue::from_str(v),
+                reqwest::header::HeaderValue::from_str(&v),
             ) {
                 headers.insert(hname, hval);
             }

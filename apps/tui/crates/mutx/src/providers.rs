@@ -252,7 +252,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
-        user_agent: None,
+        user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {

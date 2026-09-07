@@ -1200,11 +1200,12 @@ impl DatabaseEngine {
                     params![data.id],
                     |row| row.get(0),
                 )?;
+                let entry_start = data
+                    .transcript
+                    .entries
+                    .partition_point(|entry| (entry.seq as i64) <= watermark);
                 let mut new_entries = Vec::new();
-                for entry in &data.transcript.entries {
-                    if (entry.seq as i64) <= watermark {
-                        continue;
-                    }
+                for entry in &data.transcript.entries[entry_start..] {
                     self.upsert_entry(entry)?;
                     self.insert_membership(data.id.as_str(), entry.seq, entry.id.as_str())?;
                     new_entries.push(entry);
@@ -1214,10 +1215,11 @@ impl DatabaseEngine {
                     params![data.id],
                     |row| row.get(0),
                 )?;
-                for directive in &data.transcript.directives {
-                    if (directive.seq as i64) <= directive_watermark {
-                        continue;
-                    }
+                let directive_start = data
+                    .transcript
+                    .directives
+                    .partition_point(|directive| (directive.seq as i64) <= directive_watermark);
+                for directive in &data.transcript.directives[directive_start..] {
                     self.insert_directive(data.id.as_str(), directive)?;
                 }
                 let new_entries: Vec<muta_contracts::TranscriptEntry> =

@@ -10,10 +10,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub const MUTA_USER_AGENT: &str = concat!("muta/", env!("CARGO_PKG_VERSION"));
 
 /// OpenCode version emulated by muta.
-pub const OPENCODE_VERSION: &str = "1.18.18";
+pub const OPENCODE_VERSION: &str = "1.18.20";
 
 /// User-Agent header value sent for OpenCode client profile.
-pub const OPENCODE_USER_AGENT: &str = "opencode/1.18.18";
+pub const OPENCODE_USER_AGENT: &str = "opencode/1.18.20";
+
+/// Client identity headers used for OpenCode profile.
+pub const OPENCODE_CLIENT_HEADERS: &[(&str, &str)] = &[("x-opencode-client", "cli")];
 
 /// Claude Code version emulated by muta.
 pub const CLAUDE_CODE_VERSION: &str = "0.2.29";
@@ -301,10 +304,10 @@ impl ClientPreset {
                 label: "OpenCode",
                 default_version: OPENCODE_VERSION,
                 user_agent: OPENCODE_USER_AGENT,
-                headers: &[],
+                headers: OPENCODE_CLIENT_HEADERS,
                 capabilities: ClientCapabilities {
                     coding_platform_compatible: true,
-                    has_client_headers: false,
+                    has_client_headers: true,
                 },
             },
             Self::ClaudeCode => ClientProfileSpec {
@@ -850,6 +853,16 @@ mod tests {
             headers
                 .iter()
                 .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
+        );
+
+        let opencode = ClientProfile::OpenCode;
+        assert!(opencode.capabilities().has_client_headers);
+        assert!(opencode.capabilities().coding_platform_compatible);
+        assert!(
+            opencode
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "x-opencode-client" && *v == "cli")
         );
 
         let claude = ClientProfile::ClaudeCode;

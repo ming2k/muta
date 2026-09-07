@@ -92,6 +92,7 @@ pub struct VirtualLayoutIndex {
     source_ptr: usize,
     source_len: usize,
     chunks: Vec<VirtualChunk>,
+    settled_message_end: usize,
     total_lines: usize,
 }
 
@@ -110,6 +111,7 @@ pub struct VirtualWindow {
     pub prefix_lines: usize,
     pub skip_rows: usize,
     pub total_lines: usize,
+    pub is_full: bool,
 }
 
 impl VirtualLayoutIndex {
@@ -126,37 +128,68 @@ impl VirtualLayoutIndex {
         let start = self
             .chunks
             .partition_point(|chunk| chunk.end_line <= scroll);
-        let start = start.min(self.chunks.len().saturating_sub(1));
         let viewport_end = scroll.saturating_add(view_height as usize).max(scroll + 1);
-        let mut end = self
-            .chunks
-            .partition_point(|chunk| chunk.start_line < viewport_end);
-        end = end.max(start + 1).min(self.chunks.len());
-        let first = &self.chunks[start];
-        let last = &self.chunks[end - 1];
-        Some(VirtualWindow {
-            message_start: first.message_start,
-            message_end: last.message_end,
-            prefix_lines: first.start_line,
-            skip_rows: scroll.saturating_sub(first.start_line),
-            total_lines: self.total_lines,
-        })
+
+        if start < self.chunks.len() {
+            let first = &self.chunks[start];
+            let mut end = self
+                .chunks
+                .partition_point(|chunk| chunk.start_line < viewport_end);
+            end = end.max(start + 1).min(self.chunks.len());
+            let last = &self.chunks[end - 1];
+            let is_full = self.settled_message_end == self.source_len;
+            let message_end = if is_full {
+                last.message_end
+            } else {
+                self.source_len
+            };
+
+            Some(VirtualWindow {
+                message_start: first.message_start,
+                message_end,
+                prefix_lines: first.start_line,
+                skip_rows: scroll.saturating_sub(first.start_line),
+                total_lines: self.total_lines,
+                is_full,
+            })
+        } else if self.settled_message_end < self.source_len {
+            // Viewport is completely below the settled prefix (scrolled to the live tail).
+            // Skip the entire settled history prefix in O(1)!
+            let last_chunk = self.chunks.last()?;
+            Some(VirtualWindow {
+                message_start: self.settled_message_end,
+                message_end: self.source_len,
+                prefix_lines: last_chunk.end_line,
+                skip_rows: scroll.saturating_sub(last_chunk.end_line),
+                total_lines: self.total_lines,
+                is_full: false,
+            })
+        } else {
+            let last = self.chunks.last()?;
+            Some(VirtualWindow {
+                message_start: last.message_start,
+                message_end: last.message_end,
+                prefix_lines: last.start_line,
+                skip_rows: scroll.saturating_sub(last.start_line),
+                total_lines: self.total_lines,
+                is_full: true,
+            })
+        }
     }
 }
 
-/// Build an exact index only once every message body has a stable cached
-/// height. While a live tail is still streaming the caller naturally falls
-/// back to the cache-only path; once that tail settles, the next draw upgrades
-/// to a fully virtualized transcript.
+/// Build an exact layout index over all settled messages.
+///
+/// If live tail messages (such as an in-flight tool step or streaming prose)
+/// are still being measured, settled history chunks are retained as a prefix
+/// index so the renderer can still skip all preceding off-screen history
+/// in O(1) binary search time rather than scanning every settled message.
 ///
 /// Geometry comes from the engine's flex solver (ADR-0114): the chunks are
 /// declared as a single vertical flex pass — `FlexItem::fixed(chunk_height)`
 /// per chunk, `Flex::column()` with no gap (inter-chunk spacing is already
 /// part of each chunk's height via `default_gap_before`) — and the solver
-/// yields every chunk's exact main-axis offset. The hand-rolled accumulation
-/// loop this replaces could drift from the painting path's cursor arithmetic;
-/// sharing one solver keeps the virtual index and the paint pass in lockstep
-/// by construction.
+/// yields every chunk's exact main-axis offset.
 pub fn build_virtual_index(
     messages: &[TranscriptMessage],
     cache: &HeightCache,
@@ -166,23 +199,17 @@ pub fn build_virtual_index(
         return None;
     }
     // Chunk planning is strategy-specific; heights resolve through the cache.
-    let plans: Vec<VirtualChunkPlan> = match strategy {
-        Strategy::TurnBand => plan_turn_band(messages, cache)?,
+    let (plans, settled_message_end) = match strategy {
+        Strategy::TurnBand => plan_turn_band(messages, cache),
     };
     if plans.is_empty() {
         return None;
     }
 
-    // Single flex solve for the whole transcript's chunk geometry. The
-    // container's main axis is intentionally unbounded (usize::MAX): the
-    // transcript can exceed any u16 row count, so there must be no shrinking
-    // and no clamping — every chunk keeps its exact planned height.
+    // Single flex solve for the prefix settled chunk geometry.
     let items: Vec<FlexItem> = plans
         .iter()
         .map(|p| {
-            // A single chunk taller than 65535 rows is pathological (a whole
-            // turn group spanning 65k+ lines); clamp rather than silently
-            // truncate. Totals stay usize-exact via `used_main`.
             FlexItem::fixed(u16::try_from(p.height).unwrap_or(u16::MAX))
         })
         .collect();
@@ -210,14 +237,12 @@ pub fn build_virtual_index(
         source_ptr: messages.as_ptr() as usize,
         source_len: messages.len(),
         chunks,
+        settled_message_end,
         total_lines,
     })
 }
 
-/// A planned chunk before geometry: message range + resolved height. Heights
-/// resolve to `None` (aborting the whole index) whenever any message lacks a
-/// cached height, preserving the "virtualize only fully settled transcripts"
-/// invariant.
+/// A planned chunk before geometry: message range + resolved height.
 struct VirtualChunkPlan {
     message_start: usize,
     message_end: usize,
@@ -227,7 +252,7 @@ struct VirtualChunkPlan {
 fn plan_turn_band(
     messages: &[TranscriptMessage],
     cache: &HeightCache,
-) -> Option<Vec<VirtualChunkPlan>> {
+) -> (Vec<VirtualChunkPlan>, usize) {
     let mut plans = Vec::new();
     let mut index = 0usize;
     while index < messages.len() {
@@ -235,15 +260,28 @@ fn plan_turn_band(
         let mut height = default_gap_before(messages, index);
         if let Some(end) = default_group_end(messages, index) {
             height += 1 + TURN_HEADER_BODY_GAP_ROWS;
+            let mut resolved = true;
             for (offset, message) in messages[index..end].iter().enumerate() {
                 if offset > 0 {
                     height += default_boundary_gap(&messages[index + offset - 1], message);
                 }
-                height += cached_height(cache, message)?;
+                match cached_height(cache, message) {
+                    Some(h) => height += h,
+                    None => {
+                        resolved = false;
+                        break;
+                    }
+                }
+            }
+            if !resolved {
+                break;
             }
             index = end;
         } else {
-            height += cached_height(cache, &messages[index])?;
+            match cached_height(cache, &messages[index]) {
+                Some(h) => height += h,
+                None => break,
+            }
             index += 1;
         }
         if index == messages.len() {
@@ -255,7 +293,7 @@ fn plan_turn_band(
             height,
         });
     }
-    Some(plans)
+    (plans, index)
 }
 
 fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usize> {

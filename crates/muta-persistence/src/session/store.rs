@@ -58,11 +58,7 @@ impl SessionStore {
             db_path,
             blob_store,
             writer,
-            state: Mutex::new(SessionState {
-                path,
-                data,
-                defer_persist,
-            }),
+            state: Mutex::new(SessionState::new(path, data, defer_persist)),
             persist_gate: Mutex::new(()),
         }
     }
@@ -95,12 +91,7 @@ impl SessionStore {
             db_path,
             blob_store,
             writer,
-            state: Mutex::new(SessionState {
-                path,
-                data,
-                // Fresh primary session: defer until it gains real content.
-                defer_persist: true,
-            }),
+            state: Mutex::new(SessionState::new(path, data, true)),
             persist_gate: Mutex::new(()),
         }
     }

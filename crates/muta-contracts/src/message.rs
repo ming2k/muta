@@ -526,6 +526,20 @@ impl Message {
             cache_frozen: false,
         }
     }
+
+    /// Compare two messages for wire-level semantic equivalence without allocating.
+    ///
+    /// Semantics are identical to `self.to_wire() == other.to_wire()`, but performs
+    /// zero heap allocations and avoids copying contents or sidecars.
+    #[inline]
+    pub fn semantic_wire_eq(&self, other: &Self) -> bool {
+        self.role == other.role
+            && self.content == other.content
+            && self.reasoning_content == other.reasoning_content
+            && self.tool_calls == other.tool_calls
+            && self.tool_call_id == other.tool_call_id
+            && self.images == other.images
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -689,6 +703,22 @@ mod tests {
             w.content_blob.is_none() && w.display_content.is_none(),
             "storage/UI sidecars stripped"
         );
+    }
+
+    #[test]
+    fn semantic_wire_eq_matches_to_wire_equality() {
+        let m1 = Message::new(Role::User, "hello")
+            .with_attribution("kimi", "kimi-code")
+            .with_sent_at_ms(12345);
+        let m2 = Message::new(Role::User, "hello")
+            .with_attribution("openai", "gpt-4o")
+            .with_sent_at_ms(67890);
+        let m3 = Message::new(Role::User, "hello world");
+
+        assert!(m1.semantic_wire_eq(&m2));
+        assert_eq!(m1.to_wire() == m2.to_wire(), m1.semantic_wire_eq(&m2));
+        assert!(!m1.semantic_wire_eq(&m3));
+        assert_eq!(m1.to_wire() == m3.to_wire(), m1.semantic_wire_eq(&m3));
     }
 
     #[test]

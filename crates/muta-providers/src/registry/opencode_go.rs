@@ -268,7 +268,7 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // Endpoints are per-model by wire format (see `route_for_model`); the
     // instance-level default is the OpenAI chat-completions surface.
     base_url: "https://opencode.ai/zen/go/v1/chat/completions",
-    user_agent: None,
+    user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
     protocol: WireProtocol::OpenAiChatCompletions,
     // The served set comes from the models.dev third-party catalog (the relay
     // publishes there; its own `/models` is not authoritative). Fitting is

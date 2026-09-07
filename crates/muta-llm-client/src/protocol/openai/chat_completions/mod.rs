@@ -117,6 +117,11 @@ impl OpenAiChatCompletionsProvider {
         self
     }
 
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.endpoint = self.endpoint.with_session_id(session_id);
+        self
+    }
+
     /// Attach the effective provider-channel capability view.
     pub fn with_model_capabilities(
         mut self,
@@ -169,6 +174,9 @@ impl OpenAiChatCompletionsProvider {
                 req = req.header(name, value);
             }
         }
+        req = self
+            .endpoint
+            .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
         req
     }
 
@@ -559,5 +567,43 @@ mod tests {
         // No protocol note: native tool calls are the wire default and the
         // ToolCallEchoFilter strips text-mirrored calls regardless.
         assert!(provider.prompt_hints().system_guidance.is_empty());
+    }
+
+    #[test]
+    fn opencode_go_request_carries_session_and_client_headers() {
+        let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
+            "test-key".to_string(),
+            "glm-5.2".to_string(),
+            "https://opencode.ai/zen/go/v1/chat/completions",
+            crate::OPENCODE_USER_AGENT,
+        )
+        .with_id("opencode-go".to_string())
+        .with_session_id("ses_wire_test_123");
+
+        let auth = muta_contracts::ResolvedAuth::new("test-token");
+        let body = serde_json::json!({"model": "glm-5.2"});
+        let req = provider.build_request_for_auth(&body, &auth).build().unwrap();
+
+        let headers = req.headers();
+        assert_eq!(
+            headers.get("x-opencode-session").unwrap().to_str().unwrap(),
+            "ses_wire_test_123"
+        );
+        assert_eq!(
+            headers.get("x-opencode-client").unwrap().to_str().unwrap(),
+            "cli"
+        );
+        assert!(
+            headers
+                .get("x-opencode-request")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("req_")
+        );
+        assert_eq!(
+            headers.get("user-agent").unwrap().to_str().unwrap(),
+            crate::OPENCODE_USER_AGENT
+        );
     }
 }

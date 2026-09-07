@@ -36,6 +36,11 @@ impl PromptCacheConfig {
         }
     }
 
+    /// The routing key (session identifier) attached to this prompt-cache configuration, if any.
+    pub fn routing_key(&self) -> Option<&str> {
+        self.routing_key.as_deref()
+    }
+
     /// Merge a request override onto the route default, then validate the
     /// exact result against this route's declared capabilities.
     pub fn resolve(&self, request: &ModelRequest) -> Result<ResolvedCachePlan, String> {

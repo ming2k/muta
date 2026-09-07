@@ -39,6 +39,9 @@ pub struct Endpoint {
     pub client_profile: ClientProfile,
     /// Stable attribution id (`provider_id()`).
     pub id: String,
+    /// Optional session identifier for sticky routing / session affinity.
+    pub session_id: Option<String>,
+    pub(crate) fallback_session_id: Arc<std::sync::OnceLock<String>>,
 }
 
 impl Endpoint {
@@ -55,6 +58,8 @@ impl Endpoint {
             base_url: base_url.into(),
             client_profile: ClientProfile::Native,
             id: id.into(),
+            session_id: None,
+            fallback_session_id: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -134,6 +139,93 @@ impl Endpoint {
     /// id from the channel entry id).
     pub fn set_id(&mut self, id: String) {
         self.id = id;
+    }
+
+    /// Stamp a session identifier onto this endpoint for sticky routing / session affinity.
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Stamp a session identifier in place.
+    pub fn set_session_id(&mut self, session_id: Option<String>) {
+        self.session_id = session_id;
+    }
+
+    /// The explicitly configured session identifier, if any.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Return an effective session identifier for affinity and sticky routing.
+    ///
+    /// If no session identifier was configured, generates and caches a stable
+    /// fallback session identifier (`ses_<uuid>`) for this endpoint instance.
+    pub fn effective_session_id(&self) -> &str {
+        if let Some(id) = self.session_id.as_deref()
+            && !id.trim().is_empty()
+        {
+            return id;
+        }
+        self.fallback_session_id
+            .get_or_init(|| format!("ses_{}", uuid::Uuid::new_v4().simple()))
+            .as_str()
+    }
+
+    /// Return all dynamic session-affinity and request-tracking HTTP headers.
+    ///
+    /// Depending on the connection target and the active client profile:
+    ///
+    /// 1. When connecting to an OpenCode relay (such as `opencode-go` or `https://opencode.ai/...`):
+    ///    attaches `x-opencode-session` (required by Console Go for sticky routing / KV-cache reuse),
+    ///    `x-opencode-request` (trace UUID), and `x-opencode-client` (if not already in client headers).
+    /// 2. When emulating an OpenCode client against non-OpenCode endpoints:
+    ///    attaches `x-session-affinity` and `X-Session-Id` matching upstream OpenCode client behavior.
+    pub fn session_affinity_headers(
+        &self,
+        session_override: Option<&str>,
+    ) -> Vec<(&'static str, String)> {
+        let is_opencode_relay =
+            self.id.starts_with("opencode") || self.base_url.contains("opencode.ai");
+        let is_opencode_client = matches!(self.client_profile, ClientProfile::OpenCode)
+            || self.client_profile.user_agent().starts_with("opencode/");
+
+        if !is_opencode_relay && !is_opencode_client {
+            return Vec::new();
+        }
+
+        let sid = session_override
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.effective_session_id());
+
+        let mut headers = Vec::new();
+        if is_opencode_relay {
+            headers.push(("x-opencode-session", sid.to_string()));
+            if !is_opencode_client {
+                headers.push(("x-opencode-client", "cli".to_string()));
+            }
+            headers.push((
+                "x-opencode-request",
+                format!("req_{}", uuid::Uuid::new_v4().simple()),
+            ));
+        } else if is_opencode_client {
+            headers.push(("x-session-affinity", sid.to_string()));
+            headers.push(("X-Session-Id", sid.to_string()));
+        }
+
+        headers
+    }
+
+    /// Attach session-affinity and request-tracking headers to an outbound HTTP request builder.
+    pub fn attach_session_affinity_headers(
+        &self,
+        mut req: reqwest::RequestBuilder,
+        session_override: Option<&str>,
+    ) -> reqwest::RequestBuilder {
+        for (name, val) in self.session_affinity_headers(session_override) {
+            req = req.header(name, val);
+        }
+        req
     }
 
     // accessors
@@ -251,6 +343,14 @@ mod tests {
                 .any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1")
         );
 
+        let opencode = ClientProfile::OpenCode;
+        assert!(
+            opencode
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "x-opencode-client" && *v == "cli")
+        );
+
         let custom = ClientProfile::custom(
             "custom-agent/1.0",
             vec![("X-Custom-Foo".to_string(), "Bar".to_string())],
@@ -258,5 +358,60 @@ mod tests {
         let custom_headers = custom.headers();
         assert_eq!(custom_headers.len(), 1);
         assert_eq!(custom_headers[0], ("X-Custom-Foo", "Bar"));
+    }
+
+    #[test]
+    fn opencode_relay_emits_session_and_request_headers() {
+        let ep = Endpoint::from_static_key(
+            "test-key",
+            "glm-5.2",
+            "https://opencode.ai/zen/go/v1/chat/completions",
+            "opencode-go",
+        )
+        .with_client_profile(ClientProfile::OpenCode)
+        .with_session_id("ses_wire_affinity_999");
+
+        assert_eq!(ep.user_agent(), OPENCODE_USER_AGENT);
+        assert_eq!(ep.effective_session_id(), "ses_wire_affinity_999");
+
+        let headers = ep.session_affinity_headers(None);
+        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-session" && v == "ses_wire_affinity_999"));
+        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-request" && v.starts_with("req_")));
+    }
+
+    #[test]
+    fn opencode_relay_generates_fallback_session_id_when_unconfigured() {
+        let ep = Endpoint::from_static_key(
+            "test-key",
+            "glm-5.2",
+            "https://opencode.ai/zen/go/v1/chat/completions",
+            "opencode-go",
+        );
+
+        assert!(ep.session_id().is_none());
+        let sid1 = ep.effective_session_id().to_string();
+        assert!(sid1.starts_with("ses_"));
+        // Stable across multiple calls
+        let sid2 = ep.effective_session_id().to_string();
+        assert_eq!(sid1, sid2);
+
+        let headers = ep.session_affinity_headers(None);
+        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-session" && v == &sid1));
+    }
+
+    #[test]
+    fn opencode_client_emits_affinity_headers_against_standard_providers() {
+        let ep = Endpoint::from_static_key(
+            "test-key",
+            "claude-3-5-sonnet",
+            "https://api.anthropic.com/v1/messages",
+            "anthropic",
+        )
+        .with_client_profile(ClientProfile::OpenCode)
+        .with_session_id("ses_affinity456");
+
+        let headers = ep.session_affinity_headers(None);
+        assert!(headers.iter().any(|(k, v)| *k == "x-session-affinity" && v == "ses_affinity456"));
+        assert!(headers.iter().any(|(k, v)| *k == "X-Session-Id" && v == "ses_affinity456"));
     }
 }

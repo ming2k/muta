@@ -38,11 +38,14 @@ fn _persist_guard_doc() {}
 /// Wire-normalized equality: harness sidecars (timestamps, display content,
 /// provenance) are not provider-visible content, so comparisons that decide
 /// append-vs-rebuild must ignore them (ADR-0186).
+///
+/// Implemented via zero-copy `semantic_wire_eq` to eliminate repetitive heap
+/// allocations and clones on the ReAct turn hot path.
 fn wire_eq(a: &[Message], b: &[Message]) -> bool {
     a.len() == b.len()
         && a.iter()
             .zip(b.iter())
-            .all(|(x, y)| x.to_wire() == y.to_wire())
+            .all(|(x, y)| x.semantic_wire_eq(y))
 }
 
 impl SessionStore {
@@ -163,6 +166,7 @@ impl SessionStore {
             state.data.transcript = rebuild_transcript_from_messages(&messages);
             state.data.generation = uuid::Uuid::new_v4().to_string();
             let children = admit_runner_children(&mut state.data, &messages);
+            state.projected_cache = Some(messages.clone());
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
@@ -217,27 +221,44 @@ impl SessionStore {
     pub async fn append_turn(&self, current: &[Message]) -> Result<(), String> {
         let (path, data, children) = {
             let mut state = self.state.lock().await;
-            let durable = state.data.transcript.project_messages();
-            if current.len() <= durable.len() && !wire_eq(current, &durable) {
+            let durable_len = state.get_or_project_messages().len();
+            if current.len() <= durable_len && !wire_eq(current, state.get_or_project_messages()) {
                 return Ok(());
             }
+            let old_entries_len = state.data.transcript.entries.len();
             let mut children = Vec::new();
-            if current.len() > durable.len() && wire_eq(&current[..durable.len()], &durable) {
-                for message in &current[durable.len()..] {
+            let mut full_rewrite = false;
+            if current.len() > durable_len
+                && wire_eq(&current[..durable_len], state.get_or_project_messages())
+            {
+                let tail = &current[durable_len..];
+                for message in tail {
                     state
                         .data
                         .transcript
                         .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                children = admit_runner_children(&mut state.data, &current[durable.len()..]);
-            } else if !wire_eq(current, &durable) {
+                children = admit_runner_children(&mut state.data, tail);
+                state.append_to_projection_cache(tail);
+            } else if !wire_eq(current, state.get_or_project_messages()) {
                 state.data.transcript = rebuild_transcript_from_messages(current);
                 state.data.generation = uuid::Uuid::new_v4().to_string();
                 children = admit_runner_children(&mut state.data, current);
+                state.invalidate_projection_cache();
+                full_rewrite = true;
             }
             state.data.updated_at = unix_timestamp();
             state.defer_persist = false;
-            (state.path.clone(), state.data.clone(), children)
+
+            let data = if full_rewrite {
+                state.data.clone()
+            } else {
+                let mut delta = state.data.clone_metadata_without_history();
+                delta.transcript.entries =
+                    state.data.transcript.entries[old_entries_len..].to_vec();
+                delta
+            };
+            (state.path.clone(), data, children)
         };
         persist_runner_children(&self.db_path, &self.blob_store, &children);
         self.persist_off_runtime(path, data, self.blob_store.clone())
@@ -251,25 +272,30 @@ impl SessionStore {
             let mut state = self.state.lock().await;
 
             // 1. Message-tail delta against the projection.
-            let durable = state.data.transcript.project_messages();
-            let prefix_matches = commit.messages.len() >= durable.len()
-                && wire_eq(&commit.messages[..durable.len()], &durable);
+            let durable_len = state.get_or_project_messages().len();
+            let prefix_matches = commit.messages.len() >= durable_len
+                && wire_eq(&commit.messages[..durable_len], state.get_or_project_messages());
+            let old_entries_len = state.data.transcript.entries.len();
             let mut children = Vec::new();
-            if commit.messages.len() > durable.len() && prefix_matches {
-                for message in &commit.messages[durable.len()..] {
+            let mut full_rewrite = false;
+            if commit.messages.len() > durable_len && prefix_matches {
+                let tail = &commit.messages[durable_len..];
+                for message in tail {
                     state
                         .data
                         .transcript
                         .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                children =
-                    admit_runner_children(&mut state.data, &commit.messages[durable.len()..]);
+                children = admit_runner_children(&mut state.data, tail);
+                state.append_to_projection_cache(tail);
                 state.data.updated_at = unix_timestamp();
-            } else if !wire_eq(commit.messages, &durable) {
+            } else if !wire_eq(commit.messages, state.get_or_project_messages()) {
                 state.data.transcript = rebuild_transcript_from_messages(commit.messages);
                 state.data.generation = uuid::Uuid::new_v4().to_string();
                 children = admit_runner_children(&mut state.data, commit.messages);
+                state.invalidate_projection_cache();
                 state.data.updated_at = unix_timestamp();
+                full_rewrite = true;
             }
 
             // 2. Round counter.
@@ -351,9 +377,17 @@ impl SessionStore {
             }
 
             state.defer_persist = false;
+            let data = if full_rewrite {
+                state.data.clone()
+            } else {
+                let mut delta = state.data.clone_metadata_without_history();
+                delta.transcript.entries =
+                    state.data.transcript.entries[old_entries_len..].to_vec();
+                delta
+            };
             (
                 state.path.clone(),
-                state.data.clone(),
+                data,
                 children,
                 usage_upserts,
             )
@@ -386,6 +420,7 @@ impl SessionStore {
                 }
             }
             state.data.last_projection = Some(result.checkpoint);
+            state.invalidate_projection_cache();
             state.data.updated_at = unix_timestamp();
             state.defer_persist = false;
             (state.path.clone(), state.data.clone())
@@ -426,6 +461,7 @@ impl SessionStore {
         // Repoint this store at the child; the parent state is already current.
         state.path = child_path;
         state.data = child;
+        state.invalidate_projection_cache();
         state.defer_persist = false;
         Ok((fork_child_id, parent_id))
     }
@@ -485,12 +521,7 @@ impl SessionStore {
             db_path,
             blob_store,
             writer: self.writer.clone(),
-            state: Mutex::new(SessionState {
-                path: side_path,
-                data,
-                // An already-materialised side session persists eagerly.
-                defer_persist: false,
-            }),
+            state: Mutex::new(SessionState::new(side_path, data, false)),
             persist_gate: Mutex::new(()),
         })
     }
@@ -513,6 +544,7 @@ impl SessionStore {
             let messages = state.data.tree.get_context_messages(&id);
             state.data.transcript = rebuild_transcript_from_messages(&messages);
             state.data.generation = uuid::Uuid::new_v4().to_string();
+            state.invalidate_projection_cache();
             state.data.updated_at = unix_timestamp();
             (state.data.clone(), id)
         };
@@ -533,6 +565,7 @@ impl SessionStore {
             let messages = state.data.tree.get_context_messages(target_leaf_id);
             state.data.transcript = rebuild_transcript_from_messages(&messages);
             state.data.generation = uuid::Uuid::new_v4().to_string();
+            state.invalidate_projection_cache();
             state.data.updated_at = unix_timestamp();
             (state.data.clone(), messages)
         };

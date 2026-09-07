@@ -353,7 +353,7 @@ pub fn build_provider_for_channel(
             dialect,
         } => {
             let capabilities = channel.capabilities();
-            let provider = GoogleProvider::with_credentials(
+            let mut provider = GoogleProvider::with_credentials(
                 credentials,
                 channel.model.clone(),
                 base_url,
@@ -364,6 +364,9 @@ pub fn build_provider_for_channel(
             .with_prompt_cache(prompt_cache)
             .with_dialect(*dialect)
             .with_id(entry_id.to_string());
+            if let Some(sid) = session_id {
+                provider = provider.with_session_id(sid);
+            }
             Arc::new(provider)
         }
         Transport::Anthropic {
@@ -380,6 +383,9 @@ pub fn build_provider_for_channel(
                 client_profile.clone(),
             )
             .with_id(entry_id.to_string());
+            if let Some(sid) = session_id {
+                provider = provider.with_session_id(sid);
+            }
             // Cap the response length at the model's registered output limit so
             // high-output models (MiniMax M3) are not truncated by the default.
             let capabilities = channel.capabilities();
@@ -428,7 +434,7 @@ pub fn build_provider_for_channel(
             // the picker shows (GPT→medium, others→high clamped to the
             // ladder); an explicit channel override still wins.
             let effective_effort = effective_channel_effort(*effort, &capabilities);
-            let provider = OpenAiChatCompletionsProvider::with_credentials(
+            let mut provider = OpenAiChatCompletionsProvider::with_credentials(
                 credentials,
                 channel.model.clone(),
                 base_url,
@@ -439,6 +445,9 @@ pub fn build_provider_for_channel(
             .with_model_capabilities(capabilities)
             .with_dialect(*dialect)
             .with_id(entry_id.to_string());
+            if let Some(sid) = session_id {
+                provider = provider.with_session_id(sid);
+            }
             Arc::new(provider)
         }
         Transport::OpenAiResponses {
@@ -451,7 +460,7 @@ pub fn build_provider_for_channel(
             // Same wire-level default as the chat-completions arm above —
             // see the comment there.
             let effective_effort = effective_channel_effort(*effort, &capabilities);
-            let provider = OpenAiResponsesProvider::with_credentials(
+            let mut provider = OpenAiResponsesProvider::with_credentials(
                 credentials,
                 channel.model.clone(),
                 base_url,
@@ -462,6 +471,9 @@ pub fn build_provider_for_channel(
             .with_prompt_cache(prompt_cache)
             .with_dialect(*dialect)
             .with_id(entry_id.to_string());
+            if let Some(sid) = session_id {
+                provider = provider.with_session_id(sid);
+            }
             Arc::new(provider)
         }
     }

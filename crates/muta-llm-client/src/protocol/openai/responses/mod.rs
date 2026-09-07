@@ -247,6 +247,11 @@ impl OpenAiResponsesProvider {
         self
     }
 
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.endpoint = self.endpoint.with_session_id(session_id);
+        self
+    }
+
     /// Human-readable backend label for error messages and logs.
     fn label(&self) -> &'static str {
         match self.dialect {
@@ -298,6 +303,9 @@ impl OpenAiResponsesProvider {
                 req = req.header(name, value);
             }
         }
+        req = self
+            .endpoint
+            .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
         req
     }
 
