@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.3] - 2026-09-07
+
+### Changed
+
+- **View layer renamed to render.** The mutx `view` module is now `render` (telemetry overlay's
+  `view.rs` is now `draw.rs`), aligning naming with the rendering pipeline.
+- **Session scheduling removed.** Deprecated cron/repeat scheduling (`/cron`, `/repeat` and
+  schedule ops) has been decommissioned across contracts, persistence, and runtime.
+- **Transcript contracts extracted.** Shared transcript projection types now live in
+  `muta-contracts::transcript`; persistence event storage was consolidated into session fields.
+- **Session routing extracted.** Slash-command session routing moved to a dedicated
+  `handlers_slash/session_route` module, and unattended restore integration tests replace the
+  delegated restore suite.
+
+### Added
+
+- New ADRs: incremental streaming pipeline with single-parse hot path (0184), non-blocking
+  workspace trust with projection-preserved interrupted turns (0185), and single transcript
+  projection directives persistence (0186).
+
 ## [0.39.2] - 2026-09-07
 
 ### Added
