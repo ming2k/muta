@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-09-07
+
+### Added
+
+- **LLM endpoint session affinity and OpenCode relay headers.**
+  Dynamic session tracking and sticky routing via `x-opencode-session`, `x-opencode-request`,
+  and `x-session-affinity` across OpenAI, Anthropic, Google, and OpenCode Go wire protocols.
+
+### Fixed
+
+- **Streaming transcript layout quadratic degradation elimination (ADR-0189).**
+  The TUI rendering engine now maintains a prefix-aware virtual window during live
+  streaming. Even while the live tail message is actively streaming and unmeasured,
+  all preceding settled history chunks are indexed and skipped in O(1) via binary
+  search, preventing per-frame O(N) linear height walks over long transcripts.
+- **In-flight bounded tool command execution (ADR-0189).**
+  Both episodic and persistent shell executions now enforce hard bounded memory
+  caps online during process execution, compacting runaway outputs in-flight to
+  strictly prevent out-of-memory crashes on infinite streams. High-frequency
+  streaming events are coalesced into 30ms/4KB batches, protecting UI event
+  loops from saturation and frame drops.
+- **Zero-allocation turn persistence hot paths (ADR-0189).**
+  - Eliminated repetitive full-transcript message projections on every ReAct turn
+    boundary via an incremental `SessionState::projected_cache`.
+  - Replaced deep-clone message comparisons (`to_wire()`) with zero-allocation
+    `Message::semantic_wire_eq`.
+  - Eliminated full-history cloning inside the session state mutex: incremental
+    turn commits now clone only delta entries and metadata via
+    `clone_metadata_without_history`.
+  - Eliminated intermediate JSON AST serialization in `compute_checksum` via
+    a zero-copy `SessionRowChecksumView` streaming directly to CRC32C.
+  - Optimized `last_effective_prompt_from_data` to locate the latest user prompt
+    via reverse scan respecting compaction watermarks without projection materialization.
+
 ## [0.40.0] - 2026-09-07
 
 ### Fixed
