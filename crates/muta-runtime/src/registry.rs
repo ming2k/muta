@@ -151,6 +151,12 @@ pub struct SessionRegistry {
     sessions: Arc<Mutex<HashMap<String, Arc<HostedSession>>>>,
     monitor: MonitorBus,
     meta: Arc<Mutex<MonitorMeta>>,
+    /// Daemon-level task fabric (ADR-0190 D6): rehosted services and other
+    /// owner-less tasks live here, published onto the monitor bus as
+    /// `TaskUpdated`/`TaskRemoved` diffs and folded into monitor snapshots.
+    daemon_tasks: Arc<crate::background_jobs::BackgroundJobManager>,
+    /// The live daemon-task rows folded for snapshots (id → row).
+    daemon_task_rows: Arc<std::sync::Mutex<HashMap<String, muta_contracts::MonitoredTask>>>,
 }
 
 /// How long a never-persisted (empty) hosted session may sit idle before the
@@ -195,6 +201,171 @@ impl SessionRegistry {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             monitor,
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
+            daemon_tasks: Arc::new(crate::background_jobs::BackgroundJobManager::new()),
+            daemon_task_rows: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The daemon-level task fabric (ADR-0190 D6). Rehosted services and
+    /// other owner-less tasks spawn here; every lifecycle event is folded
+    /// into the snapshot cache and published as a monitor diff.
+    pub fn daemon_tasks(&self) -> Arc<crate::background_jobs::BackgroundJobManager> {
+        self.daemon_tasks.clone()
+    }
+
+    /// Spawn a task on the daemon fabric: monitor-visible, owner-less.
+    pub async fn spawn_daemon_task(
+        &self,
+        command: String,
+        label: Option<String>,
+        kind: muta_contracts::JobKind,
+    ) -> Result<muta_contracts::BackgroundJobInfo, String> {
+        let mgr = self.daemon_tasks.clone();
+        let roots: Vec<std::path::PathBuf> = Vec::new();
+        let workspace = std::env::temp_dir();
+        mgr.spawn_process_ex(
+            command,
+            crate::background_jobs::ProcessSpawnOptions {
+                label,
+                cwd: None,
+                workspace_root: &workspace,
+                additional_roots: &roots,
+                detached: true,
+                timeout: None,
+                owner_session: None,
+            },
+            kind,
+            Some(muta_contracts::Readiness::FirstOutput),
+            None,
+        )
+        .await
+    }
+
+    /// Stop a daemon-level task (the human-side control the TUI panel will
+    /// drive).
+    pub fn stop_daemon_task(&self, task_id: &str) -> Result<(), String> {
+        self.daemon_tasks.kill_job(&muta_contracts::JobId::from(task_id))
+    }
+
+    /// Fold one fabric event into the snapshot cache and publish the diff.
+    /// Runs on a dedicated subscriber task per registry instance.
+    pub fn start_daemon_task_monitor(self: &Arc<Self>) {
+        let mgr = self.daemon_tasks.clone();
+        let rows = self.daemon_task_rows.clone();
+        let registry = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut rx = mgr.subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(crate::background_jobs::BackgroundJobEvent::Started(info)) => {
+                        Self::upsert_task_row(&rows, &info, None);
+                        if let Some(r) = registry.upgrade()
+                            && let Some(task) = rows.lock().unwrap().get(&info.id.0)
+                        {
+                            r.publish_host_event(MonitorEvent::TaskUpdated(task.clone()));
+                        }
+                    }
+                    Ok(crate::background_jobs::BackgroundJobEvent::Progress {
+                        job_id,
+                        line,
+                    }) => {
+                        let changed = {
+                            let mut guard = rows.lock().unwrap();
+                            if let Some(row) = guard.get_mut(&job_id.0) {
+                                row.latest_output = Some(line);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if changed
+                            && let Some(r) = registry.upgrade()
+                            && let Some(task) = rows.lock().unwrap().get(&job_id.0)
+                        {
+                            r.publish_host_event(MonitorEvent::TaskUpdated(task.clone()));
+                        }
+                    }
+                    Ok(crate::background_jobs::BackgroundJobEvent::Ready { job_id }) => {
+                        let changed = {
+                            let mut guard = rows.lock().unwrap();
+                            if let Some(row) = guard.get_mut(&job_id.0) {
+                                row.state = muta_contracts::JobState::Ready {
+                                    started_at_ms: row.created_at_ms,
+                                    ready_at_ms: crate::registry::unix_epoch_ms(),
+                                };
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if changed
+                            && let Some(r) = registry.upgrade()
+                            && let Some(task) = rows.lock().unwrap().get(&job_id.0)
+                        {
+                            r.publish_host_event(MonitorEvent::TaskUpdated(task.clone()));
+                        }
+                    }
+                    Ok(crate::background_jobs::BackgroundJobEvent::Completed(outcome)) => {
+                        if let Some(info) = mgr.get_job(&outcome.job_id) {
+                            Self::upsert_task_row(&rows, &info, Some(&outcome));
+                            if let Some(r) = registry.upgrade()
+                                && let Some(task) = rows.lock().unwrap().get(&outcome.job_id.0)
+                            {
+                                r.publish_host_event(MonitorEvent::TaskUpdated(task.clone()));
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    fn upsert_task_row(
+        rows: &Arc<std::sync::Mutex<HashMap<String, muta_contracts::MonitoredTask>>>,
+        info: &muta_contracts::BackgroundJobInfo,
+        outcome: Option<&muta_contracts::BackgroundJobOutcome>,
+    ) {
+        let mut guard = rows.lock().unwrap();
+        let row = guard.entry(info.id.0.clone()).or_insert_with(|| {
+            let (label, spec) = match &info.spec {
+                muta_contracts::JobSpec::Process { command, label, .. } => (
+                    label.clone().unwrap_or_else(|| {
+                        command.split_whitespace().next().unwrap_or("task").to_string()
+                    }),
+                    command.clone(),
+                ),
+                muta_contracts::JobSpec::Timer { label, prompt, .. } => (
+                    label.clone().unwrap_or_else(|| "timer".to_string()),
+                    prompt.clone(),
+                ),
+            };
+            let log_path = info
+                .id
+                .0
+                .is_empty()
+                .then(|| None)
+                .flatten();
+            muta_contracts::MonitoredTask {
+                id: info.id.0.clone(),
+                label,
+                spec,
+                state: info.state.clone(),
+                owner_session: None,
+                created_at_ms: info.created_at_ms,
+                completed_at_ms: info.completed_at_ms,
+                latest_output: info.latest_output.clone(),
+                log_path,
+            }
+        });
+        row.state = match outcome {
+            Some(o) => o.state.clone(),
+            None => info.state.clone(),
+        };
+        row.completed_at_ms = info.completed_at_ms.or(row.completed_at_ms);
+        if let Some(o) = outcome {
+            row.latest_output = Some(o.summary.clone());
         }
     }
     /// Look up an active hosted session by its ID.
@@ -1157,11 +1328,19 @@ impl SessionRegistry {
             }
         }
         sessions.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+        let tasks = self
+            .daemon_task_rows
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
         let meta = self.meta.lock().await.clone();
         MonitorSnapshot {
             project_root: meta.project_root.unwrap_or_default(),
             daemon_started_at: meta.started_at,
             sessions,
+            tasks,
         }
     }
 

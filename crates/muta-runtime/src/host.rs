@@ -214,6 +214,9 @@ async fn run_inner(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     registry.set_monitor_meta(String::new(), started_at).await;
+    // ADR-0190 D6: the daemon-task monitor tap folds daemon-fabric events
+    // into monitor snapshots/diffs so rehosted services are operator-visible.
+    registry.start_daemon_task_monitor();
 
     // Single instance (ADR-0101)
     // Hold the global lock for the process lifetime. A second daemon spawned
@@ -387,50 +390,31 @@ async fn run_inner(
 
     // Boot rehost (ADR-0190 D4, the general successor of ADR-0125's
     // armed-schedule rehost): every service task in the durable task ledger
-    // that carries a restart policy is re-spawned so services survive
-    // daemon restarts. Runs after the listener binds (startup latency stays
-    // flat); each respawn is a bare process start — the owning session, if
-    // hosted, sees the task through the shared fabric once re-attached.
+    // that carries a restart policy is re-spawned on the **registry's
+    // daemon-task fabric** — so its lifecycle events are monitor-visible
+    // (the D6 hub), not lost to an unobserved manager. Failures are logged
+    // and non-fatal.
     {
-        use crate::background_jobs::{BackgroundJobManager, ProcessSpawnOptions};
         use muta_contracts::JobSpec;
         let dirs = muta_persistence::paths::get();
-        crate::task_ledger::rehost_all(&dirs.db_file(), |row| {
+        let registry_for_rehost = Arc::clone(&registry);
+        crate::task_ledger::rehost_all(&dirs.db_file(), move |row| {
             let JobSpec::Process {
                 command,
-                restart: Some(policy),
+                restart: Some(_policy),
                 ..
             } = &row.spec
             else {
                 return;
             };
-            // Spawn detached from any session: the rehosted service is a
-            // daemon-level service; its events reach whichever session's
-            // mailbox subscribes to the shared fabric next. Use a plain
-            // process spawn on the workspace root when known; failures are
-            // logged and non-fatal.
-            let workspace = std::env::temp_dir();
-            let roots: Vec<std::path::PathBuf> = Vec::new();
-            let mgr = BackgroundJobManager::new();
-            let mgr_for_log = mgr.clone();
+            let registry = Arc::clone(&registry_for_rehost);
             let command = command.clone();
-            let policy = *policy;
             tokio::spawn(async move {
-                match mgr
-                    .spawn_process_ex(
+                match registry
+                    .spawn_daemon_task(
                         command,
-                        ProcessSpawnOptions {
-                            label: Some(format!("rehost:{}", row.job_id)),
-                            cwd: None,
-                            workspace_root: &workspace,
-                            additional_roots: &roots,
-                            detached: true,
-                            timeout: None,
-                            owner_session: None,
-                        },
+                        Some(format!("rehost:{}", row.job_id)),
                         muta_contracts::JobKind::Service,
-                        Some(muta_contracts::Readiness::FirstOutput),
-                        Some(policy),
                     )
                     .await
                 {
@@ -438,7 +422,6 @@ async fn run_inner(
                         tracing::info!(job = %info.id.0, "rehosted service started");
                     }
                     Err(error) => {
-                        let _ = &mgr_for_log;
                         tracing::warn!(%error, "rehosted service failed to start");
                     }
                 }

@@ -315,6 +315,28 @@ TUI notices, `/jobs` table, poll/logs/kill/wait tools). An interactive TUI
 task panel (list/tail/stop affordances) is UX work that adds no structure
 and is deferred to the frontend roadmap.
 
+**D6 revisited (2026-09-07, second hardening pass): partially promoted.**
+Two facts forced the promotion of the daemon-side half. First, D4's rehost
+spawned services into an unobserved manager — their events had no
+subscriber, a D7-class drift. Second, daemon-level tasks (owner-less,
+restart-surviving) had **no human-side control plane at all**: stopping a
+runaway rehosted service required asking the model or restarting the
+daemon. This pass therefore landed:
+
+- **`SessionRegistry` daemon-task hub**: a registry-scoped fabric whose
+  events fold into a snapshot cache and publish as monitor diffs.
+  `spawn_daemon_task` / `stop_daemon_task` are the operator verbs; the
+  rehost path now spawns through the hub (closing the unobserved-manager
+  gap).
+- **Monitor protocol extension** (additive per ADR-0134):
+  `MonitorSnapshot.tasks` + `MonitoredTask` rows, and
+  `MonitorEvent::TaskUpdated`/`TaskRemoved` diffs. `muta daemon status`
+  renders a daemon-tasks section (tested); clients upsert via the new
+  `upsert_task_row`.
+- The **interactive TUI panel** remains deferred to the frontend roadmap —
+  its data plane now exists; only the view surface is missing, and that
+  surface should follow ADR-0141/0172/0173 governance as its own ADR.
+
 **Timer gained its model-facing consumer** (closing the D7 gap this pass
 itself created): `run_command { schedule_in_secs, repeat }` arms a Timer
 task through `BackgroundJobService::spawn_timer`; the schema test locks

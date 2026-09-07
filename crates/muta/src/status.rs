@@ -17,7 +17,7 @@ use std::path::Path;
 use muta_contracts::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };
-use muta_runtime::client::{self, DaemonDiagnostics, upsert_session_row};
+use muta_runtime::client::{self, DaemonDiagnostics, upsert_session_row, upsert_task_row};
 
 /// How `muta daemon status` renders its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,12 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
             }
             MonitorEvent::SessionRemoved { session_id } => {
                 state.sessions.retain(|row| row.id != session_id);
+            }
+            MonitorEvent::TaskUpdated(task) => {
+                upsert_task_row(&mut state.tasks, task);
+            }
+            MonitorEvent::TaskRemoved { task_id } => {
+                state.tasks.retain(|row| row.id != task_id);
             }
             // The daemon is draining (ADR-0101): the stream ends right
             // after this frame. Print a note and stop watching — the next
@@ -240,6 +246,37 @@ pub(crate) fn table(snapshot: &MonitorSnapshot) -> String {
         root,
         snapshot.sessions.len()
     ));
+    if !snapshot.tasks.is_empty() {
+        out.push_str(&format!("  {} daemon task(s):\n", snapshot.tasks.len()));
+        out.push_str(&format!(
+            "    {:<16} {:<12} {:<28} {}\n",
+            "TASK", "STATE", "LABEL", "LATEST"
+        ));
+        for t in &snapshot.tasks {
+            let state = match &t.state {
+                muta_contracts::JobState::Running { .. } => "running",
+                muta_contracts::JobState::Ready { .. } => "ready",
+                muta_contracts::JobState::Succeeded { .. } => "done",
+                muta_contracts::JobState::Failed { .. } => "failed",
+                muta_contracts::JobState::Killed { .. } => "killed",
+                muta_contracts::JobState::TimedOut { .. } => "timed out",
+                muta_contracts::JobState::Queued => "queued",
+            };
+            let latest = t.latest_output.as_deref().unwrap_or("");
+            let latest = if latest.chars().count() > 30 {
+                format!("{}…", latest.chars().take(29).collect::<String>())
+            } else {
+                latest.to_string()
+            };
+            out.push_str(&format!(
+                "    {:<16} {:<12} {:<28} {}\n",
+                short_id(&t.id),
+                state,
+                truncate_chars(&t.label, 28),
+                latest
+            ));
+        }
+    }
     if snapshot.sessions.is_empty() {
         out.push_str("  (all quiet — no running or blocked sessions)\n");
         return out;
@@ -306,6 +343,14 @@ fn detail(row: &MonitoredSession) -> String {
         parts.push(truncate(&row.overview, 60));
     }
     parts.join(" · ")
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    if s.chars().count() > n {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    } else {
+        s.to_string()
+    }
 }
 
 fn short_id(id: &str) -> String {
@@ -377,7 +422,32 @@ mod tests {
             project_root: "/home/u/proj".into(),
             daemon_started_at: 50,
             sessions: rows,
+            tasks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn table_renders_daemon_tasks_section() {
+        let mut snap = snapshot(Vec::new());
+        snap.tasks = vec![muta_contracts::MonitoredTask {
+            id: "task_abc12345".into(),
+            label: "rehost:svc_old".into(),
+            spec: "npm run dev".into(),
+            state: muta_contracts::JobState::Ready {
+                started_at_ms: 0,
+                ready_at_ms: 0,
+            },
+            owner_session: None,
+            created_at_ms: 100,
+            completed_at_ms: None,
+            latest_output: Some("listening on :3000".into()),
+            log_path: None,
+        }];
+        let text = table(&snap);
+        assert!(text.contains("1 daemon task(s)"), "{text}");
+        assert!(text.contains("ready"), "{text}");
+        assert!(text.contains("rehost:svc_old"), "{text}");
+        assert!(text.contains("listening on :3000"), "{text}");
     }
 
     #[test]

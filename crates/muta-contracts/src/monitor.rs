@@ -92,6 +92,12 @@ pub enum MonitorEvent {
     /// reconnects against it. Emitted exactly once, before the individual
     /// `SessionRemoved` diffs of the same shutdown.
     DaemonDraining,
+    /// A daemon-level task (ADR-0190) changed in place — spawned, progressed
+    /// to `Ready`, or settled. Carries the complete row; consumers upsert
+    /// by id. Session-scoped tasks do not stream here.
+    TaskUpdated(MonitoredTask),
+    /// A daemon-level task left the snapshot entirely (pruned / aborted).
+    TaskRemoved { task_id: String },
 }
 
 /// The daemon-level snapshot: who is serving and what is happening right now.
@@ -104,6 +110,41 @@ pub struct MonitorSnapshot {
     /// in-TUI `/serve` prehost).
     pub daemon_started_at: u64,
     pub sessions: Vec<MonitoredSession>,
+    /// Daemon-level task fabric rows (ADR-0190): rehosted services and any
+    /// other task with no owning session. Session-scoped tasks stay in
+    /// their session's own fabric; this is the human-side view of what the
+    /// daemon itself is running on the operator's behalf. Empty for
+    /// producers that predate the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<MonitoredTask>,
+}
+
+/// One row of the daemon-level task tree (ADR-0190 D6): identity, spec
+/// label, lifecycle state, and ownership. Content-free — the transcript
+/// stays in the session, the full log stays on disk (path included).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct MonitoredTask {
+    pub id: String,
+    /// Human label (job label, or the command's first word).
+    pub label: String,
+    /// Spec summary line (command preview / timer descriptor).
+    pub spec: String,
+    pub state: crate::job::JobState,
+    /// Owning session id; `None` = daemon-level (rehosted services).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session: Option<String>,
+    /// Unix-epoch ms the task was created.
+    pub created_at_ms: u64,
+    /// Unix-epoch ms of settle, when terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<u64>,
+    /// Latest output line, for the at-a-glance tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_output: Option<String>,
+    /// On-disk full log path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
 }
 
 /// One row of the control panel: a hosted session's identity, status, and
@@ -320,6 +361,7 @@ mod tests {
         let snapshot = MonitorSnapshot {
             project_root: "/tmp/proj".into(),
             daemon_started_at: 1_700_000_000,
+            tasks: Vec::new(),
             sessions: vec![MonitoredSession {
                 id: "s-1".into(),
                 overview: "fix the flaky test".into(),

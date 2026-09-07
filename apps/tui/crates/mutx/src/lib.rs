@@ -611,6 +611,11 @@ pub async fn run_tui(
                         muta_contracts::MonitorEvent::SessionRemoved { session_id } => {
                             rows.retain(|r| r.id != session_id);
                         }
+                        // Daemon-level task diffs (ADR-0190): the dashboard's
+                        // task section lives in the rows map keyed by task id
+                        // via the same rev-counter refresh — folded in Phase 2.
+                        muta_contracts::MonitorEvent::TaskUpdated(_) => {}
+                        muta_contracts::MonitorEvent::TaskRemoved { .. } => {}
                         // The daemon began its graceful shutdown (ADR-0101):
                         // no row change; the stream closes right after. The
                         // next daemon interaction re-discovers or re-spawns.

@@ -1214,6 +1214,17 @@ pub fn upsert_session_row(rows: &mut Vec<MonitoredSession>, row: MonitoredSessio
     rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
 }
 
+pub fn upsert_task_row(
+    rows: &mut Vec<muta_contracts::MonitoredTask>,
+    row: muta_contracts::MonitoredTask,
+) {
+    match rows.iter_mut().find(|existing| existing.id == row.id) {
+        Some(existing) => *existing = row,
+        None => rows.push(row),
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.created_at_ms));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

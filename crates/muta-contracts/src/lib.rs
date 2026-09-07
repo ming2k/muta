@@ -217,7 +217,8 @@ pub use model::{
     register_fitted_models, resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
-    MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
+    MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,
+    SessionStatus,
 };
 pub use pressure::{
     CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, LayeredRequestWeights,
