@@ -1046,14 +1046,39 @@ fn test_delete_selected_history_entry_and_cascade() {
 
     // 1. Setup 3 history entries
     app.input_history = vec![
-        muta_contracts::HistoryEntry::new("first entry".into(), Some("session-test".into()), None, 100),
-        muta_contracts::HistoryEntry::new("target entry".into(), Some("session-test".into()), None, 200),
-        muta_contracts::HistoryEntry::new("third entry".into(), Some("session-test".into()), None, 300),
+        muta_contracts::HistoryEntry::new(
+            "first entry".into(),
+            Some("session-test".into()),
+            None,
+            100,
+        ),
+        muta_contracts::HistoryEntry::new(
+            "target entry".into(),
+            Some("session-test".into()),
+            None,
+            200,
+        ),
+        muta_contracts::HistoryEntry::new(
+            "third entry".into(),
+            Some("session-test".into()),
+            None,
+            300,
+        ),
     ];
     // Backfill has target entry
     app.session_history_backfill = vec![
-        muta_contracts::HistoryEntry::new("target entry".into(), Some("session-test".into()), None, 200),
-        muta_contracts::HistoryEntry::new("other backfill".into(), Some("session-test".into()), None, 250),
+        muta_contracts::HistoryEntry::new(
+            "target entry".into(),
+            Some("session-test".into()),
+            None,
+            200,
+        ),
+        muta_contracts::HistoryEntry::new(
+            "other backfill".into(),
+            Some("session-test".into()),
+            None,
+            250,
+        ),
     ];
     // Attachments has target entry
     let identity = ("target entry".to_string(), Some("session-test".to_string()));
@@ -1102,16 +1127,19 @@ fn test_delete_selected_history_entry_and_cascade() {
 
 #[test]
 fn test_shift_delete_and_bare_delete_dispatch() {
-    use crossterm::event::{KeyCode, KeyModifiers};
     use crate::keymap::Key;
     use crate::modal_keys::resolve_modal_key;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     let c = crate::input::InputContext::default();
 
     // Shift+Delete in HistorySearch resolves to HistoryDeleteSelected
     let shift_del = Key::SHIFT_DELETE;
     let action = resolve_modal_key(crate::Modal::HistorySearch, shift_del, &c);
-    assert_eq!(action, Some(crate::input::InputAction::HistoryDeleteSelected));
+    assert_eq!(
+        action,
+        Some(crate::input::InputAction::HistoryDeleteSelected)
+    );
 
     // Bare Delete in HistorySearch falls through to None (text engine DeleteForward)
     let bare_del = Key {
@@ -1124,14 +1152,21 @@ fn test_shift_delete_and_bare_delete_dispatch() {
 
 #[test]
 fn test_composer_hints_history_search_density() {
-    use crate::components::composer_hints::{hint_row_parts, ComposeTarget, ActionDensity};
+    use crate::components::composer_hints::{ActionDensity, ComposeTarget, hint_row_parts};
     use crate::render::Theme;
 
     let theme = Theme::default();
     let key = crate::keymap::Key::TAB;
 
     // Full density: includes close, navigate, delete, insert
-    let (left, right) = hint_row_parts(false, ActionDensity::Full, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let (left, right) = hint_row_parts(
+        false,
+        ActionDensity::Full,
+        ComposeTarget::HistorySearch,
+        &theme,
+        theme.panel(),
+        key,
+    );
     let left_str: String = left.iter().map(|s| s.content.as_ref()).collect();
     let right_str: String = right.iter().map(|s| s.content.as_ref()).collect();
     assert!(left_str.contains("close"));
@@ -1143,7 +1178,14 @@ fn test_composer_hints_history_search_density() {
     assert!(right_str.contains("insert"));
 
     // Compact density: drops navigate and Tab
-    let (left_c, right_c) = hint_row_parts(false, ActionDensity::Compact, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let (left_c, right_c) = hint_row_parts(
+        false,
+        ActionDensity::Compact,
+        ComposeTarget::HistorySearch,
+        &theme,
+        theme.panel(),
+        key,
+    );
     let left_c_str: String = left_c.iter().map(|s| s.content.as_ref()).collect();
     let right_c_str: String = right_c.iter().map(|s| s.content.as_ref()).collect();
     assert!(left_c_str.contains("close"));
@@ -1153,7 +1195,14 @@ fn test_composer_hints_history_search_density() {
     assert!(right_c_str.contains("Enter"));
 
     // Tiny density: drops delete as well, only close and Enter insert
-    let (left_t, right_t) = hint_row_parts(false, ActionDensity::Tiny, ComposeTarget::HistorySearch, &theme, theme.panel(), key);
+    let (left_t, right_t) = hint_row_parts(
+        false,
+        ActionDensity::Tiny,
+        ComposeTarget::HistorySearch,
+        &theme,
+        theme.panel(),
+        key,
+    );
     let left_t_str: String = left_t.iter().map(|s| s.content.as_ref()).collect();
     let right_t_str: String = right_t.iter().map(|s| s.content.as_ref()).collect();
     assert!(left_t_str.contains("close"));
@@ -1180,12 +1229,7 @@ async fn test_ctrl_c_in_history_search() {
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(AtomicUsize::new(0));
 
-    crate::event_loop::handle_ctrl_c(
-        &mut app,
-        "test-session",
-        &copy_tx,
-        &copy_pending,
-    );
+    crate::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
 
     // Modal remains open, input cleared, modal_index reset
     assert_eq!(app.active_modal(), crate::Modal::HistorySearch);
@@ -1193,12 +1237,7 @@ async fn test_ctrl_c_in_history_search() {
     assert_eq!(app.modal_index, 0);
 
     // Case 2: Filter query is empty -> Ctrl+C dismisses history modal
-    crate::event_loop::handle_ctrl_c(
-        &mut app,
-        "test-session",
-        &copy_tx,
-        &copy_pending,
-    );
+    crate::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
 
     // Modal dismissed
     assert_ne!(app.active_modal(), crate::Modal::HistorySearch);
@@ -1225,7 +1264,7 @@ fn test_history_ranking_prefers_exact_word_over_scattered_and_applies_recency() 
             "let's write the adr".into(),
             Some("other-session".into()),
             None,
-            base_time + 1 * hour_ms,
+            base_time + hour_ms,
         ),
         // Word prefix "adroit approach"
         muta_contracts::HistoryEntry::new(
@@ -1254,10 +1293,16 @@ fn test_history_ranking_prefers_exact_word_over_scattered_and_applies_recency() 
     assert_eq!(app.input_history[rows[1].0].text, "let's write the adr");
 
     // Row 2: "adroit approach to problems" (word prefix)
-    assert_eq!(app.input_history[rows[2].0].text, "adroit approach to problems");
+    assert_eq!(
+        app.input_history[rows[2].0].text,
+        "adroit approach to problems"
+    );
 
     // Row 3: "all dogs run in the park" (scattered acronym, MUST be lowest rank despite newer timestamp!)
-    assert_eq!(app.input_history[rows[3].0].text, "all dogs run in the park");
+    assert_eq!(
+        app.input_history[rows[3].0].text,
+        "all dogs run in the park"
+    );
 
     // Verify exact word scores strictly higher than scattered acronym
     assert!(rows[0].1.score > rows[3].1.score);

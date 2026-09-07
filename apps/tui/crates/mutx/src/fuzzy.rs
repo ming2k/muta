@@ -221,7 +221,11 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<FuzzyMatch> {
     let last_pos = *positions.last().unwrap_or(&0);
 
     let left_boundary = first_pos == 0 || is_word_boundary(Some(h[first_pos - 1]), h[first_pos]);
-    let next_char = if last_pos + 1 < h_len { Some(h[last_pos + 1]) } else { None };
+    let next_char = if last_pos + 1 < h_len {
+        Some(h[last_pos + 1])
+    } else {
+        None
+    };
     let right_boundary = is_right_boundary(h[last_pos], next_char);
 
     if is_contiguous {
@@ -385,7 +389,10 @@ mod tests {
 
         assert!(exact.score > prefix.score, "exact word must beat prefix");
         assert!(prefix.score > substring.score, "prefix must beat substring");
-        assert!(substring.score > scattered.score, "substring must beat scattered acronym");
+        assert!(
+            substring.score > scattered.score,
+            "substring must beat scattered acronym"
+        );
     }
 
     /// Empty query in rank() returns every item, unhighlighted.

@@ -30,8 +30,8 @@ use mutx_engine::{Alignment, Block, Color, Frame, Line, Modifier, Paragraph, Rec
 use crate::components::options::push_wrapped_styled;
 use crate::primitives::contrast_fg;
 use crate::question_model::{QuestionAction, QuestionEffect, QuestionModel};
-use crate::trust_gate;
 use crate::render::Theme;
+use crate::trust_gate;
 
 /// Width budget for the centered trust panel, as a fraction of the
 /// terminal width. Clamped so the panel stays readable both on very

@@ -1147,8 +1147,19 @@ mod tests {
 
         let text = "a".repeat(60);
         // 64 is out of bounds for string of length 60: must not panic.
-        let line = line_spans("", Style::default(), &text, Some((0, 64)), Style::default(), Color::Red);
-        let selected_spans: Vec<_> = line.spans.iter().filter(|s| s.style.bg == Color::Red).collect();
+        let line = line_spans(
+            "",
+            Style::default(),
+            &text,
+            Some((0, 64)),
+            Style::default(),
+            Color::Red,
+        );
+        let selected_spans: Vec<_> = line
+            .spans
+            .iter()
+            .filter(|s| s.style.bg == Color::Red)
+            .collect();
         assert_eq!(selected_spans.len(), 1);
         assert_eq!(selected_spans[0].content, text);
 

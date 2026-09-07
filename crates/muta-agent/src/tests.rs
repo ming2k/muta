@@ -2528,7 +2528,8 @@ async fn execution_policy_blocks_ask_user_for_child_agents() {
     );
     assert!(
         lines.iter().any(|line| {
-            line.starts_with("tool-result ask_user") && line.contains("forbidden by ExecutionPolicy")
+            line.starts_with("tool-result ask_user")
+                && line.contains("forbidden by ExecutionPolicy")
         }),
         "tool result should contain ExecutionPolicy rejection: {lines:?}"
     );

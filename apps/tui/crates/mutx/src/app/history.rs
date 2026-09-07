@@ -569,13 +569,17 @@ impl App {
 
     /// Delete an entry from input history at `orig_idx` (an index into [`App::input_history`]),
     /// cascading to SQLite persistence, session backfill, and attachment cache.
-    pub fn delete_history_entry_at(&mut self, orig_idx: usize) -> Option<muta_contracts::HistoryEntry> {
+    pub fn delete_history_entry_at(
+        &mut self,
+        orig_idx: usize,
+    ) -> Option<muta_contracts::HistoryEntry> {
         if orig_idx >= self.input_history.len() {
             return None;
         }
         let removed = self.input_history.remove(orig_idx);
         // Cascade 1: Prune matching text from current session's backfill
-        self.session_history_backfill.retain(|e| e.text != removed.text);
+        self.session_history_backfill
+            .retain(|e| e.text != removed.text);
         // Cascade 2: Remove cached attachments
         let identity = (removed.text.clone(), removed.session_id.clone());
         self.history_attachments.remove(&identity);
@@ -596,9 +600,7 @@ impl App {
     pub fn delete_selected_history_entry(&mut self) -> Option<muta_contracts::HistoryEntry> {
         let ranked = self.history_rows();
         let pick = ranked.get(self.modal_index).or_else(|| ranked.first());
-        let Some(&(orig_idx, _)) = pick else {
-            return None;
-        };
+        let &(orig_idx, _) = pick?;
         let removed = self.delete_history_entry_at(orig_idx);
         let new_len = self.history_rows().len();
         if self.modal_index >= new_len {

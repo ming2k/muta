@@ -37,21 +37,31 @@ The model window is `derive(entries, directives)`. So is the presentation the
 TUI renders. Nothing derived is persisted, so nothing derived can disagree
 with the facts.
 
-## Event Log and Snapshot
+## The Durable Ledger
 
-The event log is the durable history. Each meaningful session mutation is
-recorded as an event, so replay can rebuild the session even if the process
-stopped between turns. A snapshot exists as an acceleration layer: it gives the
-loader a compact current image, but it must describe the same state the event
-history would produce.
+The durable history is the materialized transcript itself: immutable
+`entries` rows positioned per-session by a gap-free membership `seq`, plus
+the append-only `projections` directive history. There is no separate event
+log — an earlier design promised one, but the membership primary key already
+enforces append-only integrity, so the second representation was removed
+(ADR-0187).
 
-This matters for context projection. Pruning and compaction are not ordinary
-message edits. They archive the original messages and replace the model window
-in one atomic session mutation. On replay, that mutation must not be expanded
-into "archive these messages" plus "replace the model window" plus another
-projection record, because that would duplicate the archive. The event and the
-snapshot describe one operation: original context was retained durably, while a
-smaller projection became model-visible.
+Saves are incremental: a turn commit appends only memberships and directives
+above the durable watermark. Each session row carries a **transcript
+generation id**; when an in-memory transcript no longer shares the store's
+generation (a rebuild mints a new one), the next save escalates to a full
+rewrite inside the same transaction, so divergence can never persist.
+
+Working state — the todo list (derived from `state` entries), title, digest,
+provider pin, round counter, interrupt records, the retry point, and the
+command ledger — lives on the session row in SQLite, protected by a verified
+row checksum. Entries and directives the running binary cannot decode are
+preserved verbatim and round-trip through every save, so a database written
+by a newer muta survives an older one without loss (ADR-0187).
+
+The model window is `derive(entries, directives)`. So is the presentation the
+TUI renders. Nothing derived is persisted, so nothing derived can disagree
+with the facts.
 
 ## Admission and Commit
 

@@ -8,8 +8,8 @@ mod picker;
 
 pub use derive::{derive_channel, derive_entries, derive_entry, resolve_credential, route_models};
 pub use discovery::{
-    discover_connection_models, discover_provider_models, refresh_connection_models_for_etag,
-    sync_fitted_model_registry, DiscoveryOutcome,
+    DiscoveryOutcome, discover_connection_models, discover_provider_models,
+    refresh_connection_models_for_etag, sync_fitted_model_registry,
 };
 use picker::active_model_id_for_entry;
 pub use picker::{

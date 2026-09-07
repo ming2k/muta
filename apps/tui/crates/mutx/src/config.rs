@@ -175,10 +175,10 @@ pub fn thinking_default_expanded(config: &TuiConfig) -> bool {
 /// Load prompt input history from SQLite muta.db (authoritative SSOT).
 pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
     let db_path = muta_persistence::paths::get().db_file();
-    if let Ok(engine) = muta_persistence::db::DatabaseEngine::open(&db_path, None) {
-        if let Ok(entries) = engine.load_input_history(muta_contracts::HISTORY_CAP) {
-            return entries;
-        }
+    if let Ok(engine) = muta_persistence::db::DatabaseEngine::open(&db_path, None)
+        && let Ok(entries) = engine.load_input_history(muta_contracts::HISTORY_CAP)
+    {
+        return entries;
     }
     Vec::new()
 }

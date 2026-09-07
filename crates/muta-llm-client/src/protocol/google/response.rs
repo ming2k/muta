@@ -174,7 +174,7 @@ pub fn stream_payload(payload: &str) -> StreamPayload {
 /// Assemble the stream payload from an already-parsed JSON value — the
 /// single-parse path used by the SSE executor (ADR-0184).
 pub fn stream_payload_value(value: &Value) -> StreamPayload {
-    let root = value.get("response").unwrap_or(&value);
+    let root = value.get("response").unwrap_or(value);
     let mut events = Vec::new();
     let mut thought_signatures = Vec::new();
     let mut text_thought_signature = None;
@@ -189,10 +189,10 @@ pub fn stream_payload_value(value: &Value) -> StreamPayload {
     {
         let mut call_index = 0usize;
         for part in parts {
-            if let Some(signature) = thought_signature(part) {
-                if part.get("functionCall").is_none() {
-                    text_thought_signature = Some(signature);
-                }
+            if let Some(signature) = thought_signature(part)
+                && part.get("functionCall").is_none()
+            {
+                text_thought_signature = Some(signature);
             }
             if let Some(text) = part.get("text").and_then(|text| text.as_str())
                 && !text.is_empty()
@@ -219,16 +219,14 @@ pub fn stream_payload_value(value: &Value) -> StreamPayload {
             }
         }
     }
-    if text_thought_signature.is_none() {
-        if let Some(candidate) = root
+    if text_thought_signature.is_none()
+        && let Some(candidate) = root
             .get("candidates")
             .and_then(|candidates| candidates.as_array())
             .and_then(|candidates| candidates.first())
-        {
-            if let Some(signature) = thought_signature(candidate) {
-                text_thought_signature = Some(signature);
-            }
-        }
+        && let Some(signature) = thought_signature(candidate)
+    {
+        text_thought_signature = Some(signature);
     }
     StreamPayload {
         events,

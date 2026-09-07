@@ -46,10 +46,7 @@ impl SessionStore {
             state
                 .data
                 .transcript
-                .push(muta_contracts::TranscriptEntry::from_state(
-                    0,
-                    Some(todos),
-                ));
+                .push(muta_contracts::TranscriptEntry::from_state(0, Some(todos)));
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
@@ -77,7 +74,10 @@ impl SessionStore {
             ),
             _ => (
                 ContextProjectionKind::Prune,
-                transcript.entries.len().saturating_sub(transcript.project().len()),
+                transcript
+                    .entries
+                    .len()
+                    .saturating_sub(transcript.project().len()),
             ),
         };
         let window = transcript.project();
@@ -125,7 +125,13 @@ impl SessionStore {
     /// Entries projected out of the view by the current directives — the
     /// recoverable originals.
     pub async fn archived_transcript_count(&self) -> usize {
-        self.state.lock().await.data.transcript.projected_out().len()
+        self.state
+            .lock()
+            .await
+            .data
+            .transcript
+            .projected_out()
+            .len()
     }
 
     pub async fn digest(&self) -> (Option<muta_contracts::SessionDigest>, Option<u64>) {
@@ -233,11 +239,14 @@ impl SessionStore {
         self.state.lock().await.data.request_usage_records.clone()
     }
 
+    /// Wholesale usage-record replacement. Rare (crash repair / ledger
+    /// reseed); persists as a full rewrite so records removed from the list
+    /// are removed from the durable ledger too (ADR-0187).
     pub async fn set_request_usage_records(
         &self,
         records: Vec<muta_contracts::RequestUsageRecord>,
     ) -> Result<(), String> {
-        let (path, data, should_persist) = {
+        let (data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.request_usage_records = records;
             state.data.updated_at = unix_timestamp();
@@ -245,11 +254,10 @@ impl SessionStore {
             if !empty_unpersisted {
                 state.defer_persist = false;
             }
-            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+            (state.data.clone(), !empty_unpersisted)
         };
         if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone())
-                .await?;
+            self.persist_full_rewrite(data).await?;
         }
         Ok(())
     }

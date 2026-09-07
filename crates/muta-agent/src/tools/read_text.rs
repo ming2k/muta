@@ -13,9 +13,7 @@ use crate::tools::helpers::{
 #[derive(ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
-    #[tool(
-        desc = "Path to the text file; relative paths use the primary workspace"
-    )]
+    #[tool(desc = "Path to the text file; relative paths use the primary workspace")]
     path: String,
     #[tool(desc = "1-based line number to start reading from (default 1)")]
     offset: Option<i64>,

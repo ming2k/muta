@@ -9,7 +9,6 @@ use mutx_engine::{
 };
 
 use super::Theme;
-pub(crate) use crate::elevation::*;
 pub(crate) use super::components::footer::{
     FooterHint, FooterHintWithBand, modal_footer_text, render_modal_footer,
     render_modal_footer_with_more,
@@ -24,6 +23,7 @@ use super::design::{MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
 /// …). Re-exported here because every overlay already imports this module for
 /// `FooterHint`, so a footer's key + label both come from one place.
 pub(crate) use super::keymap::keyvocab;
+pub(crate) use crate::elevation::*;
 
 /// 2-tier responsive layout breakpoint for TUI views (ADR-0097 evolution, ADR-0181 capability pipeline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

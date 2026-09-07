@@ -38,9 +38,7 @@ impl SearchTextTool {
 #[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchTextArgs {
-    #[tool(
-        desc = "Exact text to search for (default), or regular expression when regex: true."
-    )]
+    #[tool(desc = "Exact text to search for (default), or regular expression when regex: true.")]
     query: String,
     #[tool(
         desc = "Directory or file to search; relative paths use the primary workspace (default '.')"
@@ -49,7 +47,11 @@ struct SearchTextArgs {
     #[tool(
         desc = "File path globs relative to path to include (e.g. [\"*.rs\"]). Alternatives are separate array items (OR)."
     )]
-    #[serde(default, alias = "patterns", deserialize_with = "deserialize_optional_string_or_vec")]
+    #[serde(
+        default,
+        alias = "patterns",
+        deserialize_with = "deserialize_optional_string_or_vec"
+    )]
     include: Option<Vec<String>>,
     #[tool(desc = "File path globs to exclude from search (e.g. [\"target/**\", \"*.log\"]).")]
     #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]

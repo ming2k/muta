@@ -114,11 +114,7 @@ pub fn doom_signature(name: &str, args: &str) -> String {
             .unwrap_or_else(|| ".".to_string());
         let patterns = {
             let s = normalized_string_array(&value, "patterns", false);
-            if s.is_empty() {
-                "*".to_string()
-            } else {
-                s
-            }
+            if s.is_empty() { "*".to_string() } else { s }
         };
         return format!(
             "{name}|{path}|include={patterns}|exclude={}",

@@ -11,8 +11,8 @@ use crate::message_body::draw_message_body;
 use crate::model::document::{CommandPhase, TranscriptMessage};
 use crate::model::layout::{BlockRegion, COMMAND_RESULT_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
-use crate::text_layout::wrap_text;
 use crate::render::TRANSCRIPT_BODY_LEADING_INDENT;
+use crate::text_layout::wrap_text;
 
 pub fn draw_command_result(
     ctx: &mut RenderCtx<'_, '_>,

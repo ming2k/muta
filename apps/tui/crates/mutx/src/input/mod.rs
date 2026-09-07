@@ -189,7 +189,7 @@ fn question_other_field(context: &InputContext) -> bool {
 }
 
 /// Whether the active modal paints its own scrollable body — derived from the
-/// modal's declared [`Claims::body_scroll`] (modal.rs, ADR-0173 §2): the
+/// modal's declared `Claims::body_scroll` (modal.rs, ADR-0173 §2): the
 /// scroll keys page a modal body exactly when the modal declares the family,
 /// so the key→action mirror of `App::modal_scroll_field` can never drift from
 /// the declaration.

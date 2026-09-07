@@ -327,79 +327,82 @@ impl GoogleProvider {
                             ))],
                             Ok(parsed_json) => {
                                 let parsed = response::stream_payload_value(&parsed_json);
-                            if !parsed.thought_signatures.is_empty() {
-                                let mut guard =
-                                    thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
-                                for (id, signature) in &parsed.thought_signatures {
-                                    guard.insert(id.clone(), Value::String(signature.clone()));
-                                }
-                                for event in &parsed.events {
-                                    if let ProviderStreamEvent::ToolCallDelta {
-                                        id: Some(id),
-                                        name: Some(name),
-                                        ..
-                                    } = event
-                                        && let Some(sig) = guard.get(id).cloned()
-                                    {
-                                        guard.insert(name.clone(), sig);
+                                if !parsed.thought_signatures.is_empty() {
+                                    let mut guard = thought_signatures
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    for (id, signature) in &parsed.thought_signatures {
+                                        guard.insert(id.clone(), Value::String(signature.clone()));
                                     }
-                                }
-                            }
-                            if let Some(signature) = parsed.text_thought_signature {
-                                *text_thought_signature
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner()) = Some(signature.clone());
-                            }
-                            let stored_text_sig = text_thought_signature
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .clone();
-                            if let Some(signature) = stored_text_sig {
-                                let mut guard =
-                                    thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
-                                for event in &parsed.events {
-                                    if let ProviderStreamEvent::ToolCallDelta {
-                                        id: Some(id),
-                                        name,
-                                        ..
-                                    } = event
-                                    {
-                                        guard
-                                            .entry(id.clone())
-                                            .or_insert_with(|| Value::String(signature.clone()));
-                                        if let Some(name) = name {
-                                            guard.entry(name.clone()).or_insert_with(|| {
-                                                Value::String(signature.clone())
-                                            });
+                                    for event in &parsed.events {
+                                        if let ProviderStreamEvent::ToolCallDelta {
+                                            id: Some(id),
+                                            name: Some(name),
+                                            ..
+                                        } = event
+                                            && let Some(sig) = guard.get(id).cloned()
+                                        {
+                                            guard.insert(name.clone(), sig);
                                         }
                                     }
                                 }
-                            }
-                            parsed
-                                .events
-                                .into_iter()
-                                .map(|event| match event {
-                                    ProviderStreamEvent::ToolCallDelta {
-                                        id,
-                                        name,
-                                        arguments,
-                                        ..
-                                    } => {
-                                        let mut guard = next_tool_index
-                                            .lock()
-                                            .unwrap_or_else(|e| e.into_inner());
-                                        let index = *guard;
-                                        *guard += 1;
-                                        Ok(ProviderStreamEvent::ToolCallDelta {
-                                            index,
+                                if let Some(signature) = parsed.text_thought_signature {
+                                    *text_thought_signature
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner()) =
+                                        Some(signature.clone());
+                                }
+                                let stored_text_sig = text_thought_signature
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .clone();
+                                if let Some(signature) = stored_text_sig {
+                                    let mut guard = thought_signatures
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    for event in &parsed.events {
+                                        if let ProviderStreamEvent::ToolCallDelta {
+                                            id: Some(id),
+                                            name,
+                                            ..
+                                        } = event
+                                        {
+                                            guard.entry(id.clone()).or_insert_with(|| {
+                                                Value::String(signature.clone())
+                                            });
+                                            if let Some(name) = name {
+                                                guard.entry(name.clone()).or_insert_with(|| {
+                                                    Value::String(signature.clone())
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                parsed
+                                    .events
+                                    .into_iter()
+                                    .map(|event| match event {
+                                        ProviderStreamEvent::ToolCallDelta {
                                             id,
                                             name,
                                             arguments,
-                                        })
-                                    }
-                                    event => Ok(event),
-                                })
-                                .collect()
+                                            ..
+                                        } => {
+                                            let mut guard = next_tool_index
+                                                .lock()
+                                                .unwrap_or_else(|e| e.into_inner());
+                                            let index = *guard;
+                                            *guard += 1;
+                                            Ok(ProviderStreamEvent::ToolCallDelta {
+                                                index,
+                                                id,
+                                                name,
+                                                arguments,
+                                            })
+                                        }
+                                        event => Ok(event),
+                                    })
+                                    .collect()
                             }
                         }
                     }

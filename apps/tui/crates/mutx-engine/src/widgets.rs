@@ -201,10 +201,26 @@ impl<'a> Block<'a> {
         if area.width == 0 || area.height == 0 {
             return area;
         }
-        let left = if self.borders.0 & Borders::LEFT.0 != 0 { 1 } else { 0 };
-        let right = if self.borders.0 & Borders::RIGHT.0 != 0 { 1 } else { 0 };
-        let top = if self.borders.0 & Borders::TOP.0 != 0 { 1 } else { 0 };
-        let bottom = if self.borders.0 & Borders::BOTTOM.0 != 0 { 1 } else { 0 };
+        let left = if self.borders.0 & Borders::LEFT.0 != 0 {
+            1
+        } else {
+            0
+        };
+        let right = if self.borders.0 & Borders::RIGHT.0 != 0 {
+            1
+        } else {
+            0
+        };
+        let top = if self.borders.0 & Borders::TOP.0 != 0 {
+            1
+        } else {
+            0
+        };
+        let bottom = if self.borders.0 & Borders::BOTTOM.0 != 0 {
+            1
+        } else {
+            0
+        };
 
         Rect {
             x: area.x.saturating_add(left),
@@ -282,8 +298,7 @@ impl<'a> Block<'a> {
         }
 
         // Corners
-        if self.borders.0 & (Borders::TOP.0 | Borders::LEFT.0)
-            == (Borders::TOP.0 | Borders::LEFT.0)
+        if self.borders.0 & (Borders::TOP.0 | Borders::LEFT.0) == (Borders::TOP.0 | Borders::LEFT.0)
         {
             grid.set(area.x, area.y, Cell::narrow(tl, bar_style));
         }
@@ -297,7 +312,11 @@ impl<'a> Block<'a> {
             == (Borders::BOTTOM.0 | Borders::LEFT.0)
             && area.height > 1
         {
-            grid.set(area.x, area.y + area.height - 1, Cell::narrow(bl, bar_style));
+            grid.set(
+                area.x,
+                area.y + area.height - 1,
+                Cell::narrow(bl, bar_style),
+            );
         }
         if self.borders.0 & (Borders::BOTTOM.0 | Borders::RIGHT.0)
             == (Borders::BOTTOM.0 | Borders::RIGHT.0)

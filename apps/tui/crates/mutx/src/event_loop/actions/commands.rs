@@ -217,7 +217,10 @@ pub(crate) async fn handle_send_slash(
         && !cmd_args.trim().is_empty()
         && !cmd_args.trim().starts_with("list")
     {
-        let target = cmd_args.trim().split_whitespace().next().unwrap_or(cmd_args.trim());
+        let target = cmd_args
+            .split_whitespace()
+            .next()
+            .unwrap_or(cmd_args.trim());
         let short_id = crate::session::short_session_id(target);
         app.switching_session = Some(short_id.clone());
         *runtime.switching_session.lock().await = Some(short_id);

@@ -12,12 +12,12 @@ use super::sticky::StickyStep;
 use crate::message_body::draw_message_body;
 use crate::model::document::TranscriptMessage;
 use crate::model::selection::{CellDragInfo, SelectionState};
-use crate::text_layout::{padded_tail, wrap_text};
-use crate::tools::{ArgLayout, DiffCache, ToolStatus};
 use crate::render::{
     STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
     TOOL_STEP_CHILDREN_GAP_ROWS,
 };
+use crate::text_layout::{padded_tail, wrap_text};
+use crate::tools::{ArgLayout, DiffCache, ToolStatus};
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_tool_step(

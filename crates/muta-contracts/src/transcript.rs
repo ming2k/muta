@@ -118,9 +118,10 @@ pub struct MessagePayload {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum EntryPayload {
-    /// A transcript message.
+    /// A transcript message. Boxed: the payload dominates the entry size and
+    /// entries are cloned wholesale on every turn commit (ADR-0187).
     #[serde(rename = "message")]
-    Message(MessagePayload),
+    Message(Box<MessagePayload>),
     /// A working-state snapshot (e.g. the TodoList mirror).
     #[serde(rename = "state")]
     State(StatePayload),
@@ -172,7 +173,9 @@ impl TranscriptEntry {
     pub fn from_message(seq: u64, message: &Message) -> Self {
         let injection = message.origin.clone();
         let origin = match message.origin.as_ref().map(|o| o.kind) {
-            Some(crate::message::InjectionKind::CompactionCheckpoint) => Some(EntryOrigin::Checkpoint),
+            Some(crate::message::InjectionKind::CompactionCheckpoint) => {
+                Some(EntryOrigin::Checkpoint)
+            }
             Some(_) => Some(EntryOrigin::Harness),
             None => None,
         };
@@ -188,7 +191,7 @@ impl TranscriptEntry {
                 .timestamp
                 .map(|s| s.saturating_mul(1000))
                 .unwrap_or_else(unix_now_ms),
-            payload: EntryPayload::Message(MessagePayload {
+            payload: EntryPayload::Message(Box::new(MessagePayload {
                 tool_calls: message.tool_calls.clone(),
                 tool_call_id: message.tool_call_id.clone(),
                 images: message.images.clone(),
@@ -203,7 +206,7 @@ impl TranscriptEntry {
                 injection,
                 sent_at_ms: message.sent_at_ms,
                 cache_frozen: message.cache_frozen,
-            }),
+            })),
         }
     }
 
@@ -343,6 +346,16 @@ pub struct Transcript {
     pub entries: Vec<TranscriptEntry>,
     /// Projection decisions, ordered by directive seq.
     pub directives: Vec<ProjectionDirective>,
+    /// Lower bound for the next membership seq. Set by loaders when the
+    /// durable store holds rows the in-memory entries do not (e.g. entries
+    /// preserved verbatim because their payload kind is unknown to this
+    /// binary); guarantees a later `push` cannot collide with them.
+    #[serde(default)]
+    pub min_next_seq: u64,
+    /// Lower bound for the next directive seq, same contract as
+    /// [`Self::min_next_seq`].
+    #[serde(default)]
+    pub min_next_directive_seq: u64,
 }
 
 impl Transcript {
@@ -353,6 +366,7 @@ impl Transcript {
     /// Append a fact at the next membership seq.
     pub fn push(&mut self, mut entry: TranscriptEntry) -> &mut Self {
         entry.seq = self.next_seq();
+        self.min_next_seq = entry.seq + 1;
         self.entries.push(entry);
         self
     }
@@ -360,27 +374,37 @@ impl Transcript {
     /// Append a projection decision.
     pub fn push_directive(&mut self, mut directive: ProjectionDirective) -> &mut Self {
         directive.seq = self.next_directive_seq();
+        self.min_next_directive_seq = directive.seq + 1;
         self.directives.push(directive);
         self
     }
 
-    /// Next membership seq (gap-free watermark).
+    /// Next membership seq (gap-free watermark, never below the floor).
     pub fn next_seq(&self) -> u64 {
-        self.entries.last().map_or(0, |e| e.seq + 1)
+        self.entries
+            .last()
+            .map_or(0, |e| e.seq + 1)
+            .max(self.min_next_seq)
     }
 
-    /// Next directive seq (gap-free watermark).
+    /// Next directive seq (gap-free watermark, never below the floor).
     pub fn next_directive_seq(&self) -> u64 {
-        self.directives.last().map_or(0, |d| d.seq + 1)
+        self.directives
+            .last()
+            .map_or(0, |d| d.seq + 1)
+            .max(self.min_next_directive_seq)
     }
 
     /// The current TodoList mirror, derived from the newest `state` entry
     /// carrying one.
     pub fn derive_todos(&self) -> Option<crate::todos::TodoList> {
-        self.entries.iter().rev().find_map(|entry| match &entry.payload {
-            EntryPayload::State(StatePayload { todos }) => todos.clone(),
-            _ => None,
-        })
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.payload {
+                EntryPayload::State(StatePayload { todos }) => todos.clone(),
+                _ => None,
+            })
     }
 
     /// The projected view (ADR-0186 §4): the message sequence the next
@@ -400,8 +424,7 @@ impl Transcript {
         let mut checkpoint_seq: Option<u64> = None;
         let mut elided: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        let mut frozen: std::collections::HashMap<u64, String> =
-            std::collections::HashMap::new();
+        let mut frozen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
         for directive in &self.directives {
             match &directive.payload {
                 DirectivePayload::Prune { elided: removed } => {
@@ -410,7 +433,8 @@ impl Transcript {
                     }
                 }
                 DirectivePayload::Compact { checkpoint_seq: cp } => {
-                    compact_watermark = Some(compact_watermark.unwrap_or(0).max(directive.up_to_seq));
+                    compact_watermark =
+                        Some(compact_watermark.unwrap_or(0).max(directive.up_to_seq));
                     checkpoint_seq = Some(*cp);
                 }
                 DirectivePayload::Freeze { shape } => {
@@ -422,30 +446,29 @@ impl Transcript {
         let mut view = Vec::new();
         // The checkpoint substitutes the archived head: it is presented first,
         // at the position the compacted range occupied.
-        if let Some(cp) = checkpoint_seq {
-            if let Some(entry) = self.entries.iter().find(|entry| entry.seq == cp) {
-                if let Some(message) = entry.to_message() {
-                    view.push((entry.seq, message));
-                }
-            }
+        if let Some(cp) = checkpoint_seq
+            && let Some(entry) = self.entries.iter().find(|entry| entry.seq == cp)
+            && let Some(message) = entry.to_message()
+        {
+            view.push((entry.seq, message));
         }
         for entry in &self.entries {
             if entry.is_hidden_kind() {
                 continue;
             }
-            if let (Some(watermark), Some(cp)) = (compact_watermark, checkpoint_seq) {
-                if entry.seq <= watermark || entry.seq == cp {
-                    // The checkpoint itself was already emitted above.
-                    continue;
-                }
+            if let (Some(watermark), Some(cp)) = (compact_watermark, checkpoint_seq)
+                && (entry.seq <= watermark || entry.seq == cp)
+            {
+                // The checkpoint itself was already emitted above.
+                continue;
             }
             let Some(mut message) = entry.to_message() else {
                 continue;
             };
-            if let Some(tool_call_id) = &message.tool_call_id {
-                if let Some(placeholder) = elided.get(tool_call_id) {
-                    message.content = placeholder.clone();
-                }
+            if let Some(tool_call_id) = &message.tool_call_id
+                && let Some(placeholder) = elided.get(tool_call_id)
+            {
+                message.content = placeholder.clone();
             }
             if let Some(shape) = frozen.get(&entry.seq) {
                 message.content = shape.clone();
@@ -509,12 +532,10 @@ mod tests {
                 // assistant messages carry protocol-private state to verify
                 // verbatim round-trips through the view
                 payload.provider_meta = Some(
-                    [
-                        (
-                            "gemini_thought_signatures".to_string(),
-                            serde_json::json!({ call_id: "sig" }),
-                        ),
-                    ]
+                    [(
+                        "gemini_thought_signatures".to_string(),
+                        serde_json::json!({ call_id: "sig" }),
+                    )]
                     .into_iter()
                     .collect(),
                 );
@@ -559,7 +580,7 @@ mod tests {
     #[test]
     fn todos_derive_from_newest_state_entry() {
         let mut transcript = Transcript::new();
-        let mut first = crate::todos::TodoList::default();
+        let first = crate::todos::TodoList::default();
         // (The list starts empty; an empty mirror still counts as derived
         // state, so push two mirrors and expect the newest to win.)
         transcript.push(TranscriptEntry::from_state(0, Some(first.clone())));
@@ -613,9 +634,7 @@ mod tests {
             seq: 0,
             kind: DirectiveKind::Compact,
             up_to_seq: 1,
-            payload: DirectivePayload::Compact {
-                checkpoint_seq,
-            },
+            payload: DirectivePayload::Compact { checkpoint_seq },
         });
         let view = transcript.project();
         assert_eq!(view.len(), 2);

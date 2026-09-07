@@ -96,9 +96,7 @@ pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestion
                 },
                 UserQuestionOption {
                     label: "Keep quarantined and exit".to_string(),
-                    description: Some(
-                        "Quit without loading project configurations.".to_string(),
-                    ),
+                    description: Some("Quit without loading project configurations.".to_string()),
                 },
             ],
             multi_select: false,

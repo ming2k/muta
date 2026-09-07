@@ -3,7 +3,7 @@
 //! The system prompt is a [`SystemPromptRegistry`] of declarative
 //! [`SystemPromptSection`]s — one per behavioral paragraph — registered on the
 //! [`Agent`](crate::Agent) at construction. The `model_request` assembler
-//! rebuilds a structured, cache-tiered [`InstructionBundle`] from live agent
+//! rebuilds a structured, cache-tiered `InstructionBundle` from live agent
 //! state before every provider request.
 
 use muta_contracts::InstructionTier;

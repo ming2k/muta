@@ -44,8 +44,8 @@ const REFRESH_PERIOD: Duration = Duration::from_secs(60 * 60);
 
 /// A [`muta_contracts::DynamicCatalog`] that keeps the models.dev disk cache
 /// fresh on a background cadence. Run it through the generic
-/// [`muta_agent::dynamic::spawn_refresh`] wiring at startup; the first tick
-/// fires immediately, then every [`Self::refresh_period`].
+/// `muta_agent::dynamic::spawn_refresh` wiring at startup; the first tick
+/// fires immediately, then every `refresh_period`.
 ///
 /// This only refreshes the *cache*. The per-connection reconciliation still
 /// runs through model discovery, which reads the freshly refreshed cache on

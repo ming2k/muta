@@ -18,9 +18,11 @@ pub(crate) use runtime::{
     now_epoch_ms,
 };
 #[cfg(test)]
+pub(crate) use transcript::apply_transcript_patch;
+#[cfg(test)]
 pub(crate) use transcript::focused_messages_mut;
 #[allow(unused_imports)]
-pub(crate) use transcript::{apply_transcript_patch, display_status, resolve_focused_mut};
+pub(crate) use transcript::{display_status, resolve_focused_mut};
 
 #[cfg(test)]
 pub(crate) use actions::host_test_shims;
@@ -153,8 +155,7 @@ pub(crate) fn auto_dispatch_ready_round(app: &mut App, viewed_session_id: &str) 
         && app.pending_dispatch.iter().any(|item| {
             item.session_id == viewed_session_id
                 && item.state == crate::app::QueuedDispatchState::Waiting
-        })
-    {
+        }) {
         Some(viewed_session_id.to_string())
     } else {
         app.naturally_completed_sessions
@@ -178,8 +179,10 @@ pub(crate) fn auto_dispatch_ready_round(app: &mut App, viewed_session_id: &str) 
         let sent_at_ms = now_epoch_ms();
         let expanded_text =
             crate::composer_attachments::expand_paste_chips(&dispatch.text, &dispatch.text_pastes);
-        let expanded_text =
-            crate::composer_attachments::strip_orphan_image_chips(&expanded_text, dispatch.images.len());
+        let expanded_text = crate::composer_attachments::strip_orphan_image_chips(
+            &expanded_text,
+            dispatch.images.len(),
+        );
         app.naturally_completed_sessions.remove(&session_id);
         app.idle_sessions.remove(&session_id);
         app.running_sessions.insert(session_id.clone());
@@ -571,13 +574,10 @@ async fn process_one_event(
         && let Some(entry) = modal_cmd_history
     {
         let (name, args) = actions::split_command_word(&entry);
-        let mut msg = TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms());
+        let mut msg =
+            TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms());
         msg.cancel_pending_command();
-        runtime
-            .messages
-            .write()
-            .await
-            .push(msg);
+        runtime.messages.write().await.push(msg);
         app.record_input_history(entry, Vec::new(), Vec::new());
     }
 

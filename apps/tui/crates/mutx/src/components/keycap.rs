@@ -50,7 +50,7 @@ pub(crate) struct KeyAffordance {
 }
 
 impl KeyAffordance {
-    /// Construct a new typed KeyAffordance from a canonical [`Key`].
+    /// Construct a new typed KeyAffordance from a canonical `Key`.
     pub const fn from_key(key: crate::keymap::Key, label: &'static str) -> Self {
         Self::new(key.display(), label)
     }

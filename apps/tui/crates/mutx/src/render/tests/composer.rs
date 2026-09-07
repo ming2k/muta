@@ -1847,7 +1847,10 @@ fn composer_hint_sentence_names_the_delivery_group() {
     let mut terminal = draw_frame_composer("wait", true, hints);
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(row4.contains("send steer"), "steer verb: {row4:?}");
-    assert!(row4.contains("follow-up mode"), "follow-up mode affordance: {row4:?}");
+    assert!(
+        row4.contains("follow-up mode"),
+        "follow-up mode affordance: {row4:?}"
+    );
 
     let hints_followup = ComposerHints {
         compose_target: ComposeTarget::Running(crate::app::ComposerSendMode::FollowUp),
@@ -1856,7 +1859,10 @@ fn composer_hint_sentence_names_the_delivery_group() {
     let mut terminal = draw_frame_composer("wait", true, hints_followup);
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(row4.contains("queue follow-up"), "follow-up verb: {row4:?}");
-    assert!(row4.contains("steer mode"), "steer mode affordance: {row4:?}");
+    assert!(
+        row4.contains("steer mode"),
+        "steer mode affordance: {row4:?}"
+    );
 }
 
 /// Once the draft outgrows the box, the three-part overflow affordance
@@ -2069,7 +2075,8 @@ fn draw_composer_records_composer_rect_enabling_whole_component_focus() {
     );
 
     // 2. Click on Row 1 (text row): y = 2 -> precise text cursor
-    let target_row1 = crate::interaction::classify_click(&layout_map, COMPOSER_PROMPT_PREFIX_COLS as u16 + 2, 2);
+    let target_row1 =
+        crate::interaction::classify_click(&layout_map, COMPOSER_PROMPT_PREFIX_COLS as u16 + 2, 2);
     assert!(matches!(
         target_row1,
         crate::interaction::ClickTarget::InputBox { .. }

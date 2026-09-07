@@ -1,4 +1,4 @@
-//! Construction, load/persist, snapshots, event-log replay and compaction trigger, the armed-schedule disk scan, the list/detail/active views, and the offline corruption scan tools of [`SessionStore`].
+//! Construction, load/persist, snapshot persistence, the list/detail/active views, and the offline corruption scan tools of [`SessionStore`].
 
 use super::*;
 
@@ -41,7 +41,10 @@ impl SessionStore {
         let project_root = sessions_dir.clone();
         let db_path = sessions_dir.join("muta.db");
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
-        let id_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("default");
+        let id_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("default");
         let data = load_or_seed(&db_path, id_stem, &blob_store, &project_root, Some(&path));
         let defer_persist = !path.exists() && data.is_user_facing_empty();
         let writer = if db_path == paths::get().db_file() {
@@ -113,9 +116,7 @@ impl SessionStore {
 
     /// Test-only: lock the session state (same crate sibling module access).
     #[cfg(test)]
-    pub(crate) async fn state_lock_for_test(
-        &self,
-    ) -> tokio::sync::MutexGuard<'_, SessionState> {
+    pub(crate) async fn state_lock_for_test(&self) -> tokio::sync::MutexGuard<'_, SessionState> {
         self.state.lock().await
     }
 
@@ -190,7 +191,13 @@ impl SessionStore {
         let load_path = path.clone();
         let resolved_id = resolved.clone();
         let data = tokio::task::spawn_blocking(move || {
-            load_or_seed(&db_path, &resolved_id, &blob_store, &project_root, Some(&load_path))
+            load_or_seed(
+                &db_path,
+                &resolved_id,
+                &blob_store,
+                &project_root,
+                Some(&load_path),
+            )
         })
         .await
         .map_err(|e| format!("session open task failed: {e}"))?;
@@ -208,7 +215,8 @@ impl SessionStore {
             (resolved.clone(), path, state.data.id == resolved)
         };
 
-        let db_deleted = self.writer
+        let db_deleted = self
+            .writer
             .delete_session(resolved.clone())
             .await
             .map_err(|e| e.to_string())?;
@@ -284,10 +292,9 @@ impl SessionStore {
         let active_id = self.state.lock().await.data.id.clone();
         let db_path = self.db_path.clone();
         let project_root_str = self.project_root.to_string_lossy().into_owned();
-        let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
-            let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
-                .map_err(|e| e.to_string())?;
+            let engine =
+                crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
             engine
                 .list_session_summaries(Some(&project_root_str), &active_id)
                 .map_err(|e| e.to_string())
@@ -304,10 +311,9 @@ impl SessionStore {
             self.resolve_session(id, &state)?
         };
         let db_path = self.db_path.clone();
-        let blob_store = self.blob_store.clone();
         tokio::task::spawn_blocking(move || {
-            let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store))
-                .map_err(|e| e.to_string())?;
+            let engine =
+                crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
             engine
                 .get_session_detail(&resolved, &active_id)
                 .map_err(|e| e.to_string())?
@@ -317,26 +323,46 @@ impl SessionStore {
         .map_err(|e| format!("session detail task failed: {e}"))?
     }
 
-    /// Run the snapshot persistence off the async runtime.
+    /// Run the persistence off the async runtime (ADR-0187): append the
+    /// transcript delta above the durable watermark and upsert the session
+    /// row. The engine escalates to a full rewrite whenever `data`'s
+    /// transcript generation differs from the store's, so no caller-side
+    /// mode flag is needed.
     pub(crate) async fn persist_off_runtime(
         &self,
         _path: PathBuf,
-        mut data: SessionData,
-        blob_store: BlobStore,
+        data: SessionData,
+        _blob_store: BlobStore,
     ) -> Result<(), String> {
-        let _persist_guard = self.persist_gate.lock().await;
-        offload_session_blobs(&mut data, &blob_store)?;
+        self.persist_with_usage(_path, data, Vec::new()).await
+    }
+
+    /// Persist a transcript delta plus the usage-record upserts a commit
+    /// produced (ADR-0187): the usage ledger is key-addressed, so only the
+    /// changed attempts are written.
+    pub(crate) async fn persist_with_usage(
+        &self,
+        _path: PathBuf,
+        mut data: SessionData,
+        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
+    ) -> Result<(), String> {
+        let _persist_gate = self.persist_gate.lock().await;
         data.checksum = Some(compute_checksum(&data)?);
         self.writer
-            .save_session_full(data)
+            .save_session(data, false, usage_upserts)
             .await
             .map_err(|e| format!("session persist task failed: {e}"))
     }
 
-    /// Write `data` to the store's SQLite database.
-    #[cfg(test)]
-    pub(crate) fn persist_archive(&self, data: &SessionData) -> Result<(), String> {
-        persist_to(&self.db_path, data, &self.blob_store)
+    /// Persist a full rewrite (rare: wholesale working-state replacement).
+    pub(crate) async fn persist_full_rewrite(&self, data: SessionData) -> Result<(), String> {
+        let _persist_gate = self.persist_gate.lock().await;
+        let mut data = data;
+        data.checksum = Some(compute_checksum(&data)?);
+        self.writer
+            .save_session(data, true, Vec::new())
+            .await
+            .map_err(|e| format!("session persist task failed: {e}"))
     }
 
     /// Resolve `input` (a 4+ char hex id or prefix) to the full session id

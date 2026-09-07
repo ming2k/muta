@@ -1749,14 +1749,7 @@ mod tests {
             failures: vec![("gmain".to_string(), "network error".to_string())],
         };
 
-        apply_model_discovery_outcome(
-            &mut config,
-            &resp_tx,
-            &mut usage,
-            outcome,
-            None,
-            false,
-        );
+        apply_model_discovery_outcome(&mut config, &resp_tx, &mut usage, outcome, None, false);
 
         let warning = resp_rx.recv().await.expect("warning expected");
         match warning {

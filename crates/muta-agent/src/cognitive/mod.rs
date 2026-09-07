@@ -176,7 +176,9 @@ impl CognitivePipeline {
         self.consult_with_fallback(
             EnvironmentSensorTask,
             input,
-            EnvironmentReminderOutput { reminder_text: None },
+            EnvironmentReminderOutput {
+                reminder_text: None,
+            },
         )
         .await
     }

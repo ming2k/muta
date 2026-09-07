@@ -218,7 +218,7 @@ impl RequestPerformance {
 /// Stable identity of a concrete network attempt. A ReAct turn may have
 /// multiple attempts when the transport retries; those attempts can each be
 /// billed and therefore must never overwrite one another.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RequestUsageKey {
     pub session_id: String,
     #[serde(default = "default_request_actor")]

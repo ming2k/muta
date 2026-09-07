@@ -15,7 +15,10 @@ use mutx_engine::widgets::{Block, Borders};
 use mutx_engine::{Backend, Color, Draw, DrawCmd, EscapeEmitter, Modifier, Style};
 
 /// Helper to render a multi-feature test frame into an in-memory buffer.
-fn render_test_frame_with_driver(driver: TerminalDriver, glyph_v: &'static str) -> (Vec<u8>, TerminalProfile) {
+fn render_test_frame_with_driver(
+    driver: TerminalDriver,
+    glyph_v: &'static str,
+) -> (Vec<u8>, TerminalProfile) {
     let mut sink = Vec::new();
     let profile = match driver {
         TerminalDriver::DirectColor(_) => TerminalProfile::direct_color(),
@@ -88,18 +91,36 @@ fn smoke_scenario_1_direct_color_truecolor() {
     let output = String::from_utf8(bytes).expect("valid utf-8 output");
 
     // 1. DEC Mode 2026 synchronized update envelope must open and close
-    assert!(output.contains("\x1b[?2026h"), "DirectColor must open mode 2026 envelope");
-    assert!(output.contains("\x1b[?2026l"), "DirectColor must close mode 2026 envelope");
+    assert!(
+        output.contains("\x1b[?2026h"),
+        "DirectColor must open mode 2026 envelope"
+    );
+    assert!(
+        output.contains("\x1b[?2026l"),
+        "DirectColor must close mode 2026 envelope"
+    );
 
     // 2. 24-bit TrueColor SGR codes must be emitted
-    assert!(output.contains("\x1b[38;2;"), "DirectColor must emit 38;2 foreground RGB");
-    assert!(output.contains("\x1b[48;2;"), "DirectColor must emit 48;2 background RGB");
+    assert!(
+        output.contains("\x1b[38;2;"),
+        "DirectColor must emit 38;2 foreground RGB"
+    );
+    assert!(
+        output.contains("\x1b[48;2;"),
+        "DirectColor must emit 48;2 background RGB"
+    );
 
     // 3. True italic attribute must be emitted
-    assert!(output.contains("\x1b[3m"), "DirectColor must emit SGR 3 (italic)");
+    assert!(
+        output.contains("\x1b[3m"),
+        "DirectColor must emit SGR 3 (italic)"
+    );
 
     // 4. Unicode box-drawing character must be intact
-    assert!(output.contains("┃"), "DirectColor must output Unicode heavy vertical bar");
+    assert!(
+        output.contains("┃"),
+        "DirectColor must output Unicode heavy vertical bar"
+    );
 }
 
 #[test]
@@ -111,18 +132,36 @@ fn smoke_scenario_2_ecma48_ansi16_linux_console() {
     let output = String::from_utf8(bytes).expect("valid utf-8 output");
 
     // 1. Synchronized update must NOT be emitted
-    assert!(!output.contains("\x1b[?2026h"), "ANSI-16 must not emit mode 2026");
+    assert!(
+        !output.contains("\x1b[?2026h"),
+        "ANSI-16 must not emit mode 2026"
+    );
 
     // 2. Zero 24-bit TrueColor escapes
-    assert!(!output.contains("\x1b[38;2;"), "ANSI-16 must not emit 38;2 TrueColor");
-    assert!(!output.contains("\x1b[48;2;"), "ANSI-16 must not emit 48;2 TrueColor");
+    assert!(
+        !output.contains("\x1b[38;2;"),
+        "ANSI-16 must not emit 38;2 TrueColor"
+    );
+    assert!(
+        !output.contains("\x1b[48;2;"),
+        "ANSI-16 must not emit 48;2 TrueColor"
+    );
 
     // 3. SGR 3 (Italic) must be eliminated; SGR 4 (Underline) replacement must be emitted
-    assert!(!output.contains("\x1b[3m"), "ANSI-16 must eliminate SGR 3 (italic)");
-    assert!(output.contains("\x1b[4m"), "ANSI-16 must map italic to SGR 4 (underline)");
+    assert!(
+        !output.contains("\x1b[3m"),
+        "ANSI-16 must eliminate SGR 3 (italic)"
+    );
+    assert!(
+        output.contains("\x1b[4m"),
+        "ANSI-16 must map italic to SGR 4 (underline)"
+    );
 
     // 4. Standard ANSI color sequences must be present
-    assert!(output.contains("\x1b[3"), "ANSI-16 must emit standard 30..37 foreground codes");
+    assert!(
+        output.contains("\x1b[3"),
+        "ANSI-16 must emit standard 30..37 foreground codes"
+    );
 }
 
 #[test]
@@ -134,24 +173,51 @@ fn smoke_scenario_3_dec_vt100_getty_serial() {
     let output = String::from_utf8(bytes.clone()).expect("valid utf-8 output");
 
     // 1. ABSOLUTELY ZERO color codes (neither 38;2, nor 48;2, nor 30..37, nor 40..47, nor 39/49)
-    assert!(!output.contains("\x1b[38;"), "Monochrome must not emit 38; codes");
-    assert!(!output.contains("\x1b[48;"), "Monochrome must not emit 48; codes");
-    assert!(!output.contains("\x1b[31m") && !output.contains("\x1b[32m"), "Monochrome must not emit ANSI colors");
-    assert!(!output.contains("\x1b[39m") && !output.contains("\x1b[49m"), "Monochrome must not emit color reset codes");
+    assert!(
+        !output.contains("\x1b[38;"),
+        "Monochrome must not emit 38; codes"
+    );
+    assert!(
+        !output.contains("\x1b[48;"),
+        "Monochrome must not emit 48; codes"
+    );
+    assert!(
+        !output.contains("\x1b[31m") && !output.contains("\x1b[32m"),
+        "Monochrome must not emit ANSI colors"
+    );
+    assert!(
+        !output.contains("\x1b[39m") && !output.contains("\x1b[49m"),
+        "Monochrome must not emit color reset codes"
+    );
 
     // 2. Zero Mode 2026 synchronized updates
-    assert!(!output.contains("\x1b[?2026h"), "Monochrome must not emit mode 2026");
+    assert!(
+        !output.contains("\x1b[?2026h"),
+        "Monochrome must not emit mode 2026"
+    );
 
     // 3. Canonical VT100 SGR 7 (Reverse Video) must be used for active/highlighted content
-    assert!(output.contains("\x1b[7m"), "Monochrome must represent active content with SGR 7 Reverse Video");
+    assert!(
+        output.contains("\x1b[7m"),
+        "Monochrome must represent active content with SGR 7 Reverse Video"
+    );
 
     // 4. Box drawing must be strictly pure ASCII '|', zero Unicode box characters
-    assert!(!output.contains("┃"), "Monochrome getty output must not contain Unicode '┃'");
-    assert!(output.contains('|'), "Monochrome getty output must contain ASCII '|'");
+    assert!(
+        !output.contains("┃"),
+        "Monochrome getty output must not contain Unicode '┃'"
+    );
+    assert!(
+        output.contains('|'),
+        "Monochrome getty output must contain ASCII '|'"
+    );
 
     // 5. Output must consist exclusively of ASCII bytes and VT100 SGR codes (0, 1, 4, 7)
     for b in &bytes {
-        assert!(b.is_ascii(), "Every byte in VT100 output must be valid ASCII: byte value {b}");
+        assert!(
+            b.is_ascii(),
+            "Every byte in VT100 output must be valid ASCII: byte value {b}"
+        );
     }
 }
 

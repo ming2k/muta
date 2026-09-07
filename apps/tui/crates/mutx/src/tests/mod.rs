@@ -19,11 +19,11 @@ use crate::config;
 use crate::event_loop::{display_status, focused_messages_mut};
 use crate::model::layout::{InteractiveTarget, LayoutMap};
 use crate::model::selection::{SelectionDrag, SelectionState};
+use crate::render::Theme;
 use crate::transcript::{
     finalize_streaming_reasoning, transcript_message_from_core, transcript_messages_from_core,
 };
 use crate::versioned::{TranscriptPatch, TranscriptUpdate};
-use crate::render::Theme;
 use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;
@@ -99,8 +99,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
+        stream_cursor: None,
         side_messages: Vec::new(),
         side_messages_version: 0,
+        side_stream_cursor: None,
         layout_height_cache: Default::default(),
         in_side_view: false,
         side_session_id: None,

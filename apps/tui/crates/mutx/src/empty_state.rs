@@ -345,13 +345,11 @@ fn guidance_section(
                 Span::styled(" to set one up.", muted),
             ]),
         ],
-        EmptyStateGuidance::LoadingSession(ref id) => vec![
-            Line::from(vec![
-                Span::styled("Loading session ", muted),
-                Span::styled(id.clone(), info),
-                Span::styled("…", muted),
-            ]),
-        ],
+        EmptyStateGuidance::LoadingSession(ref id) => vec![Line::from(vec![
+            Span::styled("Loading session ", muted),
+            Span::styled(id.clone(), info),
+            Span::styled("…", muted),
+        ])],
     }
 }
 

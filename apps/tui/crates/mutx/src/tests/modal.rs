@@ -1303,7 +1303,8 @@ fn config_view_navigation_and_theme_preview() {
     );
 
     // Revert preview on exit to categories
-    app.theme = crate::render::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
+    app.theme =
+        crate::render::Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
     app.config_focus = crate::overlays::ConfigFocus::Categories;
     assert_eq!(
         app.theme.surface(),

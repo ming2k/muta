@@ -325,7 +325,18 @@ impl Agent {
                 // side effects.
                 self.run_turn_start_hooks(messages, &round.state, round.turn_index)
                     .await;
-                round.pending_request = Some(self.model_request(messages));
+                // Assemble once per turn, then gate on context pressure with
+                // the assembled request (ADR-0187 hot path): the estimate and
+                // the provider call share one assembly. A projection that
+                // replaces the window re-assembles exactly once.
+                let mut request = self.model_request(messages);
+                if self
+                    .project_context_if_needed(messages, &request, cancel)
+                    .await?
+                {
+                    request = self.model_request(messages);
+                }
+                round.pending_request = Some(request);
             }
             tracing::debug!(
                 turn = round.turn_index,
@@ -984,7 +995,11 @@ impl Agent {
                 if self.check_hard_stop(round.turn_index).is_break() {
                     return Err(self.hard_stop_error());
                 }
-                self.project_context_if_needed(messages, cancel).await?;
+                // The context-pressure gate lives at the request-assembly
+                // boundary (top of loop, with the assembled request) — one
+                // decision point, one assembly. Projection therefore lands
+                // after this turn's persist; its own commit carries the
+                // projected window durably.
                 // Mid-round save point (ADR-0048): persist this turn's new
                 // messages (the assistant response + all tool results) before
                 // any further work, so a crash leaves the transcript in sync

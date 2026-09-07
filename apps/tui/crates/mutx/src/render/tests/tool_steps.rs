@@ -567,10 +567,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     );
     assert_eq!(
         footer_stack::rect_of(&rendered.footer, FooterRowId::Activity),
-        Some(expect(
-            status_y + QUEUE_BAR_ROWS,
-            ACTIVITY_BAR_ROWS
-        )),
+        Some(expect(status_y + QUEUE_BAR_ROWS, ACTIVITY_BAR_ROWS)),
         "activity bar rect"
     );
     assert_eq!(
@@ -594,10 +591,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     assert_eq!(
         rendered.hint_rect,
         expect(
-            status_y
-                + QUEUE_BAR_ROWS
-                + ACTIVITY_BAR_ROWS
-                + rendered.input_rect.height,
+            status_y + QUEUE_BAR_ROWS + ACTIVITY_BAR_ROWS + rendered.input_rect.height,
             MODEL_BAR_ROWS
         ),
         "hint bar rect matches the legacy offset"

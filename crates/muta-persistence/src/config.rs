@@ -1340,11 +1340,17 @@ impl Config {
                 continue;
             }
             if canonical == canonical_root {
-                skipped.push((raw.clone(), "workspace root itself; already admitted".to_string()));
+                skipped.push((
+                    raw.clone(),
+                    "workspace root itself; already admitted".to_string(),
+                ));
                 continue;
             }
             if canonical.starts_with(&canonical_root) {
-                skipped.push((raw.clone(), "inside workspace; already admitted".to_string()));
+                skipped.push((
+                    raw.clone(),
+                    "inside workspace; already admitted".to_string(),
+                ));
                 continue;
             }
             // Distinct spellings of the same directory (relative plus

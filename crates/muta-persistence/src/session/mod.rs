@@ -41,7 +41,9 @@ use tokio::sync::Mutex;
 /// structural no-op — legacy snapshots load with an empty list.
 /// v13 (ADR-0186): clean break — the transcript is entries + directives;
 /// legacy pre-transcript snapshots are not migrated and load as empty.
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 13;
+/// v14 (ADR-0187): persistence v2 — the row checksum covers the session row
+/// (working state) instead of the transcript, and is verified on load.
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 14;
 
 /// A session-scoped connection + model pin (C6 / ADR-0186). `connection`
 /// carries the **connection id** (provider + account + endpoint, per
@@ -118,10 +120,11 @@ pub struct SessionData {
     /// Transcript char count when `digest` was generated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) digest_anchor: Option<u64>,
-    /// High-water mark: the `seq` of the last event already folded into this
-    /// snapshot.
+    /// Identity of the transcript lineage (ADR-0187). Incremental saves are
+    /// appended only while this matches the store's generation; any rebuild
+    /// mints a new one and the next save escalates to a full rewrite.
     #[serde(default)]
-    pub(crate) applied_seq: Option<u64>,
+    pub(crate) generation: String,
     /// Session-scoped provider pin (C6). `None` means "follow the global
     /// default".
     #[serde(default)]
@@ -151,6 +154,42 @@ pub struct SessionData {
     /// Native DAG session tree (Schema v12).
     #[serde(default)]
     pub(crate) tree: muta_contracts::SessionTree,
+    /// Transcript entries this binary cannot decode, preserved verbatim
+    /// (ADR-0187): raw rows ride in memory and round-trip through every
+    /// save, so a newer binary's data survives an older binary untouched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unknown_entries: Vec<UnknownEntryRow>,
+    /// Projection directives this binary cannot decode, preserved verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unknown_directives: Vec<UnknownDirectiveRow>,
+}
+
+/// A transcript entry preserved verbatim because its payload kind is unknown
+/// to this binary (ADR-0187). The envelope columns are stored raw and are
+/// written back unchanged; the payload JSON is opaque.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct UnknownEntryRow {
+    pub id: String,
+    pub seq: u64,
+    /// Envelope kind string as stored (`message` / `state` — or whatever a
+    /// newer schema wrote; the table CHECK decides what may round-trip).
+    pub kind: String,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub origin: Option<String>,
+    pub hidden: bool,
+    pub created_at_ms: u64,
+    pub payload_json: String,
+}
+
+/// A projection directive preserved verbatim because its payload kind is
+/// unknown to this binary (ADR-0187).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct UnknownDirectiveRow {
+    pub seq: u64,
+    pub kind: String,
+    pub up_to_seq: u64,
+    pub payload_json: String,
 }
 
 impl Default for SessionData {
@@ -170,7 +209,7 @@ impl Default for SessionData {
             title: None,
             digest: None,
             digest_anchor: None,
-            applied_seq: None,
+            generation: uuid::Uuid::new_v4().to_string(),
             provider_selection: None,
             disabled_tools: std::collections::HashSet::new(),
             round_counter: 0,
@@ -180,10 +219,11 @@ impl Default for SessionData {
             retry_pending: None,
             unattended: false,
             tree: muta_contracts::SessionTree::default(),
+            unknown_entries: Vec::new(),
+            unknown_directives: Vec::new(),
         }
     }
 }
-
 
 impl SessionData {
     /// The single authority for "this session has no substantive content yet"
@@ -237,84 +277,58 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     data
 }
 
-/// Compute the CRC32C checksum that should be stored for `data`. The checksum
-/// covers the canonical JSON representation of all fields except `checksum`,
-/// which is set to `null` during computation so later verification can read
-/// the stored value and compare against the same payload.
-///
-/// Returns `Err` on serialization failure rather than a sentinel `0`. The
-/// previous code returned `0` on a serialization error, which would *appear*
-/// to be a valid checksum and let `verify_checksum` accept corrupt data — a
-/// fail-open failure mode for an integrity check.
+/// Compute the CRC32C checksum over the session **row** — the working state
+/// (ADR-0187). The transcript and the verbatim unknown rows are excluded:
+/// they live in their own append-only tables with primary-key integrity, so
+/// the row checksum covers exactly the data a single UPSERT writes. Returns
+/// `Err` on serialization failure rather than a sentinel `0` (a sentinel
+/// would look like a valid checksum and let verification accept corruption).
 fn compute_checksum(data: &SessionData) -> Result<u32, String> {
     let mut value = serde_json::to_value(data).map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("checksum".to_string(), serde_json::Value::Null);
+        // Fields not part of the session row (or recomputed after load).
+        for excluded in [
+            "transcript",
+            "unknown_entries",
+            "unknown_directives",
+            "checksum",
+            "last_projection",
+        ] {
+            obj.remove(excluded);
+        }
     }
     let bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
     Ok(crc32c::crc32c(&bytes))
 }
 
-/// Verify the stored checksum on `data`, if present. Returns `Ok(())` when the
-/// checksum matches or when the file predates checksums. Returns an error
-/// describing the mismatch otherwise.
-fn verify_checksum(data: &SessionData) -> Result<(), String> {
+/// Verify the stored row checksum on load (ADR-0187). Rows stamped by an
+/// older schema (whose checksum covered the transcript) are exempt via
+/// `schema_version`. A mismatch is reported loudly but is not fatal: the
+/// durable per-row data remains authoritative and the next save restamps.
+pub(crate) fn verify_checksum(data: &SessionData, session_id: &str) {
     let Some(stored) = data.checksum else {
-        return Ok(());
+        return;
     };
-    let expected = compute_checksum(data)?;
-    if expected == stored {
-        Ok(())
-    } else {
-        Err(format!(
-            "checksum mismatch: stored {stored:#010x}, computed {expected:#010x}"
-        ))
+    if data.schema_version < CURRENT_SCHEMA_VERSION {
+        return;
+    }
+    match compute_checksum(data) {
+        Ok(expected) if expected == stored => {}
+        Ok(expected) => tracing::error!(
+            session = %session_id,
+            stored = format!("{stored:#010x}"),
+            computed = format!("{expected:#010x}"),
+            "session row checksum mismatch: the working state was corrupted between saves"
+        ),
+        Err(error) => tracing::error!(
+            session = %session_id,
+            error,
+            "session row checksum could not be recomputed"
+        ),
     }
 }
 
 /// Characters above which a message content is moved to the blob store.
-const BLOB_OFFLOAD_THRESHOLD: usize = 4_096;
-
-/// Test fixture writer: persist `data` to the SQLite DB next to `path` and
-/// register the path alias, mirroring the production persist path.
-#[cfg(test)]
-pub(crate) fn write_session_file(
-    path: &Path,
-    data: &SessionData,
-    blob_store: &BlobStore,
-) -> Result<(), String> {
-    let mut data = data.clone();
-    offload_session_blobs(&mut data, blob_store)?;
-    data.checksum = Some(compute_checksum(&data)?);
-    if let Some(parent) = path.parent() {
-        let db_path = parent.join("muta.db");
-        let _ = persist_to(&db_path, &data, blob_store);
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone())) {
-            let _ = engine.set_kv(&format!("path:{}", path.display()), &data.id);
-        }
-    }
-    Ok(())
-}
-
-/// Move large entry bodies into the blob store and replace them with a
-/// `content_blob` reference (ADR-0186: entries, not wire messages).
-fn offload_session_blobs(data: &mut SessionData, blob_store: &BlobStore) -> Result<(), String> {
-    for entry in data.transcript.entries.iter_mut() {
-        let EntryPayload::Message(payload) = &mut entry.payload else {
-            continue;
-        };
-        if let Some(content) = &mut entry.content
-            && content.len() > BLOB_OFFLOAD_THRESHOLD
-            && payload.content_blob.is_none()
-        {
-            let hash = blob_store.put(content.as_bytes())?;
-            payload.content_blob = Some(hash);
-            content.clear();
-        }
-    }
-    Ok(())
-}
-
 /// Rehydrate entry bodies from `content_blob` references after loading.
 fn load_session_blobs(data: &mut SessionData, blob_store: &BlobStore) -> Result<(), String> {
     for entry in data.transcript.entries.iter_mut() {
@@ -350,10 +364,10 @@ pub struct SessionSummary {
     pub digest: Option<muta_contracts::SessionDigest>,
 }
 
-/// The mutable bits a [`SessionStore`] pins to one session file: the snapshot
-/// path, its event log, and the in-memory session data. Grouped under a single
-/// [`tokio::sync::Mutex`] so repointing the store (reset / fork / open) — which
-/// swaps both the path and the event log — is atomic with respect to every
+/// The mutable bits a [`SessionStore`] pins to one session: the snapshot path
+/// alias and the in-memory session data. Grouped under a single
+/// [`tokio::sync::Mutex`] so repointing the store (reset / fork / open) is
+/// atomic with respect to every
 /// reader and writer. There is no second lock to deadlock against.
 pub(crate) struct SessionState {
     /// Absolute path of this session's snapshot: `<sessions_dir>/<id>.json`.
@@ -385,21 +399,21 @@ pub struct SessionStore {
 }
 
 /// Write `data` authoritatively to the SQLite database at `db_path`.
-fn persist_to(db_path: &Path, data: &SessionData, blob_store: &BlobStore) -> Result<(), String> {
+fn persist_to(db_path: &Path, data: &SessionData, _blob_store: &BlobStore) -> Result<(), String> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let mut data = data.clone();
-    offload_session_blobs(&mut data, blob_store)?;
+    let data = data.clone();
+    let mut data = data;
     data.checksum = Some(compute_checksum(&data)?);
 
     let dirs = paths::get();
     if db_path == dirs.db_file() {
         crate::db::get_persistence_handle()
-            .save_session_full_blocking(data)
+            .save_session_blocking(data)
             .map_err(|e| format!("failed to save session to sqlite: {e}"))
     } else {
-        let engine = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone()))
+        let engine = crate::db::DatabaseEngine::open(db_path, None)
             .map_err(|e| format!("failed to open sqlite db {}: {e}", db_path.display()))?;
         engine
             .save_session_full(&data)
@@ -419,7 +433,7 @@ fn load_or_seed(
     project_root: &Path,
     legacy_file: Option<&Path>,
 ) -> SessionData {
-    let engine_opt = crate::db::DatabaseEngine::open(db_path, Some(blob_store.clone())).ok();
+    let engine_opt = crate::db::DatabaseEngine::open(db_path, None).ok();
 
     // Path alias in kv_store maps a legacy snapshot path to its session id.
     let mapped_id = if let Some(path) = legacy_file {
@@ -436,30 +450,29 @@ fn load_or_seed(
     let target_id = mapped_id.as_deref().unwrap_or(session_id);
 
     // Primary path: load directly from SQLite (SSOT).
-    if let Some(ref engine) = engine_opt {
-        if let Ok(Some(mut data)) = engine.load_session_full(target_id) {
-            if let Err(error) = load_session_blobs(&mut data, blob_store) {
-                tracing::warn!(error = %error, "could not load session blobs from sqlite");
-            }
-            data = migrate_session_data(data);
-            return data;
+    if let Some(ref engine) = engine_opt
+        && let Ok(Some(mut data)) = engine.load_session_full(target_id)
+    {
+        if let Err(error) = load_session_blobs(&mut data, blob_store) {
+            tracing::warn!(error = %error, "could not load session blobs from sqlite");
         }
+        data = migrate_session_data(data);
+        return data;
     }
 
     // Legacy flat-file snapshots are retired, not migrated: the path alias
     // pins one fresh identity so the caller's path keeps resolving to the
     // same (empty) session.
-    let id = if target_id.len() >= 32
-        && target_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    let id =
+        if target_id.len() >= 32 && target_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            target_id.to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+    if let Some(path) = legacy_file
+        && let Some(ref engine) = engine_opt
     {
-        target_id.to_string()
-    } else {
-        uuid::Uuid::new_v4().to_string()
-    };
-    if let Some(path) = legacy_file {
-        if let Some(ref engine) = engine_opt {
-            let _ = engine.set_kv(&format!("path:{}", path.display()), &id);
-        }
+        let _ = engine.set_kv(&format!("path:{}", path.display()), &id);
     }
     SessionData {
         id,
@@ -1125,14 +1138,20 @@ pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), St
     let mut examined = 0usize;
     let mut corrupt = 0usize;
     for session in engine
-        .list_sessions(project_root.map(|p| p.to_string_lossy().into_owned()).as_deref())
+        .list_sessions(
+            project_root
+                .map(|p| p.to_string_lossy().into_owned())
+                .as_deref(),
+        )
         .map_err(|e| e.to_string())?
     {
         examined += 1;
         match engine.load_session_full(&session.id) {
             Ok(Some(data)) => println!(
                 "ok       {} (schema {}, {} entries)",
-                session.id, data.schema_version, data.transcript.entries.len()
+                session.id,
+                data.schema_version,
+                data.transcript.entries.len()
             ),
             Ok(None) => {
                 corrupt += 1;
@@ -1153,6 +1172,8 @@ mod fields;
 mod history;
 
 pub use history::CommitTurn;
+#[cfg(test)]
+pub(crate) use history::rebuild_transcript_from_messages as rebuild_for_test;
 mod store;
 #[cfg(test)]
 mod tests;

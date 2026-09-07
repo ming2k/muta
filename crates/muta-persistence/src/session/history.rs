@@ -39,7 +39,10 @@ fn _persist_guard_doc() {}
 /// provenance) are not provider-visible content, so comparisons that decide
 /// append-vs-rebuild must ignore them (ADR-0186).
 fn wire_eq(a: &[Message], b: &[Message]) -> bool {
-    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.to_wire() == y.to_wire())
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.to_wire() == y.to_wire())
 }
 
 impl SessionStore {
@@ -58,11 +61,10 @@ impl SessionStore {
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            let already = state
-                .data
-                .round_interrupts
-                .iter()
-                .any(|existing| existing.reason == record.reason && existing.round == record.round);
+            let already =
+                state.data.round_interrupts.iter().any(|existing| {
+                    existing.reason == record.reason && existing.round == record.round
+                });
             if already {
                 return Ok(());
             }
@@ -156,17 +158,24 @@ impl SessionStore {
     /// decision history is cleared — the caller asserts the window is the
     /// whole truth.
     pub async fn replace_messages(&self, messages: Vec<Message>) -> Result<(), String> {
-        let (path, data, should_persist) = {
+        let (path, data, children, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.transcript = rebuild_transcript_from_messages(&messages);
-            admit_runner_children(self, &mut state.data, &messages);
+            state.data.generation = uuid::Uuid::new_v4().to_string();
+            let children = admit_runner_children(&mut state.data, &messages);
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 state.defer_persist = false;
             }
-            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+            (
+                state.path.clone(),
+                state.data.clone(),
+                children,
+                !empty_unpersisted,
+            )
         };
+        persist_runner_children(&self.db_path, &self.blob_store, &children);
         if should_persist {
             self.persist_off_runtime(path, data, self.blob_store.clone())
                 .await?;
@@ -206,31 +215,31 @@ impl SessionStore {
     /// on divergence the transcript is rebuilt (the caller's window is the
     /// truth).
     pub async fn append_turn(&self, current: &[Message]) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, children) = {
             let mut state = self.state.lock().await;
             let durable = state.data.transcript.project_messages();
             if current.len() <= durable.len() && !wire_eq(current, &durable) {
                 return Ok(());
             }
+            let mut children = Vec::new();
             if current.len() > durable.len() && wire_eq(&current[..durable.len()], &durable) {
                 for message in &current[durable.len()..] {
                     state
                         .data
                         .transcript
-                        .push(muta_contracts::TranscriptEntry::from_message(
-                            0,
-                            message,
-                        ));
+                        .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                admit_runner_children(self, &mut state.data, &current[durable.len()..]);
+                children = admit_runner_children(&mut state.data, &current[durable.len()..]);
             } else if !wire_eq(current, &durable) {
                 state.data.transcript = rebuild_transcript_from_messages(current);
-                admit_runner_children(self, &mut state.data, current);
+                state.data.generation = uuid::Uuid::new_v4().to_string();
+                children = admit_runner_children(&mut state.data, current);
             }
             state.data.updated_at = unix_timestamp();
             state.defer_persist = false;
-            (state.path.clone(), state.data.clone())
+            (state.path.clone(), state.data.clone(), children)
         };
+        persist_runner_children(&self.db_path, &self.blob_store, &children);
         self.persist_off_runtime(path, data, self.blob_store.clone())
             .await
     }
@@ -238,28 +247,28 @@ impl SessionStore {
     /// Commit everything a finished ReAct turn changed, in **one** lock
     /// acquisition and at most **one** snapshot write.
     pub async fn commit_turn(&self, commit: CommitTurn<'_>) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, children, usage_upserts) = {
             let mut state = self.state.lock().await;
 
             // 1. Message-tail delta against the projection.
             let durable = state.data.transcript.project_messages();
             let prefix_matches = commit.messages.len() >= durable.len()
                 && wire_eq(&commit.messages[..durable.len()], &durable);
+            let mut children = Vec::new();
             if commit.messages.len() > durable.len() && prefix_matches {
                 for message in &commit.messages[durable.len()..] {
                     state
                         .data
                         .transcript
-                        .push(muta_contracts::TranscriptEntry::from_message(
-                            0,
-                            message,
-                        ));
+                        .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                admit_runner_children(self, &mut state.data, &commit.messages[durable.len()..]);
+                children =
+                    admit_runner_children(&mut state.data, &commit.messages[durable.len()..]);
                 state.data.updated_at = unix_timestamp();
             } else if !wire_eq(commit.messages, &durable) {
                 state.data.transcript = rebuild_transcript_from_messages(commit.messages);
-                admit_runner_children(self, &mut state.data, commit.messages);
+                state.data.generation = uuid::Uuid::new_v4().to_string();
+                children = admit_runner_children(&mut state.data, commit.messages);
                 state.data.updated_at = unix_timestamp();
             }
 
@@ -271,7 +280,11 @@ impl SessionStore {
                 state.data.updated_at = unix_timestamp();
             }
 
-            // 3. Usage records — upsert only the records that changed.
+            // 3. Usage records — upsert only the records that changed. The
+            // durable ledger lives in its own key-addressed table, so the
+            // changed records ride to the save as upserts (ADR-0187); the
+            // in-memory mirror feeds the token ledger.
+            let mut usage_upserts: Vec<muta_contracts::RequestUsageRecord> = Vec::new();
             if !commit.usage_records.is_empty() {
                 if commit
                     .usage_records
@@ -280,28 +293,30 @@ impl SessionStore {
                 {
                     return Err("request usage record belongs to another session".to_string());
                 }
+                let mut index: std::collections::HashMap<muta_contracts::RequestUsageKey, usize> =
+                    state
+                        .data
+                        .request_usage_records
+                        .iter()
+                        .enumerate()
+                        .map(|(i, record)| (record.key.clone(), i))
+                        .collect();
                 for record in commit.usage_records {
-                    let differs = state
-                        .data
-                        .request_usage_records
-                        .iter()
-                        .any(|existing| existing.key == record.key && existing != record);
-                    let is_new = !state
-                        .data
-                        .request_usage_records
-                        .iter()
-                        .any(|existing| existing.key == record.key);
-                    if differs || is_new {
-                        match state
-                            .data
-                            .request_usage_records
-                            .iter_mut()
-                            .find(|existing| existing.key == record.key)
-                        {
-                            Some(existing) => *existing = record.clone(),
-                            None => state.data.request_usage_records.push(record.clone()),
+                    match index.get(&record.key) {
+                        Some(&i) => {
+                            if state.data.request_usage_records[i] != *record {
+                                state.data.request_usage_records[i] = record.clone();
+                                usage_upserts.push(record.clone());
+                                state.data.updated_at = unix_timestamp();
+                            }
                         }
-                        state.data.updated_at = unix_timestamp();
+                        None => {
+                            index
+                                .insert(record.key.clone(), state.data.request_usage_records.len());
+                            state.data.request_usage_records.push(record.clone());
+                            usage_upserts.push(record.clone());
+                            state.data.updated_at = unix_timestamp();
+                        }
                     }
                 }
             }
@@ -336,10 +351,15 @@ impl SessionStore {
             }
 
             state.defer_persist = false;
-            (state.path.clone(), state.data.clone())
+            (
+                state.path.clone(),
+                state.data.clone(),
+                children,
+                usage_upserts,
+            )
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        persist_runner_children(&self.db_path, &self.blob_store, &children);
+        self.persist_with_usage(path, data, usage_upserts).await
     }
 
     /// Commit a model-context projection (ADR-0186): translate the
@@ -358,9 +378,11 @@ impl SessionStore {
                 Some(()) => {}
                 None => {
                     // Fallback: the caller's window is the truth; rebuild the
-                    // entries and drop the stale directive history.
-                    state.data.transcript =
-                        rebuild_transcript_from_messages(&result.model_window);
+                    // entries and drop the stale directive history. The new
+                    // transcript shares nothing with the durable rows, so the
+                    // next save rewrites in full (ADR-0187).
+                    state.data.transcript = rebuild_transcript_from_messages(&result.model_window);
+                    state.data.generation = uuid::Uuid::new_v4().to_string();
                 }
             }
             state.data.last_projection = Some(result.checkpoint);
@@ -375,53 +397,61 @@ impl SessionStore {
     /// Fork the current session: write its state to a new child and
     /// repoint this store at the child in SQLite. Returns `(child_id, parent_id)`.
     pub async fn fork(&self) -> Result<(String, String), String> {
-        let mut state = self.state.lock().await;
-        if state.data.transcript.entries.is_empty() {
-            return Err("Cannot fork an empty session.".to_string());
-        }
-        let parent_id = state.data.id.clone();
-        let now = unix_timestamp();
+        let (parent_id, child, fork_child_id, child_path) = {
+            let state = self.state.lock().await;
+            if state.data.transcript.entries.is_empty() {
+                return Err("Cannot fork an empty session.".to_string());
+            }
+            let parent_id = state.data.id.clone();
+            let now = unix_timestamp();
 
-        // Build the child snapshot from the parent's current state. Entries
-        // are shared by identity; the child merely gains its own memberships.
-        let mut child = state.data.clone();
-        let fork_id = uuid::Uuid::new_v4().to_string();
-        child.id = fork_id.clone();
-        child.parent_id = Some(parent_id.clone());
-        child.fork_kind = muta_contracts::SessionForkKind::Fork;
-        child.created_at = now;
-        child.updated_at = now;
-        child.request_usage_records.clear();
+            // Build the child snapshot from the parent's current state. Entries
+            // are shared by identity; the child merely gains its own memberships.
+            let mut child = state.data.clone();
+            let fork_child_id = uuid::Uuid::new_v4().to_string();
+            child.id = fork_child_id.clone();
+            child.parent_id = Some(parent_id.clone());
+            child.fork_kind = muta_contracts::SessionForkKind::Fork;
+            child.created_at = now;
+            child.updated_at = now;
+            child.request_usage_records.clear();
 
-        let child_path = self.sessions_dir.join(format!("{fork_id}.json"));
+            let child_path = self.sessions_dir.join(format!("{fork_child_id}.json"));
+            (parent_id, child, fork_child_id, child_path)
+        };
+        // Blocking I/O stays outside the session lock.
         persist_to(&self.db_path, &child, &self.blob_store)?;
 
+        let mut state = self.state.lock().await;
         // Repoint this store at the child; the parent state is already current.
         state.path = child_path;
         state.data = child;
         state.defer_persist = false;
-        Ok((fork_id, parent_id))
+        Ok((fork_child_id, parent_id))
     }
 
     /// Fork the current session into a **self-contained side session** without
     /// disturbing this store's active pointer (ADR-0017). Returns `(side_id, parent_id)`.
     pub async fn fork_to_side(&self) -> Result<(String, String), String> {
-        let state = self.state.lock().await;
-        if state.data.transcript.entries.is_empty() {
-            return Err("Cannot fork an empty session.".to_string());
-        }
-        let parent_id = state.data.id.clone();
-        let now = unix_timestamp();
+        let (parent_id, side, side_id) = {
+            let state = self.state.lock().await;
+            if state.data.transcript.entries.is_empty() {
+                return Err("Cannot fork an empty session.".to_string());
+            }
+            let parent_id = state.data.id.clone();
+            let now = unix_timestamp();
 
-        let mut side = state.data.clone();
-        let side_id = uuid::Uuid::new_v4().to_string();
-        side.id = side_id.clone();
-        side.parent_id = Some(parent_id.clone());
-        side.fork_kind = muta_contracts::SessionForkKind::Aside;
-        side.created_at = now;
-        side.updated_at = now;
-        side.request_usage_records.clear();
-
+            let mut side = state.data.clone();
+            let side_id = uuid::Uuid::new_v4().to_string();
+            side.id = side_id.clone();
+            side.parent_id = Some(parent_id.clone());
+            side.fork_kind = muta_contracts::SessionForkKind::Aside;
+            side.created_at = now;
+            side.updated_at = now;
+            side.request_usage_records.clear();
+            (parent_id, side, side_id)
+        };
+        // Blocking I/O stays outside the session lock.
         persist_to(&self.db_path, &side, &self.blob_store)?;
         Ok((side_id, parent_id))
     }
@@ -432,12 +462,20 @@ impl SessionStore {
         let db_path = self.db_path.clone();
         let project_root = self.project_root.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
-        let engine = crate::db::DatabaseEngine::open(&db_path, Some(blob_store.clone()))
-            .map_err(|e| e.to_string())?;
-        let data = if let Some(data) = engine.load_session_full(side_id).map_err(|e| e.to_string())? {
+        let engine = crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
+        let data = if let Some(data) = engine
+            .load_session_full(side_id)
+            .map_err(|e| e.to_string())?
+        {
             data
         } else if side_path.exists() {
-            load_or_seed(&db_path, side_id, &blob_store, &project_root, Some(&side_path))
+            load_or_seed(
+                &db_path,
+                side_id,
+                &blob_store,
+                &project_root,
+                Some(&side_path),
+            )
         } else {
             return Err(format!("Side session '{side_id}' was not found."));
         };
@@ -468,28 +506,38 @@ impl SessionStore {
         &self,
         entry: muta_contracts::SessionEntry,
     ) -> Result<String, String> {
-        let mut state = self.state.lock().await;
-        let id = entry.id.clone();
-        state.data.tree.insert_entry(entry);
-        let messages = state.data.tree.get_context_messages(&id);
-        state.data.transcript = rebuild_transcript_from_messages(&messages);
-        state.data.updated_at = unix_timestamp();
-        persist_to(&self.db_path, &state.data, &self.blob_store)?;
+        let (data, id) = {
+            let mut state = self.state.lock().await;
+            let id = entry.id.clone();
+            state.data.tree.insert_entry(entry);
+            let messages = state.data.tree.get_context_messages(&id);
+            state.data.transcript = rebuild_transcript_from_messages(&messages);
+            state.data.generation = uuid::Uuid::new_v4().to_string();
+            state.data.updated_at = unix_timestamp();
+            (state.data.clone(), id)
+        };
+        // Blocking I/O stays outside the session lock.
+        persist_to(&self.db_path, &data, &self.blob_store)?;
         Ok(id)
     }
 
     /// Switch active leaf in the DAG session tree and update the durable
     /// transcript to the leaf's context.
     pub async fn switch_tree_leaf(&self, target_leaf_id: &str) -> Result<Vec<Message>, String> {
-        let mut state = self.state.lock().await;
-        if !state.data.tree.entries.contains_key(target_leaf_id) {
-            return Err(format!("Node '{target_leaf_id}' not found in session tree"));
-        }
-        state.data.tree.active_leaf_id = Some(target_leaf_id.to_string());
-        let messages = state.data.tree.get_context_messages(target_leaf_id);
-        state.data.transcript = rebuild_transcript_from_messages(&messages);
-        state.data.updated_at = unix_timestamp();
-        persist_to(&self.db_path, &state.data, &self.blob_store)?;
+        let (data, messages) = {
+            let mut state = self.state.lock().await;
+            if !state.data.tree.entries.contains_key(target_leaf_id) {
+                return Err(format!("Node '{target_leaf_id}' not found in session tree"));
+            }
+            state.data.tree.active_leaf_id = Some(target_leaf_id.to_string());
+            let messages = state.data.tree.get_context_messages(target_leaf_id);
+            state.data.transcript = rebuild_transcript_from_messages(&messages);
+            state.data.generation = uuid::Uuid::new_v4().to_string();
+            state.data.updated_at = unix_timestamp();
+            (state.data.clone(), messages)
+        };
+        // Blocking I/O stays outside the session lock.
+        persist_to(&self.db_path, &data, &self.blob_store)?;
         Ok(messages)
     }
 }
@@ -498,12 +546,11 @@ impl SessionStore {
 /// transcript becomes a **subagent session** (its own `sessions` row, facts
 /// shared by identity), and the parent's tool entry gains a `SubagentRef`
 /// pointer. The in-memory `Message` keeps its `children` for the live view;
-/// the persisted entry carries only the pointer.
-fn admit_runner_children(
-    session: &SessionStore,
-    state: &mut SessionData,
-    candidates: &[Message],
-) {
+/// the persisted entry carries only the pointer. The subagent rows are
+/// *returned*, not written here: the caller persists them after releasing the
+/// session lock so no blocking I/O runs under the lock (ADR-0187).
+fn admit_runner_children(state: &mut SessionData, candidates: &[Message]) -> Vec<SessionData> {
+    let mut subagents = Vec::new();
     for message in candidates {
         let (Some(children), Some(runner_meta)) =
             (message.children.as_ref(), message.runner_meta.as_ref())
@@ -522,10 +569,7 @@ fn admit_runner_children(
             ..Default::default()
         };
         subagent.transcript = rebuild_transcript_from_messages(children);
-        if let Err(error) = crate::session::persist_to(&session.db_path, &subagent, &session.blob_store) {
-            tracing::warn!(%error, "could not persist subagent session; nested transcript is dropped");
-            continue;
-        }
+        subagents.push(subagent);
         // Stamp the pointer on the already-admitted parent entry (the newest
         // tool result matching this runner result's content).
         let call_id = message.tool_call_id.clone();
@@ -537,8 +581,7 @@ fn admit_runner_children(
             .find(|entry| {
                 matches!(&entry.payload, muta_contracts::EntryPayload::Message(payload)                     if payload.tool_call_id == call_id)
             })
-        {
-            if let muta_contracts::EntryPayload::Message(payload) = &mut entry.payload {
+            && let muta_contracts::EntryPayload::Message(payload) = &mut entry.payload {
                 payload.subagent = Some(muta_contracts::SubagentRef {
                     session_id: subagent_id,
                     description: runner_meta.description.clone(),
@@ -546,12 +589,25 @@ fn admit_runner_children(
                     toolset_count: Some(runner_meta.toolset_count),
                 });
             }
+    }
+    subagents
+}
+
+/// Persist admitted subagent sessions. Called after the session lock is
+/// released; failures leave the parent entry's pointer dangling, which the
+/// load path reports rather than silently dropping the run.
+fn persist_runner_children(db_path: &Path, blob_store: &BlobStore, subagents: &[SessionData]) {
+    for subagent in subagents {
+        if let Err(error) = crate::session::persist_to(db_path, subagent, blob_store) {
+            tracing::warn!(%error, subagent = %subagent.id, "could not persist subagent session; nested transcript is dropped");
         }
     }
 }
 
 /// Rebuild a transcript from a flat message window (entries get fresh ids;
-/// projection history is cleared).
+/// projection history is cleared). The caller must mint a fresh
+/// `SessionData::generation` afterwards: the new transcript shares no rows
+/// with the durable one (ADR-0187).
 pub(crate) fn rebuild_transcript_from_messages(messages: &[Message]) -> muta_contracts::Transcript {
     let mut transcript = muta_contracts::Transcript::new();
     for message in messages {
@@ -579,8 +635,8 @@ fn translate_projection(
     });
     if let Some(checkpoint_index) = checkpoint_index {
         let (checkpoint, tail) = target.split_at(checkpoint_index + 1);
-        let tail_matches = tail.len() <= current.len()
-            && wire_eq(&current[current.len() - tail.len()..], tail);
+        let tail_matches =
+            tail.len() <= current.len() && wire_eq(&current[current.len() - tail.len()..], tail);
         // The archived range is the current projection's head that the caller
         // reports as archived; its length anchors the directive.
         let archived_len = result.archived_originals.len();
@@ -594,8 +650,7 @@ fn translate_projection(
             } else {
                 transcript.entries[archived_len - 1].seq
             };
-            let checkpoint_entry =
-                muta_contracts::TranscriptEntry::from_message(0, &checkpoint[0]);
+            let checkpoint_entry = muta_contracts::TranscriptEntry::from_message(0, &checkpoint[0]);
             transcript.push(checkpoint_entry);
             let checkpoint_seq = transcript
                 .entries
@@ -652,8 +707,4 @@ fn translate_projection(
     }
 
     None
-}
-
-fn wire_eq_lengths(a: &[Message], b: &[Message]) -> bool {
-    a.len() == b.len() && !a.is_empty()
 }

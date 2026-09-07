@@ -2,11 +2,11 @@
 //! `run_app_loop`'s `if needs_draw` stage (it was a ~1000-line closure).
 
 use crate::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
-use crate::composer::{ComposerText, ComposerProps};
+use crate::composer::{ComposerProps, ComposerText};
 use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
-use crate::render;
 use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ConfirmChoice;
+use crate::render;
 use crate::{App, Modal, ProviderDeleteChoice, Recess};
 
 use super::actions::effective_reasoning_effort;

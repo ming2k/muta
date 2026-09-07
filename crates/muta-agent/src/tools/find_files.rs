@@ -36,7 +36,11 @@ struct FindFilesArgs {
     #[tool(
         desc = "Path globs to match files (e.g. [\"*.rs\"], [\"src/**\"]). Alternatives are separate array items (OR). If omitted, defaults to [\"*\"] (matches all files)."
     )]
-    #[serde(default, alias = "include", deserialize_with = "deserialize_optional_string_or_vec")]
+    #[serde(
+        default,
+        alias = "include",
+        deserialize_with = "deserialize_optional_string_or_vec"
+    )]
     patterns: Option<Vec<String>>,
     #[tool(desc = "Directory to search; relative paths use the primary workspace (default '.')")]
     path: Option<String>,

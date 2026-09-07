@@ -184,15 +184,14 @@ impl WorkspaceSecurityStore {
         // Check for legacy JSON file to migrate once and purge
         let legacy_json = self.db_path.with_extension("json");
         if legacy_json.exists() {
-            if let Ok(text) = std::fs::read_to_string(&legacy_json) {
-                if let Ok(state) = serde_json::from_str::<PersistedWorkspaceSecurity>(&text) {
-                    if state.version == CURRENT_VERSION {
-                        let _ = engine.set_json("state:workspace_security", &state);
-                        let _ = std::fs::remove_file(&legacy_json);
-                        let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));
-                        return Ok(state);
-                    }
-                }
+            if let Ok(text) = std::fs::read_to_string(&legacy_json)
+                && let Ok(state) = serde_json::from_str::<PersistedWorkspaceSecurity>(&text)
+                && state.version == CURRENT_VERSION
+            {
+                let _ = engine.set_json("state:workspace_security", &state);
+                let _ = std::fs::remove_file(&legacy_json);
+                let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));
+                return Ok(state);
             }
             let _ = std::fs::remove_file(&legacy_json);
             let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));

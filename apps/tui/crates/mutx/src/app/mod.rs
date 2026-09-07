@@ -267,12 +267,18 @@ pub struct App {
     /// past this, so an unchanged transcript costs no per-frame deep clone.
     /// Starts at 0 (the `Versioned` sentinel) so the first frame always syncs.
     pub messages_version: u64,
+    /// O(1) streaming-delta target for `messages` (id, index); reset on
+    /// wholesale replacement (ADR-0187).
+    pub stream_cursor: Option<(u64, usize)>,
     /// Side-conversation transcript (ADR-0017). Populated only while a `/btw`
     /// side session is live; per-turn events tagged with the side `session_id`
     /// route here instead of into `messages`.
     pub side_messages: Vec<TranscriptMessage>,
     /// Companion to `messages_version` for the side buffer.
     pub side_messages_version: u64,
+    /// O(1) streaming-delta target for `side_messages`; reset on wholesale
+    /// replacement (ADR-0187).
+    pub side_stream_cursor: Option<(u64, usize)>,
     /// Per-message laid-out height cache (Stage 2). Lets the transcript renderer
     /// skip re-wrapping off-screen messages, making per-frame layout O(visible)
     /// instead of O(transcript). Cleared whenever the transcript changes (a

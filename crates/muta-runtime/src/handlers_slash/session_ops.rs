@@ -149,7 +149,11 @@ pub(crate) async fn restore_session_runtime(
             .iter()
             .rev()
             .find_map(|rec| {
-                if (rec.name == "unattended" || rec.name == "auto" || rec.name == "delegate" || rec.name == "autopilot" || rec.name == "yolo")
+                if (rec.name == "unattended"
+                    || rec.name == "auto"
+                    || rec.name == "delegate"
+                    || rec.name == "autopilot"
+                    || rec.name == "yolo")
                     && let Some(CommandResult::Ack { title, .. }) = &rec.result
                 {
                     let title = title.to_lowercase();

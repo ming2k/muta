@@ -364,7 +364,12 @@ pub fn line_diff_hunks_with_context(
             // Find first change line (Delete/Replace) or fallback to insertion point
             let change_start = ops
                 .iter()
-                .find(|op| matches!(op, SimilarDiffOp::Delete { .. } | SimilarDiffOp::Replace { .. }))
+                .find(|op| {
+                    matches!(
+                        op,
+                        SimilarDiffOp::Delete { .. } | SimilarDiffOp::Replace { .. }
+                    )
+                })
                 .map(|op| op.old_range().start)
                 .unwrap_or(old_range.start);
 
@@ -416,11 +421,27 @@ fn find_hunk_scope_hint(old_lines: &[&str], start_line_idx: usize) -> Option<Str
 
 fn is_scope_declaration(line: &str) -> bool {
     let kw_prefixes = [
-        "fn ", "pub fn ", "pub(crate) fn ", "async fn ", "pub async fn ",
-        "impl ", "struct ", "pub struct ", "enum ", "pub enum ", "trait ", "pub trait ",
-        "def ", "async def ", "class ",
-        "function ", "export function ", "export default ", "export class ",
-        "func ", "type ",
+        "fn ",
+        "pub fn ",
+        "pub(crate) fn ",
+        "async fn ",
+        "pub async fn ",
+        "impl ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "trait ",
+        "pub trait ",
+        "def ",
+        "async def ",
+        "class ",
+        "function ",
+        "export function ",
+        "export default ",
+        "export class ",
+        "func ",
+        "type ",
     ];
     for prefix in &kw_prefixes {
         if line.starts_with(prefix) {
@@ -722,8 +743,14 @@ mod tests {
         let hunks = line_diff_hunks(old, new, 0);
 
         assert_eq!(hunks.len(), 1);
-        assert_eq!(hunks[0].hint.as_deref(), Some("pub fn calculate(val: i32) -> i32"));
-        assert_eq!(hunks[0].header(), "@@ -1,5 +1,5 @@ pub fn calculate(val: i32) -> i32");
+        assert_eq!(
+            hunks[0].hint.as_deref(),
+            Some("pub fn calculate(val: i32) -> i32")
+        );
+        assert_eq!(
+            hunks[0].header(),
+            "@@ -1,5 +1,5 @@ pub fn calculate(val: i32) -> i32"
+        );
     }
 
     #[test]

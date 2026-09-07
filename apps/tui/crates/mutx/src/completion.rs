@@ -66,7 +66,7 @@ pub struct Completion {
     pub replace_start: usize,
     pub replace_end: usize,
     pub kind: CompletionItemKind,
-    /// Canonical command when this row is an alias (`/yolo` → `/delegate`).
+    /// Canonical command when this row is an alias (`/yolo` → `/unattended`).
     /// Drives the distinct row rendering; the accepted edit already commits
     /// the canonical spelling via `insert_text`.
     pub alias_of: Option<String>,

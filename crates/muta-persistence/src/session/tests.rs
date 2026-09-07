@@ -5,13 +5,8 @@
 //! append-only directives, and fork shares facts by identity.
 
 use crate::session::*;
-use crate::blobs::BlobStore;
-use muta_contracts::{
-    DirectiveKind, DirectivePayload, InjectionKind, Message, ProjectionDirective, Role, ToolCall,
-    TranscriptEntry,
-};
+use muta_contracts::{Message, Role, ToolCall};
 use std::path::PathBuf;
-use tokio::sync::Mutex;
 
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("muta-t18x-{tag}-{}", uuid::Uuid::new_v4()));
@@ -146,7 +141,7 @@ async fn prune_commit_appends_directive_not_rewrite() {
     window[2].content = "[pruned]".into();
     let original_body = window[2].content.clone();
     let _ = original_body;
-    let archived = store.full_transcript().await;
+    let _archived = store.full_transcript().await;
     store
         .commit_context_projection(ContextProjectionResult {
             model_window: window,
@@ -294,7 +289,10 @@ async fn fork_shares_entries_and_diverges() {
 #[tokio::test]
 async fn fork_to_side_keeps_active_pointer() {
     let store = store("side").await;
-    store.replace_messages(vec![user("aside seed")]).await.unwrap();
+    store
+        .replace_messages(vec![user("aside seed")])
+        .await
+        .unwrap();
     let (side_id, _) = store.fork_to_side().await.unwrap();
     assert_eq!(store.model_window().await.len(), 1);
     let side = store.open_side(&side_id).await.unwrap();
@@ -312,13 +310,15 @@ async fn provider_selection_round_trips() {
     let store = SessionStore::for_path(path.clone());
     // Lazy contract (ADR-0018): a pin on an empty session does not
     // materialise it — give the session content first.
-    store.replace_messages(vec![user("real work")]).await.unwrap();
+    store
+        .replace_messages(vec![user("real work")])
+        .await
+        .unwrap();
     store
         .set_provider_selection(Some(ProviderSelection {
             connection: "anthropic".into(),
             model: Some("claude-sonnet-4".into()),
         }))
-
         .await
         .unwrap();
     let reloaded = SessionStore::for_path(path);
@@ -417,7 +417,10 @@ async fn fresh_session_stays_unpersisted_until_content() {
     let store = SessionStore::for_path(path.clone());
     assert!(store.is_empty_unpersisted().await);
     assert!(!path.exists());
-    store.replace_messages(vec![user("now real")]).await.unwrap();
+    store
+        .replace_messages(vec![user("now real")])
+        .await
+        .unwrap();
     assert!(!store.is_empty_unpersisted().await);
     let reloaded = SessionStore::for_path(path);
     assert_eq!(reloaded.model_window().await.len(), 1);
@@ -453,12 +456,15 @@ async fn runner_children_become_subagent_sessions_with_pointer() {
     let dir = temp_dir("subagent");
     let path = dir.join("session.json");
     let store = SessionStore::for_path(path.clone());
-    store.replace_messages(vec![user("spawn task")]).await.unwrap();
+    store
+        .replace_messages(vec![user("spawn task")])
+        .await
+        .unwrap();
 
     let call = ToolCall::new("call-sub", "task", "{}");
     let mut parent = assistant("delegating");
     parent.tool_calls = Some(vec![call.clone()]);
-    let mut child_messages = vec![user("child task"), assistant("child done")];
+    let child_messages = vec![user("child task"), assistant("child done")];
     let runner_meta = muta_contracts::message::RunnerMeta {
         description: Some("do the thing".into()),
         duration_ms: Some(1234),
@@ -497,7 +503,10 @@ async fn runner_children_become_subagent_sessions_with_pointer() {
         subagent.fork_kind,
         muta_contracts::SessionForkKind::Subagent
     );
-    assert_eq!(subagent.parent_id.as_deref(), Some(store.id().await.as_str()));
+    assert_eq!(
+        subagent.parent_id.as_deref(),
+        Some(store.id().await.as_str())
+    );
     let transcript = subagent
         .transcript
         .entries

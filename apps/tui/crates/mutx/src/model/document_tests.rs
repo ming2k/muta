@@ -1118,7 +1118,10 @@ fn normalize_thinking_topic_edge_cases() {
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0 >> 11
     }
 }
@@ -1199,12 +1202,7 @@ fn streamed_message_equals_freshly_parsed_message() {
     for chunk in corpus.as_bytes().chunks(7) {
         // Snap to char boundary.
         let mut end = chunk.len();
-        while !corpus.is_char_boundary(
-            corpus
-                .as_bytes()
-                .len()
-                .min(end + streamed.raw.len()),
-        ) {
+        while !corpus.is_char_boundary(corpus.len().min(end + streamed.raw.len())) {
             end -= 1;
         }
         let start = streamed.raw.len();
@@ -1250,7 +1248,10 @@ fn push_stream_stays_bounded_on_long_streams() {
         elapsed.as_secs() < 5,
         "push_stream regressed to super-linear cost: {elapsed:?} for 600 KB"
     );
-    assert!(msg.blocks.len() > 100, "structure must have been discovered");
+    assert!(
+        msg.blocks.len() > 100,
+        "structure must have been discovered"
+    );
 }
 
 /// The incremental thinking counter must agree with a full tokenization of
@@ -1276,15 +1277,18 @@ fn thinking_counter_matches_full_tokenization() {
     let exact = muta_contracts::tokenizer::count_tokens(content);
     // Streaming: the counter may lag by the carried tail (one open pretoken),
     // never lead.
-    assert!(counted <= exact && exact - counted <= 16, "{counted} vs {exact}");
+    assert!(
+        counted <= exact && exact - counted <= 16,
+        "{counted} vs {exact}"
+    );
     msg.finalize_thinking(full);
-    let MessageKind::Thinking {
-        stream_tokens, ..
-    } = &msg.kind
-    else {
+    let MessageKind::Thinking { stream_tokens, .. } = &msg.kind else {
         panic!("not thinking");
     };
-    assert_eq!(stream_tokens.tokens(), muta_contracts::tokenizer::count_tokens(full));
+    assert_eq!(
+        stream_tokens.tokens(),
+        muta_contracts::tokenizer::count_tokens(full)
+    );
 }
 
 /// Split on whole-scalar boundaries (provider deltas never split scalars).
@@ -1323,8 +1327,10 @@ fn wrap_cache_is_transparent() {
             let fresh = crate::text_layout::wrap_text(text, width);
             assert_eq!(cached.len(), fresh.len());
             for (c, f) in cached.iter().zip(fresh.iter()) {
-                assert_eq!((c.text.as_str(), c.start_byte, c.end_byte),
-                           (f.text.as_str(), f.start_byte, f.end_byte));
+                assert_eq!(
+                    (c.text.as_str(), c.start_byte, c.end_byte),
+                    (f.text.as_str(), f.start_byte, f.end_byte)
+                );
             }
         }
     }
@@ -1351,8 +1357,10 @@ fn wrap_cache_is_transparent() {
             assert_eq!(po, fo);
             assert_eq!(pw.len(), fw.len());
             for (c, f) in pw.iter().zip(fw.iter()) {
-                assert_eq!((c.text.as_str(), c.start_byte, c.end_byte),
-                           (f.text.as_str(), f.start_byte, f.end_byte));
+                assert_eq!(
+                    (c.text.as_str(), c.start_byte, c.end_byte),
+                    (f.text.as_str(), f.start_byte, f.end_byte)
+                );
             }
         }
     }

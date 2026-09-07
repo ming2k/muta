@@ -8,7 +8,7 @@
 //!
 //! Frontends drive the harness through [`execute_round`],
 //! [`start_interactive_round`], and
-//! [`start_schedule_scheduler`]. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
+//! `start_schedule_scheduler`. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
 //! future GUI); the actual round machinery is shared here.
 //!
 //! All items are `pub` because they are assembled by the binary, which knows
@@ -32,9 +32,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use muta_contracts::{
-    AgentEvent, AgentRequest, AgentResponse, HarnessError, HarnessSnapshot, ImagePart,
-    InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent,
+    AgentEvent, AgentResponse, HarnessError, HarnessSnapshot, ImagePart, InjectionKind, LoopStatus,
+    Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, Provider,
+    ProviderStreamEvent, Role, RoundEvent,
 };
 use muta_persistence::{
     CommitTurn,
@@ -844,11 +844,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             let mut g = in_flight_draft.lock().unwrap_or_else(|e| e.into_inner());
             let text = g.trim().to_string();
             g.clear();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
+            if text.is_empty() { None } else { Some(text) }
         };
         let interrupt_record = if stopped {
             // Attribution: this round's own admitted number, not the live
@@ -1009,7 +1005,10 @@ pub async fn execute_round(
 
     // Phase 1: Pre-flight Aspect Evaluation (ADR-0183)
     if !input.hidden && !input.is_retry() {
-        let pre_flight = agent.aspects().evaluate_pre_flight(&input.prompt, false).await;
+        let pre_flight = agent
+            .aspects()
+            .evaluate_pre_flight(&input.prompt, false)
+            .await;
         tracing::debug!(
             tier = ?pre_flight.tier,
             thinking = pre_flight.enable_thinking,
@@ -1062,18 +1061,17 @@ pub async fn execute_round(
     } else {
         let mut th = session.model_window().await;
         // Phase 2: Turn-Intake Aspect Evaluation (ADR-0183)
-        if !input.hidden {
-            if let Some(reminder) = agent
+        if !input.hidden
+            && let Some(reminder) = agent
                 .aspects()
                 .evaluate_turn_intake(agent.workspace_root().as_deref())
                 .await
-            {
-                tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
-                th.push(crate::conversation_context::hidden_user(
-                    InjectionKind::SystemReminder,
-                    format!("<system-reminder>\n{reminder}\n</system-reminder>"),
-                ));
-            }
+        {
+            tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
+            th.push(crate::conversation_context::hidden_user(
+                InjectionKind::SystemReminder,
+                format!("<system-reminder>\n{reminder}\n</system-reminder>"),
+            ));
         }
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
@@ -1247,19 +1245,19 @@ pub async fn execute_round(
                     if matches!(event, AgentEvent::ToolCall { .. }) {
                         activity_for_run.store(true, Ordering::SeqCst);
                     }
-                    if let AgentEvent::AssistantDelta { ref delta, .. } = event {
-                        if let Some(ref draft) = draft_for_run {
-                            if let Ok(mut g) = draft.lock() {
-                                g.push_str(delta);
-                            }
-                        }
+                    if let AgentEvent::AssistantDelta { ref delta, .. } = event
+                        && let Some(ref draft) = draft_for_run
+                        && let Ok(mut g) = draft.lock()
+                    {
+                        g.push_str(delta);
                     }
-                    if matches!(event, AgentEvent::ToolCall { .. } | AgentEvent::AssistantEnd(..)) {
-                        if let Some(ref draft) = draft_for_run {
-                            if let Ok(mut g) = draft.lock() {
-                                g.clear();
-                            }
-                        }
+                    if matches!(
+                        event,
+                        AgentEvent::ToolCall { .. } | AgentEvent::AssistantEnd(..)
+                    ) && let Some(ref draft) = draft_for_run
+                        && let Ok(mut g) = draft.lock()
+                    {
+                        g.clear();
                     }
                     if matches!(event, AgentEvent::ModelRequestStarted { .. })
                         && let Some(ledger) = accounting_ledger.clone()
@@ -1395,10 +1393,10 @@ pub async fn execute_round(
     // Only emit saving activity on natural completion. An interrupted or failed
     // round must never re-arm the activity bar that was already idled.
     if result.is_ok() {
-        if let Some(ref draft) = in_flight_draft {
-            if let Ok(mut g) = draft.lock() {
-                g.clear();
-            }
+        if let Some(ref draft) = in_flight_draft
+            && let Ok(mut g) = draft.lock()
+        {
+            g.clear();
         }
         let _ = tx.send(round_response(
             &session_id,
@@ -1952,7 +1950,6 @@ pub fn send_compaction(
         },
     ));
 }
-
 
 #[cfg(test)]
 mod digest_tests {

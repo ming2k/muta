@@ -14,13 +14,13 @@ use crate::message_body::draw_message_body;
 use crate::model::document::{Block, Inline, TranscriptMessage};
 use crate::model::layout::{BlockRegion, THINKING_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
-use crate::text_layout::{
-    RichLineParams, RichTextColors, RichTextRanges, WrappedLine, block_selection_range,
-    line_selection, line_spans_rich, padded_tail,
-};
 use crate::render::{
     REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
     TRANSCRIPT_BODY_LEADING_INDENT,
+};
+use crate::text_layout::{
+    RichLineParams, RichTextColors, RichTextRanges, WrappedLine, block_selection_range,
+    line_selection, line_spans_rich, padded_tail,
 };
 
 #[allow(clippy::too_many_arguments)]

@@ -3,8 +3,8 @@
 use mutx_engine::{Frame, Line, Paragraph, Rect};
 
 use crate::model::layout::{BlockRegion, LayoutMap};
-use crate::text_layout::WrappedLine;
 use crate::render::Theme;
+use crate::text_layout::WrappedLine;
 
 pub(crate) const MARKER_COLLAPSED: &str = "+";
 pub(crate) const MARKER_EXPANDED: &str = "-";

@@ -1,8 +1,7 @@
+use super::security_ops::{TrustRoute, parse_trust_domain, trust_route};
 use super::session_route::{
     SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
 };
-use super::security_ops::{TrustRoute, parse_trust_domain, trust_route};
-
 
 #[cfg(test)]
 mod session_route_tests {
@@ -206,7 +205,9 @@ mod confinement_arg_tests {
 
     #[test]
     fn enable_forms() {
-        for s in ["on", "true", "1", "enable", "enabled", "confine", "confined", "jail"] {
+        for s in [
+            "on", "true", "1", "enable", "enabled", "confine", "confined", "jail",
+        ] {
             assert_eq!(parse_confinement_arg(s), Ok(Some(true)), "failed on {s:?}");
         }
     }

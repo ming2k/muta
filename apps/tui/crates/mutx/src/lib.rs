@@ -128,12 +128,12 @@ use crate::model::document::{
 };
 use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
+use crate::render::Theme;
 use crate::transcript::{
     finalize_streaming_reasoning, merge_command_rows, merge_round_interrupt_rows,
     rebase_transcript_rounds, transcript_commands_from_ledger, transcript_interrupts_from_records,
     transcript_messages_from_core,
 };
-use crate::render::Theme;
 
 /// Where the session this TUI drives lives. All sessions in the unified
 /// daemon model are remote (daemon-hosted).
@@ -2256,8 +2256,10 @@ pub async fn run_tui(
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
+        stream_cursor: None,
         side_messages: Vec::new(),
         side_messages_version: 0,
+        side_stream_cursor: None,
         layout_height_cache: Default::default(),
         in_side_view: false,
         side_session_id: None,

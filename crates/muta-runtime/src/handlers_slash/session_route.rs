@@ -31,7 +31,8 @@ pub(crate) fn session_route<'a>(name: &str, parts: &'a [&str]) -> Result<Session
 pub(crate) fn parse_unattended_arg(arg: &str) -> Result<Option<bool>, String> {
     match arg.trim() {
         "" => Ok(None),
-        "on" | "true" | "1" | "enable" | "enabled" | "unattended" | "auto" | "delegate" | "yolo" => Ok(Some(true)),
+        "on" | "true" | "1" | "enable" | "enabled" | "unattended" | "auto" | "delegate"
+        | "yolo" => Ok(Some(true)),
         "off" | "false" | "0" | "disable" | "disabled" | "attended" => Ok(Some(false)),
         other => Err(format!(
             "Unknown value '{other}'. Use `/unattended` to toggle, or `/unattended on|off`."
@@ -42,8 +43,12 @@ pub(crate) fn parse_unattended_arg(arg: &str) -> Result<Option<bool>, String> {
 pub(crate) fn parse_confinement_arg(arg: &str) -> Result<Option<bool>, String> {
     match arg.trim() {
         "" => Ok(None),
-        "on" | "true" | "1" | "enable" | "enabled" | "confine" | "confined" | "jail" => Ok(Some(true)),
-        "off" | "false" | "0" | "disable" | "disabled" | "unconfine" | "unconfined" | "escape" => Ok(Some(false)),
+        "on" | "true" | "1" | "enable" | "enabled" | "confine" | "confined" | "jail" => {
+            Ok(Some(true))
+        }
+        "off" | "false" | "0" | "disable" | "disabled" | "unconfine" | "unconfined" | "escape" => {
+            Ok(Some(false))
+        }
         other => Err(format!(
             "Unknown value '{other}'. Use `/confinement` to toggle, or `/confinement on|off`."
         )),

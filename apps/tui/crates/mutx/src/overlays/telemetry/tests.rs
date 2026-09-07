@@ -1,5 +1,5 @@
-use super::model::*;
 use super::draw::*;
+use super::model::*;
 use crate::modal::TelemetryTab;
 use crate::render::Theme;
 use muta_contracts::{

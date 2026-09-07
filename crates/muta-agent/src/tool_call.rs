@@ -56,7 +56,7 @@ pub(crate) fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
 }
 
 /// Parse fallback text formatted as `[Called tool <name> with arguments: <json>]`
-/// or `[Called tool `<name>` with arguments: <json>]`.
+/// or `[Called tool `name` with arguments: <json>]`.
 fn parse_called_tool_fallback(text: &str) -> Option<ToolCall> {
     let prefix = "[Called tool ";
     let idx = text.find(prefix)?;

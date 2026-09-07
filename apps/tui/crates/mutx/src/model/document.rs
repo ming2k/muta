@@ -1883,7 +1883,9 @@ impl TranscriptMessage {
     pub fn push_thinking_delta(&mut self, delta: &str) {
         let sanitized = sanitize_text(delta);
         let MessageKind::Thinking {
-            content, stream_tokens, ..
+            content,
+            stream_tokens,
+            ..
         } = &mut self.kind
         else {
             return;
@@ -2538,18 +2540,17 @@ impl TranscriptMessage {
         // Immutable borrow of `raw` while `blocks` is mutated — disjoint
         // fields, so the live region parses in place without a copy.
         let (tail, resume) = parse_blocks_tracked(&self.raw[self.resume_byte..]);
-        let junction_break =
-            match (
-                frozen.checked_sub(1).and_then(|i| self.blocks.get(i)),
-                tail.first(),
-            ) {
-                (Some(prev), Some(next)) => {
-                    !matches!(prev, Block::Break)
-                        && !(matches!(prev, Block::ListItem { .. })
-                            && matches!(next, Block::ListItem { .. }))
-                }
-                _ => false,
-            };
+        let junction_break = match (
+            frozen.checked_sub(1).and_then(|i| self.blocks.get(i)),
+            tail.first(),
+        ) {
+            (Some(prev), Some(next)) => {
+                !matches!(prev, Block::Break)
+                    && !(matches!(prev, Block::ListItem { .. })
+                        && matches!(next, Block::ListItem { .. }))
+            }
+            _ => false,
+        };
         self.blocks.truncate(frozen);
         let live_starts_at_zero = tail.len() == resume.live_len;
         if junction_break {
@@ -2671,7 +2672,7 @@ pub fn normalize_thinking_topic(raw: &str) -> String {
     }
 
     // Strip trailing ellipsis or punctuation
-    let topic = trimmed.trim_end_matches(|c: char| c == '.' || c == '…' || c == ':').trim();
+    let topic = trimmed.trim_end_matches(['.', '…', ':']).trim();
 
     // Redundant participle prefixes that models prepend to milestone headings
     const REDUNDANT_PREFIXES: &[&str] = &[
@@ -2703,9 +2704,7 @@ pub fn normalize_thinking_topic(raw: &str) -> String {
 
     let mut stripped = topic;
     for prefix in REDUNDANT_PREFIXES {
-        if stripped.len() > prefix.len()
-            && stripped[..prefix.len()].eq_ignore_ascii_case(prefix)
-        {
+        if stripped.len() > prefix.len() && stripped[..prefix.len()].eq_ignore_ascii_case(prefix) {
             let candidate = stripped[prefix.len()..].trim();
             if !candidate.is_empty() {
                 stripped = candidate;
@@ -2735,7 +2734,7 @@ pub fn normalize_thinking_topic(raw: &str) -> String {
                 normalized_words.push(lower);
             }
         } else {
-            let is_capitalized = word.chars().next().map_or(false, |c| c.is_uppercase());
+            let is_capitalized = word.chars().next().is_some_and(|c| c.is_uppercase());
             let is_all_caps = word.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
             if is_capitalized && !is_all_caps {
                 normalized_words.push(word.to_lowercase());
@@ -2748,9 +2747,8 @@ pub fn normalize_thinking_topic(raw: &str) -> String {
     let joined = normalized_words.join(" ");
 
     const NO_THE_STARTERS: &[&str] = &[
-        "the", "a", "an", "this", "that", "these", "those",
-        "how", "why", "what", "where", "when", "which", "whether",
-        "all", "each", "every", "some", "any", "step", "phase",
+        "the", "a", "an", "this", "that", "these", "those", "how", "why", "what", "where", "when",
+        "which", "whether", "all", "each", "every", "some", "any", "step", "phase",
     ];
 
     let first_word_lower = normalized_words[0].to_lowercase();
@@ -2784,6 +2782,7 @@ pub fn count_milestones(text: &str) -> usize {
     count
 }
 
+use super::markdown::{ParseResume, parse_blocks_tracked};
 /// Parse raw markdown-like text into semantic blocks.
 ///
 /// This is intentionally lightweight — it splits on major block boundaries
@@ -2791,7 +2790,6 @@ pub fn count_milestones(text: &str) -> usize {
 /// text so copying yields exact source.
 pub(crate) use super::markdown::{clamp_link_ranges, clamp_ranges, scan_inline};
 pub use super::markdown::{parse_blocks, parse_blocks_plain};
-use super::markdown::{ParseResume, parse_blocks_tracked};
 
 #[cfg(test)]
 #[path = "document_tests.rs"]

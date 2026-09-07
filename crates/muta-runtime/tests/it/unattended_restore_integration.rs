@@ -138,8 +138,14 @@ async fn session_init_options_applies_at_fresh_startup_without_command_ledger_en
     let boot = bootstrap::assemble(p).await.expect("assemble succeeds");
 
     assert!(boot.agent.unattended(), "agent must start unattended");
-    assert!(boot.session.unattended().await, "session data must persist unattended");
-    assert!(!boot.shared_confinement.is_confined(), "confinement must be disabled");
+    assert!(
+        boot.session.unattended().await,
+        "session data must persist unattended"
+    );
+    assert!(
+        !boot.shared_confinement.is_confined(),
+        "confinement must be disabled"
+    );
 
     // Core architectural invariant: startup options must NOT inject fake
     // harness commands into the session command ledger / transcript!

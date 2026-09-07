@@ -8,7 +8,7 @@
 //! sticky header → input box → step summary → table cell → content → gap →
 //! dead) that was previously inlined across multiple handler arms in
 //! `event_loop.rs`. It depends only on the layout layer and
-//! [`step_interaction`] — no app-state or render dependency — so it stays
+//! `step_interaction` — no app-state or render dependency — so it stays
 //! unit-testable and free of layering cycles.
 //!
 //! The router does **not** handle pre-cascade checks (modal backdrop,
@@ -18,15 +18,15 @@
 //!
 //! # Relationship to `step_interaction`
 //!
-//! [`step_interaction`] classifies a *resolved cursor* as a step summary or
+//! `step_interaction` classifies a *resolved cursor* as a step summary or
 //! not. This module is the next layer up: it resolves the cursor (via
-//! `LayoutMap::cursor_at`), then delegates to [`step_interaction::summary_at`]
+//! `LayoutMap::cursor_at`), then delegates to `step_interaction::summary_at`
 //! when the cursor lands on a summary, or to `LayoutMap::table_cell_at` for
 //! table cells, or falls through to generic content.
 
 use crate::model::layout::{LayoutMap, SemanticCursor, TableCellSegment};
-use crate::step_interaction::{self, StepKind};
 use crate::render::INPUT_MSG_IDX;
+use crate::step_interaction::{self, StepKind};
 
 /// The type of clickable region a screen point resolved to.
 ///

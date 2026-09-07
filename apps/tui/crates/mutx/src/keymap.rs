@@ -1605,10 +1605,7 @@ mod tests {
             Some(CommandId::OpenActiveConnectionDetail)
         );
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
-        assert_eq!(
-            resolve_global_key(Key::CTRL_C),
-            Some(CommandId::Quit)
-        );
+        assert_eq!(resolve_global_key(Key::CTRL_C), Some(CommandId::Quit));
         assert_eq!(resolve_global_key(Key::CTRL_Q), None);
         assert_eq!(
             resolve_global_key(Key::CTRL_SHIFT_C),
@@ -1718,15 +1715,9 @@ mod tests {
         assert_eq!(resolve_global_key_with(Key::CTRL_C, &o), None);
         assert_eq!(resolve_global_key_with(Key::CTRL_Q, &o), None);
         // Unremapped commands keep their canonical behavior.
-        assert_eq!(
-            resolve_global_key_with(Key::F1, &o),
-            Some(CommandId::Help)
-        );
+        assert_eq!(resolve_global_key_with(Key::F1, &o), Some(CommandId::Help));
         // Effective binding follows the override for remapped commands.
-        assert_eq!(
-            o.effective_binding(CommandId::Quit),
-            ctrl_shift_q
-        );
+        assert_eq!(o.effective_binding(CommandId::Quit), ctrl_shift_q);
         assert_eq!(o.effective_binding(CommandId::Help), Key::F1);
         // Esc / Back is never remappable.
         let mut esc_map = std::collections::HashMap::new();

@@ -1,9 +1,7 @@
 //! End-to-end integration tests for ADR-0181: Capability-First Visual Archetypes,
 //! Structural Elevation, and Responsive Layout Pipeline.
 
-use mutx_engine::{
-    ElevationArchetype, Frame, Grid, Modifier, Rect, SpatialCost, TerminalProfile,
-};
+use mutx_engine::{ElevationArchetype, Frame, Grid, Modifier, Rect, SpatialCost, TerminalProfile};
 
 use crate::primitives::{ElevationContainer, LayoutTier, modal_frame};
 use crate::theme::Theme;
@@ -140,10 +138,25 @@ fn test_theme_selection_style_monochrome_reversal() {
     assert!(focus.add.contains(Modifier::REVERSE));
 
     // Unselected / unfocused has no modifier
-    assert!(!theme_mono.selection_style(false).add.contains(Modifier::REVERSE));
-    assert!(!theme_mono.focus_style(false).add.contains(Modifier::REVERSE));
+    assert!(
+        !theme_mono
+            .selection_style(false)
+            .add
+            .contains(Modifier::REVERSE)
+    );
+    assert!(
+        !theme_mono
+            .focus_style(false)
+            .add
+            .contains(Modifier::REVERSE)
+    );
 
     // Chromatic does not use reverse video by default
     let theme_chromatic = Theme::default();
-    assert!(!theme_chromatic.selection_style(true).add.contains(Modifier::REVERSE));
+    assert!(
+        !theme_chromatic
+            .selection_style(true)
+            .add
+            .contains(Modifier::REVERSE)
+    );
 }

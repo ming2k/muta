@@ -980,14 +980,8 @@ mod tests {
         // Tool result is a structured functionResponse, coalesced with the following user prompt
         assert_eq!(body["contents"][2]["role"], "user");
         let user_parts = body["contents"][2]["parts"].as_array().unwrap();
-        assert_eq!(
-            user_parts[0]["functionResponse"]["name"],
-            "write_todos"
-        );
-        assert_eq!(
-            user_parts[0]["functionResponse"]["id"],
-            "call_foreign"
-        );
+        assert_eq!(user_parts[0]["functionResponse"]["name"], "write_todos");
+        assert_eq!(user_parts[0]["functionResponse"]["id"], "call_foreign");
         assert_eq!(user_parts[1]["text"], "proceed");
     }
 

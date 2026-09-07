@@ -755,7 +755,9 @@ mod tests {
                     Draw::Cells {
                         x: 0,
                         y: 0,
-                        style: Style::default().fg(Color::Rgb(255, 0, 0)).bg(Color::Rgb(0, 0, 255)),
+                        style: Style::default()
+                            .fg(Color::Rgb(255, 0, 0))
+                            .bg(Color::Rgb(0, 0, 255)),
                         cells: vec![("A".into(), 1)],
                     },
                     Draw::Cells {
@@ -770,11 +772,23 @@ mod tests {
         }
         let s = String::from_utf8(buf).unwrap();
         // Must contain NO TrueColor or ANSI color SGR codes
-        assert!(!s.contains("\x1b[38;"), "no 38; color codes in monochrome: {s:?}");
-        assert!(!s.contains("\x1b[48;"), "no 48; color codes in monochrome: {s:?}");
-        assert!(!s.contains("\x1b[31m"), "no ANSI color codes in monochrome: {s:?}");
+        assert!(
+            !s.contains("\x1b[38;"),
+            "no 38; color codes in monochrome: {s:?}"
+        );
+        assert!(
+            !s.contains("\x1b[48;"),
+            "no 48; color codes in monochrome: {s:?}"
+        );
+        assert!(
+            !s.contains("\x1b[31m"),
+            "no ANSI color codes in monochrome: {s:?}"
+        );
         // Highlighted cell with bg tint should emit SGR 7 (reverse video)
-        assert!(s.contains("\x1b[7m"), "highlighted cell uses reverse video: {s:?}");
+        assert!(
+            s.contains("\x1b[7m"),
+            "highlighted cell uses reverse video: {s:?}"
+        );
         assert!(s.contains('A'));
         assert!(s.contains('B'));
     }
@@ -788,8 +802,14 @@ mod tests {
             be.end_sync_update().unwrap();
         }
         let s = String::from_utf8(buf).unwrap();
-        assert!(!s.contains("?2026h"), "monochrome profile must not emit sync update: {s:?}");
-        assert!(!s.contains("?2026l"), "monochrome profile must not emit sync update: {s:?}");
+        assert!(
+            !s.contains("?2026h"),
+            "monochrome profile must not emit sync update: {s:?}"
+        );
+        assert!(
+            !s.contains("?2026l"),
+            "monochrome profile must not emit sync update: {s:?}"
+        );
     }
 
     #[test]
@@ -810,7 +830,10 @@ mod tests {
             be.render(&cmd).unwrap();
         }
         let s = String::from_utf8(buf).unwrap();
-        assert!(!s.contains("\x1b[38;2;"), "ANSI16 profile must not emit DirectColor 38;2: {s:?}");
+        assert!(
+            !s.contains("\x1b[38;2;"),
+            "ANSI16 profile must not emit DirectColor 38;2: {s:?}"
+        );
         assert!(s.contains('X'));
     }
 }

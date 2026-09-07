@@ -73,7 +73,6 @@ impl SharedConfinement {
     }
 
     pub fn set_confined(&self, confined: bool) {
-        self.0
-            .store(confined, std::sync::atomic::Ordering::Relaxed);
+        self.0.store(confined, std::sync::atomic::Ordering::Relaxed);
     }
 }

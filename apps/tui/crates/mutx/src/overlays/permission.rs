@@ -13,8 +13,8 @@ use crate::primitives::{
     FooterHint, contrast_fg, keyvocab, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
 };
-use crate::text_layout::wrap_text;
 use crate::render::Theme;
+use crate::text_layout::wrap_text;
 use unicode_width::UnicodeWidthStr;
 
 // The permission sheet renders inline, replacing the composer (input box)

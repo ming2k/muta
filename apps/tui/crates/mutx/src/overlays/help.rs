@@ -68,9 +68,10 @@ pub fn draw_help_modal(
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
         "Session & Focus Controls",
     ))));
-    for cmd in COMMAND_REGISTRY.iter().filter(|c| {
-        c.scope == Scope::Session || c.scope == Scope::Composer
-    }) {
+    for cmd in COMMAND_REGISTRY
+        .iter()
+        .filter(|c| c.scope == Scope::Session || c.scope == Scope::Composer)
+    {
         let key_str = if !cmd.bindings.is_empty() {
             cmd.bindings[0].display()
         } else {

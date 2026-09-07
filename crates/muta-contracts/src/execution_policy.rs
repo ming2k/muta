@@ -5,8 +5,8 @@
 //! recursion limits, and human-interaction posture are governed entirely by
 //! this typed policy.
 
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::ToolPolicy;
 
@@ -22,13 +22,19 @@ impl fmt::Display for PolicyViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RecursionDepthExceeded { current, max } => {
-                write!(f, "Child agent recursion depth exceeded: current {current}, max {max}")
+                write!(
+                    f,
+                    "Child agent recursion depth exceeded: current {current}, max {max}"
+                )
             }
             Self::ChildrenBudgetExhausted => {
                 write!(f, "Child agent budget exhausted for this parent")
             }
             Self::HumanInteractionNotAllowed => {
-                write!(f, "Direct human interaction is not permitted under this execution policy")
+                write!(
+                    f,
+                    "Direct human interaction is not permitted under this execution policy"
+                )
             }
         }
     }
@@ -105,7 +111,10 @@ impl ExecutionPolicy {
     /// - Fails closed with [`PolicyViolation::RecursionDepthExceeded`] if `parent.depth >= parent.max_depth`.
     /// - Child agents never directly interact with human users (`allow_human_interaction = false`).
     /// - Child agents run in ephemeral scratchpads (`ContextLifecycle::EphemeralScratchpad`).
-    pub fn derive_child(&self, child_tool_policy: Option<ToolPolicy>) -> Result<Self, PolicyViolation> {
+    pub fn derive_child(
+        &self,
+        child_tool_policy: Option<ToolPolicy>,
+    ) -> Result<Self, PolicyViolation> {
         if self.depth >= self.max_depth {
             return Err(PolicyViolation::RecursionDepthExceeded {
                 current: self.depth,
@@ -145,7 +154,9 @@ mod tests {
         assert!(root.allow_human_interaction);
         assert!(root.can_spawn_subagent());
 
-        let child = root.derive_child(None).expect("must derive child at depth 0");
+        let child = root
+            .derive_child(None)
+            .expect("must derive child at depth 0");
         assert_eq!(child.depth, 1);
         assert!(!child.allow_human_interaction);
         assert_eq!(child.lifecycle, ContextLifecycle::EphemeralScratchpad);
@@ -159,10 +170,7 @@ mod tests {
         let grandchild_err = child.derive_child(None);
         assert_eq!(
             grandchild_err,
-            Err(PolicyViolation::RecursionDepthExceeded {
-                current: 1,
-                max: 1
-            })
+            Err(PolicyViolation::RecursionDepthExceeded { current: 1, max: 1 })
         );
     }
 }

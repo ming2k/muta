@@ -1,11 +1,10 @@
-//! Authoritative embedded SQLite storage engine and event ledger (ADR-0163).
+//! Authoritative embedded SQLite storage engine (ADR-0163, ADR-0187).
 //!
 //! Provides relational database initialization, schema migration tracking via
 //! `PRAGMA user_version`, FTS5 full-text search, Content-Addressed Storage (CAS)
 //! threshold isolation, and a single-writer persistence engine.
 
 use crate::blobs::BlobStore;
-use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Result, Row, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -14,7 +13,14 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 5;
+pub const CURRENT_DB_VERSION: u32 = 8;
+
+/// SHA-256 fingerprint of the migration catalog (version + SQL of every
+/// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
+/// for the discipline this enforces.
+#[cfg(test)]
+const MIGRATION_CATALOG_FINGERPRINT: &str =
+    "88a5585c8267145cc5f05a10b142788918d07a7db7780eb8222a881833a1ba1b";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -48,7 +54,7 @@ fn configure_connection(conn: &mut Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.pragma_update(None, "journal_size_limit", 16777216)?; // 16MB WAL recycling
-    conn.pragma_update(None, "wal_autocheckpoint", 1000)?;     // 1000 pages (~4MB)
+    conn.pragma_update(None, "wal_autocheckpoint", 1000)?; // 1000 pages (~4MB)
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     Ok(())
 }
@@ -60,9 +66,10 @@ struct Migration {
 }
 
 /// The chronological sequence of schema migrations.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
         -- Sessions table
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -149,24 +156,27 @@ const MIGRATIONS: &[Migration] = &[Migration {
             VALUES (new.id, new.session_id, new.role, new.content, COALESCE(new.reasoning_content, ''));
         END;
     "#,
-}, Migration {
-    version: 2,
-    sql: r#"
+    },
+    Migration {
+        version: 2,
+        sql: r#"
         -- Add full serialized SessionData JSON column for SQLite Single-Source-of-Truth
         ALTER TABLE sessions ADD COLUMN data TEXT;
     "#,
-}, Migration {
-    version: 3,
-    sql: r#"
+    },
+    Migration {
+        version: 3,
+        sql: r#"
         -- Add indexed summary columns for sub-millisecond session listing
         ALTER TABLE sessions ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE sessions ADD COLUMN last_user_prompt TEXT;
         ALTER TABLE sessions ADD COLUMN digest TEXT;
         CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_ms DESC);
     "#,
-}, Migration {
-    version: 4,
-    sql: r#"
+    },
+    Migration {
+        version: 4,
+        sql: r#"
         -- Unified prompt input history table (ADR-0168 / SSOT)
         CREATE TABLE IF NOT EXISTS input_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,16 +189,17 @@ const MIGRATIONS: &[Migration] = &[Migration {
         CREATE INDEX IF NOT EXISTS idx_input_history_created_at ON input_history(created_at_ms DESC);
      CREATE INDEX IF NOT EXISTS idx_input_history_session ON input_history(session_id, created_at_ms DESC);
      "#,
-}, Migration {
-    // ADR-0186: single-transcript persistence foundation. Facts live in
-    // `entries` (position-free, immutable), positions in `entry_memberships`
-    // (many-to-one so forks share facts), and projection decisions in
-    // `projections`. The event ledger is renamed `events` to match the
-    // single-source-of-truth vocabulary. The legacy `messages` table,
-    // `sessions.data` JSON snapshot column, and their FTS structures are
-    // retired together with the `SessionData` swap (same tranche).
-    version: 5,
-    sql: r#"
+    },
+    Migration {
+        // ADR-0186: single-transcript persistence foundation. Facts live in
+        // `entries` (position-free, immutable), positions in `entry_memberships`
+        // (many-to-one so forks share facts), and projection decisions in
+        // `projections`. The event ledger is renamed `events` to match the
+        // single-source-of-truth vocabulary. The legacy `messages` table,
+        // `sessions.data` JSON snapshot column, and their FTS structures are
+        // retired together with the `SessionData` swap (same tranche).
+        version: 5,
+        sql: r#"
         ALTER TABLE session_events RENAME TO events;
 
         CREATE TABLE IF NOT EXISTS entries (
@@ -298,76 +309,442 @@ const MIGRATIONS: &[Migration] = &[Migration {
             DELETE FROM fts_entries WHERE entry_id = old.id;
         END;
     "#,
-}];
+    },
+    Migration {
+        // Corrective migration: development builds of the ADR-0186 tranche stamped
+        // databases at version 5 with an interim `sessions` rebuild that carried
+        // the legacy `scheduled_jobs` column and predated the final working-state
+        // columns (`round_counter`, `unattended`, ... ). Because migration 5's SQL
+        // was finalized after those stamps, such databases short-circuit the
+        // migrator and break at runtime on the first INSERT. Migration 6 reconciles
+        // every version-5 incarnation to the final schema. The DDL must be applied
+        // conditionally (both `DROP COLUMN scheduled_jobs` and the `ADD COLUMN`
+        // set are invalid on the "other" incarnation), so the work happens in
+        // `repair_intermediate_sessions_schema` below — this entry only advances
+        // `user_version`.
+        version: 6,
+        sql: "",
+    },
+    Migration {
+        // Persistence v2 (ADR-0187): incremental append needs a transcript
+        // generation id and a durable blob reference ledger; the schema must stop
+        // promising what the runtime does not do (event ledger, session_blobs,
+        // applied_seq, projections kind CHECK); timestamps and FTS become honest.
+        // The DDL must be conditional (an interim version-5 database carries no
+        // transcript tables at all), so the work happens in
+        // `apply_persistence_v2_schema` below — this entry only advances
+        // `user_version`.
+        version: 7,
+        sql: "",
+    },
+    Migration {
+        // Usage ledger (ADR-0187): per-attempt usage records move out of the
+        // session row into their own key-addressed table. The row column
+        // forced an O(records) serialization on every save; the table upserts
+        // only the attempts a commit actually changed. DDL and the JSON
+        // backfill are conditional (the column exists only on ADR-0186
+        // databases), so the work happens in `apply_usage_ledger_schema`
+        // below — this entry only advances `user_version`.
+        version: 8,
+        sql: "",
+    },
+];
 
-/// Run all outstanding migrations in a single transactional loop.
-fn migrate_schema(conn: &mut Connection) -> Result<()> {
-    let current_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+/// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
+/// with their DDL. Shared by the migration-6 repair and the startup schema
+/// guard so the two cannot drift.
+const SESSIONS_WORKING_STATE_COLUMNS: &[(&str, &str)] = &[
+    ("provider_connection", "TEXT"),
+    ("round_counter", "INTEGER NOT NULL DEFAULT 0"),
+    ("unattended", "INTEGER NOT NULL DEFAULT 0"),
+    ("disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
+    ("commands", "TEXT NOT NULL DEFAULT '[]'"),
+    ("round_interrupts", "TEXT NOT NULL DEFAULT '[]'"),
+    ("retry_pending", "TEXT"),
+    ("request_usage_records", "TEXT NOT NULL DEFAULT '[]'"),
+    ("checksum", "INTEGER"),
+    ("schema_version", "INTEGER NOT NULL DEFAULT 13"),
+];
 
-    if current_version >= CURRENT_DB_VERSION {
+/// Columns persistence v2 (ADR-0187) added to `sessions`. Guard-only:
+/// migration 7 owns their creation, so the migration-6 repair must not add
+/// them (it runs first and its additions would collide with migration 7's).
+const SESSIONS_V2_COLUMNS: &[(&str, &str)] = &[
+    ("digest_anchor", "INTEGER"),
+    ("tree", "TEXT NOT NULL DEFAULT '{}'"),
+    ("transcript_generation", "TEXT"),
+];
+
+/// Identity columns every `sessions` incarnation must carry. Guard-only:
+/// migrations own their creation.
+const SESSIONS_IDENTITY_COLUMNS: &[&str] = &[
+    "id",
+    "parent_id",
+    "fork_kind",
+    "title",
+    "created_at_s",
+    "updated_at_s",
+    "project_root",
+    "msg_count",
+    "last_user_prompt",
+    "digest",
+];
+
+/// Columns the interim version-5 rebuild inherited from the retired
+/// cron/repeat scheduling tranche; removed by the migration-6 repair.
+const SESSIONS_RETIRED_COLUMNS: &[&str] = &["scheduled_jobs", "data", "title_manual"];
+
+fn sessions_columns(conn: &Connection) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(columns)
+}
+
+/// Reconcile an interim version-5 `sessions` table to the final ADR-0186
+/// schema: drop retired columns, add any missing working-state column. Every
+/// step is conditional because both version-5 incarnations (interim and
+/// final) must converge through this repair.
+fn repair_intermediate_sessions_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    let existing = sessions_columns(tx)?;
+    for retired in SESSIONS_RETIRED_COLUMNS {
+        if existing.contains(*retired) {
+            tx.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {retired};"))?;
+        }
+    }
+    for (name, ddl) in SESSIONS_WORKING_STATE_COLUMNS {
+        if !existing.contains(*name) {
+            tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {name} {ddl};"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Does the named table exist in the database?
+fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        params![name],
+        |row| row.get::<_, i64>(0),
+    )? == 1)
+}
+
+/// Persistence v2 (ADR-0187) schema repair, applied by migration 7. Every
+/// step is conditional: fresh ADR-0186 databases, final version-5 databases,
+/// and interim version-5 databases (no transcript tables) must all converge.
+fn apply_persistence_v2_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    // Dead ledgers: the event log never had a writer or a replay path, and
+    // the CAS lives on the filesystem.
+    tx.execute_batch("DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS session_blobs;")?;
+
+    let existing = sessions_columns(tx)?;
+    // Honest units: sessions store seconds despite the `_ms` suffix.
+    if existing.contains("created_at_ms") {
+        tx.execute_batch("ALTER TABLE sessions RENAME COLUMN created_at_ms TO created_at_s;")?;
+    }
+    if existing.contains("updated_at_ms") {
+        tx.execute_batch("ALTER TABLE sessions RENAME COLUMN updated_at_ms TO updated_at_s;")?;
+    }
+    // Restore the listing indexes the v5 table rebuild dropped.
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_root);
+         CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at_s DESC);
+         CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_s DESC);",
+    )?;
+    // Working state that v5 lost on the floor (ADR-0186 regressions).
+    if !existing.contains("digest_anchor") {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN digest_anchor INTEGER;")?;
+    }
+    if !existing.contains("tree") {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN tree TEXT NOT NULL DEFAULT '{}';")?;
+    }
+    if !existing.contains("transcript_generation") {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN transcript_generation TEXT;")?;
+    }
+    // High-water mark with no reader or writer.
+    if existing.contains("applied_seq") {
+        tx.execute_batch("ALTER TABLE sessions DROP COLUMN applied_seq;")?;
+    }
+
+    // The transcript ledger tables exist only in ADR-0186 databases; an
+    // interim version-5 database converges later, when the tables appear.
+    if !table_exists(tx, "entries")? || !table_exists(tx, "entry_memberships")? {
         return Ok(());
     }
 
-    let tx = conn.transaction()?;
+    // Drop the old FTS triggers before any table rename: ALTER TABLE RENAME
+    // reparses every trigger body, and the old entry-insert trigger selects
+    // from the table being swapped (it fired before the membership row
+    // existed anyway, leaving fts_entries silently empty).
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS trg_entries_ai; DROP TRIGGER IF EXISTS trg_entries_ad;",
+    )?;
 
-    for migration in MIGRATIONS {
-        if migration.version > current_version {
-            info!(
-                version = migration.version,
-                "Applying SQLite schema migration"
-            );
-            tx.execute_batch(migration.sql)?;
+    // Projections: the kind CHECK blocked forward-compatible extension;
+    // created_at_ms was written (with seconds!) and never read.
+    tx.execute_batch(
+        "CREATE TABLE projections_new (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            kind       TEXT NOT NULL,
+            up_to_seq  INTEGER NOT NULL,
+            payload    TEXT NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        );
+        INSERT INTO projections_new (session_id, seq, kind, up_to_seq, payload)
+            SELECT session_id, seq, kind, up_to_seq, payload FROM projections;
+        DROP TABLE projections;
+        ALTER TABLE projections_new RENAME TO projections;",
+    )?;
 
-            if migration.version == 3 {
-                let mut stmt = tx.prepare(
-                    "SELECT id, data FROM sessions WHERE data IS NOT NULL",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?;
-                let mut updates = Vec::new();
-                for item in rows {
-                    let (id, data_str) = item?;
-                    if let Ok(probe) = serde_json::from_str::<FastSummaryProbe>(&data_str) {
-                        let count = probe.model_window.len() + probe.archived_transcript.len();
-                        let last_prompt = probe
-                            .model_window
-                            .iter()
-                            .rev()
-                            .chain(probe.archived_transcript.iter().rev())
-                            .find(|m| {
-                                let is_echo = m
-                                    .origin
-                                    .as_ref()
-                                    .is_some_and(|o| o.kind == muta_contracts::InjectionKind::CommandEcho);
-                                m.role == muta_contracts::Role::User && !m.hidden && !is_echo
-                            })
-                            .map(|m| m.content.clone());
-                        let digest_json = probe.digest.as_ref().and_then(|d| serde_json::to_string(d).ok());
-                        updates.push((id, count as i64, last_prompt, digest_json));
+    // Memberships: added_by was written and never read.
+    tx.execute_batch(
+        "CREATE TABLE entry_memberships_new (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq        INTEGER NOT NULL,
+            entry_id   TEXT NOT NULL REFERENCES entries(id),
+            PRIMARY KEY (session_id, seq)
+        );
+        INSERT INTO entry_memberships_new (session_id, seq, entry_id)
+            SELECT session_id, seq, entry_id FROM entry_memberships;
+        DROP TABLE entry_memberships;
+        ALTER TABLE entry_memberships_new RENAME TO entry_memberships;
+        CREATE INDEX IF NOT EXISTS idx_memberships_entry ON entry_memberships(entry_id);",
+    )?;
+
+    // Durable GC roots: a blob is live iff some session's transcript
+    // references it. Maintained in the same transaction as the save that
+    // introduces the reference; session deletion cascades.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS blob_refs (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            hash       TEXT NOT NULL,
+            PRIMARY KEY (session_id, hash)
+        );
+        INSERT OR IGNORE INTO blob_refs (session_id, hash)
+            SELECT m.session_id, json_extract(e.payload, '$.content_blob')
+            FROM entries e JOIN entry_memberships m ON m.entry_id = e.id
+            WHERE json_extract(e.payload, '$.content_blob') IS NOT NULL;",
+    )?;
+
+    // Re-anchor FTS on memberships and backfill the index.
+    tx.execute_batch(
+        "CREATE TRIGGER trg_memberships_ai AFTER INSERT ON entry_memberships BEGIN
+            INSERT INTO fts_entries(entry_id, session_id, role, content)
+            SELECT new.entry_id, new.session_id, COALESCE(e.role, ''), COALESCE(e.content, '')
+            FROM entries e WHERE e.id = new.entry_id;
+        END;
+        CREATE TRIGGER trg_memberships_ad AFTER DELETE ON entry_memberships BEGIN
+            DELETE FROM fts_entries WHERE entry_id = old.entry_id AND session_id = old.session_id;
+        END;
+        DELETE FROM fts_entries;
+        INSERT INTO fts_entries(entry_id, session_id, role, content)
+            SELECT m.entry_id, m.session_id, COALESCE(e.role, ''), COALESCE(e.content, '')
+            FROM entry_memberships m JOIN entries e ON e.id = m.entry_id;",
+    )?;
+    Ok(())
+}
+
+/// Usage ledger (ADR-0187) schema repair, applied by migration 8: create the
+/// key-addressed `usage_records` table and migrate the session-row JSON
+/// column into it when that column exists.
+fn apply_usage_ledger_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS usage_records (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            actor_id   TEXT NOT NULL,
+            round      INTEGER NOT NULL,
+            turn       INTEGER NOT NULL,
+            attempt    INTEGER NOT NULL,
+            payload    TEXT NOT NULL,
+            PRIMARY KEY (session_id, actor_id, round, turn, attempt)
+        );",
+    )?;
+    let existing = sessions_columns(tx)?;
+    if !existing.contains("request_usage_records") {
+        return Ok(());
+    }
+    let mut stmt = tx.prepare(
+        "SELECT id, request_usage_records FROM sessions WHERE request_usage_records IS NOT NULL",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    drop(stmt);
+    for (session_id, json) in rows {
+        let Ok(records) = serde_json::from_str::<Vec<muta_contracts::RequestUsageRecord>>(&json)
+        else {
+            continue;
+        };
+        for record in &records {
+            insert_usage_record_tx(tx, &session_id, record)?;
+        }
+    }
+    tx.execute_batch("ALTER TABLE sessions DROP COLUMN request_usage_records;")?;
+    Ok(())
+}
+
+fn insert_usage_record_tx(
+    tx: &rusqlite::Connection,
+    session_id: &str,
+    record: &muta_contracts::RequestUsageRecord,
+) -> rusqlite::Result<()> {
+    let payload = serde_json::to_string(record)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    tx.execute(
+        "INSERT OR REPLACE INTO usage_records (session_id, actor_id, round, turn, attempt, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            session_id,
+            record.key.actor_id,
+            record.key.round as i64,
+            record.key.turn as i64,
+            record.key.attempt as i64,
+            payload,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Fail-fast guard: verify the `sessions` table carries exactly the columns
+/// the current runtime SQL writes, so a schema/runtime mismatch surfaces as
+/// one clear startup error instead of scattered per-statement failures
+/// (`table sessions has no column named ...`) during persistence.
+fn verify_sessions_schema(conn: &Connection) -> Result<()> {
+    if !conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sessions')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?
+        .eq(&1)
+    {
+        return Ok(());
+    }
+    let existing = sessions_columns(conn)?;
+    let mut expected: std::collections::HashSet<String> = SESSIONS_IDENTITY_COLUMNS
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    expected.extend(
+        SESSIONS_WORKING_STATE_COLUMNS
+            .iter()
+            .map(|(c, _)| c.to_string()),
+    );
+    expected.extend(SESSIONS_V2_COLUMNS.iter().map(|(c, _)| c.to_string()));
+    // Columns migration 8 retired from the row (their data moved to the
+    // usage ledger table) must not be required here.
+    expected.remove("request_usage_records");
+    let missing: Vec<&str> = expected
+        .iter()
+        .filter(|c| !existing.contains(c.as_str()))
+        .map(|c| c.as_str())
+        .collect();
+    if !missing.is_empty() {
+        return Err(rusqlite::Error::InvalidColumnName(format!(
+            "sessions table is missing column(s) {}; the database predates a \
+             skipped schema migration — restore a backup or recreate the state",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// Run all outstanding migrations in a single transactional loop, then
+/// verify the resulting schema. Verification also covers databases that
+/// short-circuit the loop (already at `CURRENT_DB_VERSION`) so a schema a
+/// retired migration produced cannot reach runtime SQL unnoticed.
+fn migrate_schema(conn: &mut Connection) -> Result<()> {
+    let current_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+    // A database written by a newer binary may carry schema this build cannot
+    // interpret; proceeding would silently degrade or destroy data. Fail loud
+    // and let every caller surface the refusal.
+    if current_version > CURRENT_DB_VERSION {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "database schema v{current_version} is newer than this binary (v{CURRENT_DB_VERSION}); \
+             refusing to open — upgrade muta to work with this state"
+        )));
+    }
+
+    if current_version < CURRENT_DB_VERSION {
+        let tx = conn.transaction()?;
+
+        for migration in MIGRATIONS {
+            if migration.version > current_version {
+                info!(
+                    version = migration.version,
+                    "Applying SQLite schema migration"
+                );
+                tx.execute_batch(migration.sql)?;
+
+                if migration.version == 3 {
+                    let mut stmt =
+                        tx.prepare("SELECT id, data FROM sessions WHERE data IS NOT NULL")?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?;
+                    let mut updates = Vec::new();
+                    for item in rows {
+                        let (id, data_str) = item?;
+                        if let Ok(probe) = serde_json::from_str::<FastSummaryProbe>(&data_str) {
+                            let count = probe.model_window.len() + probe.archived_transcript.len();
+                            let last_prompt = probe
+                                .model_window
+                                .iter()
+                                .rev()
+                                .chain(probe.archived_transcript.iter().rev())
+                                .find(|m| {
+                                    let is_echo = m.origin.as_ref().is_some_and(|o| {
+                                        o.kind == muta_contracts::InjectionKind::CommandEcho
+                                    });
+                                    m.role == muta_contracts::Role::User && !m.hidden && !is_echo
+                                })
+                                .map(|m| m.content.clone());
+                            let digest_json = probe
+                                .digest
+                                .as_ref()
+                                .and_then(|d| serde_json::to_string(d).ok());
+                            updates.push((id, count as i64, last_prompt, digest_json));
+                        }
+                    }
+                    drop(stmt);
+                    let mut update_stmt = tx.prepare(
+                        "UPDATE sessions SET msg_count = ?1, last_user_prompt = ?2, digest = ?3 WHERE id = ?4",
+                    )?;
+                    for (id, count, last_prompt, digest_json) in updates {
+                        update_stmt.execute(params![count, last_prompt, digest_json, id])?;
                     }
                 }
-                drop(stmt);
-                let mut update_stmt = tx.prepare(
-                    "UPDATE sessions SET msg_count = ?1, last_user_prompt = ?2, digest = ?3 WHERE id = ?4",
-                )?;
-                for (id, count, last_prompt, digest_json) in updates {
-                    update_stmt.execute(params![count, last_prompt, digest_json, id])?;
+
+                if migration.version == 6 {
+                    repair_intermediate_sessions_schema(&tx)?;
+                }
+                if migration.version == 7 {
+                    apply_persistence_v2_schema(&tx)?;
+                }
+                if migration.version == 8 {
+                    apply_usage_ledger_schema(&tx)?;
                 }
             }
         }
+
+        // Update schema version pragma
+        let pragma_sql = format!("PRAGMA user_version = {CURRENT_DB_VERSION}");
+        tx.execute_batch(&pragma_sql)?;
+
+        tx.commit()?;
+        info!(
+            version = CURRENT_DB_VERSION,
+            "SQLite database schema is up-to-date"
+        );
     }
 
-    // Update schema version pragma
-    let pragma_sql = format!("PRAGMA user_version = {CURRENT_DB_VERSION}");
-    tx.execute_batch(&pragma_sql)?;
-
-    tx.commit()?;
-    info!(
-        version = CURRENT_DB_VERSION,
-        "SQLite database schema is up-to-date"
-    );
-    Ok(())
+    verify_sessions_schema(conn)
 }
 
 /// Session record representation in SQLite.
@@ -377,8 +754,8 @@ pub struct SessionRecord {
     pub parent_id: Option<String>,
     pub fork_kind: String,
     pub title: Option<String>,
-    pub created_at_ms: i64,
-    pub updated_at_ms: i64,
+    pub created_at_s: i64,
+    pub updated_at_s: i64,
     pub project_root: String,
     #[serde(default)]
     pub msg_count: i64,
@@ -386,16 +763,6 @@ pub struct SessionRecord {
     pub last_user_prompt: Option<String>,
     #[serde(default)]
     pub digest: Option<String>,
-}
-
-/// One ledger row in the `events` table (ADR-0186 working-state audit log).
-#[derive(Debug, Clone)]
-pub struct SessionEventRecord {
-    pub session_id: String,
-    pub seq: i64,
-    pub event_type: String,
-    pub payload: String,
-    pub created_at_ms: i64,
 }
 
 /// One full-text search hit over transcript entries.
@@ -451,14 +818,24 @@ fn serde_plain(kind: muta_contracts::DirectiveKind) -> rusqlite::Result<&'static
     })
 }
 
+/// Pull the `content_blob` hash out of a raw payload JSON document without a
+/// typed decode (used for verbatim-preserved unknown entries).
+fn extract_content_blob(payload_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+    value
+        .get("content_blob")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
 fn map_session_row(row: &Row) -> Result<SessionRecord> {
     Ok(SessionRecord {
         id: row.get(0)?,
         parent_id: row.get(1)?,
         fork_kind: row.get(2)?,
         title: row.get(3)?,
-        created_at_ms: row.get(4)?,
-        updated_at_ms: row.get(5)?,
+        created_at_s: row.get(4)?,
+        updated_at_s: row.get(5)?,
         project_root: row.get(6)?,
         msg_count: row.get(7)?,
         last_user_prompt: row.get(8)?,
@@ -477,9 +854,25 @@ fn map_search_row(row: &Row) -> Result<HistorySearchResult> {
     })
 }
 
+/// Envelope columns of one `entries` row, as written by a save (ADR-0186 §3).
+struct EntryEnvelope<'a> {
+    id: &'a str,
+    kind: &'a str,
+    role: Option<&'a str>,
+    content: Option<&'a str>,
+    origin: Option<&'a str>,
+    hidden: bool,
+    created_at_ms: u64,
+    payload: &'a str,
+}
+
 /// Authoritative relational database access object for Muta persistence.
 pub struct DatabaseEngine {
     conn: Connection,
+    /// CAS store used to offload oversized entry bodies at insert time
+    /// (ADR-0187): only rows this transaction inserts are offloaded, so the
+    /// per-save cost stays proportional to the delta. `None` keeps content
+    /// inline (readers, tests).
     blob_store: Option<BlobStore>,
 }
 
@@ -524,9 +917,12 @@ impl DatabaseEngine {
     }
 
     /// Open an in-memory database engine for testing.
-    pub fn open_in_memory(blob_store: Option<BlobStore>) -> Result<Self> {
+    pub fn open_in_memory() -> Result<Self> {
         let conn = initialize_in_memory_db()?;
-        Ok(Self { conn, blob_store })
+        Ok(Self {
+            conn,
+            blob_store: None,
+        })
     }
 
     /// Get inner connection reference.
@@ -545,13 +941,13 @@ impl DatabaseEngine {
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest)
+            INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 fork_kind = excluded.fork_kind,
                 title = excluded.title,
-                updated_at_ms = excluded.updated_at_ms,
+                updated_at_s = excluded.updated_at_s,
                 project_root = excluded.project_root,
                 msg_count = excluded.msg_count,
                 last_user_prompt = excluded.last_user_prompt,
@@ -562,8 +958,8 @@ impl DatabaseEngine {
                 session.parent_id,
                 session.fork_kind,
                 session.title,
-                session.created_at_ms,
-                session.updated_at_ms,
+                session.created_at_s,
+                session.updated_at_s,
                 session.project_root,
                 session.msg_count,
                 session.last_user_prompt,
@@ -577,7 +973,7 @@ impl DatabaseEngine {
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
                 params![session_id],
                 map_session_row,
             )
@@ -589,8 +985,8 @@ impl DatabaseEngine {
         let mut sessions = Vec::new();
         if let Some(root) = project_root {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest \
-                 FROM sessions WHERE project_root = ?1 ORDER BY updated_at_ms DESC",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest \
+                 FROM sessions WHERE project_root = ?1 ORDER BY updated_at_s DESC",
             )?;
             let rows = stmt.query_map(params![root], map_session_row)?;
             for session in rows {
@@ -598,8 +994,8 @@ impl DatabaseEngine {
             }
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest \
-                 FROM sessions ORDER BY updated_at_ms DESC",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest \
+                 FROM sessions ORDER BY updated_at_s DESC",
             )?;
             let rows = stmt.query_map([], map_session_row)?;
             for session in rows {
@@ -617,11 +1013,53 @@ impl DatabaseEngine {
         Ok(affected > 0)
     }
 
+    /// Reclaim blob-store entries no session references (ADR-0187). The live
+    /// set is the durable `blob_refs` ledger, maintained transactionally with
+    /// the saves that introduce references; a blob absent from it cannot be
+    /// reached by any load path.
+    pub fn collect_blob_garbage(&self, blob_store: &BlobStore) -> Result<(usize, u64)> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT hash FROM blob_refs")?;
+        let live: std::collections::HashSet<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(blob_store.retain_only(&live))
+    }
+
+    /// Reclaim transcript entries no session membership references
+    /// (ADR-0187). Entries are global facts shared by identity across forks,
+    /// so only zero-reference rows are removable; the foreign key from
+    /// `entry_memberships` makes the two tables' agreement structural, and
+    /// entry insert + membership insert share one transaction, so a GC pass
+    /// can never observe the half of a pair. Returns the rows reclaimed.
+    pub fn collect_entry_garbage(&self) -> Result<usize> {
+        let reclaimed = self.conn.execute(
+            "DELETE FROM entries WHERE NOT EXISTS (
+                SELECT 1 FROM entry_memberships m WHERE m.entry_id = entries.id
+            )",
+            [],
+        )?;
+        Ok(reclaimed)
+    }
+
     /// Persist a complete [`crate::session::SessionData`] into SQLite in one
     /// transaction (ADR-0186): the session row (identity + working state),
     /// the session's memberships and directives, and the entries themselves
-    /// (`INSERT OR IGNORE` — facts are shared by identity across forks).
+    /// (upsert — facts are shared by identity across forks).
+    ///
+    /// Full mode rewrites every membership, projection, and blob reference
+    /// from `data`. It is the authoritative write for rebuilds, forks, and
+    /// any transcript whose generation the store has not seen.
     pub(crate) fn save_session_full(&self, data: &crate::session::SessionData) -> Result<()> {
+        self.save_session_inner(data, true, &[])
+    }
+
+    fn save_session_inner(
+        &self,
+        data: &crate::session::SessionData,
+        force_full: bool,
+        usage_upserts: &[muta_contracts::RequestUsageRecord],
+    ) -> Result<()> {
         let fork_str = match data.fork_kind {
             muta_contracts::SessionForkKind::Trunk => "trunk",
             muta_contracts::SessionForkKind::Fork => "fork",
@@ -633,23 +1071,42 @@ impl DatabaseEngine {
             .as_ref()
             .and_then(|d| serde_json::to_string(d).ok());
         let last_prompt = crate::session::last_effective_prompt_from_data(data);
-        let msg_count = data.transcript.entries.len() as i64;
+        let msg_count = (data.transcript.entries.len() + data.unknown_entries.len()) as i64;
+        let tree_str = serde_json::to_string(&data.tree)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
         self.conn.execute("BEGIN IMMEDIATE", [])?;
         let res: Result<()> = (|| {
+            // Read the durable generation BEFORE the row upsert stamps the
+            // incoming one: the comparison decides full-rewrite vs append.
+            let stored_generation: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT transcript_generation FROM sessions WHERE id = ?1",
+                    params![data.id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(None);
+            // A `None` stored generation (never saved, or saved before the
+            // generation column existed) also forces the full rewrite.
+            let full = force_full || stored_generation.as_deref() != Some(data.generation.as_str());
+
             self.conn.execute(
                 r#"
-                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, checksum, schema_version)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                 ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     fork_kind = excluded.fork_kind,
                     title = excluded.title,
-                    updated_at_ms = excluded.updated_at_ms,
+                    updated_at_s = excluded.updated_at_s,
                     project_root = excluded.project_root,
                     msg_count = excluded.msg_count,
                     last_user_prompt = excluded.last_user_prompt,
                     digest = excluded.digest,
+                    digest_anchor = excluded.digest_anchor,
+                    tree = excluded.tree,
+                    transcript_generation = excluded.transcript_generation,
                     provider_connection = excluded.provider_connection,
                     round_counter = excluded.round_counter,
                     unattended = excluded.unattended,
@@ -657,8 +1114,6 @@ impl DatabaseEngine {
                     commands = excluded.commands,
                     round_interrupts = excluded.round_interrupts,
                     retry_pending = excluded.retry_pending,
-                    request_usage_records = excluded.request_usage_records,
-                    applied_seq = excluded.applied_seq,
                     checksum = excluded.checksum,
                     schema_version = excluded.schema_version;
                 "#,
@@ -673,6 +1128,9 @@ impl DatabaseEngine {
                     msg_count,
                     last_prompt,
                     digest_str,
+                    data.digest_anchor.map(|a| a as i64),
+                    tree_str,
+                    data.generation,
                     data.provider_selection.as_ref().and_then(|s| serde_json::to_string(s).ok()),
                     data.round_counter as i64,
                     data.unattended,
@@ -680,66 +1138,94 @@ impl DatabaseEngine {
                     serde_json::to_string(&data.commands).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     serde_json::to_string(&data.round_interrupts).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     data.retry_pending.as_ref().and_then(|p| serde_json::to_string(p).ok()),
-                    serde_json::to_string(&data.request_usage_records).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-                    data.applied_seq.map(|s| s as i64),
                     data.checksum.map(|c| c as i64),
                     data.schema_version as i64,
                 ],
             )?;
 
-            // Projection decisions: the session's own view history.
-            self.conn
-                .execute("DELETE FROM projections WHERE session_id = ?1", params![data.id])?;
-            for directive in &data.transcript.directives {
-                let payload = serde_json::to_string(&directive.payload)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            if full {
+                // Projection decisions: the session's own view history.
                 self.conn.execute(
-                    "INSERT INTO projections (session_id, seq, kind, up_to_seq, payload, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        data.id,
-                        directive.seq as i64,
-                        serde_plain(directive.kind)?,
-                        directive.up_to_seq as i64,
-                        payload,
-                        data.updated_at as i64,
-                    ],
+                    "DELETE FROM projections WHERE session_id = ?1",
+                    params![data.id],
                 )?;
-            }
+                for directive in &data.transcript.directives {
+                    self.insert_directive(data.id.as_str(), directive)?;
+                }
+                for unknown in &data.unknown_directives {
+                    self.insert_unknown_directive(data.id.as_str(), unknown)?;
+                }
 
-            // Facts + memberships. Entries are global and shared by identity.
-            self.conn.execute(
-                "DELETE FROM entry_memberships WHERE session_id = ?1",
-                params![data.id],
-            )?;
-            for entry in &data.transcript.entries {
-                let payload = serde_json::to_string(&entry.payload)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                // Facts + memberships. Entries are global and shared by identity.
                 self.conn.execute(
-                    r#"
-                    INSERT INTO entries (id, kind, role, content, origin, hidden, created_at_ms, payload)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                    ON CONFLICT(id) DO NOTHING;
-                    "#,
-                    params![
-                        entry.id,
-                        if entry.kind == muta_contracts::EntryKind::State { "state" } else { "message" },
-                        entry.role.map(role_str),
-                        entry.content,
-                        entry.origin.map(origin_str),
-                        entry.hidden,
-                        entry.created_at_ms as i64,
-                        payload,
-                    ],
+                    "DELETE FROM entry_memberships WHERE session_id = ?1",
+                    params![data.id],
                 )?;
                 self.conn.execute(
-                    "INSERT INTO entry_memberships (session_id, seq, entry_id, added_by) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        data.id,
-                        entry.seq as i64,
-                        entry.id,
-                        data.applied_seq.unwrap_or(0) as i64,
-                    ],
+                    "DELETE FROM blob_refs WHERE session_id = ?1",
+                    params![data.id],
                 )?;
+                for entry in &data.transcript.entries {
+                    self.upsert_entry(entry)?;
+                    self.insert_membership(data.id.as_str(), entry.seq, entry.id.as_str())?;
+                }
+                for unknown in &data.unknown_entries {
+                    self.upsert_entry_row(EntryEnvelope {
+                        id: unknown.id.as_str(),
+                        kind: unknown.kind.as_str(),
+                        role: unknown.role.as_deref(),
+                        content: unknown.content.as_deref(),
+                        origin: unknown.origin.as_deref(),
+                        hidden: unknown.hidden,
+                        created_at_ms: unknown.created_at_ms,
+                        payload: unknown.payload_json.as_str(),
+                    })?;
+                    self.insert_membership(data.id.as_str(), unknown.seq, unknown.id.as_str())?;
+                }
+                self.record_blob_refs(
+                    data.id.as_str(),
+                    &data.transcript.entries,
+                    &data.unknown_entries,
+                )?;
+                self.conn.execute(
+                    "DELETE FROM usage_records WHERE session_id = ?1",
+                    params![data.id],
+                )?;
+                for record in &data.request_usage_records {
+                    insert_usage_record_tx(&self.conn, data.id.as_str(), record)?;
+                }
+            } else {
+                let watermark: i64 = self.conn.query_row(
+                    "SELECT COALESCE(MAX(seq), -1) FROM entry_memberships WHERE session_id = ?1",
+                    params![data.id],
+                    |row| row.get(0),
+                )?;
+                let mut new_entries = Vec::new();
+                for entry in &data.transcript.entries {
+                    if (entry.seq as i64) <= watermark {
+                        continue;
+                    }
+                    self.upsert_entry(entry)?;
+                    self.insert_membership(data.id.as_str(), entry.seq, entry.id.as_str())?;
+                    new_entries.push(entry);
+                }
+                let directive_watermark: i64 = self.conn.query_row(
+                    "SELECT COALESCE(MAX(seq), -1) FROM projections WHERE session_id = ?1",
+                    params![data.id],
+                    |row| row.get(0),
+                )?;
+                for directive in &data.transcript.directives {
+                    if (directive.seq as i64) <= directive_watermark {
+                        continue;
+                    }
+                    self.insert_directive(data.id.as_str(), directive)?;
+                }
+                let new_entries: Vec<muta_contracts::TranscriptEntry> =
+                    new_entries.into_iter().cloned().collect();
+                self.record_blob_refs(data.id.as_str(), &new_entries, &[])?;
+                for record in usage_upserts {
+                    insert_usage_record_tx(&self.conn, data.id.as_str(), record)?;
+                }
             }
             Ok(())
         })();
@@ -753,14 +1239,198 @@ impl DatabaseEngine {
         }
     }
 
+    fn insert_membership(&self, session_id: &str, seq: u64, entry_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO entry_memberships (session_id, seq, entry_id) VALUES (?1, ?2, ?3)",
+            params![session_id, seq as i64, entry_id],
+        )?;
+        Ok(())
+    }
+
+    fn insert_directive(
+        &self,
+        session_id: &str,
+        directive: &muta_contracts::ProjectionDirective,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(&directive.payload)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO projections (session_id, seq, kind, up_to_seq, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                directive.seq as i64,
+                serde_plain(directive.kind)?,
+                directive.up_to_seq as i64,
+                payload,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_unknown_directive(
+        &self,
+        session_id: &str,
+        unknown: &crate::session::UnknownDirectiveRow,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO projections (session_id, seq, kind, up_to_seq, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                unknown.seq as i64,
+                unknown.kind.as_str(),
+                unknown.up_to_seq as i64,
+                unknown.payload_json.as_str(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Write one entry row, offloading an oversized body to the CAS when this
+    /// engine has a blob store (ADR-0187). The offload applies only to the
+    /// row about to be inserted: already-durable rows keep their stored shape.
+    fn upsert_entry(&self, entry: &muta_contracts::TranscriptEntry) -> Result<()> {
+        let mut payload = entry.payload.clone();
+        let mut content = entry.content.clone();
+        if content
+            .as_ref()
+            .is_some_and(|c| c.len() > CAS_THRESHOLD_BYTES)
+            && let muta_contracts::EntryPayload::Message(message_payload) = &mut payload
+            && message_payload.content_blob.is_none()
+            && let Some(blob_store) = &self.blob_store
+        {
+            let hash = blob_store
+                .put(content.as_deref().unwrap_or_default().as_bytes())
+                .map_err(rusqlite::Error::InvalidParameterName)?;
+            message_payload.content_blob = Some(hash);
+            if let Some(c) = &mut content {
+                c.clear();
+            }
+        }
+        let payload = serde_json::to_string(&payload)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.upsert_entry_row(EntryEnvelope {
+            id: entry.id.as_str(),
+            kind: if entry.kind == muta_contracts::EntryKind::State {
+                "state"
+            } else {
+                "message"
+            },
+            role: entry.role.map(role_str),
+            content: content.as_deref(),
+            origin: entry.origin.map(origin_str),
+            hidden: entry.hidden,
+            created_at_ms: entry.created_at_ms,
+            payload: payload.as_str(),
+        })
+    }
+
+    fn upsert_entry_row(&self, row: EntryEnvelope<'_>) -> Result<()> {
+        let EntryEnvelope {
+            id,
+            kind,
+            role,
+            content,
+            origin,
+            hidden,
+            created_at_ms,
+            payload,
+        } = row;
+        self.conn.execute(
+            r#"
+            INSERT INTO entries (id, kind, role, content, origin, hidden, created_at_ms, payload)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                role = excluded.role,
+                content = excluded.content,
+                origin = excluded.origin,
+                hidden = excluded.hidden,
+                created_at_ms = excluded.created_at_ms,
+                payload = excluded.payload;
+            "#,
+            params![
+                id,
+                kind,
+                role,
+                content,
+                origin,
+                hidden,
+                created_at_ms as i64,
+                payload
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Maintain the durable blob reference ledger for the entries this save
+    /// touches. Callers pass exactly the entries whose memberships they wrote.
+    fn record_blob_refs(
+        &self,
+        session_id: &str,
+        entries: &[muta_contracts::TranscriptEntry],
+        unknown: &[crate::session::UnknownEntryRow],
+    ) -> Result<()> {
+        let mut refs: Vec<String> = Vec::new();
+        for entry in entries {
+            if let muta_contracts::EntryPayload::Message(payload) = &entry.payload
+                && let Some(hash) = &payload.content_blob
+            {
+                refs.push(hash.clone());
+            }
+        }
+        for row in unknown {
+            if let Some(hash) = extract_content_blob(&row.payload_json) {
+                refs.push(hash);
+            }
+        }
+        for hash in refs {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO blob_refs (session_id, hash) VALUES (?1, ?2)",
+                params![session_id, hash],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Read the durable usage ledger for one session, in deterministic key
+    /// order (ADR-0187): rows live in their own table, not on the session row.
+    fn load_usage_records(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<muta_contracts::RequestUsageRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload FROM usage_records WHERE session_id = ?1
+             ORDER BY round ASC, turn ASC, attempt ASC, actor_id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+        let mut records = Vec::new();
+        for payload in rows {
+            let payload = payload?;
+            match serde_json::from_str(&payload) {
+                Ok(record) => records.push(record),
+                Err(error) => tracing::warn!(
+                    session = %session_id,
+                    error = %error,
+                    "usage record payload undecodable; skipped"
+                ),
+            }
+        }
+        Ok(records)
+    }
+
     /// Load a full [`crate::session::SessionData`] by session ID from SQLite.
-    /// Entries whose payloads the current binary cannot decode are skipped
-    /// (kept in storage; degraded in view) per the unknown-kind contract.
-    pub(crate) fn load_session_full(&self, session_id: &str) -> Result<Option<crate::session::SessionData>> {
+    /// Entries and directives whose payloads the current binary cannot decode
+    /// are preserved verbatim (ADR-0187): they ride in memory as raw rows and
+    /// round-trip through every save untouched, so a database written by a
+    /// newer binary survives an older binary without loss or orphaning.
+    pub(crate) fn load_session_full(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::session::SessionData>> {
         let row = self
             .conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
                 params![session_id],
                 |row| {
                     Ok((
@@ -772,27 +1442,50 @@ impl DatabaseEngine {
                         row.get::<_, i64>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, Option<String>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                        row.get::<_, i64>(9)?,
-                        row.get::<_, i64>(10)?,
-                        row.get::<_, String>(11)?,
-                        row.get::<_, String>(12)?,
-                        row.get::<_, String>(13)?,
-                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, i64>(13)?,
+                        row.get::<_, String>(14)?,
                         row.get::<_, String>(15)?,
-                        row.get::<_, Option<i64>>(16)?,
-                        row.get::<_, Option<i64>>(17)?,
-                        row.get::<_, i64>(18)?,
+                        row.get::<_, String>(16)?,
+                        row.get::<_, Option<String>>(17)?,
+                        row.get::<_, Option<i64>>(18)?,
+                        row.get::<_, i64>(19)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, digest, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_pending, request_usage_records, applied_seq, checksum, schema_version)) = row
+        let Some((
+            id,
+            parent_id,
+            fork_kind,
+            title,
+            created_at_s,
+            updated_at_s,
+            project_root,
+            digest,
+            digest_anchor,
+            tree,
+            generation,
+            provider_connection,
+            round_counter,
+            unattended,
+            disabled_tools,
+            commands,
+            round_interrupts,
+            retry_pending,
+            checksum,
+            schema_version,
+        )) = row
         else {
             return Ok(None);
         };
 
         let mut entries = Vec::new();
+        let mut unknown_entries = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT e.id, m.seq, e.kind, e.role, e.content, e.origin, e.hidden, e.created_at_ms, e.payload \
@@ -822,13 +1515,14 @@ impl DatabaseEngine {
                     };
                     let role = role.as_deref().and_then(role_from_str);
                     let origin = origin.as_deref().and_then(origin_from_str);
-                    let payload: muta_contracts::EntryPayload = serde_json::from_str(&payload).ok()?;
+                    let payload: muta_contracts::EntryPayload =
+                        serde_json::from_str(&payload).ok()?;
                     Some(muta_contracts::TranscriptEntry {
-                        id: eid,
+                        id: eid.clone(),
                         seq: seq.max(0) as u64,
                         kind,
                         role,
-                        content,
+                        content: content.clone(),
                         origin,
                         hidden: hidden != 0,
                         created_at_ms: created_at_ms.max(0) as u64,
@@ -837,11 +1531,30 @@ impl DatabaseEngine {
                 })();
                 if let Some(entry) = decoded {
                     entries.push(entry);
+                } else {
+                    tracing::warn!(
+                        session = %session_id,
+                        entry = %eid,
+                        seq,
+                        "entry payload not decodable by this binary; preserved verbatim"
+                    );
+                    unknown_entries.push(crate::session::UnknownEntryRow {
+                        id: eid,
+                        seq: seq.max(0) as u64,
+                        kind,
+                        role,
+                        content,
+                        origin,
+                        hidden: hidden != 0,
+                        created_at_ms: created_at_ms.max(0) as u64,
+                        payload_json: payload,
+                    });
                 }
             }
         }
 
         let mut directives = Vec::new();
+        let mut unknown_directives = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT seq, kind, up_to_seq, payload FROM projections WHERE session_id = ?1 ORDER BY seq ASC",
@@ -863,7 +1576,8 @@ impl DatabaseEngine {
                         "freeze" => muta_contracts::DirectiveKind::Freeze,
                         _ => return None,
                     };
-                    let payload: muta_contracts::DirectivePayload = serde_json::from_str(&payload).ok()?;
+                    let payload: muta_contracts::DirectivePayload =
+                        serde_json::from_str(&payload).ok()?;
                     Some(muta_contracts::ProjectionDirective {
                         seq: seq.max(0) as u64,
                         kind,
@@ -873,19 +1587,62 @@ impl DatabaseEngine {
                 })();
                 if let Some(directive) = decoded {
                     directives.push(directive);
+                } else {
+                    tracing::warn!(
+                        session = %session_id,
+                        seq,
+                        "directive payload not decodable by this binary; preserved verbatim"
+                    );
+                    unknown_directives.push(crate::session::UnknownDirectiveRow {
+                        seq: seq.max(0) as u64,
+                        kind,
+                        up_to_seq: up_to_seq.max(0) as u64,
+                        payload_json: payload,
+                    });
                 }
             }
         }
 
-        let digest: Option<muta_contracts::SessionDigest> = digest
-            .as_deref()
-            .and_then(|raw| serde_json::from_str(raw).ok());
-        let digest_anchor = digest.as_ref().map(|_| updated_at_ms.max(0) as u64);
-        Ok(Some(crate::session::SessionData {
-            transcript: muta_contracts::Transcript { entries, directives },
+        let digest: Option<muta_contracts::SessionDigest> = match digest.as_deref() {
+            Some(raw) => match serde_json::from_str(raw) {
+                Ok(parsed) => Some(parsed),
+                Err(error) => {
+                    tracing::warn!(session = %session_id, error = %error, "digest column undecodable; ignored");
+                    None
+                }
+            },
+            None => None,
+        };
+        let tree = match tree.as_deref() {
+            Some(raw) => serde_json::from_str(raw).unwrap_or_else(|error| {
+                tracing::warn!(session = %session_id, error = %error, "session tree column undecodable; reset");
+                Default::default()
+            }),
+            None => Default::default(),
+        };
+
+        let data = crate::session::SessionData {
+            transcript: muta_contracts::Transcript {
+                min_next_seq: entries
+                    .iter()
+                    .map(|entry| entry.seq + 1)
+                    .chain(unknown_entries.iter().map(|row| row.seq + 1))
+                    .max()
+                    .unwrap_or(0),
+                min_next_directive_seq: directives
+                    .iter()
+                    .map(|directive| directive.seq + 1)
+                    .chain(unknown_directives.iter().map(|row| row.seq + 1))
+                    .max()
+                    .unwrap_or(0),
+                entries,
+                directives,
+            },
             last_projection: None,
             digest,
-            digest_anchor,
+            // The anchor is a transcript char count (ADR-0187): persisted for
+            // real; legacy rows without one refresh their digest once.
+            digest_anchor: digest_anchor.map(|a| a.max(0) as u64),
             id,
             parent_id,
             fork_kind: match fork_kind.as_str() {
@@ -895,26 +1652,39 @@ impl DatabaseEngine {
                 _ => muta_contracts::SessionForkKind::Trunk,
             },
             title,
-            created_at: created_at_ms.max(0) as u64,
-            updated_at: updated_at_ms.max(0) as u64,
+            created_at: created_at_s.max(0) as u64,
+            updated_at: updated_at_s.max(0) as u64,
             project_root: PathBuf::from(project_root),
             schema_version: if schema_version > 0 { schema_version as u32 } else { crate::session::CURRENT_SCHEMA_VERSION },
             checksum: checksum.map(|c| c as u32),
-            applied_seq: applied_seq.map(|s| s.max(0) as u64),
+            generation: generation.unwrap_or_default(),
             provider_selection: provider_connection
                 .as_deref()
                 .and_then(|raw| serde_json::from_str(raw).ok()),
-            disabled_tools: serde_json::from_str(&disabled_tools).unwrap_or_default(),
+            disabled_tools: serde_json::from_str(&disabled_tools).unwrap_or_else(|error| {
+                tracing::warn!(session = %session_id, error = %error, "disabled_tools column undecodable; treated as empty");
+                Default::default()
+            }),
             round_counter: round_counter.max(0) as u64,
-            request_usage_records: serde_json::from_str(&request_usage_records).unwrap_or_default(),
-            commands: serde_json::from_str(&commands).unwrap_or_default(),
-            round_interrupts: serde_json::from_str(&round_interrupts).unwrap_or_default(),
+            request_usage_records: self.load_usage_records(session_id)?,
+            commands: serde_json::from_str(&commands).unwrap_or_else(|error| {
+                tracing::warn!(session = %session_id, error = %error, "commands column undecodable; treated as empty");
+                Default::default()
+            }),
+            round_interrupts: serde_json::from_str(&round_interrupts).unwrap_or_else(|error| {
+                tracing::warn!(session = %session_id, error = %error, "round_interrupts column undecodable; treated as empty");
+                Default::default()
+            }),
             retry_pending: retry_pending
                 .as_deref()
                 .and_then(|raw| serde_json::from_str(raw).ok()),
             unattended: unattended != 0,
-            tree: Default::default(),
-        }))
+            tree,
+            unknown_entries,
+            unknown_directives,
+        };
+        crate::session::verify_checksum(&data, session_id);
+        Ok(Some(data))
     }
 
     /// Resolve a session ID prefix (4+ hex chars) to matching full session IDs.
@@ -927,16 +1697,16 @@ impl DatabaseEngine {
         let mut matches = Vec::new();
         if let Some(root) = project_root {
             let mut stmt = self.conn.prepare(
-                "SELECT id FROM sessions WHERE id LIKE ?1 AND project_root = ?2 ORDER BY updated_at_ms DESC",
+                "SELECT id FROM sessions WHERE id LIKE ?1 AND project_root = ?2 ORDER BY updated_at_s DESC",
             )?;
             let rows = stmt.query_map(params![pattern, root], |row| row.get(0))?;
             for id in rows {
                 matches.push(id?);
             }
         } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT id FROM sessions WHERE id LIKE ?1 ORDER BY updated_at_ms DESC",
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM sessions WHERE id LIKE ?1 ORDER BY updated_at_s DESC")?;
             let rows = stmt.query_map(params![pattern], |row| row.get(0))?;
             for id in rows {
                 matches.push(id?);
@@ -957,15 +1727,15 @@ impl DatabaseEngine {
                 parent_id,
                 fork_kind,
                 title,
-                created_at_ms,
-                updated_at_ms,
+                created_at_s,
+                updated_at_s,
                 msg_count,
                 last_user_prompt,
                 digest
             FROM sessions
             WHERE (?1 IS NULL OR project_root = ?1)
               AND fork_kind <> 'subagent'
-            ORDER BY updated_at_ms DESC;
+            ORDER BY updated_at_s DESC;
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;
@@ -1019,7 +1789,9 @@ impl DatabaseEngine {
 
             let overview = if let Some(t) = title.as_deref().filter(|t| !t.trim().is_empty()) {
                 crate::session::truncate_preview(t, 64)
-            } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+            } else if let Some(prompt) =
+                last_user_prompt.as_deref().filter(|p| !p.trim().is_empty())
+            {
                 crate::session::truncate_preview(prompt, 64)
             } else {
                 "(empty session)".to_string()
@@ -1070,61 +1842,21 @@ impl DatabaseEngine {
 
     /// Rename a session in the database. ADR-0186: a non-`NULL` title is
     /// terminal; the manual flag is retained in the signature for the command
-    /// surface but no longer stored.
-    pub fn rename_session(&self, session_id: &str, title: Option<&str>, manual: bool) -> Result<bool> {
-        let now = Utc::now().timestamp_millis();
-        if let Some(mut data) = self.load_session_full(session_id)? {
-            data.title = title.map(|s| s.to_string());
-            data.updated_at = now as u64;
-            self.save_session_full(&data)?;
-            return Ok(true);
-        }
+    /// surface but no longer stored. A single-row UPDATE: the transcript and
+    /// working state are untouched, so no load/save round trip is needed.
+    pub fn rename_session(
+        &self,
+        session_id: &str,
+        title: Option<&str>,
+        manual: bool,
+    ) -> Result<bool> {
         let _ = manual;
+        let now = crate::session::unix_timestamp() as i64;
         let affected = self.conn.execute(
-            "UPDATE sessions SET title = ?1, updated_at_ms = ?2 WHERE id = ?3",
+            "UPDATE sessions SET title = ?1, updated_at_s = ?2 WHERE id = ?3",
             params![title, now, session_id],
         )?;
         Ok(affected > 0)
-    }
-
-    /// Discover every persisted session (across all project buckets) that has armed `/schedule` jobs.
-    // Event Ledger Operations (ADR-0163)
-
-    /// Append a single event to the monotonic event ledger.
-    pub fn append_event(&self, event: &SessionEventRecord) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO events (session_id, seq, event_type, payload, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                event.session_id,
-                event.seq,
-                event.event_type,
-                event.payload,
-                event.created_at_ms,
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Load all events for a session in sequence order.
-    pub fn get_session_events(&self, session_id: &str) -> Result<Vec<SessionEventRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id, seq, event_type, payload, created_at_ms \
-             FROM events WHERE session_id = ?1 ORDER BY seq ASC",
-        )?;
-        let rows = stmt.query_map(params![session_id], |row| {
-            Ok(SessionEventRecord {
-                session_id: row.get(0)?,
-                seq: row.get(1)?,
-                event_type: row.get(2)?,
-                payload: row.get(3)?,
-                created_at_ms: row.get(4)?,
-            })
-        })?;
-        let mut events = Vec::new();
-        for event in rows {
-            events.push(event?);
-        }
-        Ok(events)
     }
 
     // Typed JSON KV Helpers (ADR-0168)
@@ -1142,9 +1874,11 @@ impl DatabaseEngine {
     /// Fetch a key from the unified KV store.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>> {
         self.conn
-            .query_row("SELECT value FROM kv_store WHERE key = ?1", params![key], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT value FROM kv_store WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
             .optional()
     }
 
@@ -1158,7 +1892,12 @@ impl DatabaseEngine {
 
     /// Record a slash-command invocation in the durable command ledger.
     pub fn record_command(&self, cmd: &muta_contracts::CommandRecord) -> Result<()> {
-        let id = format!("{}:{}:{}", cmd.name, cmd.timestamp, muta_contracts::todos::unix_now());
+        let id = format!(
+            "{}:{}:{}",
+            cmd.name,
+            cmd.timestamp,
+            muta_contracts::todos::unix_now()
+        );
         self.conn.execute(
             r#"
             INSERT INTO commands (id, session_id, name, arguments, result, status, created_at_ms)
@@ -1169,7 +1908,9 @@ impl DatabaseEngine {
                 "", // command ledger rows are session-agnostic audit records
                 cmd.name,
                 cmd.args,
-                cmd.result.as_ref().and_then(|r| serde_json::to_string(r).ok()),
+                cmd.result
+                    .as_ref()
+                    .and_then(|r| serde_json::to_string(r).ok()),
                 match cmd.status {
                     muta_contracts::CommandStatus::Success => "ok",
                     muta_contracts::CommandStatus::Error => "failed",
@@ -1397,7 +2138,10 @@ impl DatabaseEngine {
             )?;
 
             let mut delete_dedup_stmt = if dedup {
-                Some(self.conn.prepare("DELETE FROM input_history WHERE text = ?1")?)
+                Some(
+                    self.conn
+                        .prepare("DELETE FROM input_history WHERE text = ?1")?,
+                )
             } else {
                 None
             };
@@ -1454,10 +2198,8 @@ impl DatabaseEngine {
                 params![text, created_at_ms as i64],
             )?
         } else {
-            self.conn.execute(
-                "DELETE FROM input_history WHERE text = ?1",
-                params![text],
-            )?
+            self.conn
+                .execute("DELETE FROM input_history WHERE text = ?1", params![text])?
         };
         Ok(deleted)
     }
@@ -1476,7 +2218,10 @@ impl DatabaseEngine {
             candidates.push(state_home.join("mutx").join("history.json"));
             candidates.push(state_home.join("muta").join("history.json"));
             candidates.push(state_home.join("neenee").join("history.json"));
-        } else if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()).map(PathBuf::from) {
+        } else if let Some(home) = std::env::var_os("HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+        {
             let state_home = home.join(".local").join("state");
             candidates.push(state_home.join("mutx").join("history.json"));
             candidates.push(state_home.join("muta").join("history.json"));
@@ -1494,7 +2239,8 @@ impl DatabaseEngine {
             let Ok(content) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content) else {
+            let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content)
+            else {
                 let _ = std::fs::remove_file(&file);
                 continue;
             };
@@ -1519,16 +2265,22 @@ impl DatabaseEngine {
     }
 
     // Legacy Flat-File Migration (ADR-0168)
-
-
 }
 
 // Asynchronous Persistence Actor (Single-Writer Pattern)
 
 /// Command variants dispatched to the single-writer persistence actor.
 pub enum PersistenceCommand {
-    SaveSessionFull {
+    SaveSession {
         data: Box<crate::session::SessionData>,
+        /// `true`: rewrite every membership/projection/blob reference from
+        /// `data`. `false`: append only rows above the durable watermark,
+        /// escalating to a full rewrite on generation mismatch (ADR-0187).
+        full: bool,
+        /// Usage-record upserts to apply on a delta save (the durable usage
+        /// ledger lives in its own table; a full save rewrites it from
+        /// `data`).
+        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
         ack: oneshot::Sender<Result<()>>,
     },
     UpsertSession {
@@ -1544,10 +2296,6 @@ pub enum PersistenceCommand {
         title: Option<String>,
         manual: bool,
         ack: oneshot::Sender<Result<bool>>,
-    },
-    AppendEvent {
-        event: SessionEventRecord,
-        ack: oneshot::Sender<Result<()>>,
     },
     RecordCommand {
         cmd: muta_contracts::CommandRecord,
@@ -1625,8 +2373,13 @@ impl PersistenceHandle {
 
                 while let Some(cmd) = rx.blocking_recv() {
                     match cmd {
-                        PersistenceCommand::SaveSessionFull { data, ack } => {
-                            let res = engine.save_session_full(&data);
+                        PersistenceCommand::SaveSession {
+                            data,
+                            full,
+                            usage_upserts,
+                            ack,
+                        } => {
+                            let res = engine.save_session_inner(&data, full, &usage_upserts);
                             let _ = ack.send(res);
                         }
                         PersistenceCommand::UpsertSession { record, ack } => {
@@ -1644,10 +2397,6 @@ impl PersistenceHandle {
                             ack,
                         } => {
                             let res = engine.rename_session(&session_id, title.as_deref(), manual);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::AppendEvent { event, ack } => {
-                            let res = engine.append_event(&event);
                             let _ = ack.send(res);
                         }
                         PersistenceCommand::RecordCommand { cmd, ack } => {
@@ -1694,13 +2443,20 @@ impl PersistenceHandle {
         }
     }
 
-    /// Asynchronously save a full session in SQLite.
+    /// Asynchronously save a session in SQLite.
     #[allow(dead_code)]
-    pub(crate) async fn save_session_full(&self, data: crate::session::SessionData) -> Result<()> {
+    pub(crate) async fn save_session(
+        &self,
+        data: crate::session::SessionData,
+        full: bool,
+        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
+    ) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
-            .send(PersistenceCommand::SaveSessionFull {
+            .send(PersistenceCommand::SaveSession {
                 data: Box::new(data),
+                full,
+                usage_upserts,
                 ack: ack_tx,
             })
             .await
@@ -1710,14 +2466,17 @@ impl PersistenceHandle {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
-    /// Synchronously save a full session on a blocking thread.
+    /// Synchronously save a session on a blocking thread (always a full
+    /// rewrite: the blocking callers write fresh or rebuilt state).
     #[allow(dead_code)]
-    pub(crate) fn save_session_full_blocking(&self, data: crate::session::SessionData) -> Result<()> {
+    pub(crate) fn save_session_blocking(&self, data: crate::session::SessionData) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         let tx = self.tx.clone();
         let run_blocking = move || {
-            tx.blocking_send(PersistenceCommand::SaveSessionFull {
+            tx.blocking_send(PersistenceCommand::SaveSession {
                 data: Box::new(data),
+                full: true,
+                usage_upserts: Vec::new(),
                 ack: ack_tx,
             })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -1730,9 +2489,9 @@ impl PersistenceHandle {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 tokio::task::block_in_place(run_blocking)
             } else {
-                std::thread::spawn(run_blocking)
-                    .join()
-                    .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+                std::thread::spawn(run_blocking).join().map_err(|_| {
+                    rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+                })?
             }
         } else {
             run_blocking()
@@ -1742,11 +2501,6 @@ impl PersistenceHandle {
     /// The database file path.
     pub fn db_path(&self) -> &Path {
         &self.db_path
-    }
-
-    /// The associated CAS blob store, if any.
-    pub fn blob_store(&self) -> Option<&BlobStore> {
-        self.blob_store.as_ref()
     }
 
     /// Asynchronously upsert a session record.
@@ -1810,18 +2564,6 @@ impl PersistenceHandle {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
-    /// Asynchronously append an event to the ledger.
-    pub async fn append_event(&self, event: SessionEventRecord) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
-            .send(PersistenceCommand::AppendEvent { event, ack: ack_tx })
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-    }
-
     /// Asynchronously record a command invocation.
     pub async fn record_command(&self, cmd: muta_contracts::CommandRecord) -> Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -1870,9 +2612,9 @@ impl PersistenceHandle {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 tokio::task::block_in_place(run_blocking)
             } else {
-                std::thread::spawn(run_blocking)
-                    .join()
-                    .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+                std::thread::spawn(run_blocking).join().map_err(|_| {
+                    rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+                })?
             }
         } else {
             run_blocking()
@@ -1928,9 +2670,9 @@ impl PersistenceHandle {
                 ack: Some(ack_tx),
             })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+        ack_rx.blocking_recv().map_err(|_| {
+            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+        })?
     }
 
     /// Save multiple input history entries synchronously, waiting for SQLite actor confirmation.
@@ -1947,9 +2689,9 @@ impl PersistenceHandle {
                 ack: ack_tx,
             })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+        ack_rx.blocking_recv().map_err(|_| {
+            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+        })?
     }
 
     /// Clear all input history entries from SQLite.
@@ -1958,22 +2700,28 @@ impl PersistenceHandle {
         self.tx
             .blocking_send(PersistenceCommand::ClearInputHistory { ack: ack_tx })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+        ack_rx.blocking_recv().map_err(|_| {
+            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+        })?
     }
 
     /// Best-effort asynchronous delete of an input history record by text and timestamp.
     pub fn try_delete_input_history_entry(&self, text: String, created_at_ms: u64) {
-        let _ = self.tx.try_send(PersistenceCommand::DeleteInputHistoryEntry {
-            text,
-            created_at_ms,
-            ack: None,
-        });
+        let _ = self
+            .tx
+            .try_send(PersistenceCommand::DeleteInputHistoryEntry {
+                text,
+                created_at_ms,
+                ack: None,
+            });
     }
 
     /// Synchronously delete an input history entry by text and timestamp.
-    pub fn delete_input_history_entry_blocking(&self, text: &str, created_at_ms: u64) -> Result<usize> {
+    pub fn delete_input_history_entry_blocking(
+        &self,
+        text: &str,
+        created_at_ms: u64,
+    ) -> Result<usize> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .blocking_send(PersistenceCommand::DeleteInputHistoryEntry {
@@ -1982,9 +2730,9 @@ impl PersistenceHandle {
                 ack: Some(ack_tx),
             })
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into()))?
+        ack_rx.blocking_recv().map_err(|_| {
+            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+        })?
     }
 
     /// Open a lightweight read-only connection snapshot for querying.
@@ -2000,46 +2748,420 @@ mod tests {
     #[test]
     fn fresh_db_migrates_to_latest_version() {
         let conn = initialize_in_memory_db().unwrap();
-        let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(version, CURRENT_DB_VERSION);
+    }
+
+    /// Regression for the interim version-5 stamp: development builds of the
+    /// ADR-0186 tranche wrote `sessions` with `scheduled_jobs` and without the
+    /// final working-state columns, then stamped `user_version = 5`. The
+    /// migrator must reconcile such databases to the final schema instead of
+    /// letting runtime INSERTs fail with "no column named ...".
+    #[test]
+    fn interim_v5_stamp_is_repaired_to_final_schema() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&mut conn).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id               TEXT PRIMARY KEY,
+                parent_id        TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+                fork_kind        TEXT NOT NULL DEFAULT 'trunk',
+                title            TEXT,
+                created_at_ms    INTEGER NOT NULL,
+                updated_at_ms    INTEGER NOT NULL,
+                project_root     TEXT NOT NULL,
+                msg_count        INTEGER NOT NULL DEFAULT 0,
+                last_user_prompt TEXT,
+                digest           TEXT,
+                scheduled_jobs   TEXT NOT NULL DEFAULT '[]',
+                provider_connection TEXT
+            );
+            INSERT INTO sessions (id, created_at_ms, updated_at_ms, project_root)
+                VALUES ('s1', 1, 1, '/tmp');
+            PRAGMA user_version = 5;
+            "#,
+        )
+        .unwrap();
+
+        migrate_schema(&mut conn).unwrap();
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_DB_VERSION);
+        let columns = sessions_columns(&conn).unwrap();
+        assert!(!columns.contains("scheduled_jobs"));
+        assert!(!columns.contains("title_manual"));
+        for (name, _) in SESSIONS_WORKING_STATE_COLUMNS {
+            // Migration 8 retires the usage column into its own ledger table.
+            if *name == "request_usage_records" {
+                assert!(
+                    !columns.contains(*name),
+                    "{name} must have moved to the usage ledger table"
+                );
+                continue;
+            }
+            assert!(columns.contains(*name), "missing column {name}");
+        }
+        // The repaired row survives and the working-state upsert path works.
+        conn.execute(
+            "UPDATE sessions SET round_counter = 2, unattended = 1 WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// Databases already at the final version-5 schema (no interim stamp) pass
+    /// through the repair as a no-op.
+    #[test]
+    fn final_v5_schema_passes_through_migration_six_unchanged() {
+        let mut conn = initialize_in_memory_db().unwrap();
+        conn.execute_batch("PRAGMA user_version = 5;").unwrap();
+        migrate_schema(&mut conn).unwrap();
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_DB_VERSION);
+    }
+
+    /// The startup guard fails loudly on a database missing runtime columns.
+    #[test]
+    fn schema_guard_rejects_missing_columns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&mut conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, project_root TEXT NOT NULL);",
+        )
+        .unwrap();
+        let err = verify_sessions_schema(&conn).unwrap_err();
+        assert!(err.to_string().contains("missing column(s)"), "{err}");
+    }
+
+    /// Migration immutability lock: once a migration version has shipped in a
+    /// commit, editing its SQL in place strands databases stamped by the old
+    /// SQL (the interim-v5 incident). Any change to the catalog — including
+    /// edits disguised as refactors — must therefore land as a NEW version
+    /// entry, which changes this fingerprint and fails the test.
+    #[test]
+    fn migration_catalog_fingerprint_is_stable() {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        for migration in MIGRATIONS {
+            hasher.update(migration.version.to_le_bytes());
+            hasher.update(migration.sql.as_bytes());
+        }
+        let fingerprint = format!("{:x}", hasher.finalize());
+        assert_eq!(
+            fingerprint,
+            MIGRATION_CATALOG_FINGERPRINT,
+            "the migration catalog changed; ship the change as version {} \
+             with new SQL instead of rewriting an applied migration",
+            CURRENT_DB_VERSION + 1
+        );
+    }
+
+    #[test]
+    fn delta_save_appends_only_rows_above_the_watermark() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        engine.save_session_full(&data).unwrap();
+
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, "one"),
+        ));
+        engine.save_session_inner(&data, false, &[]).unwrap();
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(reloaded.transcript.entries.len(), 1);
+
+        // Second delta appends only the new row; the durable watermark moves.
+        data.transcript.push(TranscriptEntry::from_message(
+            1,
+            &Message::new(Role::User, "two"),
+        ));
+        engine.save_session_inner(&data, false, &[]).unwrap();
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(reloaded.transcript.entries.len(), 2);
+        assert_eq!(reloaded.transcript.entries[1].seq, 1);
+    }
+
+    #[test]
+    fn generation_mismatch_escalates_delta_to_full_rewrite() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, "old"),
+        ));
+        engine.save_session_full(&data).unwrap();
+
+        // Rebuild: fresh entries, fresh ids, fresh generation. The delta save
+        // must notice the generation change and rewrite everything.
+        let rebuilt = crate::session::rebuild_for_test(&[Message::new(Role::User, "rebuilt")]);
+        data.transcript = rebuilt;
+        data.generation = uuid::Uuid::new_v4().to_string();
+        engine.save_session_inner(&data, false, &[]).unwrap();
+
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(reloaded.transcript.entries.len(), 1);
+        assert_eq!(
+            reloaded.transcript.entries[0].to_message().unwrap().content,
+            "rebuilt"
+        );
+        assert_eq!(reloaded.generation, data.generation);
+    }
+
+    #[test]
+    fn delta_save_offloads_only_newly_inserted_rows() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let blob_store = BlobStore::new(
+            std::env::temp_dir().join(format!("muta-offload-{}", uuid::Uuid::new_v4())),
+        );
+        let mut data = crate::session::SessionData::default();
+        let big = "x".repeat(CAS_THRESHOLD_BYTES * 4);
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, big.clone()),
+        ));
+        let stored = engine_blob_round_trip(&data, &blob_store);
+        let reloaded = stored.load_session_full(&data.id).unwrap().unwrap();
+        let payload = reloaded.transcript.entries[0].as_message().unwrap();
+        let hash = payload.content_blob.as_ref().expect("body was offloaded");
+        assert_eq!(
+            reloaded.transcript.entries[0].content.as_deref(),
+            Some(""),
+            "the inline body is cleared"
+        );
+        assert_eq!(blob_store.get(hash).unwrap(), big.as_bytes());
+        let _ = std::fs::remove_dir_all(blob_store.root());
+    }
+
+    fn engine_blob_round_trip(
+        data: &crate::session::SessionData,
+        blob_store: &BlobStore,
+    ) -> DatabaseEngine {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&mut conn).unwrap();
+        migrate_schema(&mut conn).unwrap();
+        let engine = DatabaseEngine {
+            conn,
+            blob_store: Some(blob_store.clone()),
+        };
+        engine.save_session_full(data).unwrap();
+        engine
+    }
+
+    #[test]
+    fn unknown_payloads_round_trip_verbatim() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, "known"),
+        ));
+        engine.save_session_full(&data).unwrap();
+
+        // Inject an entry a newer binary wrote, with a payload kind this
+        // binary cannot decode.
+        let future_payload = r#"{"type":"future_kind","x":1}"#;
+        engine
+            .conn
+            .execute(
+                "INSERT INTO entries (id, kind, role, content, origin, hidden, created_at_ms, payload) VALUES (?1, 'message', 'user', NULL, NULL, 0, 1, ?2)",
+                params!["future-entry", future_payload],
+            )
+            .unwrap();
+        engine
+            .conn
+            .execute(
+                "INSERT INTO entry_memberships (session_id, seq, entry_id) VALUES (?1, 1, 'future-entry')",
+                params![data.id],
+            )
+            .unwrap();
+
+        // Load: the unknown entry rides along, known entries still work.
+        let mut reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(reloaded.transcript.entries.len(), 1);
+        assert_eq!(reloaded.unknown_entries.len(), 1);
+        assert_eq!(reloaded.unknown_entries[0].payload_json, future_payload);
+        // The view excludes it and the seq floor prevents collisions.
+        assert_eq!(reloaded.transcript.next_seq(), 2);
+
+        // Save (delta): the unknown entry survives byte-identically.
+        reloaded.transcript.push(TranscriptEntry::from_message(
+            2,
+            &Message::new(Role::User, "after"),
+        ));
+        engine.save_session_inner(&reloaded, false, &[]).unwrap();
+        let again = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(again.unknown_entries.len(), 1);
+        assert_eq!(again.unknown_entries[0].payload_json, future_payload);
+        assert_eq!(again.transcript.entries.len(), 2);
+        assert_eq!(
+            again.transcript.entries[1].to_message().unwrap().content,
+            "after"
+        );
+    }
+
+    #[test]
+    fn blob_gc_reclaims_only_blobs_absent_from_the_reference_ledger() {
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let blob_store =
+            BlobStore::new(std::env::temp_dir().join(format!("muta-gc-{}", uuid::Uuid::new_v4())));
+        let referenced = blob_store.put(b"referenced body").unwrap();
+        let orphan = blob_store.put(b"orphan body").unwrap();
+        engine
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', NULL, 1, 1, '/tmp', 0, NULL, NULL)",
+                [],
+            )
+            .unwrap();
+        engine
+            .conn
+            .execute(
+                "INSERT INTO blob_refs (session_id, hash) VALUES ('s1', ?1)",
+                params![referenced],
+            )
+            .unwrap();
+
+        let (count, _) = engine.collect_blob_garbage(&blob_store).unwrap();
+        assert_eq!(count, 1);
+        assert!(
+            blob_store.get(&referenced).is_some(),
+            "referenced blob survives"
+        );
+        assert!(blob_store.get(&orphan).is_none(), "orphan is reclaimed");
+        let _ = std::fs::remove_dir_all(blob_store.root());
+    }
+
+    #[test]
+    fn entry_gc_reclaims_only_zero_reference_rows() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut session = crate::session::SessionData::default();
+        let shared = TranscriptEntry::from_message(0, &Message::new(Role::User, "shared"));
+        let mut fork = crate::session::SessionData {
+            id: "fork-1".into(),
+            parent_id: Some(session.id.clone()),
+            fork_kind: muta_contracts::SessionForkKind::Fork,
+            ..Default::default()
+        };
+        // Both sessions reference the same fact by identity.
+        session.transcript.push(shared.clone());
+        fork.transcript.push(shared);
+        fork.transcript.push(TranscriptEntry::from_message(
+            1,
+            &Message::new(Role::User, "fork only"),
+        ));
+        engine.save_session_full(&session).unwrap();
+        engine.save_session_full(&fork).unwrap();
+
+        // An orphan row with no membership at all.
+        engine
+            .conn
+            .execute(
+                "INSERT INTO entries (id, kind, role, content, origin, hidden, created_at_ms, payload) VALUES ('orphan', 'message', 'user', 'orphan', NULL, 0, 1, '{}')",
+                [],
+            )
+            .unwrap();
+
+        let reclaimed = engine.collect_entry_garbage().unwrap();
+        assert_eq!(reclaimed, 1);
+        // The shared fact survives because the fork still references it.
+        assert!(engine.load_session_full(&session.id).unwrap().is_some());
+        let fork = engine.load_session_full("fork-1").unwrap().unwrap();
+        assert_eq!(fork.transcript.entries.len(), 2);
+    }
+
+    #[test]
+    fn digest_anchor_tree_and_generation_round_trip() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData {
+            digest: Some(muta_contracts::SessionDigest::default()),
+            digest_anchor: Some(4_242),
+            ..Default::default()
+        };
+        data.tree.active_leaf_id = Some("leaf-1".to_string());
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, "hello"),
+        ));
+        engine.save_session_full(&data).unwrap();
+
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert!(reloaded.digest.is_some());
+        assert_eq!(reloaded.digest_anchor, Some(4_242));
+        assert_eq!(reloaded.tree.active_leaf_id.as_deref(), Some("leaf-1"));
+        assert_eq!(reloaded.generation, data.generation);
+    }
+
+    #[test]
+    fn newer_database_is_refused() {
+        let mut conn = initialize_in_memory_db().unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA user_version = {};",
+            CURRENT_DB_VERSION + 1
+        ))
+        .unwrap();
+        let err = migrate_schema(&mut conn).unwrap_err();
+        assert!(err.to_string().contains("newer than this binary"), "{err}");
+    }
+
+    #[test]
+    fn row_checksum_detects_working_state_corruption_on_load() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        data.transcript.push(TranscriptEntry::from_message(
+            0,
+            &Message::new(Role::User, "hello"),
+        ));
+        engine.save_session_full(&data).unwrap();
+
+        // Corrupt the working state out-of-band, then restamp a checksum that
+        // matches the corruption? No — the mismatch case: the on-row checksum
+        // no longer matches the corrupted columns. Load is non-fatal (the row
+        // data remains authoritative), but a fresh full save restamps a
+        // correct checksum over the corrected state.
+        engine
+            .conn
+            .execute(
+                "UPDATE sessions SET round_counter = 99 WHERE id = ?1",
+                params![data.id],
+            )
+            .unwrap();
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(reloaded.round_counter, 99);
+
+        // The recomputed checksum over the loaded (corrupted) row matches the
+        // stored one only if nothing changed — here it must differ, so a save
+        // restamps and the next load is consistent again.
+        engine.save_session_full(&reloaded).unwrap();
+        let again = engine.load_session_full(&data.id).unwrap().unwrap();
+        assert_eq!(again.checksum, reloaded.checksum);
     }
 
     #[test]
     fn working_state_round_trips_through_the_session_row() {
-        let engine = DatabaseEngine::open_in_memory(None).unwrap();
+        let engine = DatabaseEngine::open_in_memory().unwrap();
         engine
             .conn
             .execute(
-                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', 'T', 1, 1, '/tmp', 0, NULL, NULL)",
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', 'T', 1, 1, '/tmp', 0, NULL, NULL)",
                 [],
             )
             .unwrap();
         let sessions = engine.list_sessions(None).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].title.as_deref(), Some("T"));
-    }
-
-    #[test]
-    fn events_ledger_append_and_replay() {
-        let engine = DatabaseEngine::open_in_memory(None).unwrap();
-        engine
-            .conn
-            .execute(
-                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_ms, updated_at_ms, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', NULL, 1, 1, '/tmp', 0, NULL, NULL)",
-                [],
-            )
-            .unwrap();
-        engine
-            .append_event(&SessionEventRecord {
-                session_id: "s1".into(),
-                seq: 0,
-                event_type: "test".into(),
-                payload: "{}".into(),
-                created_at_ms: 1,
-            })
-            .unwrap();
-        let events = engine.get_session_events("s1").unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "test");
     }
 }

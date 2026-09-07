@@ -36,6 +36,8 @@ impl ModelRequestAssembler {
     }
 
     /// Project a conversation window without mutating historical nodes.
+    /// Test/secondary callers; the hot path uses [`Self::assemble_prepared`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn assemble(
         &self,
         window: &[Message],
@@ -45,6 +47,18 @@ impl ModelRequestAssembler {
         let mut messages = window.to_vec();
         crate::agent::remove_empty_assistant_messages(&mut messages);
         messages.retain(|message| message.role != Role::System && !message.is_command_echo());
+        self.assemble_prepared(messages, context, tools)
+    }
+
+    /// Assemble from an already-filtered, owned message list. The hot path
+    /// (`Agent::model_request`) builds that list with a single clone and
+    /// hands it over — no second copy of the window per turn (ADR-0187).
+    pub(crate) fn assemble_prepared(
+        &self,
+        messages: Vec<Message>,
+        context: &SystemPromptContext,
+        tools: &[Arc<dyn Tool>],
+    ) -> muta_contracts::ModelRequest {
         let instructions = self.system_prompt_registry.build_bundle(context);
         muta_contracts::ModelRequest::with_instructions_and_tools(instructions, messages, tools)
     }

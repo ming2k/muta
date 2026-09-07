@@ -784,12 +784,12 @@ impl App {
         self.phase = None;
         self.round_started_at = None;
         if self.in_side_view {
-            if let Some(side_id) = self.side_session_id.as_deref() {
-                if let Some(chrome) = self.session_chrome.get_mut(side_id) {
-                    chrome.responding = false;
-                    chrome.phase = None;
-                    chrome.round_started_at = None;
-                }
+            if let Some(side_id) = self.side_session_id.as_deref()
+                && let Some(chrome) = self.session_chrome.get_mut(side_id)
+            {
+                chrome.responding = false;
+                chrome.phase = None;
+                chrome.round_started_at = None;
             }
         } else if let Some(chrome) = self.session_chrome.get_mut(&self.current_session_id) {
             chrome.responding = false;

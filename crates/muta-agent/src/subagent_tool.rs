@@ -1973,7 +1973,10 @@ mod tests {
             .call(r#"{"description":"nested runner","prompt":"spawn more subagents","role":"explore"}"#)
             .await;
 
-        assert!(result.is_err(), "must be rejected when depth limit is reached");
+        assert!(
+            result.is_err(),
+            "must be rejected when depth limit is reached"
+        );
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("Sub-agent spawning is rejected by ExecutionPolicy"),

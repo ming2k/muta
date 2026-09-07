@@ -21,9 +21,7 @@ use mutx_engine::{
 
 use super::common::truncate_ellipsis;
 use crate::fuzzy::FuzzyMatch;
-use crate::primitives::{
-    ElevationContainer, SCROLL_EDGE_MARGIN, contrast_fg, render_body,
-};
+use crate::primitives::{ElevationContainer, SCROLL_EDGE_MARGIN, contrast_fg, render_body};
 use crate::render::Theme;
 
 /// Maximum number of rows the dropdown reserves vertically. Capped so a long

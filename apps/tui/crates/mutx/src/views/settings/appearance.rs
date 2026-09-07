@@ -5,8 +5,8 @@ use std::path::Path;
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
 use super::{SettingsProps, render_scrollable};
-use crate::theme::mix;
 use crate::render::Theme;
+use crate::theme::mix;
 
 pub(super) fn draw_appearance_detail(
     frame: &mut Frame,

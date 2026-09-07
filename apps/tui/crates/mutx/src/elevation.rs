@@ -264,7 +264,10 @@ pub(crate) fn modal_frame(
             })
         }
         mutx_engine::ElevationArchetype::Chromatic => {
-            frame.render_widget(RtBlock::default().style(Style::default().bg(theme.panel())), area);
+            frame.render_widget(
+                RtBlock::default().style(Style::default().bg(theme.panel())),
+                area,
+            );
             area.inner(Margin {
                 horizontal: MODAL_INNER_H_PADDING,
                 vertical: MODAL_INNER_V_PADDING,

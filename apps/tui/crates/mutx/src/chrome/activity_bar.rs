@@ -4,9 +4,7 @@ use mutx_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
-use super::common::{
-    classify_liveness, dot_color, format_elapsed, truncate_for_bar,
-};
+use super::common::{classify_liveness, dot_color, format_elapsed, truncate_for_bar};
 use crate::components::keycap::keycap_warn_span;
 use crate::keymap::Key;
 use crate::render::Theme;

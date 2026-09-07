@@ -16,7 +16,7 @@
 //!   ([`crate::fsutil::atomic_write_json`]); a crash mid-write never leaves
 //!   a partial file.
 //! - **Cross-process safe**: the read-modify-write window is serialised by a
-//!   [`FileLock`] on a companion `.lock` file (the daemon and any
+//!   `FileLock` on a companion `.lock` file (the daemon and any
 //!   `--no-daemon` standalone instance may write concurrently).
 //! - **Unreadable days are non-fatal**: a corrupt/undecodable day file is
 //!   skipped with a warning — usage telemetry must never take the app down.
@@ -97,13 +97,13 @@ impl UsageStatsStore {
     fn read_day(&self, day: &str) -> DayFile {
         let legacy = self.day_file(day);
         if legacy.exists() {
-            if let Ok(content) = std::fs::read_to_string(&legacy) {
-                if let Ok(parsed) = serde_json::from_str::<DayFile>(&content) {
-                    if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
-                        let _ = engine.set_json(&format!("usage:day:{day}"), &parsed);
-                    }
-                    return parsed;
+            if let Ok(content) = std::fs::read_to_string(&legacy)
+                && let Ok(parsed) = serde_json::from_str::<DayFile>(&content)
+            {
+                if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
+                    let _ = engine.set_json(&format!("usage:day:{day}"), &parsed);
                 }
+                return parsed;
             }
             return DayFile::default();
         }
@@ -225,38 +225,35 @@ impl UsageStatsStore {
     fn list_days(&self) -> Vec<String> {
         let db_path = self.db_path();
         let mut days = Vec::new();
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
-            if let Ok(keys) = engine.list_kv_keys_with_prefix("usage:day:") {
-                for key in keys {
-                    if let Some(day) = key.strip_prefix("usage:day:") {
-                        if day.len() == 10
-                            && day.as_bytes()[4] == b'-'
-                            && day.as_bytes()[7] == b'-'
-                            && day.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                        {
-                            days.push(day.to_string());
-                        }
-                    }
+        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None)
+            && let Ok(keys) = engine.list_kv_keys_with_prefix("usage:day:")
+        {
+            for key in keys {
+                if let Some(day) = key.strip_prefix("usage:day:")
+                    && day.len() == 10
+                    && day.as_bytes()[4] == b'-'
+                    && day.as_bytes()[7] == b'-'
+                    && day.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                {
+                    days.push(day.to_string());
                 }
             }
         }
         let daily = self.daily_dir();
-        if daily.exists() {
-            if let Ok(entries) = std::fs::read_dir(&daily) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "json") {
-                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            if stem.len() == 10
-                                && stem.as_bytes()[4] == b'-'
-                                && stem.as_bytes()[7] == b'-'
-                                && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                                && !days.contains(&stem.to_string())
-                            {
-                                days.push(stem.to_string());
-                            }
-                        }
-                    }
+        if daily.exists()
+            && let Ok(entries) = std::fs::read_dir(&daily)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "json")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && stem.len() == 10
+                    && stem.as_bytes()[4] == b'-'
+                    && stem.as_bytes()[7] == b'-'
+                    && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                    && !days.contains(&stem.to_string())
+                {
+                    days.push(stem.to_string());
                 }
             }
         }

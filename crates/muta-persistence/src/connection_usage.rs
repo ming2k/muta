@@ -67,9 +67,8 @@ impl ConnectionUsage {
                     return usage;
                 }
                 let _ = std::fs::remove_file(&legacy_path);
-                let _ = std::fs::remove_file(
-                    paths::get().state_dir.join("connection_usage.json.lock"),
-                );
+                let _ =
+                    std::fs::remove_file(paths::get().state_dir.join("connection_usage.json.lock"));
             }
         }
         Self::default()

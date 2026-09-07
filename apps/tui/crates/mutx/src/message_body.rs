@@ -1004,10 +1004,7 @@ pub fn draw_message_body(
                 // content-addressed cache (ADR-0184): a frozen code block is
                 // split and wrapped exactly once per width.
                 let line_count = content.bytes().filter(|&b| b == b'\n').count() + 1;
-                let gutter_width = line_count
-                    .to_string()
-                    .len()
-                    .max(CODE_BAND_GUTTER_MIN_WIDTH);
+                let gutter_width = line_count.to_string().len().max(CODE_BAND_GUTTER_MIN_WIDTH);
                 // The code band is a uniform background with a line-number
                 // gutter — no left accent bar. Geometry shares the block-level
                 // design contract with tool-step code bands so a code block
@@ -1043,9 +1040,7 @@ pub fn draw_message_body(
                     }
                 }
 
-                for (line_idx, (line_start_byte, wrapped)) in
-                    prepared.logical.iter().enumerate()
-                {
+                for (line_idx, (line_start_byte, wrapped)) in prepared.logical.iter().enumerate() {
                     *content_lines += wrapped.len();
                     for (wrap_idx, wl) in wrapped.iter().enumerate() {
                         if *skip_rows > 0 {
@@ -1130,7 +1125,8 @@ pub fn draw_message_body(
                     .fg(theme.heading())
                     .add_modifier(Modifier::BOLD);
                 let continuation = " ".repeat(prefix_cols as usize);
-                let lines = wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
+                let lines =
+                    wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
                 *content_lines += lines.len();
                 for (line_index, wl) in lines.iter().enumerate() {
                     if *skip_rows > 0 {

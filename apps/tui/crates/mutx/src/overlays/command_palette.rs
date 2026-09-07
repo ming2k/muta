@@ -10,9 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::fuzzy::fuzzy_match;
-use crate::keymap::{
-    AppContext, Availability, COMMAND_REGISTRY, CommandId, DangerLevel,
-};
+use crate::keymap::{AppContext, Availability, COMMAND_REGISTRY, CommandId, DangerLevel};
 use crate::modal::Modal;
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
@@ -25,10 +23,7 @@ use crate::render::Theme;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PaletteAction {
     Client(CommandId),
-    Harness {
-        slash: String,
-        requires_args: bool,
-    },
+    Harness { slash: String, requires_args: bool },
 }
 
 /// One selectable entry in the Command Palette list.
@@ -50,7 +45,11 @@ fn humanize_command_name(name: &str) -> String {
     match name.trim() {
         "/compact" => "Compact Conversation".to_string(),
         "/new" => "New Session".to_string(),
-        "/delegate" => "Delegate Mode".to_string(),
+        "/unattended" => "Unattended Mode".to_string(),
+        "/auto" => "Unattended Mode (alias)".to_string(),
+        "/autopilot" => "Unattended Mode (alias)".to_string(),
+        "/delegate" => "Unattended Mode (legacy alias)".to_string(),
+        "/yolo" => "Unattended Mode (legacy alias)".to_string(),
         "/unconfine" => "Workspace Confinement".to_string(),
         "/unconfined" => "Workspace Confinement".to_string(),
         "/jail" => "Workspace Confinement (legacy alias)".to_string(),
@@ -100,7 +99,9 @@ pub(crate) fn filter_palette_commands(
     // 1. Client-side navigation and app commands from COMMAND_REGISTRY
     for spec in COMMAND_REGISTRY {
         let avail = (spec.availability)(ctx);
-        let is_recent = recent.iter().any(|r| r == spec.label || spec.slash.is_some_and(|s| s == r));
+        let is_recent = recent
+            .iter()
+            .any(|r| r == spec.label || spec.slash.is_some_and(|s| s == r));
 
         let entry = PaletteEntry {
             label: spec.label.to_string(),
@@ -135,12 +136,18 @@ pub(crate) fn filter_palette_commands(
     // 2. Harness commands from catalog
     for cmd in &catalog.commands {
         // Skip commands that already have a dedicated client UI entry
-        if COMMAND_REGISTRY.iter().any(|s| s.slash == Some(cmd.name.as_str())) {
+        if COMMAND_REGISTRY
+            .iter()
+            .any(|s| s.slash == Some(cmd.name.as_str()))
+        {
             continue;
         }
 
-        let is_recent = recent.iter().any(|r| r == &cmd.name || r == cmd.name.trim_start_matches('/'));
-        let can_run_bare = cmd.usage.is_empty() || cmd.usage.iter().any(|u| u.trim() == cmd.name.trim());
+        let is_recent = recent
+            .iter()
+            .any(|r| r == &cmd.name || r == cmd.name.trim_start_matches('/'));
+        let can_run_bare =
+            cmd.usage.is_empty() || cmd.usage.iter().any(|u| u.trim() == cmd.name.trim());
         let requires_args = !can_run_bare;
 
         let avail = if ctx.active_modal != Modal::None {
@@ -197,10 +204,7 @@ pub(crate) fn filter_palette_commands(
         match (a_avail, b_avail) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            _ => b
-                .score
-                .cmp(&a.score)
-                .then_with(|| a.label.cmp(&b.label)),
+            _ => b.score.cmp(&a.score).then_with(|| a.label.cmp(&b.label)),
         }
     });
 
@@ -402,9 +406,10 @@ mod tests {
     use super::*;
 
     fn sample_catalog() -> muta_contracts::CommandCatalog {
-        muta_runtime::startup::command_catalog(&[
-            ("/custom-check".into(), "Custom health check".into()),
-        ])
+        muta_runtime::startup::command_catalog(&[(
+            "/custom-check".into(),
+            "Custom health check".into(),
+        )])
     }
 
     #[test]
@@ -414,13 +419,29 @@ mod tests {
         let entries = filter_palette_commands("", &catalog, &[], &ctx);
 
         // Client command present
-        assert!(entries.iter().any(|e| matches!(e.action, PaletteAction::Client(CommandId::OpenModels))));
-        assert!(entries.iter().any(|e| matches!(e.action, PaletteAction::Client(CommandId::NavigateSettings))));
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e.action, PaletteAction::Client(CommandId::OpenModels)))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e.action, PaletteAction::Client(CommandId::NavigateSettings)))
+        );
 
         // Harness commands present
-        assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/compact")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.slash.as_deref() == Some("/compact"))
+        );
         assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/undo")));
-        assert!(entries.iter().any(|e| e.slash.as_deref() == Some("/custom-check")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.slash.as_deref() == Some("/custom-check"))
+        );
     }
 
     #[test]
@@ -434,8 +455,15 @@ mod tests {
             .iter()
             .filter(|e| e.slash.as_deref() == Some("/models"))
             .collect();
-        assert_eq!(model_entries.len(), 1, "There must be exactly one /models entry in the palette");
-        assert!(matches!(model_entries[0].action, PaletteAction::Client(CommandId::OpenModels)));
+        assert_eq!(
+            model_entries.len(),
+            1,
+            "There must be exactly one /models entry in the palette"
+        );
+        assert!(matches!(
+            model_entries[0].action,
+            PaletteAction::Client(CommandId::OpenModels)
+        ));
     }
 
     #[test]
@@ -444,9 +472,17 @@ mod tests {
         let ctx = AppContext::default();
         let entries = filter_palette_commands("", &catalog, &[], &ctx);
 
-        let compact = entries.iter().find(|e| e.slash.as_deref() == Some("/compact")).unwrap();
-        assert!(matches!(compact.action, PaletteAction::Harness { requires_args: false, .. }));
-
+        let compact = entries
+            .iter()
+            .find(|e| e.slash.as_deref() == Some("/compact"))
+            .unwrap();
+        assert!(matches!(
+            compact.action,
+            PaletteAction::Harness {
+                requires_args: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -469,7 +505,11 @@ mod tests {
         let ctx = AppContext::default();
         let entries = filter_palette_commands("", &catalog, &[], &ctx);
 
-        assert!(!entries.iter().any(|e| e.label.contains("Scroll Transcript")));
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.label.contains("Scroll Transcript"))
+        );
         assert!(!entries.iter().any(|e| e.label.contains("Insert Newline")));
         assert!(!entries.iter().any(|e| e.label.contains("Reconnect MCP")));
         assert!(!entries.iter().any(|e| e.label.contains("Toggle Tool")));

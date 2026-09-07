@@ -24,16 +24,14 @@ pub(super) fn enter_terminal(profile: &mutx_engine::TerminalProfile) -> io::Resu
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
 
-    if profile.supports_mouse {
-        if execute!(stdout, EnableMouseCapture).is_ok() {
-            MOUSE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
-        }
+    if profile.supports_mouse && execute!(stdout, EnableMouseCapture).is_ok() {
+        MOUSE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
     }
 
-    if profile.color_standard != mutx_engine::ColorStandard::Monochrome {
-        if execute!(stdout, EnableBracketedPaste).is_ok() {
-            BRACKETED_PASTE_ENABLED.store(true, Ordering::Relaxed);
-        }
+    if profile.color_standard != mutx_engine::ColorStandard::Monochrome
+        && execute!(stdout, EnableBracketedPaste).is_ok()
+    {
+        BRACKETED_PASTE_ENABLED.store(true, Ordering::Relaxed);
     }
 
     // Progressive keyboard enhancement (Kitty keyboard protocol) allows modifier-bearing

@@ -7,7 +7,7 @@ use muta_contracts::Role;
 use crate::App;
 use crate::event_loop::runtime::{OauthAddSignal, OutboxSignal, UiRuntime, now_epoch_ms};
 use crate::event_loop::transcript::{
-    apply_height_invalidation, apply_transcript_patch, displayed_transcript_did_change,
+    apply_height_invalidation, apply_transcript_patch_with_cursor, displayed_transcript_did_change,
 };
 use crate::modal::Modal;
 use crate::model::document::{TranscriptMessage, UserMessageOrigin};
@@ -363,8 +363,9 @@ pub(crate) async fn sync_transcripts_and_session(
     let transcript_changed = messages_version != app.messages_version;
     if transcript_changed {
         let patch = runtime.messages.take_transcript_patch();
-        if !apply_transcript_patch(&mut app.messages, patch) {
+        if !apply_transcript_patch_with_cursor(&mut app.messages, patch, &mut app.stream_cursor) {
             app.messages = runtime.messages.read().await.clone();
+            app.stream_cursor = None;
         }
         app.messages_version = messages_version;
         apply_height_invalidation(
@@ -377,8 +378,13 @@ pub(crate) async fn sync_transcripts_and_session(
     let side_transcript_changed = side_messages_version != app.side_messages_version;
     if side_transcript_changed {
         let patch = runtime.side_messages.take_transcript_patch();
-        if !apply_transcript_patch(&mut app.side_messages, patch) {
+        if !apply_transcript_patch_with_cursor(
+            &mut app.side_messages,
+            patch,
+            &mut app.side_stream_cursor,
+        ) {
             app.side_messages = runtime.side_messages.read().await.clone();
+            app.side_stream_cursor = None;
         }
         app.side_messages_version = side_messages_version;
         apply_height_invalidation(

@@ -282,7 +282,9 @@ impl App {
             return false;
         }
         match &self.selection {
-            SelectionState::Block { message_idx, .. } => *message_idx == crate::render::INPUT_MSG_IDX,
+            SelectionState::Block { message_idx, .. } => {
+                *message_idx == crate::render::INPUT_MSG_IDX
+            }
             SelectionState::TableCell { message_idx, .. } => {
                 *message_idx == crate::render::INPUT_MSG_IDX
             }
@@ -549,12 +551,14 @@ impl App {
         self.completion_dismissed = true;
     }
 
-    /// The currently active [`ComposerExtensionKind`], if any.
+    /// The currently active `ComposerExtensionKind`, if any.
     ///
     /// Floating overlays that attach directly to the Composer (History Search,
     /// Slash Commands, Mention completions) are extensions of the composer surface,
     /// borrowing its text buffer and projecting their candidates without self-contained footers.
-    pub fn active_composer_extension(&self) -> Option<crate::composer_extension::ComposerExtensionKind> {
+    pub fn active_composer_extension(
+        &self,
+    ) -> Option<crate::composer_extension::ComposerExtensionKind> {
         if self.active_modal() == Modal::HistorySearch {
             return Some(crate::composer_extension::ComposerExtensionKind::HistorySearch);
         }
@@ -563,7 +567,9 @@ impl App {
                 crate::completion::CompletionKind::Slash => {
                     let completions = self.completions();
                     let exact_match = completions.iter().any(|c| {
-                        c.replace_start == 0 && c.replace_end == self.input.len() && c.label == self.input
+                        c.replace_start == 0
+                            && c.replace_end == self.input.len()
+                            && c.label == self.input
                     });
                     if !completions.is_empty() && !exact_match {
                         Some(crate::composer_extension::ComposerExtensionKind::SlashCompletion)
@@ -574,7 +580,9 @@ impl App {
                 crate::completion::CompletionKind::Path => {
                     let completions = self.completions();
                     let exact_match = completions.iter().any(|c| {
-                        c.replace_start == 0 && c.replace_end == self.input.len() && c.label == self.input
+                        c.replace_start == 0
+                            && c.replace_end == self.input.len()
+                            && c.label == self.input
                     });
                     if !completions.is_empty() && !exact_match {
                         Some(crate::composer_extension::ComposerExtensionKind::PathCompletion)

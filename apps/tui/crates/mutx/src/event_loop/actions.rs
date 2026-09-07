@@ -34,9 +34,9 @@ pub(crate) use modals::{
     question_effects,
 };
 
+pub(super) use commands::split_command_word;
 #[allow(unused_imports)]
 pub(crate) use commands::{handle_esc_interrupt, handle_esc_interrupt_with_runtime};
-pub(super) use commands::split_command_word;
 
 #[cfg(test)]
 pub(crate) use commands::handle_ctrl_c;
@@ -238,11 +238,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
     // While the Ctrl+C quit window is armed, any user action other than
     // Ctrl+C cancels the armed state so subsequent typing or interaction
     // does not inadvertently exit the program.
-    if app.ctrl_c_armed()
-        && !matches!(
-            action,
-            input::InputAction::CtrlC | input::InputAction::None
-        )
+    if app.ctrl_c_armed() && !matches!(action, input::InputAction::CtrlC | input::InputAction::None)
     {
         app.arm_ctrl_c(None);
     }
@@ -1355,7 +1351,11 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             .unwrap_or(0),
                     );
                     if let Some(key) = report.as_ref().and_then(|report| {
-                        render::telemetry_attempt_key(report, round_index, app.telemetry_turn_cursor)
+                        render::telemetry_attempt_key(
+                            report,
+                            round_index,
+                            app.telemetry_turn_cursor,
+                        )
                     }) {
                         app.telemetry_turn = Some(key);
                         app.telemetry_scroll = 0;
@@ -2983,7 +2983,10 @@ async fn apply_pre_attach_decision(
     };
     match decision {
         crate::PreAttachDecision::Trust { domains } => {
-            tracing::info!(?domains, "mutx: PreAttach decision — granting workspace trust directly");
+            tracing::info!(
+                ?domains,
+                "mutx: PreAttach decision — granting workspace trust directly"
+            );
             let _ = app.tx.send(AgentRequest::TrustWorkspace { domains });
             // The per-frame sync clears `pre_attach` once the
             // republished snapshot reports Trusted. The PreAttach surface

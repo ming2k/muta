@@ -26,7 +26,10 @@ pub struct FindFilesPresenter;
 
 impl ToolPresenter for FindFilesPresenter {
     fn summary(&self, view: &ToolView) -> String {
-        let val = view.args.get("patterns").or_else(|| view.args.get("include"));
+        let val = view
+            .args
+            .get("patterns")
+            .or_else(|| view.args.get("include"));
         let selection = match val {
             Some(serde_json::Value::String(s)) => truncate(s, 48),
             Some(serde_json::Value::Array(patterns)) => match patterns.as_slice() {

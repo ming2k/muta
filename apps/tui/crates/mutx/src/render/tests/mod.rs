@@ -2,7 +2,7 @@
 //! (full-view renderer, grid row reader) live here.
 
 use super::*;
-use crate::composer::{ComposerText, ComposerProps};
+use crate::composer::{ComposerProps, ComposerText};
 use crate::markdown_table::{build_table_render, shrink_column_widths};
 use crate::text_layout::wrap_text;
 use unicode_width::UnicodeWidthStr;

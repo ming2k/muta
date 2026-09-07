@@ -352,6 +352,9 @@ pub struct Agent {
     /// estimate tasks (spawn_blocking) and the context-projection gates can
     /// share the same cache without borrowing the agent.
     token_weights: std::sync::Arc<muta_contracts::MessageTokenWeights>,
+    /// Content-addressed per-tool-spec BPE weights: a toolset is stable across
+    /// turns, so its schema cost is tokenized once, not per estimate pass.
+    tool_schema_weights: std::sync::Arc<muta_contracts::ToolSchemaWeights>,
 }
 
 /// Capability handle for steering a running agent from the outside — the

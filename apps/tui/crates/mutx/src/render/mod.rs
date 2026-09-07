@@ -6,7 +6,8 @@
 
 pub use crate::chrome::{ActivityBarProps, draw_activity_bar};
 pub use crate::chrome::{
-    ModelBarProps, QueueBarProps, QueueItemProps, draw_completion_menu, draw_model_bar, draw_queue_bar,
+    ModelBarProps, QueueBarProps, QueueItemProps, draw_completion_menu, draw_model_bar,
+    draw_queue_bar,
 };
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
@@ -441,7 +442,11 @@ impl BlockWrapCache {
     /// Cached code-band preparation: logical-line split, gutter width, and
     /// per-logical-line wrapping. Byte offsets are local to each logical
     /// line, exactly as a fresh wrap would produce.
-    pub(crate) fn prepare_code(&mut self, content: &str, width: usize) -> std::sync::Arc<PreparedCode> {
+    pub(crate) fn prepare_code(
+        &mut self,
+        content: &str,
+        width: usize,
+    ) -> std::sync::Arc<PreparedCode> {
         let key = wrap_key(content, width);
         if let Some(entry) = self.code.get(&key)
             && entry.content == content

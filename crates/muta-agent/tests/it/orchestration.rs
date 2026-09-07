@@ -1363,7 +1363,9 @@ async fn real_interrupt_of_a_live_round_still_records() {
     assert_eq!(records[0].round, Some(1));
     let messages = session.model_window().await;
     assert!(
-        messages.iter().any(|m| m.role == muta_contracts::Role::User),
+        messages
+            .iter()
+            .any(|m| m.role == muta_contracts::Role::User),
         "sent prompt is preserved in transcript"
     );
     let _ = std::fs::remove_dir_all(directory);

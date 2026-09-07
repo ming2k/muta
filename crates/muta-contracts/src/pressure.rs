@@ -796,6 +796,55 @@ impl MessageTokenWeights {
     }
 }
 
+/// Thread-safe, content-addressed cache of per-tool-spec token weights
+/// (ADR-0187 companion to [`MessageTokenWeights`]). A toolset is stable across
+/// turns; without the cache every estimate pass re-serialized every visible
+/// spec to JSON and re-tokenized it. The fingerprint is over the spec's
+/// semantic content, so a changed description or schema re-weights exactly
+/// once.
+#[derive(Debug, Default)]
+pub struct ToolSchemaWeights {
+    entries: std::sync::Mutex<std::collections::HashMap<u64, std::sync::Arc<usize>>>,
+}
+
+impl ToolSchemaWeights {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// BPE weight of one tool spec's serialized shape, cached by content.
+    pub fn weight(&self, spec: &crate::ToolSpec) -> usize {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        // Hash the semantic fields without a full JSON round trip: name and
+        // description are strings; the schema is a `Value` (which hashes
+        // structurally).
+        spec.name.hash(&mut hasher);
+        spec.description.hash(&mut hasher);
+        spec.parameters.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        if let Ok(entries) = self.entries.lock()
+            && let Some(hit) = entries.get(&fingerprint)
+        {
+            return **hit;
+        }
+        let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
+        let fresh = std::sync::Arc::new(estimate_semantic_json_tokens(&val).max(0) as usize);
+        if let Ok(mut entries) = self.entries.lock() {
+            match entries.get(&fingerprint) {
+                Some(existing) => return **existing,
+                None => {
+                    entries.insert(fingerprint, std::sync::Arc::clone(&fresh));
+                }
+            }
+            if entries.len() > 65_536 {
+                entries.clear();
+            }
+        }
+        *fresh
+    }
+}
+
 /// Layered weights for one assembled request: per-message token counts in
 /// input order, plus the schema cost of every visible tool spec. Both are
 /// cheap to recombine into a [`RequestTokenEstimate`] without re-tokenizing
@@ -836,6 +885,7 @@ impl LayeredRequestWeights {
 pub fn layered_request_weights(
     request: &crate::ModelRequest,
     weights: &MessageTokenWeights,
+    tool_schema_weights: &ToolSchemaWeights,
 ) -> LayeredRequestWeights {
     let instructions_tokens = if request.instructions.is_empty() {
         0
@@ -850,10 +900,7 @@ pub fn layered_request_weights(
     let tool_schema_tokens = request
         .tool_specs
         .iter()
-        .map(|spec| {
-            let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
-            estimate_semantic_json_tokens(&val).max(0) as usize
-        })
+        .map(|spec| tool_schema_weights.weight(spec))
         .sum::<usize>();
     LayeredRequestWeights {
         instructions_tokens,

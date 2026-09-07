@@ -6,13 +6,13 @@ use super::SlashEnv;
 use super::record::{
     record_ack, record_command, record_command_with_duration, record_error, record_invocation,
 };
-use super::session_route::{
-    SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
-};
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
     fork_current_session, restore_session_runtime, start_fresh_session,
     supersede_for_session_switch, teardown_sides_for_session_switch,
+};
+use super::session_route::{
+    SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
 };
 use crate::agent_setup::active_context_window;
 use crate::project::init_muta_config;
@@ -29,8 +29,8 @@ use muta_agent::orchestration::{
     send_harness_state_for_session,
 };
 use muta_contracts::{
-    AgentRequest, AgentResponse, CommandResult, LoopStatus, Message, RoundEvent, Tool,
-    TrustDomain, estimate_tokens,
+    AgentResponse, CommandResult, LoopStatus, Message, RoundEvent, Tool, TrustDomain,
+    estimate_tokens,
 };
 use muta_skills::ListSkillsTool;
 

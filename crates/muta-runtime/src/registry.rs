@@ -773,19 +773,40 @@ impl SessionRegistry {
     /// One storage-maintenance pass: sweep unreferenced blobs and prune
     /// over-age usage day files. Both phases are synchronous directory scans
     /// proportional to the data dir's size, so the work runs on the blocking
-    /// pool.
+    /// pool. Blob liveness is decided by the durable `blob_refs` ledger
+    /// (ADR-0187), not by a filesystem scan.
     pub fn spawn_storage_maintenance(self: &Arc<Self>) {
         let dirs = muta_persistence::paths::get();
+        let db_path = dirs.db_file();
         let blobs = muta_persistence::blobs::BlobStore::new(dirs.blobs_dir());
-        let projects = dirs.projects_dir();
         let usage = muta_persistence::usage_stats::UsageStatsStore::new();
         tokio::task::spawn_blocking(move || {
-            let (count, bytes) = blobs.collect_garbage(&projects);
+            let (count, bytes, entries) =
+                match muta_persistence::db::DatabaseEngine::open(&db_path, None) {
+                    Ok(engine) => {
+                        let (count, bytes) = engine
+                        .collect_blob_garbage(&blobs)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(%error, "blob garbage collection failed; skipping pass");
+                            (0, 0)
+                        });
+                        let entries = engine.collect_entry_garbage().unwrap_or_else(|error| {
+                        tracing::warn!(%error, "entry garbage collection failed; skipping pass");
+                        0
+                    });
+                        (count, bytes, entries)
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "could not open database for storage maintenance");
+                        (0, 0, 0)
+                    }
+                };
             let days = usage.prune_old_days();
-            if count > 0 || days > 0 {
+            if count > 0 || entries > 0 || days > 0 {
                 tracing::info!(
                     blobs = count,
                     bytes,
+                    entries,
                     pruned_days = days,
                     "storage maintenance: reclaimed unreferenced data"
                 );

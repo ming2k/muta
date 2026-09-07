@@ -59,7 +59,8 @@ impl App {
             // Already present → remove it (toggle off).
             self.queue_blocked_sessions.remove(session_id);
             if self.idle_sessions.contains(session_id) {
-                self.naturally_completed_sessions.insert(session_id.to_string());
+                self.naturally_completed_sessions
+                    .insert(session_id.to_string());
             }
             false
         } else {

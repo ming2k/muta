@@ -67,21 +67,12 @@ fn project_frags_to_wrapped_preserves_highlights_across_soft_wraps() {
     // Row 1: "let x = very_long_" (bytes 0..18)
     // Row 2: "changed_identifier_value;\n" (bytes 18..44)
     let row1 = project_frags_to_wrapped(full, &frags, 0, 18);
-    assert_eq!(
-        row1,
-        vec![
-            ("let x = ", false),
-            ("very_long_", true),
-        ]
-    );
+    assert_eq!(row1, vec![("let x = ", false), ("very_long_", true),]);
 
     let row2 = project_frags_to_wrapped(full, &frags, 18, 44);
     assert_eq!(
         row2,
-        vec![
-            ("changed_identifier_value", true),
-            (";", false),
-        ]
+        vec![("changed_identifier_value", true), (";", false),]
     );
 }
 
@@ -110,7 +101,7 @@ fn project_syntax_diff_frags_merges_syntax_and_diff_layers() {
     ];
 
     let slices = project_syntax_diff_frags(full, &frags, &syntax, 0, full.len());
-    
+
     // "let" should be Keyword, not changed
     let let_slice = slices.iter().find(|s| s.text == "let").unwrap();
     assert_eq!(let_slice.kind, SyntaxKind::Keyword);

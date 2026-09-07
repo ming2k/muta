@@ -702,14 +702,20 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     // First press: clears staged text, does NOT arm quit
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.input.is_empty(), "the staged task text is cleared");
-    assert!(!app.ctrl_c_armed(), "clearing text does not arm the quit window");
+    assert!(
+        !app.ctrl_c_armed(),
+        "clearing text does not arm the quit window"
+    );
     assert_eq!(app.copy_toast_message, "input cleared");
     assert_eq!(app.active_modal(), Modal::Host, "the dashboard stays open");
     assert!(app.host_prompting, "the prompt itself stays mounted");
 
     // Second press (input now empty): arms quit window
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
-    assert!(app.ctrl_c_armed(), "first press with empty input arms the quit window");
+    assert!(
+        app.ctrl_c_armed(),
+        "first press with empty input arms the quit window"
+    );
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Third press: inside armed window quits
@@ -741,7 +747,10 @@ fn ctrl_c_at_composer_clears_text_without_arming_then_double_press_quits() {
     let flow = super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert_eq!(flow, ActionFlow::Handled);
     assert!(app.ctrl_c_armed(), "press on empty input arms quit window");
-    assert!(app.copy_toast_until.is_none(), "copy toast cleared when armed");
+    assert!(
+        app.copy_toast_until.is_none(),
+        "copy toast cleared when armed"
+    );
 
     // Third Ctrl+C: inside armed window -> ends session / exits.
     let flow = super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
@@ -771,10 +780,14 @@ async fn ctrl_c_armed_cancelled_by_other_action() {
         &runtime,
         crate::input::InputAction::ScrollUp,
         "test-session",
-    ).await;
+    )
+    .await;
 
     // Must be disarmed
-    assert!(!app.ctrl_c_armed(), "typing or moving cursor must disarm quit");
+    assert!(
+        !app.ctrl_c_armed(),
+        "typing or moving cursor must disarm quit"
+    );
 }
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a

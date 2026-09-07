@@ -345,9 +345,8 @@ fn nearest_ansi16(r: u8, g: u8, b: u8) -> Color {
         let dr = r as i32 - pr as i32;
         let dg = g as i32 - pg as i32;
         let db = b as i32 - pb as i32;
-        let dist = (((512 + r_mean) * dr * dr) >> 8)
-            + 4 * dg * dg
-            + (((767 - r_mean) * db * db) >> 8);
+        let dist =
+            (((512 + r_mean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - r_mean) * db * db) >> 8);
 
         let dist_u32 = dist as u32;
         if dist_u32 < best_dist {

@@ -106,7 +106,7 @@ pub enum Modal {
     /// Permissions manager modal: a centered, dismissable overlay listing the
     /// session's cached "always allow" rules with per-row revoke and a
     /// clear-all action. Opened with the `/permissions` slash command. This
-    /// is the management surface — distinct from [`Modal::Permission`] (the
+    /// is the management surface — distinct from `Modal::Permission` (the
     /// inline real-time approval sheet).
     Permissions,
     /// Config manager modal: a centered, dismissable overlay listing the

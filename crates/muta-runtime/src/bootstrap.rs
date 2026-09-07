@@ -156,7 +156,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         unattended: unattended_at_start,
         confined: confined_at_start,
         human_channel,
-        teardown_token,
+        teardown_token: _,
     } = params;
     debug_assert!(
         matches!(

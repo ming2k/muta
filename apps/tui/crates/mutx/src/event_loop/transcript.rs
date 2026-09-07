@@ -2,8 +2,8 @@
 
 use crate::model::document::{MessageKind, TranscriptMessage};
 use crate::model::selection::{CellDragInfo, SelectionState, get_selected_text};
-use crate::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate};
 use crate::render;
+use crate::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate};
 
 /// Apply only the cache invalidation actually caused by the most recent transcript mutation.
 pub(crate) fn apply_height_invalidation(
@@ -33,22 +33,64 @@ pub(crate) fn displayed_transcript_did_change(
 }
 
 /// Replay high-frequency stream changes into the app-owned transcript.
+/// Convenience wrapper without a cursor (tests); production callers use
+/// [`apply_transcript_patch_with_cursor`].
+#[cfg(test)]
 pub(crate) fn apply_transcript_patch(
     messages: &mut Vec<TranscriptMessage>,
     patch: TranscriptPatch,
 ) -> bool {
+    apply_transcript_patch_with_cursor(messages, patch, &mut None)
+}
+
+/// As the cursor-less convenience wrapper, carrying a cross-call streaming cursor
+/// `(&mut Some((message_id, index)))`. Streaming deltas target one message
+/// many times per second; with the cursor the target lookup is O(1) instead
+/// of a reverse scan over the whole transcript per delta (ADR-0187). The
+/// cursor is validated by id on every use, so a stale entry degrades to the
+/// scan, never to a wrong message. Callers must reset it to `None` when they
+/// replace the message vector wholesale.
+pub(crate) fn apply_transcript_patch_with_cursor(
+    messages: &mut Vec<TranscriptMessage>,
+    patch: TranscriptPatch,
+    cursor: &mut Option<(u64, usize)>,
+) -> bool {
     let updates = match patch {
         TranscriptPatch::None => return true,
-        TranscriptPatch::Replace => return false,
+        TranscriptPatch::Replace => {
+            *cursor = None;
+            return false;
+        }
         TranscriptPatch::Updates(updates) => updates,
     };
+
+    // Resolve the streaming target by id: cursor hit first (validated), scan
+    // from the end as fallback (streaming targets are the live tail).
+    fn target_mut<'a>(
+        messages: &'a mut [TranscriptMessage],
+        message_id: u64,
+        cursor: &mut Option<(u64, usize)>,
+    ) -> Option<&'a mut TranscriptMessage> {
+        if let Some((id, index)) = *cursor
+            && id == message_id
+            && messages
+                .get(index)
+                .is_some_and(|message| message.id == message_id)
+        {
+            return messages.get_mut(index);
+        }
+        *cursor = None;
+        let index = messages
+            .iter()
+            .rposition(|message| message.id == message_id)?;
+        *cursor = Some((message_id, index));
+        Some(&mut messages[index])
+    }
 
     for update in updates {
         let applied = match update {
             TranscriptUpdate::TextDelta { message_id, delta } => {
-                let Some(message) = messages
-                    .iter_mut()
-                    .rfind(|message| message.id == message_id)
+                let Some(message) = target_mut(messages, message_id, cursor)
                     .filter(|message| matches!(message.kind, MessageKind::Text))
                 else {
                     return false;
@@ -57,9 +99,7 @@ pub(crate) fn apply_transcript_patch(
                 true
             }
             TranscriptUpdate::ReasoningDelta { message_id, delta } => {
-                let Some(message) = messages
-                    .iter_mut()
-                    .rfind(|message| message.id == message_id)
+                let Some(message) = target_mut(messages, message_id, cursor)
                     .filter(|message| message.is_thinking())
                 else {
                     return false;
@@ -86,10 +126,7 @@ pub(crate) fn apply_transcript_patch(
                 message_id,
                 message,
             } => {
-                let Some(existing) = messages
-                    .iter_mut()
-                    .rfind(|message| message.id == message_id)
-                else {
+                let Some(existing) = target_mut(messages, message_id, cursor) else {
                     return false;
                 };
                 *existing = message;
@@ -103,7 +140,10 @@ pub(crate) fn apply_transcript_patch(
                 if local_tail != pre_append_tail {
                     return false;
                 }
+                let index = messages.len();
+                let id = message.id;
                 messages.push(message);
+                *cursor = Some((id, index));
                 true
             }
         };

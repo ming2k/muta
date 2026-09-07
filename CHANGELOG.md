@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-09-07
+
+### Fixed
+
+- **Blob garbage collection no longer scans a retired file layout.** The daily
+  maintenance pass marked liveness by scanning `projects/*/sessions/*.json`
+  snapshot files that are no longer written, which would have reclaimed the
+  body of every offloaded entry. Blob liveness is now decided by a durable
+  `blob_refs` ledger maintained in the same transaction as the saves that
+  introduce references; orphaned transcript entries (no membership) are
+  reclaimed in the same pass.
+- **Session resume fidelity regressions.** The fork DAG (`SessionTree`) and the
+  digest anchor are persisted again — resume restores the fork tree, and
+  digest auto-refresh works across restarts instead of silently disabling
+  itself.
+- **Full-text search was silently empty.** The entry-insert FTS trigger fired
+  before the membership row existed; triggers are re-anchored on memberships
+  and the index is backfilled on migration.
+- **Session listing indexes restored** (lost in the 0.39.3 table rebuild), and
+  a fail-fast startup guard now rejects databases missing runtime columns.
+- **Rename no longer round-trips a full session load/save** (single-row
+  UPDATE), and the rename path no longer writes milliseconds into a
+  seconds-valued column.
+
+### Changed
+
+- **Persistence v2 (ADR-0187).** Turn commits append only the transcript delta
+  above a durable watermark; a per-session transcript generation id escalates
+  any divergence to a full rewrite inside the same transaction. Entry and
+  directive payloads a binary cannot decode are preserved verbatim and
+  round-trip through every save, so a database written by a newer muta
+  survives an older one without loss. The session row carries a verified
+  working-state checksum (legacy rows exempt via schema version). The schema
+  stops promising what the runtime never did: the write-dead event ledger,
+  `session_blobs`, and `applied_seq` are removed. Timestamp columns are
+  renamed to their true unit (`created_at_s` / `updated_at_s`).
+- **Usage ledger (ADR-0187).** Per-attempt usage records moved out of the
+  session row into a key-addressed `usage_records` table; commits upsert only
+  the attempts that actually changed (O(records) instead of O(records²)), and
+  the session row no longer serializes the whole list on every save.
+- **Runtime hot path (ADR-0188).** One request assembly per turn (the context
+  gate consumes the assembled request), one window clone instead of three,
+  content-addressed tool-schema BPE weights, and blob offload applied inside
+  the save transaction to exactly the rows being written.
+- **TUI streaming cursor.** Streaming deltas resolve their target message in
+  O(1) via an id-validated cursor instead of a reverse scan over the whole
+  rendered transcript per delta.
+- **Databases written by a newer muta are refused loudly** instead of being
+  opened with silently degraded behavior; upgrade muta to work with newer
+  state.
+
+### Added
+
+- New ADRs: persistence v2 — incremental append and blob reference ledger
+  (0187), runtime hot-path degradation elimination (0188).
+
 ## [0.39.3] - 2026-09-07
 
 ### Changed

@@ -10,9 +10,8 @@
 use std::path::Path;
 
 use muta_contracts::{
-    AspectVerdict, EnvironmentReminderOutput, EnvironmentSensorInput,
-    ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput, StreamLoopReviewInput,
-    StreamLoopVerdict,
+    AspectVerdict, EnvironmentReminderOutput, EnvironmentSensorInput, ExecutionTier,
+    PreFlightRouteInput, PreFlightRouteOutput, StreamLoopReviewInput, StreamLoopVerdict,
 };
 
 use crate::cognitive::CognitivePipeline;
@@ -62,10 +61,7 @@ impl AspectEngine {
     // Phase 2: Turn Intake
 
     /// Sense workspace environment facts (e.g. git status) and synthesize a dynamic reminder.
-    pub async fn evaluate_turn_intake(
-        &self,
-        workspace_cwd: Option<&Path>,
-    ) -> Option<String> {
+    pub async fn evaluate_turn_intake(&self, workspace_cwd: Option<&Path>) -> Option<String> {
         let cwd = workspace_cwd?;
         let (branch, dirty_count, dirty_sample) = detect_workspace_git_summary(cwd).await;
         if dirty_count == 0 {
@@ -183,9 +179,9 @@ async fn detect_workspace_git_summary(cwd: &Path) -> (String, usize, Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use muta_contracts::{Message, ModelRequest, Provider, Role};
     use async_trait::async_trait;
+    use muta_contracts::{Message, ModelRequest, Provider, Role};
+    use std::sync::Arc;
 
     struct MockProvider;
 

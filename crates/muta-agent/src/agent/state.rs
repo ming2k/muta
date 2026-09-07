@@ -118,7 +118,9 @@ impl Agent {
 
         Self {
             provider,
-            execution_policy: std::sync::RwLock::new(muta_contracts::ExecutionPolicy::root_default()),
+            execution_policy: std::sync::RwLock::new(
+                muta_contracts::ExecutionPolicy::root_default(),
+            ),
             pool,
             toolset,
             resolved_tools,
@@ -166,6 +168,7 @@ impl Agent {
             agent_selection: std::sync::Mutex::new(agent_selection),
             token_ledger: std::sync::Mutex::new(None),
             token_weights: std::sync::Arc::new(muta_contracts::MessageTokenWeights::new()),
+            tool_schema_weights: std::sync::Arc::new(muta_contracts::ToolSchemaWeights::new()),
         }
     }
 
@@ -309,15 +312,26 @@ impl Agent {
     /// cache makes the resulting request cheap to re-estimate; nothing in
     /// this path can stall the executor behind filesystem reads.
     pub(super) fn model_request(&self, messages: &[Message]) -> muta_contracts::ModelRequest {
-        let mut enriched = messages.to_vec();
+        // One clone of the provider-relevant window: system rows are rare, so
+        // filtering first halves the per-turn memcpy of the old
+        // clone-then-clone pipeline. Skill injection still sees the
+        // pre-echo-filter copy (same scan semantics as before); the echo and
+        // empty-assistant filters then run in place — no second clone.
+        let mut enriched: Vec<Message> = messages
+            .iter()
+            .filter(|message| message.role != Role::System)
+            .cloned()
+            .collect();
         // Skill injection is memory-only (bodies are cached in the registry),
         // so keeping it here costs no I/O and keeps the debug preview honest
         // about implicit loads.
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
+        crate::agent::remove_empty_assistant_messages(&mut enriched);
+        enriched.retain(|message| !message.is_command_echo());
         let tools = self.visible_tools();
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
-            .assemble(&enriched, &context, &tools)
+            .assemble_prepared(enriched, &context, &tools)
             .with_route_state(
                 &self.provider.route_fingerprint(),
                 self.provider.continuation_mode(),
@@ -335,7 +349,11 @@ impl Agent {
         &self,
         request: &muta_contracts::ModelRequest,
     ) -> muta_contracts::LayeredRequestWeights {
-        muta_contracts::layered_request_weights(request, &self.token_weights)
+        muta_contracts::layered_request_weights(
+            request,
+            &self.token_weights,
+            &self.tool_schema_weights,
+        )
     }
 
     pub(super) fn estimate_model_request(
@@ -716,21 +734,27 @@ impl Agent {
     /// Between ReAct turns, if context pressure exceeds the configured budget,
     /// hand the live message list to the [`ContextProjectionGate`] so it can
     /// produce and persist the next model-visible window.
+    /// Gate the assembled request on context pressure. Takes the
+    /// already-assembled request so the turn's estimate reuses it instead of
+    /// rebuilding the full request a second time (ADR-0187 hot path).
+    /// Returns `true` when the projection replaced `messages` (the caller
+    /// must re-assemble before calling the provider).
     pub(super) async fn project_context_if_needed(
         &self,
         messages: &mut Vec<Message>,
+        request: &muta_contracts::ModelRequest,
         cancel: &CancellationToken,
-    ) -> Result<(), HarnessError> {
+    ) -> Result<bool, HarnessError> {
         let budget = *self
             .context_prune_threshold_tokens
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // With the content-addressed weights cache warm, the estimate here
+        // With the content-addressed weights caches warm, the estimate here
         // is a fingerprint walk over unchanged bytes plus O(new bytes) of
         // fresh BPE — cheap enough to stay inline; the gate runs before the
         // provider call, never concurrently with stream forwarding.
-        if budget == 0 || self.estimate_next_request_tokens(messages).total_tokens <= budget {
-            return Ok(());
+        if budget == 0 || self.estimate_model_request(request).total_tokens <= budget {
+            return Ok(false);
         }
         let gate = self
             .context_projection_gate
@@ -738,7 +762,7 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(gate) = gate else {
-            return Ok(());
+            return Ok(false);
         };
         let replacement = tokio::select! {
             biased;
@@ -749,8 +773,9 @@ impl Agent {
             && !replacement.is_empty()
         {
             *messages = replacement;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn set_thread_id(&self, thread_id: impl Into<String>) {

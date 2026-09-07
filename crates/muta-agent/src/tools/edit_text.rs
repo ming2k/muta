@@ -11,9 +11,7 @@ use crate::tools::helpers::{
 #[derive(ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditTextArgs {
-    #[tool(
-        desc = "Path to the text file to modify; relative paths use the primary workspace"
-    )]
+    #[tool(desc = "Path to the text file to modify; relative paths use the primary workspace")]
     path: String,
     #[tool(
         desc = "The exact verbatim text to replace; must match uniquely in the file. Globs and regexes are NOT supported."
@@ -165,9 +163,10 @@ fn apply_unique_edit(
         ));
     }
 
-    let match_offset = content
-        .find(old_str)
-        .expect("count_occurrences > 0 guarantees find succeeds");
+    // match_count >= 1 is guaranteed above; the else arm is fail-safe.
+    let Some(match_offset) = content.find(old_str) else {
+        return Ok(None);
+    };
     let match_end = match_offset + old_str.len();
 
     let mut new_content = String::with_capacity(content.len() + new_str.len() - old_str.len());

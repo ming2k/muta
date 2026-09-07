@@ -101,10 +101,9 @@ pub(crate) fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, Stri
         Some("instructions") | Some("agents") | Some("rules") => {
             Ok(TrustRoute::Grant(TrustDomain::Instructions))
         }
-        Some("ex-workspace")
-        | Some("ex-workspaces")
-        | Some("externals")
-        | Some("workspace") => Ok(TrustRoute::Grant(TrustDomain::ExWorkspace)),
+        Some("ex-workspace") | Some("ex-workspaces") | Some("externals") | Some("workspace") => {
+            Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
+        }
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(

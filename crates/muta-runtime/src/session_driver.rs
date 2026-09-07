@@ -853,8 +853,8 @@ impl SessionDriver {
                     } else {
                         domains
                     };
-                    if let Err(error) = workspace_security
-                        .trust_domains(&project_root_for_side, &domains_to_trust)
+                    if let Err(error) =
+                        workspace_security.trust_domains(&project_root_for_side, &domains_to_trust)
                     {
                         tracing::error!(?error, "failed to persist workspace trust");
                     }
@@ -890,7 +890,8 @@ impl SessionDriver {
                         &project_root_for_side,
                     );
                     let rules = if snapshot.instructions.is_trusted() {
-                        crate::project::load_project_rules(&project_root_for_side).unwrap_or_default()
+                        crate::project::load_project_rules(&project_root_for_side)
+                            .unwrap_or_default()
                     } else {
                         String::new()
                     };
@@ -1096,7 +1097,7 @@ impl SessionDriver {
 fn request_may_mutate_context(req: &AgentRequest) -> bool {
     match req {
         AgentRequest::SlashCommand(cmd) => {
-            let name = cmd.trim().split_whitespace().next().unwrap_or("");
+            let name = cmd.split_whitespace().next().unwrap_or("");
             matches!(
                 name,
                 "/compact"

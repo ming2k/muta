@@ -394,7 +394,9 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -p, --prompt <prompt>  run the prompt non-interactively (headless)\n");
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
-            out.push_str("  --unattended           run unattended without interactive human confirmations\n");
+            out.push_str(
+                "  --unattended           run unattended without interactive human confirmations\n",
+            );
             out.push_str("  --no-confinement       disable workspace filesystem confinement (unconfined file access)\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
             out.push_str("      --remote <addr>    connect to a remote Muta daemon\n");

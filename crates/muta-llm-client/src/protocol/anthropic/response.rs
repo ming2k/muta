@@ -399,7 +399,9 @@ mod tests {
     #[test]
     fn stream_parser_surfaces_error_events_as_err() {
         let result = stream_events(
-            &parse(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            &parse(
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+            ),
             &mut StreamUsage::default(),
         );
         assert!(result.is_err());
@@ -421,7 +423,8 @@ mod tests {
             r#"{"type":"message_stop"}"#,
             r#"{"type":"content_block_stop","index":0}"#,
         ] {
-            let events = stream_events(&parse(payload), &mut state).expect("non-content event is ok");
+            let events =
+                stream_events(&parse(payload), &mut state).expect("non-content event is ok");
             assert!(
                 events.is_empty(),
                 "non-content event must yield nothing: {payload}"

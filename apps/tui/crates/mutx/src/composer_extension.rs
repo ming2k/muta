@@ -91,7 +91,9 @@ impl ComposerExtension for SlashCompletionExtension {
             crossterm::event::KeyCode::Esc if !ctx.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
             }
-            crossterm::event::KeyCode::Tab if ctx.suggestion_count > 0 && !ctx.completion_dismissed => {
+            crossterm::event::KeyCode::Tab
+                if ctx.suggestion_count > 0 && !ctx.completion_dismissed =>
+            {
                 let idx = ctx.suggestion_index.unwrap_or(0);
                 Some(InputAction::CommitSuggestion(idx.to_string()))
             }
@@ -122,7 +124,9 @@ impl ComposerExtension for PathCompletionExtension {
             crossterm::event::KeyCode::Esc if !ctx.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
             }
-            crossterm::event::KeyCode::Tab if ctx.suggestion_count > 0 && !ctx.completion_dismissed => {
+            crossterm::event::KeyCode::Tab
+                if ctx.suggestion_count > 0 && !ctx.completion_dismissed =>
+            {
                 let idx = ctx.suggestion_index.unwrap_or(0);
                 Some(InputAction::CommitSuggestion(idx.to_string()))
             }
@@ -174,30 +178,69 @@ mod tests {
         let slash_ext = SlashCompletionExtension;
         let path_ext = PathCompletionExtension;
 
-        let mut ctx = InputContext::default();
-        ctx.completion_dismissed = false;
-        ctx.suggestion_count = 2;
-        ctx.suggestion_index = Some(1);
+        let ctx = InputContext {
+            completion_dismissed: false,
+            suggestion_count: 2,
+            suggestion_index: Some(1),
+            ..InputContext::default()
+        };
 
-        assert_eq!(slash_ext.intercept_key(Key::ESC, &ctx), Some(InputAction::CloseCompletion));
-        assert_eq!(path_ext.intercept_key(Key::ESC, &ctx), Some(InputAction::CloseCompletion));
+        assert_eq!(
+            slash_ext.intercept_key(Key::ESC, &ctx),
+            Some(InputAction::CloseCompletion)
+        );
+        assert_eq!(
+            path_ext.intercept_key(Key::ESC, &ctx),
+            Some(InputAction::CloseCompletion)
+        );
 
-        assert_eq!(slash_ext.intercept_key(Key::TAB, &ctx), Some(InputAction::CommitSuggestion("1".into())));
-        assert_eq!(path_ext.intercept_key(Key::TAB, &ctx), Some(InputAction::CommitSuggestion("1".into())));
+        assert_eq!(
+            slash_ext.intercept_key(Key::TAB, &ctx),
+            Some(InputAction::CommitSuggestion("1".into()))
+        );
+        assert_eq!(
+            path_ext.intercept_key(Key::TAB, &ctx),
+            Some(InputAction::CommitSuggestion("1".into()))
+        );
     }
 
     #[test]
     fn test_compose_target_for_extension_mapping() {
-        use crate::components::composer_hints::{compose_target_for_extension, ComposeTarget};
+        use crate::components::composer_hints::{ComposeTarget, compose_target_for_extension};
 
-        let history_target = compose_target_for_extension(false, None, false, Some(ComposerExtensionKind::HistorySearch));
+        let history_target = compose_target_for_extension(
+            false,
+            None,
+            false,
+            Some(ComposerExtensionKind::HistorySearch),
+        );
         assert_eq!(history_target, ComposeTarget::HistorySearch);
 
-        let slash_target = compose_target_for_extension(false, None, false, Some(ComposerExtensionKind::SlashCompletion));
-        assert_eq!(slash_target, ComposeTarget::Completion { kind: crate::completion::CompletionKind::Slash });
+        let slash_target = compose_target_for_extension(
+            false,
+            None,
+            false,
+            Some(ComposerExtensionKind::SlashCompletion),
+        );
+        assert_eq!(
+            slash_target,
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Slash
+            }
+        );
 
-        let path_target = compose_target_for_extension(false, None, false, Some(ComposerExtensionKind::PathCompletion));
-        assert_eq!(path_target, ComposeTarget::Completion { kind: crate::completion::CompletionKind::Path });
+        let path_target = compose_target_for_extension(
+            false,
+            None,
+            false,
+            Some(ComposerExtensionKind::PathCompletion),
+        );
+        assert_eq!(
+            path_target,
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Path
+            }
+        );
 
         let prompt_target = compose_target_for_extension(false, None, false, None);
         assert_eq!(prompt_target, ComposeTarget::Prompt);

@@ -11,8 +11,8 @@ use std::borrow::Cow;
 use mutx_engine::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
-use crate::text_layout::padded_tail;
 use crate::render::Theme;
+use crate::text_layout::padded_tail;
 
 /// Semantic visual tone for a metadata chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

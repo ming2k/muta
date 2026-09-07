@@ -155,19 +155,14 @@ pub fn draw_sessions_modal(
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
-                    Span::styled(
-                        "Loading sessions…",
-                        Style::default().fg(theme.muted()),
-                    ),
+                    Span::styled("Loading sessions…", Style::default().fg(theme.muted())),
                 ]),
             ]
         } else {
-            vec![Line::from(vec![
-                Span::styled(
-                    "No previous sessions in this project.",
-                    Style::default().fg(theme.muted()),
-                ),
-            ])]
+            vec![Line::from(vec![Span::styled(
+                "No previous sessions in this project.",
+                Style::default().fg(theme.muted()),
+            )])]
         };
         render_centered_body(frame, f.body, body);
         if let Some(fo) = f.footer {

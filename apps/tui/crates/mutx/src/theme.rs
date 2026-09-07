@@ -841,15 +841,11 @@ impl Theme {
             mutx_engine::ElevationArchetype::Structured => {
                 Style::default().add_modifier(Modifier::REVERSE)
             }
-            mutx_engine::ElevationArchetype::Hybrid => {
-                Style::default()
-                    .bg(self.selected_bg)
-                    .fg(self.text)
-                    .add_modifier(Modifier::BOLD)
-            }
-            mutx_engine::ElevationArchetype::Chromatic => {
-                Style::default().bg(self.selected_bg)
-            }
+            mutx_engine::ElevationArchetype::Hybrid => Style::default()
+                .bg(self.selected_bg)
+                .fg(self.text)
+                .add_modifier(Modifier::BOLD),
+            mutx_engine::ElevationArchetype::Chromatic => Style::default().bg(self.selected_bg),
         }
     }
 
@@ -865,9 +861,9 @@ impl Theme {
             mutx_engine::ElevationArchetype::Hybrid => {
                 Style::default().add_modifier(Modifier::BOLD)
             }
-            mutx_engine::ElevationArchetype::Chromatic => {
-                Style::default().fg(self.brand()).add_modifier(Modifier::BOLD)
-            }
+            mutx_engine::ElevationArchetype::Chromatic => Style::default()
+                .fg(self.brand())
+                .add_modifier(Modifier::BOLD),
         }
     }
 
@@ -1534,17 +1530,20 @@ warn_fg = "#ff8800"
     #[test]
     fn test_resolve_with_profile_adapts_defaults() {
         let vt100_prof = mutx_engine::TerminalProfile::dec_vt100_monochrome();
-        let theme = Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &vt100_prof);
+        let theme =
+            Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &vt100_prof);
         assert_eq!(theme.app_bg, Color::Reset);
         assert_eq!(theme.text, Color::Reset);
 
         let linux_prof = mutx_engine::TerminalProfile::ecma48_ansi16();
-        let theme_linux = Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &linux_prof);
+        let theme_linux =
+            Theme::resolve_with_profile("zen", &ColorSchemeConfig::default(), None, &linux_prof);
         assert_eq!(theme_linux.app_bg, Color::Reset);
         assert_eq!(theme_linux.text, Color::White);
 
         // Explicit non-default choice is preserved
-        let theme_nord = Theme::resolve_with_profile("nord", &ColorSchemeConfig::default(), None, &vt100_prof);
+        let theme_nord =
+            Theme::resolve_with_profile("nord", &ColorSchemeConfig::default(), None, &vt100_prof);
         assert_ne!(theme_nord.text, Color::Reset);
     }
 }

@@ -505,8 +505,11 @@ async fn auto_dispatch_sends_followup_and_pops_queue_on_natural_completion() {
     app.current_session_id = "session-a".to_string();
 
     // Stage a follow-up item in the outbox
-    app.pending_dispatch
-        .push_back(queued_dispatch("fu-1", "session-a", "do the follow up task"));
+    app.pending_dispatch.push_back(queued_dispatch(
+        "fu-1",
+        "session-a",
+        "do the follow up task",
+    ));
     assert_eq!(app.pending_count("session-a"), 1);
 
     // If session is NOT idle or NOT naturally completed, auto-dispatch does nothing
@@ -515,7 +518,8 @@ async fn auto_dispatch_sends_followup_and_pops_queue_on_natural_completion() {
     assert_eq!(app.pending_count("session-a"), 1);
 
     // Simulate natural completion: round completed + harness became idle
-    app.naturally_completed_sessions.insert("session-a".to_string());
+    app.naturally_completed_sessions
+        .insert("session-a".to_string());
     app.idle_sessions.insert("session-a".to_string());
 
     // Now auto-dispatch runs:
@@ -524,11 +528,17 @@ async fn auto_dispatch_sends_followup_and_pops_queue_on_natural_completion() {
     // It MUST send AgentRequest::FollowUp (NOT AgentRequest::Prompt!)
     let req = rx.try_recv().expect("must send follow-up request");
     match req {
-        muta_contracts::AgentRequest::FollowUp { session_id, message } => {
+        muta_contracts::AgentRequest::FollowUp {
+            session_id,
+            message,
+        } => {
             assert_eq!(session_id, "session-a");
             assert_eq!(message.id, "fu-1");
             assert_eq!(message.text, "do the follow up task");
-            assert_eq!(message.display_text.as_deref(), Some("do the follow up task"));
+            assert_eq!(
+                message.display_text.as_deref(),
+                Some("do the follow up task")
+            );
         }
         other => panic!("expected FollowUp request, got {:?}", other),
     }
@@ -540,7 +550,9 @@ async fn auto_dispatch_sends_followup_and_pops_queue_on_natural_completion() {
     );
 
     // Simulate FollowUpStarted arrival: remove_dispatch is called
-    let removed = app.remove_dispatch("session-a", "fu-1").expect("must remove dispatch");
+    let removed = app
+        .remove_dispatch("session-a", "fu-1")
+        .expect("must remove dispatch");
     assert_eq!(removed.id, "fu-1");
     assert_eq!(app.pending_count("session-a"), 0);
 }
@@ -597,7 +609,8 @@ async fn user_interrupt_blocks_queue_and_prevents_auto_dispatch() {
 async fn drain_outbox_signal_round_interrupted_blocks_queue_and_resets_dispatching() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.current_session_id = "session-a".to_string();
-    app.naturally_completed_sessions.insert("session-a".to_string());
+    app.naturally_completed_sessions
+        .insert("session-a".to_string());
 
     let mut dispatch = queued_dispatch("fu-1", "session-a", "next task");
     dispatch.state = crate::app::QueuedDispatchState::Dispatching;

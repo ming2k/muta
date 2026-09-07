@@ -10,15 +10,15 @@ use super::base::{
 };
 use crate::model::layout::BlockRegion;
 use crate::model::selection::SelectionState;
+use crate::render::{
+    BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
+    Theme,
+};
 use crate::text_layout::{
     CodeGutterParams, WrappedLine, block_selection_range, clamp_selection_range, code_gutter_line,
     line_selection, line_spans, padded_tail, wrap_text,
 };
 use crate::tools::{DiffCache, DiffHunk, DiffOp, ResultKind};
-use crate::render::{
-    BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
-    Theme,
-};
 
 /// Build the summary line for a tool/runner step: an optional expand marker
 /// followed by the summary text, padded to `full_width`.
@@ -429,7 +429,12 @@ pub(crate) fn draw_checklist_content(
                     text_style,
                     ctx.theme.selected(),
                 );
-                spans.extend(rest_spans.spans.into_iter().filter(|s| !s.content.is_empty()));
+                spans.extend(
+                    rest_spans
+                        .spans
+                        .into_iter()
+                        .filter(|s| !s.content.is_empty()),
+                );
                 Line::from(spans)
             } else {
                 line_spans(
@@ -616,10 +621,8 @@ pub(crate) fn draw_matches_content(
                         start_byte: content_abs + wl.start_byte,
                         end_byte: content_abs + wl.end_byte,
                     };
-                    let selected = clamp_selection_range(
-                        line_selection(sel_range, &block_wl),
-                        &wl.text,
-                    );
+                    let selected =
+                        clamp_selection_range(line_selection(sel_range, &block_wl), &wl.text);
                     let mut spans = vec![
                         Span::styled(" ".repeat(indent), pad),
                         lineno_span,
@@ -1194,7 +1197,16 @@ pub(crate) fn draw_tool_result(
                 .unwrap_or(crate::syntax::Language::Plain);
 
             draw_code_content(
-                ctx, mi, block_idx, content, start_line, explicit_lang, syntax_lang, selection, indent, inner_w,
+                ctx,
+                mi,
+                block_idx,
+                content,
+                start_line,
+                explicit_lang,
+                syntax_lang,
+                selection,
+                indent,
+                inner_w,
             )
         }
         ResultKind::Diff => {
@@ -1206,7 +1218,11 @@ pub(crate) fn draw_tool_result(
                 Some(muta_contracts::ToolOutput::Patch { .. }) => None,
                 _ => serde_json::from_str::<serde_json::Value>(arguments)
                     .ok()
-                    .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(|s| s.to_string())),
+                    .and_then(|v| {
+                        v.get("path")
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string())
+                    }),
             };
             let path_ref = match structured {
                 Some(muta_contracts::ToolOutput::Patch { path, .. }) => Some(path.as_str()),
@@ -1342,7 +1358,10 @@ pub(crate) fn draw_diff_content(
                 Span::styled(" ".repeat(indent), pad),
                 Span::styled(" ".repeat(gutter_cols), pad),
                 Span::styled("  ", Style::default().bg(code_bg)),
-                Span::styled(range_header.clone(), Style::default().bg(code_bg).fg(info_fg)),
+                Span::styled(
+                    range_header.clone(),
+                    Style::default().bg(code_bg).fg(info_fg),
+                ),
             ];
             let mut used = indent + gutter_cols + sign_w + range_header.len();
             if let Some(hint) = &hunk.hint {
@@ -1409,7 +1428,13 @@ pub(crate) fn draw_diff_content(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ];
-                let projected = project_syntax_diff_frags(&full, &line.frags, &syntax_spans, wl.start_byte, wl.end_byte);
+                let projected = project_syntax_diff_frags(
+                    &full,
+                    &line.frags,
+                    &syntax_spans,
+                    wl.start_byte,
+                    wl.end_byte,
+                );
                 if !projected.is_empty() {
                     for slice in projected {
                         let token_fg = if lang == crate::syntax::Language::Plain {
@@ -1595,7 +1620,10 @@ pub(crate) fn project_syntax_slice<'a>(
     for pair in points.windows(2) {
         let seg_start = pair[0];
         let seg_end = pair[1];
-        if seg_start >= seg_end || !full.is_char_boundary(seg_start) || !full.is_char_boundary(seg_end) {
+        if seg_start >= seg_end
+            || !full.is_char_boundary(seg_start)
+            || !full.is_char_boundary(seg_end)
+        {
             continue;
         }
 
@@ -1636,10 +1664,19 @@ fn code_gutter_line_syntax(
     let mut spans = Vec::new();
     let prefix = left_indent + 1 + gutter.len() + gutter_gap;
 
-    spans.push(Span::styled(" ".repeat(left_indent), Style::default().bg(code_bg)));
+    spans.push(Span::styled(
+        " ".repeat(left_indent),
+        Style::default().bg(code_bg),
+    ));
     spans.push(Span::styled(" ", Style::default().bg(code_bg)));
-    spans.push(Span::styled(gutter.to_string(), Style::default().bg(code_bg).fg(gutter_fg)));
-    spans.push(Span::styled(" ".repeat(gutter_gap), Style::default().bg(code_bg)));
+    spans.push(Span::styled(
+        gutter.to_string(),
+        Style::default().bg(code_bg).fg(gutter_fg),
+    ));
+    spans.push(Span::styled(
+        " ".repeat(gutter_gap),
+        Style::default().bg(code_bg),
+    ));
 
     let projected = project_syntax_slice(full_line, syntax_spans, start_byte, end_byte);
 
@@ -1652,12 +1689,21 @@ fn code_gutter_line_syntax(
         spans.push(Span::styled(token_text.to_string(), style));
     }
 
-    let row_slice_len = if end_byte >= start_byte && full_line.is_char_boundary(start_byte) && full_line.is_char_boundary(end_byte) {
-        full_line[start_byte..end_byte].trim_end_matches('\n').trim_end_matches('\r').len()
+    let row_slice_len = if end_byte >= start_byte
+        && full_line.is_char_boundary(start_byte)
+        && full_line.is_char_boundary(end_byte)
+    {
+        full_line[start_byte..end_byte]
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .len()
     } else {
         0
     };
     let used = prefix + row_slice_len;
-    spans.push(Span::styled(padded_tail(full_width, used), Style::default().bg(code_bg)));
+    spans.push(Span::styled(
+        padded_tail(full_width, used),
+        Style::default().bg(code_bg),
+    ));
     Line::from(spans)
 }
