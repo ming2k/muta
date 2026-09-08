@@ -131,6 +131,27 @@ distinct slot tiers:
 └────────────────────────────────────────────────────────┘
 ```
 
+### The recall pointer badge (ADR-0192)
+
+While the pointer occupies tier 3 (a history snapshot slot), the composer's
+top breathing row declares it — `[history 3/17 · draft saved]`:
+
+- `3/17` is the 1-based pointer position over the current session's
+  newest-first slice. Draft mode renders no badge: the indicator exists only
+  for the state that silently swaps the buffer under the user's keystrokes.
+- `· draft saved` reassures that ↓ past the newest row restores the stashed
+  draft (text and staged attachments together). It degrades first on narrow
+  panels, then the `history` word, then the position — the pointer
+  (`3/17`) is the last element to go.
+- `· edited` replaces the reassurance when the live buffer has forked from
+  the loaded row. Edits on a history row are temporary — they are discarded
+  when the pointer moves — so the badge surfaces the fork before an
+  accidental ↑ discards it.
+- `Esc draft` on the hint row names the exit: Esc cancels the walk and
+  restores the stashed draft without sending. The badge outranks the
+  Ctrl+R badge on the same row (content honesty over surface naming) but
+  never the overflow indicator (a spatial fact about the row itself).
+
 ### In-place queue editing
 
 When the outbox queue contains staged items, pressing `↑` enters the

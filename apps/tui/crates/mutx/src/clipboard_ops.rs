@@ -71,7 +71,12 @@ pub(super) fn spawn_clipboard_paste(tx: &mpsc::UnboundedSender<ClipboardRead>) {
 /// `insert_newline` being a no-op in modals) and skips the chip / attachment
 /// machinery entirely. Other modals drop the paste silently.
 pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
-    if app.active_sheet() == Some(crate::sheet::SheetKind::Question) {
+    // The question sheet's "Other" field accepts paste only while the sheet
+    // is the keyboard foreground — a coexisting modal renders above it and
+    // its paste lands in the modal's own borrowed field (or is dropped).
+    if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
+        && app.active_modal() == Modal::None
+    {
         return apply_question_other_paste(app, read);
     }
     match app.active_modal() {

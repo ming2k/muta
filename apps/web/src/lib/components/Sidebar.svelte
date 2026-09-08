@@ -1,5 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
   import type { MonitoredSession } from "../types.js";
 
   interface Props {
@@ -72,33 +73,41 @@
 <aside class="sidebar" class:open>
   <div class="brand-header">
     <div class="brand-logo">
-      <span class="dot" class:online={daemon.connection === "connected"}></span>
+      <!-- 朱砂印: the seal-mark logo (cat & duck in a red round seal). -->
+      <img class="seal" src="/logo-seal.png" alt="muta seal" draggable="false" />
       <span class="title">muta</span>
     </div>
     <button
       class="badge"
       class:online={daemon.connection === "connected"}
       onclick={onOpenConnection}
-      title="Connection settings"
+      title={t("connectionSettings")}
     >
-      {daemon.connection === "connected" ? "Online" : daemon.connection === "connecting" ? "Connecting" : "Offline"}
+      {daemon.connection === "connected"
+        ? t("online")
+        : daemon.connection === "connecting"
+          ? t("connectingShort")
+          : t("offline")}
     </button>
   </div>
 
   <div class="action-bar">
-    <button class="btn-primary" onclick={() => daemon.newSession()}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <button class="btn-new" onclick={() => daemon.newSession()}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <path d="M12 5v14M5 12h14"/>
       </svg>
-      New Session
+      {t("newSession")}
     </button>
   </div>
 
   <div class="sessions-container">
-    <div class="section-title">Hosted Sessions ({daemon.sessions.length})</div>
+    <div class="section-title">{t("sessionsTitle")} · {daemon.sessions.length}</div>
     <div class="session-list">
       {#if daemon.sessions.length === 0}
-        <div class="empty">No active sessions</div>
+        <div class="empty">
+          <span class="empty-mark">空</span>
+          <span class="empty-text">{t("noSessions")}</span>
+        </div>
       {:else}
         {#each daemon.sessions as s (s.id)}
           <div
@@ -127,7 +136,7 @@
               {:else}
                 <span class="session-title">{sessionTitle(s)}</span>
               {/if}
-              <span class="status-pill status-{s.status}">
+              <span class="status-dot status-{s.status}" title={s.status}>
                 {statusLabels[s.status] ?? s.status}
               </span>
             </div>
@@ -139,7 +148,7 @@
                 {/if}
                 <button
                   class="icon-action rename-btn"
-                  title="Rename session"
+                  title={t("renameSession")}
                   onclick={(e) => {
                     e.stopPropagation();
                     startRename(s);
@@ -149,7 +158,7 @@
                 </button>
                 <button
                   class="icon-action interrupt-btn"
-                  title="Interrupt the current round"
+                  title={t("interruptRound")}
                   onclick={(e) => {
                     e.stopPropagation();
                     daemon.interruptSession(s.id);
@@ -159,7 +168,7 @@
                 </button>
                 <button
                   class="icon-action suspend-btn"
-                  title="Suspend session (park in memory; attaching again resumes it)"
+                  title={t("suspendSession")}
                   onclick={(e) => {
                     e.stopPropagation();
                     daemon.suspendSession(s.id);
@@ -169,7 +178,7 @@
                 </button>
                 <button
                   class="icon-action end-btn"
-                  title="End session (keeps history; removes it from the daemon)"
+                  title={t("endSession")}
                   onclick={(e) => {
                     e.stopPropagation();
                     daemon.endSession(s.id);
@@ -180,13 +189,13 @@
                 <button
                   class="icon-action delete-btn"
                   class:confirm={confirmDeleteId === s.id}
-                  title={confirmDeleteId === s.id ? "Click again to confirm deletion" : "Delete session"}
+                  title={confirmDeleteId === s.id ? t("confirmDelete") : t("deleteSession")}
                   onclick={(e) => {
                     e.stopPropagation();
                     requestDelete(s.id);
                   }}
                 >
-                  {confirmDeleteId === s.id ? "confirm?" : "×"}
+                  {confirmDeleteId === s.id ? t("confirmDelete") : "×"}
                 </button>
               </span>
             </div>
@@ -203,10 +212,10 @@
 
 <style>
   .sidebar {
-    width: 280px;
+    width: 264px;
     height: 100%;
     background-color: var(--bg-sidebar);
-    border-right: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
@@ -217,179 +226,174 @@
   }
 
   .brand-header {
-    padding: 16px 20px;
+    padding: 1.1rem 1.25rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid var(--border-subtle);
   }
 
   .brand-logo {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.6rem;
   }
 
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: var(--accent-danger);
-    transition: background-color 0.3s;
-  }
-
-  .dot.online {
-    background-color: var(--accent-primary);
+  /* 朱砂印: the round seal mark, image-carried. */
+  .seal {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    user-select: none;
+    /* Light theme print keeps its full cinnabar; night mode: the red seal
+       on dark paper needs no filter — the ink already reads. */
   }
 
   .title {
-    font-family: var(--font-mono);
+    font-family: var(--font-brush);
     font-weight: 600;
-    font-size: 16px;
-    letter-spacing: -0.5px;
+    font-size: 1.1rem;
+    letter-spacing: 0.12em;
+    color: var(--text-primary);
   }
 
   .badge {
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 2px 6px;
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    padding: 0.15rem 0.5rem;
     border-radius: var(--radius-sm);
-    background: rgba(248, 81, 73, 0.15);
+    background: transparent;
     color: var(--accent-danger);
+    border: 1px solid var(--accent-danger);
     text-transform: uppercase;
-    border: none;
     cursor: pointer;
+    transition: background-color var(--t-fast);
+  }
+
+  .badge:hover {
+    background: var(--seal-soft);
   }
 
   .badge.online {
-    background: rgba(46, 160, 67, 0.15);
-    color: var(--accent-primary);
+    color: var(--accent-info);
+    border-color: var(--accent-info);
   }
 
   .action-bar {
-    padding: 14px 16px 8px;
+    padding: 0.9rem 1.1rem 0.4rem;
   }
 
-  .btn-primary {
+  .btn-new {
     width: 100%;
-    padding: 8px 12px;
-    background-color: var(--accent-primary);
-    color: #fff;
-    border: none;
+    padding: 0.5rem 0.75rem;
+    background: transparent;
+    color: var(--accent-primary);
+    border: 1px solid var(--accent-primary);
     border-radius: var(--radius-md);
-    font-size: 13px;
+    font-size: 0.8rem;
     font-weight: 500;
+    letter-spacing: 0.06em;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 0.4rem;
     cursor: pointer;
-    transition: opacity 0.15s;
+    transition: background-color var(--t-fast);
   }
 
-  .btn-primary:hover {
-    opacity: 0.9;
+  .btn-new:hover {
+    background: var(--seal-soft);
   }
 
   .sessions-container {
     flex: 1;
     overflow-y: auto;
-    padding: 8px 12px;
+    padding: 0.5rem 0.7rem;
   }
 
   .section-title {
-    font-size: 11px;
-    text-transform: uppercase;
-    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.15em;
+    font-weight: 500;
     color: var(--text-muted);
-    letter-spacing: 0.5px;
-    margin: 8px 4px;
+    margin: 0.6rem 0.3rem;
   }
 
   .session-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
   }
 
   .session-item {
-    padding: 10px 12px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
+    padding: 0.55rem 0.6rem;
+    border-left: 2px solid transparent;
     cursor: pointer;
     text-align: left;
-    transition: background-color 0.15s;
+    transition: border-color var(--t-fast), background-color var(--t-fast);
   }
 
   .session-item:hover {
-    background: var(--bg-surface);
+    background: var(--bg-surface-hover);
   }
 
+  /* Selected session marked by a cinnabar rule on the left — a brush
+     stroke, not a filled pill. */
   .session-item.active {
     background: var(--bg-surface);
-    border-color: var(--border-strong);
+    border-left-color: var(--accent-primary);
   }
 
   .session-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 4px;
-    gap: 6px;
+    margin-bottom: 0.15rem;
+    gap: 0.4rem;
   }
 
   .session-title {
     font-weight: 500;
-    font-size: 13px;
+    font-size: 0.82rem;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 150px;
+    min-width: 0;
   }
 
-  .status-pill {
+  .status-dot {
     font-family: var(--font-mono);
-    font-size: 10px;
-    padding: 1px 5px;
-    border-radius: var(--radius-sm);
-    text-transform: uppercase;
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
     flex-shrink: 0;
-  }
-
-  .status-idle {
-    background: var(--bg-surface-hover);
     color: var(--text-muted);
   }
 
+  .status-dot::before {
+    content: "·";
+    margin-right: 0.3em;
+    font-weight: 700;
+  }
+
   .status-running {
-    background: rgba(88, 166, 255, 0.15);
     color: var(--accent-info);
   }
 
   .status-needs_approval,
   .status-needs_input {
-    background: rgba(210, 153, 34, 0.15);
     color: var(--accent-warning);
   }
 
-  .status-interrupted {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
-  }
-
   .status-failed {
-    background: rgba(248, 81, 73, 0.15);
     color: var(--accent-danger);
   }
 
   .session-meta {
-    font-size: 11px;
+    font-size: 0.7rem;
     color: var(--text-muted);
     display: flex;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
     align-items: center;
   }
 
@@ -402,7 +406,7 @@
   .meta-right {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 0.35rem;
     flex-shrink: 0;
   }
 
@@ -410,12 +414,12 @@
     background: transparent;
     border: none;
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: 0.8rem;
     line-height: 1;
     cursor: pointer;
-    padding: 0 2px;
+    padding: 0 0.1rem;
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity var(--t-fast), color var(--t-fast);
   }
 
   .session-item:hover .icon-action,
@@ -428,12 +432,12 @@
   }
 
   .end-btn:hover {
-    color: var(--accent-warning, var(--text-secondary)) !important;
+    color: var(--accent-warning) !important;
   }
 
   .interrupt-btn:hover,
   .suspend-btn:hover {
-    color: var(--accent-primary, var(--text-secondary)) !important;
+    color: var(--accent-info) !important;
   }
 
   .delete-btn:hover {
@@ -442,11 +446,12 @@
 
   .delete-btn.confirm {
     color: var(--accent-danger);
-    font-size: 10px;
+    font-size: 0.62rem;
     font-family: var(--font-mono);
-    border: 1px solid rgba(248, 81, 73, 0.4);
+    border: 1px solid var(--accent-danger);
     border-radius: var(--radius-sm);
-    padding: 1px 4px;
+    padding: 0.05rem 0.25rem;
+    opacity: 1;
   }
 
   .rename-input {
@@ -456,23 +461,36 @@
     border: 1px solid var(--border-input-focus);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
-    font-size: 13px;
-    padding: 2px 6px;
+    font-size: 0.82rem;
+    padding: 0.1rem 0.35rem;
     outline: none;
   }
 
   .empty {
-    padding: 24px;
+    padding: 2rem 1rem;
     text-align: center;
     color: var(--text-muted);
-    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .empty-mark {
+    font-family: var(--font-brush);
+    font-size: 1.6rem;
+    color: var(--border-strong);
+  }
+
+  .empty-text {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
   }
 
   .sidebar-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border-subtle);
+    padding: 0.7rem 1.1rem;
+    border-top: 1px solid var(--line);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 0.68rem;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -487,8 +505,8 @@
       bottom: 0;
       z-index: 90;
       transform: translateX(-100%);
-      transition: transform 0.2s ease-out;
-      box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+      transition: transform 0.2s var(--ease);
+      box-shadow: 8px 0 32px rgba(0, 0, 0, 0.25);
     }
 
     .sidebar.open {
@@ -499,7 +517,7 @@
       display: block;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.45);
+      background: rgba(0, 0, 0, 0.35);
       z-index: 80;
     }
   }

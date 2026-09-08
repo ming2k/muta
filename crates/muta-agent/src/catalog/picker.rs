@@ -92,10 +92,10 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                     // daily-driver model carries its flag into the flat
                     // Models picker wherever it is served.
                     info.favorite = config.favorites.iter().any(|fav| fav == &info.model);
-                    // Recency is model-level too (stage-2 usage telemetry):
+                    // Recency is (connection, model) level:
                     // the flat Models picker's "recent" section is ordered by
-                    // it. 0 (never activated) surfaces as `None`.
-                    let recency = usage.model_recency(&info.model);
+                    // it. 0 (never activated on this connection) surfaces as `None`.
+                    let recency = usage.model_recency(&entry.id, &info.model);
                     info.last_used_ms = (recency > 0).then_some(recency);
                     info
                 })
@@ -186,7 +186,6 @@ pub fn prune_stale_models(config: &mut Config, usage: &mut ConnectionUsage) -> b
     // Prune connection usage telemetry.
     let usage_changed = usage.prune(
         |conn_id| valid_connection_ids.contains(conn_id),
-        |model_id| all_valid_models.contains(model_id),
         |conn_id, model_id| {
             connection_models_map
                 .get(conn_id)

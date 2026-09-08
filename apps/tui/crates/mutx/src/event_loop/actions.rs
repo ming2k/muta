@@ -357,7 +357,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 &app.selection,
                 app.focused_messages(),
                 &app.input,
-                &app.layout_map,
+                &app.ui.document,
                 app.drag.cell_info.as_ref(),
             ) {
                 clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
@@ -1458,7 +1458,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 &app.selection,
                 app.focused_messages(),
                 &app.input,
-                &app.layout_map,
+                &app.ui.document,
                 app.drag.cell_info.as_ref(),
             ) {
                 clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
@@ -1515,6 +1515,14 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::ClearFocusedTarget => {
             app.focused_target = None;
             app.transcript_focused = false;
+        }
+        input::InputAction::CancelHistoryRecall => {
+            // Esc while the inline ↑/↓ pointer sits on a history row: cancel
+            // the recall and restore the stashed draft (text + attachments).
+            // `cancel_history_recall` is a no-op when the pointer is already
+            // `None`, so a key race between the context snapshot and dispatch
+            // cannot clobber a draft (ADR-0192).
+            app.cancel_history_recall();
         }
         input::InputAction::ActivateFocusedTarget => {
             if let Some(target) = app.focused_target {
@@ -2429,58 +2437,50 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
 }
 
 pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
-    if app.active_sheet() == Some(crate::sheet::SheetKind::Permission) {
-        if app.modal_hit_map.permission_sheet_contains(x, y) {
+    use crate::ui::UiKey;
+    match app.ui.scene().hit_test(x, y).copied() {
+        Some(UiKey::Modal(modal)) => {
+            if app.ui.contains(UiKey::Modal(modal), x, y) {
+                scroll_tick(app, !up);
+            }
+        }
+        Some(UiKey::OauthUrl | UiKey::OauthCode) => scroll_tick(app, !up),
+        Some(UiKey::ProviderDelete | UiKey::PreAttach) => {}
+        Some(UiKey::Sheet(crate::sheet::SheetKind::Permission) | UiKey::PermissionAction(_)) => {
             if app.permission_show_details {
-                if up {
-                    app.permission_scroll = app.permission_scroll.saturating_sub(1);
+                app.permission_scroll = if up {
+                    app.permission_scroll.saturating_sub(1)
                 } else {
-                    app.permission_scroll = app
-                        .permission_scroll
-                        .saturating_add(1)
-                        .min(app.permission_max_scroll);
-                }
-            }
-        } else {
-            scroll_tick(app, !up);
-        }
-    } else if app.active_modal() != Modal::None {
-        let inside_modal = app
-            .modal_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-            || app.modal_hit_map.oauth_modal_contains(x, y);
-
-        if inside_modal {
-            scroll_tick(app, !up);
-        }
-    } else if app.modal_hit_map.completion_menu_contains(x, y) {
-        let count = app.completions().len();
-        if count > 0 {
-            if up {
-                let prev = match app.suggestion_index {
-                    Some(0) | None => count.saturating_sub(1),
-                    Some(i) => i.saturating_sub(1),
+                    app.permission_scroll.saturating_add(1).min(app.permission_max_scroll)
                 };
-                app.suggestion_index = Some(prev);
-            } else {
-                let next = match app.suggestion_index {
-                    Some(i) if i + 1 < count => i + 1,
-                    _ => 0,
-                };
-                app.suggestion_index = Some(next);
             }
         }
-    } else {
-        let over_composer = app.input_rect.is_some_and(|r| {
-            r.height > crate::design::COMPOSER_VERTICAL_CHROME_ROWS
-                && r.x <= x
-                && x < r.x + r.width
-                && r.y <= y
-                && y < r.y + r.height
-        });
-        if !(over_composer && app.step_input_scroll(up, 4).is_some()) {
+        Some(UiKey::Sheet(crate::sheet::SheetKind::Question) | UiKey::QuestionOption(_)) => {
+            app.question_modal_follow = false;
+            app.question_scroll = if up { app.question_scroll.saturating_sub(1) }
+                else { app.question_scroll.saturating_add(1) };
+        }
+        Some(UiKey::Completion | UiKey::CompletionItem(_)) => {
+            let count = app.completions().len();
+            if count > 0 {
+                app.suggestion_index = Some(if up {
+                    match app.suggestion_index {
+                        Some(0) | None => count.saturating_sub(1),
+                        Some(i) => i.saturating_sub(1),
+                    }
+                } else {
+                    match app.suggestion_index { Some(i) if i + 1 < count => i + 1, _ => 0 }
+                });
+            }
+        }
+        Some(UiKey::Composer) => {
+            if app.step_input_scroll(up, 4).is_none() { scroll_tick(app, !up); }
+        }
+        Some(UiKey::Transcript | UiKey::Sticky | UiKey::Queue | UiKey::Activity |
+             UiKey::ModelBar | UiKey::Context | UiKey::Performance | UiKey::Connection) => {
             scroll_tick(app, !up);
         }
+        _ => {}
     }
 }
 
@@ -2540,8 +2540,10 @@ mod transcript_scroll_tests {
     fn wheel_spatial_routing_under_permission_modal() {
         let mut app = scrollable_app();
         app.set_active_sheet_for_test(crate::sheet::SheetKind::Permission);
-        app.modal_hit_map
-            .set_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::None);
+        app.ui
+            .mount_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
+        app.ui.commit();
         app.permission_show_details = true;
         app.permission_max_scroll = 10;
         app.permission_scroll = 2;
@@ -2566,7 +2568,9 @@ mod transcript_scroll_tests {
     fn wheel_spatial_routing_under_overlay_modal_isolates_backdrop() {
         let mut app = scrollable_app();
         app.set_active_modal_for_test(Modal::Help);
-        app.modal_rect = Some(mutx_engine::Rect::new(10, 5, 60, 10));
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::Help);
+        app.ui.mount(crate::ui::UiKey::Modal(Modal::Help), mutx_engine::Rect::new(10, 5, 60, 10));
+        app.ui.commit();
         app.help_scroll = 5;
 
         // 1. Wheel on backdrop (x=2, y=2) outside modal_rect: absorbed, neither modal nor transcript scrolls
@@ -2585,12 +2589,14 @@ mod transcript_scroll_tests {
         let mut app = scrollable_app();
         app.input = "/m".to_string();
         app.cursor_position = 2;
-        app.modal_hit_map
-            .set_completion_menu_rect(mutx_engine::Rect::new(0, 8, 30, 2));
-        app.modal_hit_map
-            .push_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
-        app.modal_hit_map
-            .push_completion_item(1, mutx_engine::Rect::new(0, 9, 30, 1));
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::None);
+        app.ui
+            .mount_completion(mutx_engine::Rect::new(0, 8, 30, 2));
+        app.ui
+            .mount_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
+        app.ui
+            .mount_completion_item(1, mutx_engine::Rect::new(0, 9, 30, 1));
+        app.ui.commit();
 
         let runtime = UiRuntime::minimal_for_test();
 
@@ -2757,7 +2763,7 @@ async fn execute_command_by_id(
                 &app.selection,
                 app.focused_messages(),
                 &app.input,
-                &app.layout_map,
+                &app.ui.document,
                 app.drag.cell_info.as_ref(),
             ) {
                 clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);

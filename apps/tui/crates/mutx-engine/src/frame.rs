@@ -90,6 +90,44 @@ impl<'a> Frame<'a> {
     pub(crate) fn take_cursor(&mut self) -> CursorState {
         std::mem::take(&mut self.cursor)
     }
+
+    /// Isolate a painter, including direct buffer access, to a terminal clip.
+    /// Drawing into scratch also prevents a painter from corrupting cells
+    /// outside its allocation. Wide glyphs crossing the clip become spaces.
+    pub fn paint_clipped<R>(&mut self, clip: Rect, paint: impl FnOnce(&mut Frame<'_>) -> R) -> R {
+        let clip = clip.intersection(self.area_rect);
+        let mut scratch = self.grid.clone();
+        let mut frame = Frame::new(&mut scratch);
+        let result = paint(&mut frame);
+        let cursor = frame.take_cursor();
+        for y in clip.y..clip.bottom() {
+            for x in clip.x..clip.right() {
+                if let Some(cell) = scratch.get(x, y) {
+                    let mut cell = cell.clone();
+                    if (cell.is_wide_continuation() && x == clip.x)
+                        || (cell.width >= 2 && x.saturating_add(1) >= clip.right())
+                    {
+                        cell.symbol = " ".into();
+                        cell.width = 1;
+                    }
+                    // Copy the complete row slice before marking it; Grid::set
+                    // repairs adjacent glyph halves and cannot copy a pair one
+                    // cell at a time without erasing the head on the second set.
+                    let index = y as usize * self.grid.width as usize + x as usize;
+                    if self.grid.content[index] != cell {
+                        self.grid.content[index] = cell;
+                        self.grid.mark(x, y);
+                    }
+                }
+            }
+        }
+        if let CursorState::Visible(x, y) = cursor
+            && clip.contains(x, y)
+        {
+            self.cursor = cursor;
+        }
+        result
+    }
 }
 
 /// A widget that can render itself into a grid. Implemented for `Paragraph`,
@@ -302,6 +340,17 @@ impl<W: io::Write> Terminal<W> {
         self.commit()
     }
 
+    /// Layout and paint a retained RenderTree, diff against current screen, and flush.
+    pub fn draw_tree(&mut self, tree: &mut crate::render_tree::RenderTree) -> io::Result<()> {
+        let (w, h) = self.back.size();
+        tree.layout(crate::render_tree::Size::new(w, h));
+        self.render_frame(|f| {
+            let mut ctx = crate::render_tree::PaintContext::new(f);
+            tree.paint(&mut ctx);
+        });
+        self.commit()
+    }
+
     /// Render into the retained back grid without emitting terminal output.
     /// The next [`Self::draw`] replaces or completes this staged frame and
     /// commits only the final grid. This supports layout-dependent state such
@@ -390,6 +439,15 @@ impl TestTerminal {
         let mut frame = Frame::new(&mut self.back);
         render(&mut frame);
         self.cursor = frame.take_cursor();
+    }
+
+    /// Layout and paint a retained RenderTree directly to the test buffer.
+    pub fn draw_tree(&mut self, tree: &mut crate::render_tree::RenderTree) {
+        let (w, h) = self.back.size();
+        tree.layout(crate::render_tree::Size::new(w, h));
+        let mut frame = Frame::new(&mut self.back);
+        let mut ctx = crate::render_tree::PaintContext::new(&mut frame);
+        tree.paint(&mut ctx);
     }
 
     /// Read the rendered grid (the "buffer" the tests inspect).

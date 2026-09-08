@@ -40,4 +40,4 @@ pub mod usage_stats;
 pub mod web_connections;
 pub mod workspace_security;
 
-pub use session::CommitTurn;
+pub use session::{CommitTurn, SessionStore};

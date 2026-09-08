@@ -415,7 +415,7 @@ session across every project (ADR-0096). It is read at daemon startup.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `daemon.shutdown_grace_secs` | `10` | How long a `muta daemon stop` waits for hosted sessions to settle before forcing shutdown |
+| `daemon.shutdown_grace_secs` | `10` | How long a `muta stop` waits for hosted sessions to settle before forcing shutdown |
 | `daemon.idle_exit_minutes` | `5` | A daemon with no hosted sessions exits after this idle period (armed `/schedule` jobs keep it alive — ADR-0125) |
 | `daemon.local_auth` | `true` | Require the bearer token on the Unix-socket control plane. Turn off only for locked-down single-user sockets |
 | `daemon.rehost_armed_schedules` | `true` | At daemon boot, rehost every persisted session that still has armed `/schedule` jobs, so scheduled prompts keep firing across daemon restarts (ADR-0125); `false` = cold start |

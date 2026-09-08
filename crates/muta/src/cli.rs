@@ -2,17 +2,15 @@
 //!
 //! For most of the project's life this lived in `muta-runtime::startup`
 //! (`parse_args`), which put a frontend concern inside the session-runtime
-//! library and let two flag tables (`serve` vs `daemon start`) drift
-//! independently. The vocabulary also accreted: `serve`/`daemon start`,
-//! `status`/`daemon status`, `attach`/`resume`, `stop`/`daemon stop` —
-//! four noun-verb spellings for one daemon. ADR-0116 fixes both:
+//! library and let two flag tables drift independently. ADR-0116 fixes both:
 //!
 //! - **One noun per resource, one verb per action.** The daemon is managed
-//!   by `muta daemon start|stop|status|token`; sessions by `muta session rm`
-//!   (listing is `daemon status`). Interactive run/attach/dashboard commands
-//!   belong exclusively to `mutx`. The former top-level spellings (`serve`, `stop`,
-//!   `status`, `resume`, `exec`) are removed outright: no alias, no
-//!   teaching error — an unknown word is an unrecognized command.
+//!   by the top-level `muta start|stop|status|token` verbs; sessions by
+//!   `muta session rm` (listing is `status`). Interactive
+//!   run/attach/dashboard commands belong exclusively to `mutx`. The former
+//!   spellings (`serve`, the `daemon` noun, `resume`, `exec`) are removed
+//!   outright: no alias, no teaching error — an unknown word is an
+//!   unrecognized command.
 //! - **The parser is a table, not a hand-rolled ladder.** One spec drives
 //!   parsing, help, error messages, and shell completions, so a flag
 //!   cannot exist in one place and not the other (the `--expose`/
@@ -93,14 +91,14 @@ pub enum SkillAction {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionAction {
     /// `muta session rm <id>` — terminate a hosted session. Listing is
-    /// `daemon status`: the session table is the daemon's view.
+    /// `muta status`: the session table is the daemon's view.
     Delete(String),
 }
 
-/// `muta daemon …`
+/// `muta` daemon verbs (top-level: start, stop, status, token)
 #[derive(Debug, Clone, PartialEq)]
 pub enum DaemonAction {
-    /// `muta daemon start` — start the session daemon.
+    /// `muta start` — start the session daemon.
     Start {
         /// `--fg`: stay in the foreground (the systemd/tmux shape).
         /// Detaching is the default because "start" asks for a daemon,
@@ -113,11 +111,11 @@ pub enum DaemonAction {
         idle_exit_minutes: Option<u64>,
         shutdown_grace_secs: Option<u64>,
     },
-    /// `muta daemon stop` — graceful, budget-aware drain.
+    /// `muta stop` — graceful, budget-aware drain.
     Stop,
-    /// `muta daemon token` — print the local daemon's bearer token.
+    /// `muta token` — print the local daemon's bearer token.
     Token,
-    /// `muta daemon status` — the daemon's session table and endpoints.
+    /// `muta status` — the daemon's session table and endpoints.
     Status {
         watch: bool,
         json: bool,
@@ -189,37 +187,14 @@ struct Spec {
 }
 
 const SESSION_SUBS: &[Spec] = &[
-    // The listing is `daemon status`, not a session subcommand: the
+    // The listing is `muta status`, not a session subcommand: the
     // session table is the daemon's view of what it hosts (ADR-0116's
-    // one-noun-per-resource — `session ls` duplicated `daemon status`
+    // one-noun-per-resource — `session ls` duplicated `muta status`
     // verbatim).
     Spec {
         name: "rm",
         names: &["rm", "delete"],
         about: "terminate a hosted session by id",
-    },
-];
-
-const DAEMON_SUBS: &[Spec] = &[
-    Spec {
-        name: "start",
-        names: &["start"],
-        about: "start the daemon (detached by default; --fg stays in the foreground)",
-    },
-    Spec {
-        name: "stop",
-        names: &["stop"],
-        about: "stop the daemon gracefully",
-    },
-    Spec {
-        name: "status",
-        names: &["status"],
-        about: "show the daemon's sessions and endpoints",
-    },
-    Spec {
-        name: "token",
-        names: &["token"],
-        about: "print the local daemon bearer token",
     },
 ];
 
@@ -343,11 +318,6 @@ const COMMANDS: &[Spec] = &[
         name: "session",
         names: &["session"],
         about: "manage sessions (rm; listing is `status`)",
-    },
-    Spec {
-        name: "daemon",
-        names: &["daemon"],
-        about: "manage the session daemon (start, stop, status, token)",
     },
     Spec {
         name: "config",
@@ -561,8 +531,7 @@ fn split_tool_list(list: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// The `daemon start` flags (ADR-0116: one table — the `serve` vs
-/// `daemon start` duplication is gone).
+/// The `muta start` flags (one table — the `serve` duplication is gone).
 #[derive(Default)]
 struct DaemonStartFlags {
     foreground: bool,
@@ -807,57 +776,6 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 _ => unreachable!("session subcommands are closed"),
             }
         }
-        "daemon" => {
-            if extra.is_empty() {
-                // `muta daemon` defaults to status, like `git remote`.
-                Mode::Daemon(DaemonAction::Status {
-                    watch: false,
-                    json,
-                    include_idle: false,
-                    diagnostic: false,
-                })
-            } else {
-                let sub = match resolve(&extra[0], DAEMON_SUBS) {
-                    Some(sub) => sub,
-                    None => return unexpected(&extra[0]),
-                };
-                let sub_extra = &extra[1..];
-                match sub.name {
-                    "start" => {
-                        let flags = parse_daemon_start_flags(sub_extra).map_err(|e| e.0)?;
-                        Mode::Daemon(DaemonAction::Start {
-                            foreground: flags.foreground,
-                            port: flags.port,
-                            public: flags.public,
-                            no_local_auth: flags.no_local_auth,
-                            idle_exit_minutes: flags.idle_exit_minutes,
-                            shutdown_grace_secs: flags.shutdown_grace_secs,
-                        })
-                    }
-                    "stop" => {
-                        let args: &[String] = sub_extra;
-                        match args {
-                            [] => Mode::Daemon(DaemonAction::Stop),
-                            [bad, ..] => return unexpected(bad),
-                        }
-                    }
-                    "status" => {
-                        let flags = parse_table_flags(sub_extra, false).map_err(|e| e.0)?;
-                        Mode::Daemon(DaemonAction::Status {
-                            watch: flags.watch,
-                            json: flags.json || json,
-                            include_idle: flags.include_idle,
-                            diagnostic: flags.diagnostic,
-                        })
-                    }
-                    "token" => match sub_extra {
-                        [] => Mode::Daemon(DaemonAction::Token),
-                        [bad, ..] => return unexpected(bad),
-                    },
-                    _ => unreachable!("daemon subcommands are closed"),
-                }
-            }
-        }
         "config" => {
             let extra_str: Vec<&str> = extra.iter().map(String::as_str).collect();
             match extra_str.as_slice() {
@@ -1039,33 +957,6 @@ fn command_flags(cmd: &str) -> &'static [(&'static str, &'static str)] {
             ("--all", "include idle sessions"),
             ("--diagnostic", "report discovery/lock/socket/log health"),
         ],
-        "daemon" => &[
-            ("start --fg", "stay in the foreground (default: detach)"),
-            (
-                "start --port <n>",
-                "TCP port (default: MUTA_PORT, else 9800)",
-            ),
-            (
-                "start --public",
-                "bind all interfaces; requires the bearer token",
-            ),
-            (
-                "start --no-local-auth",
-                "drop the loopback bearer-token requirement",
-            ),
-            (
-                "start --idle-exit <min>",
-                "auto-exit after <min> idle minutes (0 = never)",
-            ),
-            ("start --grace <secs>", "graceful-drain budget in seconds"),
-            ("status --watch", "keep streaming live updates"),
-            ("status --json", "emit one JSON frame per update"),
-            ("status --all", "include idle sessions"),
-            (
-                "status --diagnostic",
-                "report discovery/lock/socket/log health",
-            ),
-        ],
         "session" => &[("rm <id>", "terminate a hosted session by id")],
         "mcp" => &[
             ("ls", "list configured MCP servers"),
@@ -1140,7 +1031,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
                     out.push_str(&format!("  {:<width$}  {about}\n", flag));
                 }
             }
-            if spec.name == "start" || spec.name == "daemon" {
+            if spec.name == "start" {
                 out.push_str(
                     "\nThe daemon hosts every session across every project. `start` runs it\n",
                 );
@@ -1163,7 +1054,6 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
 fn subs_of(cmd: &str) -> Option<&'static [Spec]> {
     match cmd {
         "session" => Some(SESSION_SUBS),
-        "daemon" => Some(DAEMON_SUBS),
         "config" => Some(CONFIG_SUBS),
         "auth" => Some(AUTH_SUBS),
         "mcp" => Some(MCP_SUBS),
@@ -1363,15 +1253,14 @@ mod surface_tests {
     }
 
     #[test]
-    fn legacy_daemon_commands_remain_compatible() {
-        assert!(matches!(
-            parse(&["daemon", "start"]).unwrap().mode,
-            Mode::Daemon(DaemonAction::Start { .. })
-        ));
-        assert!(matches!(
-            parse(&["daemon", "token"]).unwrap().mode,
-            Mode::Daemon(DaemonAction::Token)
-        ));
+    fn daemon_noun_is_not_accepted() {
+        for command in ["daemon"] {
+            assert!(parse(&[command]).is_err(), "{command}");
+            assert!(parse(&[command, "start"]).is_err(), "{command} start");
+            assert!(parse(&[command, "stop"]).is_err(), "{command} stop");
+            assert!(parse(&[command, "status"]).is_err(), "{command} status");
+            assert!(parse(&[command, "token"]).is_err(), "{command} token");
+        }
     }
 
     #[test]

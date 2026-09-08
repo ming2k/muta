@@ -143,7 +143,7 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
 
     let mut result = Vec::new();
     for (round_num, mut attempts) in round_map.into_iter().rev() {
-        attempts.sort_by_key(|a| (a.turn, a.attempt));
+        attempts.sort_by(|a, b| (b.turn, b.attempt).cmp(&(a.turn, a.attempt)));
 
         let mut prompt_tokens = 0u64;
         let mut completion_tokens = 0u64;
@@ -196,6 +196,32 @@ pub fn telemetry_attempt_key(
     let round = rounds.get(round_index)?;
     let attempt = round.attempts.get(attempt_index)?;
     Some((attempt.round as u32, attempt.attempt))
+}
+
+pub(crate) fn fmt_num<T: std::fmt::Display>(num: T) -> String {
+    let s = num.to_string();
+    let is_negative = s.starts_with('-');
+    let remainder = if is_negative { &s[1..] } else { &s[..] };
+    let (int_part, frac_part) = match remainder.find('.') {
+        Some(pos) => (&remainder[..pos], Some(&remainder[pos..])),
+        None => (remainder, None),
+    };
+    let len = int_part.len();
+    let mut result = String::with_capacity(s.len() + len / 3);
+    for (i, c) in int_part.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    if let Some(frac) = frac_part {
+        result.push_str(frac);
+    }
+    if is_negative {
+        format!("-{result}")
+    } else {
+        result
+    }
 }
 
 pub(crate) fn fmt_tokens(count: u64) -> String {

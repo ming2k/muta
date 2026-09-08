@@ -924,16 +924,16 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     },
     CommandSpec {
         id: CommandId::OpenTelemetry,
-        label: "Session Telemetry",
+        label: "Session Stats",
         hint: "Ctrl+O",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
         bindings: &[Key::CTRL_O],
-        slash: Some("/telemetry"),
+        slash: Some("/stats"),
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Safe,
-        description: "View context token accounting and model telemetry",
+        description: "View context token accounting and session stats",
     },
     CommandSpec {
         id: CommandId::OpenModels,
@@ -1279,7 +1279,8 @@ pub fn command_id_from_name(name: &str) -> Option<CommandId> {
         "interrupt" | "interrupt_task" | "interrupt-task" => CommandId::InterruptTask,
         "quit" | "quit_muta" | "quit-muta" => CommandId::Quit,
         "copy" | "copy_selection" | "copy-selection" => CommandId::CopySelection,
-        "telemetry" | "open_telemetry" | "open-telemetry" => CommandId::OpenTelemetry,
+        "stats" | "session_stats" | "session-stats" | "telemetry" | "open_telemetry"
+        | "open-telemetry" => CommandId::OpenTelemetry,
         "connection"
         | "connection_detail"
         | "active_connection_detail"

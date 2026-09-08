@@ -316,6 +316,7 @@ pub async fn run_app_loop(
                 terminal.stage(|f| render::render_frame(app, f, &viewed_session_id))?;
             } else {
                 terminal.draw(|f| render::render_frame(app, f, &viewed_session_id))?;
+                app.ui.commit();
             }
         }
 
@@ -344,6 +345,7 @@ pub async fn run_app_loop(
                 continue;
             }
             terminal.commit_staged()?;
+            app.ui.commit();
             // Committed: the staged rect observation is now the published
             // geometry. Nothing to do — the snapshot is simply dropped.
         }
@@ -360,6 +362,7 @@ pub async fn run_app_loop(
                 continue;
             }
             terminal.commit_staged()?;
+            app.ui.commit();
         }
         // A transcript shrink can clamp a manually positioned viewport after
         // a normal draw. Repaint once at the newly valid offset instead of
@@ -447,10 +450,18 @@ async fn process_one_event(
         }
     }
 
-    let active_modal = app.active_modal();
+    let foreground = app.ui.scene().foreground().copied();
+    let active_modal = match foreground {
+        Some(crate::ui::UiKey::Modal(modal)) => modal,
+        Some(crate::ui::UiKey::ProviderDelete) => Modal::Connections,
+        _ => Modal::None,
+    };
     let is_responding = app.viewed_chrome().responding;
     let completion_kind = app.completion_kind();
-    let active_sheet = app.active_sheet();
+    let active_sheet = match foreground {
+        Some(crate::ui::UiKey::Sheet(kind)) => Some(kind),
+        _ => None,
+    };
     let suppress_completions =
         matches!(active_modal, Modal::Help | Modal::ViewSwitcher) || active_sheet.is_some();
     let completions = if suppress_completions {
@@ -471,6 +482,7 @@ async fn process_one_event(
     let in_side_view = app.in_side_view;
     let has_focused_target = app.focused_target.is_some();
     let transcript_focused = app.transcript_focused;
+    let in_history_recall = app.history_index.is_some();
     let history_searching = app.history_search;
     let model_searching = app.model_search;
     let custom_provider_field =
@@ -544,6 +556,7 @@ async fn process_one_event(
                 in_side_view,
                 has_focused_target,
                 transcript_focused,
+                in_history_recall,
                 history_searching,
                 model_searching,
                 custom_provider_field,

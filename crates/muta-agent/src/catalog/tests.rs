@@ -875,9 +875,52 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
     // Usage pruned of deleted connection and deleted models
     assert!(usage.recency_of("my-custom") > 0);
     assert_eq!(usage.recency_of("deleted-connection"), 0);
-    assert!(usage.model_recency("model-a") > 0);
+    assert!(usage.model_recency("my-custom", "model-a") > 0);
+    assert_eq!(usage.model_recency("my-custom", "model-deleted"), 0);
+    assert_eq!(usage.model_recency("deleted-connection", "model-deleted"), 0);
     assert_eq!(usage.last_model_for("my-custom"), None);
     assert_eq!(usage.last_model_for("deleted-connection"), None);
+}
+
+#[test]
+fn model_recency_isolation_across_same_preset_connections() {
+    let _sandbox = sandboxed_paths();
+    let mut conn1 = instance("conn-1", None);
+    conn1.models = vec!["shared-model".to_string()];
+    conn1.protocol = Some(WireProtocol::OpenAiChatCompletions);
+    conn1.base_url = Some("https://relay1.example.com".to_string());
+
+    let mut conn2 = instance("conn-2", None);
+    conn2.models = vec!["shared-model".to_string()];
+    conn2.protocol = Some(WireProtocol::OpenAiChatCompletions);
+    conn2.base_url = Some("https://relay2.example.com".to_string());
+
+    let connections = Connections {
+        connections: vec![conn1, conn2],
+    };
+    connections.save().unwrap();
+
+    let config = Config {
+        default_connection: "conn-1".to_string(),
+        ..Default::default()
+    };
+
+    let mut usage = muta_persistence::connection_usage::ConnectionUsage::default();
+    // User activates shared-model on conn-1 only
+    usage.record("conn-1");
+    usage.record_model("conn-1", "shared-model");
+
+    let snapshot = super::build_picker_state(&config, &usage);
+    let row1 = snapshot.rows.iter().find(|r| r.id == "conn-1").expect("row1");
+    let row2 = snapshot.rows.iter().find(|r| r.id == "conn-2").expect("row2");
+
+    let model1 = row1.model_info.iter().find(|m| m.model == "shared-model").expect("conn-1 shared-model");
+    let model2 = row2.model_info.iter().find(|m| m.model == "shared-model").expect("conn-2 shared-model");
+
+    // conn-1 has last_used_ms recorded
+    assert!(model1.last_used_ms.is_some(), "conn-1 shared-model must have recency");
+    // conn-2 must NOT have last_used_ms set!
+    assert_eq!(model2.last_used_ms, None, "conn-2 shared-model must NOT inherit conn-1 recency");
 }
 
 #[tokio::test]

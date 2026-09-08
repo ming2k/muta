@@ -1146,7 +1146,9 @@ mod tests {
             let (_qm, effects) = qm.update(QuestionAction::Submit);
             effects
         };
-        assert!(effects.contains(&QuestionEffect::Closed { request_id: "q1".into() }));
+        assert!(effects.contains(&QuestionEffect::Closed {
+            request_id: "q1".into()
+        }));
 
         super::question_effects::apply(&effects, &mut app, &runtime).await;
 

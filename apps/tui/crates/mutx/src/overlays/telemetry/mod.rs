@@ -1,4 +1,4 @@
-//! Session Telemetry modal: unified context usage and performance telemetry
+//! Session Stats modal: unified context usage and performance stats
 //! grouped by user round, with turn-level drill-down and attempt inspection.
 
 pub mod draw;

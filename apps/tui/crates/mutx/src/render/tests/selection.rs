@@ -60,10 +60,8 @@ fn virtual_index_prefix_skips_settled_history_during_streaming_tail() {
         ));
     }
     // 6th message is actively streaming (not in HeightCache)
-    let streaming_tail = TranscriptMessage::new(
-        muta_contracts::Role::Assistant,
-        "streaming in progress...",
-    );
+    let streaming_tail =
+        TranscriptMessage::new(muta_contracts::Role::Assistant, "streaming in progress...");
     messages.push(streaming_tail);
 
     let mut cache = HeightCache::default();

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
 </script>
 
 <div class="toast-stack" role="status" aria-live="polite">
@@ -11,7 +12,7 @@
           <div class="toast-text">{toast.body}</div>
         {/if}
       </div>
-      <button class="close" aria-label="Dismiss" onclick={() => daemon.dismissToast(toast.id)}>
+      <button class="close" aria-label={t("dismiss")} onclick={() => daemon.dismissToast(toast.id)}>
         ×
       </button>
     </div>
@@ -35,12 +36,12 @@
     align-items: flex-start;
     gap: 8px;
     background-color: var(--bg-surface);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line-strong);
     border-left: 3px solid var(--text-muted);
     border-radius: var(--radius-md);
     padding: 10px 12px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-    animation: slideIn 0.15s ease-out;
+    box-shadow: var(--shadow-modal);
+    animation: slideIn 0.2s var(--ease);
   }
 
   .toast.info {

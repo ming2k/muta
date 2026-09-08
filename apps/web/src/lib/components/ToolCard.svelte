@@ -1,25 +1,56 @@
 <script lang="ts">
   import type { RunnerExecution, LiveToolExecution } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
 
   interface Props {
     tool: LiveToolExecution;
   }
 
   let { tool }: Props = $props();
-  let expanded = $state(true);
-  let runnerExpanded = $state(true);
+
+  /* UX (borrowed from opencode's session-turn pattern): tools collapse by
+     default so long rounds stay scannable — the header row carries a live
+     one-line preview while running, and the full transcript opens on demand.
+     A tool that is still running, or that failed, opens itself so attention
+     goes where it is needed. */
+  let expanded = $state(false);
+  let runnerExpanded = $state(false);
+  let userToggled = $state(false);
+
+  $effect(() => {
+    // Auto-open on failure only if the user has not expressed a preference.
+    if (!userToggled && tool.status === "failed") expanded = true;
+  });
+
+  function toggle() {
+    userToggled = true;
+    expanded = !expanded;
+  }
 
   let statusLabel = $derived.by(() => {
     switch (tool.status) {
       case "running":
-        return "running…";
+        return `${t("running")}…`;
       case "failed":
-        return `failed (${tool.durationMs ?? 0}ms)`;
+        return `${t("failed")} · ${tool.durationMs ?? 0}ms`;
       case "cancelled":
-        return "cancelled";
+        return t("cancelled");
       default:
-        return `done (${tool.durationMs ?? 0}ms)`;
+        return `${t("done")} · ${tool.durationMs ?? 0}ms`;
     }
+  });
+
+  /* One-line preview for the collapsed header: the first non-blank line of
+     live output, or of the arguments when nothing has streamed yet. */
+  let headPreview = $derived.by(() => {
+    const source =
+      (tool.status === "running" ? tool.stdout || tool.stderr : "") || tool.arguments;
+    const line = source
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (!line) return "";
+    return line.length > 72 ? `${line.slice(0, 72)}…` : line;
   });
 
   let livePreview = $derived(
@@ -30,30 +61,33 @@
     const parts: string[] = [];
     if (runner.profile) parts.push(runner.profile);
     if (runner.activity) parts.push(runner.activity);
-    const running = runner.tools.filter((t) => t.status === "running").length;
-    if (running > 0) parts.push(`${running} tool${running > 1 ? "s" : ""} running`);
-    return parts.join(" · ") || "working…";
+    const running = runner.tools.filter((t2) => t2.status === "running").length;
+    if (running > 0) parts.push(t("toolsRunning")(running));
+    return parts.join(" · ") || t("working");
   }
 </script>
 
-<div class="tool-card">
-  <button class="tool-header" onclick={() => (expanded = !expanded)}>
-    <div class="tool-title">
-      <span class="icon">⚡</span>
-      <span class="name">{tool.name}</span>
-    </div>
-    <div class="tool-badge status-{tool.status}">{statusLabel}</div>
+<div class="tool-card" class:running={tool.status === "running"}>
+  <button class="tool-header" onclick={toggle} aria-expanded={expanded}>
+    <span class="glyph" aria-hidden="true">⚡</span>
+    <span class="name">{tool.name}</span>
+    {#if !expanded && headPreview}
+      <span class="preview">{headPreview}</span>
+    {/if}
+    <span class="spacer"></span>
+    <span class="tool-badge status-{tool.status}">{statusLabel}</span>
+    <span class="chevron" aria-hidden="true">{expanded ? "−" : "+"}</span>
   </button>
 
   {#if expanded}
     <div class="tool-content">
       <div class="block">
-        <div class="label">Arguments</div>
+        <div class="label">{t("arguments")}</div>
         <pre>{tool.arguments}</pre>
       </div>
       {#if tool.status === "running" && livePreview}
         <div class="block">
-          <div class="label">Live output</div>
+          <div class="label">{t("liveOutput")}</div>
           <pre class="stream">{livePreview}</pre>
         </div>
       {/if}
@@ -71,7 +105,7 @@
       {/if}
       {#if tool.output}
         <div class="block">
-          <div class="label">Result</div>
+          <div class="label">{t("result")}</div>
           <pre class="output">{tool.output}</pre>
         </div>
       {/if}
@@ -82,16 +116,16 @@
           <button class="runner-header" onclick={() => (runnerExpanded = !runnerExpanded)}>
             <span class="runner-icon">⎇</span>
             <span class="runner-title">runner — {runnerSummary(runner)}</span>
-            <span class="chevron">{runnerExpanded ? "-" : "+"}</span>
+            <span class="chevron">{runnerExpanded ? "−" : "+"}</span>
           </button>
           {#if runnerExpanded}
             <div class="runner-content">
               {#each runner.tools as sub (sub.id)}
                 <div class="runner-tool">
                   <div class="runner-tool-head">
-                    <span class="name">{sub.name}</span>
+                    <span class="name sub-name">{sub.name}</span>
                     <span class="sub-status status-{sub.status}">
-                      {sub.status === "running" ? "running…" : `done (${sub.durationMs ?? 0}ms)`}
+                      {sub.status === "running" ? `${t("running")}…` : `${t("done")} (${sub.durationMs ?? 0}ms)`}
                     </span>
                   </div>
                   {#if sub.output}
@@ -101,13 +135,13 @@
               {/each}
               {#if runner.streamingReasoning}
                 <details class="runner-reasoning" open>
-                  <summary>thinking…</summary>
+                  <summary>{t("thinking")}…</summary>
                   <pre class="runner-reasoning-text">{runner.streamingReasoning}</pre>
                 </details>
               {/if}
               {#each runner.reasoning as trace, i (i)}
                 <details class="runner-reasoning">
-                  <summary>thinking</summary>
+                  <summary>{t("thinking")}</summary>
                   <pre class="runner-reasoning-text">{trace}</pre>
                 </details>
               {/each}
@@ -126,44 +160,73 @@
 </div>
 
 <style>
+  /* A tool card is a quiet ledger row: no filled card, just a hairline
+     above and mono ink below, opening on demand. */
   .tool-card {
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    margin: 8px 0;
+    border-top: 1px solid var(--line);
+    margin: 0.1rem 0;
     overflow: hidden;
     content-visibility: auto;
   }
 
+  .tool-card.running .glyph {
+    animation: breathe 1.6s ease-in-out infinite;
+  }
+
+  @keyframes breathe {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
   .tool-header {
     width: 100%;
-    padding: 8px 12px;
+    padding: 0.45rem 0.25rem;
     background: transparent;
     border: none;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    align-items: baseline;
+    gap: 0.5rem;
     cursor: pointer;
     text-align: left;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 0.75rem;
+    min-width: 0;
   }
 
-  .tool-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+  .glyph {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .name {
     font-weight: 600;
     color: var(--accent-info);
+    flex-shrink: 0;
+  }
+
+  .preview {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .spacer {
+    flex: 1;
+    min-width: 0.5rem;
   }
 
   .tool-badge {
-    font-size: 11px;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
+    font-size: 0.65rem;
+    flex-shrink: 0;
+    color: var(--text-muted);
   }
 
   .status-running {
@@ -171,7 +234,7 @@
   }
 
   .status-completed {
-    color: var(--accent-primary);
+    color: var(--accent-info);
   }
 
   .status-failed {
@@ -182,18 +245,23 @@
     color: var(--text-muted);
   }
 
+  .chevron {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    flex-shrink: 0;
+    width: 0.8em;
+  }
+
   .tool-content {
-    padding: 10px 12px;
-    background-color: var(--bg-surface);
-    border-top: 1px solid var(--border-subtle);
+    padding: 0.4rem 0.25rem 0.6rem;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 0.72rem;
     max-height: 240px;
     overflow-y: auto;
   }
 
   .block {
-    margin-bottom: 8px;
+    margin-bottom: 0.5rem;
   }
 
   .block:last-child {
@@ -202,9 +270,10 @@
 
   .label {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    margin-bottom: 2px;
+    margin-bottom: 0.1rem;
   }
 
   pre {
@@ -223,22 +292,22 @@
   }
 
   .runner-block {
-    margin-top: 8px;
-    border-left: 2px solid var(--border-strong);
-    padding-left: 10px;
+    margin-top: 0.5rem;
+    border-left: 2px solid var(--line-strong);
+    padding-left: 0.6rem;
   }
 
   .runner-header {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 0.4rem;
     width: 100%;
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 2px 0;
+    padding: 0.1rem 0;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 0.72rem;
     text-align: left;
   }
 
@@ -253,41 +322,40 @@
     white-space: nowrap;
   }
 
-  .chevron {
-    margin-left: auto;
-    color: var(--text-muted);
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-
   .runner-content {
-    padding: 6px 0 2px;
+    padding: 0.35rem 0 0.1rem;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 0.35rem;
   }
 
   .runner-tool {
     background: var(--bg-surface-hover);
     border-radius: var(--radius-sm);
-    padding: 6px 8px;
+    padding: 0.35rem 0.5rem;
   }
 
   .runner-tool-head {
     display: flex;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
+  }
+
+  .sub-name {
+    color: var(--text-secondary);
+    font-weight: 600;
   }
 
   .runner-tool pre {
-    margin-top: 4px;
+    margin-top: 0.25rem;
     max-height: 120px;
     overflow-y: auto;
   }
 
   .sub-status {
-    font-size: 10px;
+    font-size: 0.62rem;
     flex-shrink: 0;
+    color: var(--text-muted);
   }
 
   .runner-stream {
@@ -299,8 +367,8 @@
   .runner-reasoning summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 11px;
-    padding: 2px 0;
+    font-size: 0.7rem;
+    padding: 0.1rem 0;
     user-select: none;
   }
 
@@ -314,5 +382,11 @@
     color: var(--text-secondary);
     max-height: 200px;
     overflow-y: auto;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tool-card.running .glyph {
+      animation: none;
+    }
   }
 </style>

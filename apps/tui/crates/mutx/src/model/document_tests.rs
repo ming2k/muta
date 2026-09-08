@@ -963,7 +963,10 @@ fn reasoning_summary_shows_activity_then_settles() {
     // Streaming without milestones: an activity word, not a metric.
     let streaming = TranscriptMessage::reasoning("one two three four five");
     let summary = streaming.reasoning_summary().unwrap();
-    assert_eq!(summary, "Thinking…", "no token count while streaming: {summary}");
+    assert_eq!(
+        summary, "Thinking…",
+        "no token count while streaming: {summary}"
+    );
 
     // Even a long trace shows no count.
     let filler = "lorem ipsum ".repeat(600);
@@ -1244,7 +1247,6 @@ fn push_stream_stays_bounded_on_long_streams() {
         "structure must have been discovered"
     );
 }
-
 
 /// The wrap cache must be transparent: cached geometry is bit-for-bit what a
 /// fresh `wrap_text` / code preparation produces, across widths and content

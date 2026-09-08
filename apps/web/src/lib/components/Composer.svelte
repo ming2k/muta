@@ -1,5 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
   import type { ImagePart, ComposerCompletion } from "../types.js";
 
   interface PendingImage {
@@ -93,7 +94,7 @@
     return new Promise((resolve) => {
       if (!file.type.startsWith("image/")) return resolve(null);
       if (file.size > MAX_IMAGE_BYTES) {
-        daemon.pushToast("warning", "Image too large", `${file.name} exceeds 10 MB.`);
+        daemon.pushToast("warning", t("imageTooLarge"), t("imageTooLargeBody")(file.name));
         return resolve(null);
       }
       const reader = new FileReader();
@@ -183,7 +184,7 @@
         {#each images as img, i (img.previewUrl)}
           <span class="chip">
             <img src={img.previewUrl} alt="attachment" />
-            <button class="remove" aria-label="Remove image" onclick={() => removeImage(i)}>×</button>
+            <button class="remove" aria-label={t("removeImage")} onclick={() => removeImage(i)}>×</button>
           </span>
         {/each}
       </div>
@@ -195,13 +196,13 @@
       onkeydown={handleKeyDown}
       oninput={handleInput}
       onpaste={handlePaste}
-      placeholder="Type your message, or ask coding tasks... (Enter to send, Shift+Enter for newline)"
+      placeholder={t("composerPlaceholder")}
       rows="1"
       disabled={!daemon.sessionAttached}
     ></textarea>
 
     {#if completionMatches.length > 0}
-      <div class="command-completions" aria-label="Command completions">
+      <div class="command-completions" aria-label={t("commandCompletions")}>
         {#each completionMatches as item (`${item.kind}:${item.label}`)}
           <button
             type="button"
@@ -239,8 +240,8 @@
         />
         <button
           class="attach-btn"
-          aria-label="Attach image"
-          title="Attach image (or paste)"
+          aria-label={t("attachImage")}
+          title={t("attachImage")}
           disabled={!daemon.sessionAttached}
           onclick={() => fileInputEl?.click()}
         >
@@ -250,11 +251,11 @@
         </button>
         <button
           class="send-btn"
-          aria-label="Send message"
+          aria-label={t("sendMessage")}
           disabled={(!draft.trim() && images.length === 0) || !daemon.sessionAttached}
           onclick={handleSend}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
           </svg>
         </button>
@@ -265,24 +266,25 @@
 
 <style>
   .composer-container {
-    padding: 12px 24px 20px;
-    background-color: var(--bg-app);
+    padding: 0.5rem var(--pad-x) 1.4rem;
+    background: linear-gradient(to top, var(--bg-app) 78%, transparent);
   }
 
+  /* The composer floats on the paper like a blank scroll awaiting the
+     brush: a single raised surface, hairline border, no heavy shadow. */
   .composer-box {
+    width: min(var(--measure), 100%);
+    margin: 0 auto;
     background-color: var(--input-bg-inactive);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-lg);
-    padding: 12px 16px 8px;
+    padding: 0.7rem 1rem 0.5rem;
     display: flex;
     flex-direction: column;
-    transition: background-color 0.15s, border-color 0.15s;
+    transition: background-color var(--t-fast), border-color var(--t-fast);
   }
 
-  /* The input component's two related-but-independent background tokens:
-     inactive rests just above the page background; active (focus-within)
-     lifts to the brighter input surface so the prompt is clearly the
-     "typing lands here" target. */
+  /* Focused paper brightens — the only "lifted" state in the whole UI. */
   .composer-box:focus-within {
     background-color: var(--input-bg-active);
     border-color: var(--border-input-focus);
@@ -293,39 +295,45 @@
     border: none;
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: 0.92rem;
+    line-height: 1.6;
     resize: none;
     outline: none;
-    min-height: 24px;
+    min-height: 1.6em;
     max-height: 180px;
-    line-height: 1.5;
+  }
+
+  textarea::placeholder {
+    color: var(--text-muted);
+    opacity: 0.7;
   }
 
   textarea:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
   }
 
   .command-completions {
     display: grid;
     gap: 2px;
-    margin: 6px -6px 2px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border-subtle);
+    margin: 0.35rem -0.35rem 0.1rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid var(--line);
   }
 
   .command-completions button {
     display: grid;
     grid-template-columns: minmax(8rem, auto) 1fr;
-    gap: 12px;
+    gap: 0.75rem;
     align-items: baseline;
-    padding: 6px;
+    padding: 0.35rem 0.4rem;
     border: 0;
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     background: transparent;
     text-align: left;
     cursor: pointer;
+    font-size: 0.8rem;
   }
 
   .command-completions button:hover,
@@ -337,6 +345,8 @@
 
   .command-completions code {
     color: var(--accent-primary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
   }
 
   /* Alias candidates are a secondary tier: the alias keeps the primary slot
@@ -350,15 +360,15 @@
   .command-completions .alias-target {
     color: var(--accent-primary);
     opacity: 0.75;
-    font-family: var(--font-mono, monospace);
-    font-size: 0.92em;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
   }
 
   .image-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
   }
 
   .chip {
@@ -367,7 +377,7 @@
     height: 48px;
     border-radius: var(--radius-md);
     overflow: hidden;
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line-strong);
   }
 
   .chip img {
@@ -399,35 +409,35 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 8px;
+    margin-top: 0.5rem;
   }
 
   .hints {
     display: flex;
-    gap: 6px;
+    gap: 0.35rem;
   }
 
   .hint-pill {
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 2px 6px;
+    font-size: 0.68rem;
+    padding: 0.12rem 0.4rem;
     border-radius: var(--radius-sm);
-    background-color: var(--bg-surface);
+    background-color: transparent;
     color: var(--text-muted);
-    border: none;
+    border: 1px solid var(--line);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: color var(--t-fast), border-color var(--t-fast);
   }
 
   .hint-pill:hover {
-    background-color: var(--bg-surface-hover);
     color: var(--text-secondary);
+    border-color: var(--line-strong);
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   .file-input {
@@ -435,22 +445,22 @@
   }
 
   .attach-btn {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     background: transparent;
     color: var(--text-muted);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: color var(--t-fast), border-color var(--t-fast);
   }
 
   .attach-btn:not(:disabled):hover {
     color: var(--text-secondary);
-    background: var(--bg-surface);
+    border-color: var(--line-strong);
   }
 
   .attach-btn:disabled {
@@ -458,26 +468,34 @@
     cursor: not-allowed;
   }
 
+  /* 朱砂 send: the one filled element in the entire interface. */
   .send-btn {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     background-color: var(--accent-primary);
-    color: #fff;
+    color: var(--bg-app);
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: opacity 0.15s;
+    transition: opacity var(--t-fast), transform var(--t-fast);
   }
 
   .send-btn:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: not-allowed;
   }
 
   .send-btn:not(:disabled):hover {
-    opacity: 0.9;
+    opacity: 0.88;
+    transform: translateY(-1px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .send-btn:not(:disabled):hover {
+      transform: none;
+    }
   }
 </style>

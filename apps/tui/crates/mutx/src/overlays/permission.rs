@@ -8,7 +8,8 @@ use muta_contracts::{PermissionRequest, UserQuestionRequest};
 
 use crate::components::options::{ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled};
 use crate::design::MODAL_INNER_H_PADDING;
-use crate::model::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
+use crate::model::layout::{PermissionActionHit, QuestionOptionHit};
+use crate::ui::ComponentTree;
 use crate::primitives::{
     FooterHint, contrast_fg, keyvocab, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
@@ -51,7 +52,7 @@ const OTHER_OPTION_LABEL: &str = "Other";
 #[allow(clippy::too_many_arguments)] // modal draw fns thread many context args by nature
 pub fn draw_question_modal(
     frame: &mut Frame,
-    hit_map: &mut ModalHitMap,
+    hit_map: &mut ComponentTree,
     request: &UserQuestionRequest,
     current_question: usize,
     selected: &[Vec<usize>],
@@ -101,11 +102,7 @@ pub fn draw_question_modal(
                     selected: q_selected.is_some_and(|s| s.contains(&i)),
                     highlighted: false,
                     tone: ChoiceTone::Flat,
-                    marker: if q.multi_select {
-                        ChoiceMarker::Checkbox
-                    } else {
-                        ChoiceMarker::None
-                    },
+                    marker: ChoiceMarker::Checkbox,
                 }
                 .measure_lines(measure_width);
                 rows += row;
@@ -117,27 +114,23 @@ pub fn draw_question_modal(
                 selected: q_selected.is_some_and(|s| s.contains(&other_idx)),
                 highlighted: false,
                 tone: ChoiceTone::Flat,
-                marker: if q.multi_select {
-                    ChoiceMarker::Checkbox
-                } else {
-                    ChoiceMarker::None
-                },
+                marker: ChoiceMarker::Checkbox,
             }
             .measure_lines(measure_width);
-            // The "Other" free-text field (present while it is highlighted),
-            // wrapped at the same 5-column indent budget the body build uses.
-            if highlighted == other_idx {
-                let field = other_text
-                    .get(current_question)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                rows += wrap_text(
-                    field,
-                    measure_width.saturating_sub(OTHER_FIELD_INDENT).max(1),
-                )
-                .len()
-                .max(1);
-            }
+            // The "Other" free-text field — now always rendered beneath the
+            // "Other" option line (focused: live value; unfocused: the typed
+            // value or a dim "Other" placeholder), so it always occupies its
+            // wrapped rows in the demand measurement.
+            let field = other_text
+                .get(current_question)
+                .map(String::as_str)
+                .unwrap_or("");
+            rows += wrap_text(
+                field,
+                measure_width.saturating_sub(OTHER_FIELD_INDENT).max(1),
+            )
+            .len()
+            .max(1);
             rows
         })
         .unwrap_or(0);
@@ -148,11 +141,15 @@ pub fn draw_question_modal(
     // of the scrollbar's bottom cap (`▼`), so the selected option is never
     // overlapped by the indicator.
     let desired = content_h.saturating_add(2);
-    // The sheet may grow upward into the transcript, but only up to the top
-    // edge of the terminal — the header must stay on screen. The slot's own
-    // height is the minimum (so a short question still reads as the
-    // drop-in composer replacement it is designed to be).
-    let available_above = slot_bottom.max(1);
+    // The sheet grows upward into the transcript but only up to the shared
+    // interaction-slot maximum (`sheet_max_height` — the same
+    // `terminal_height / 2` rule the composer input box caps itself at), so
+    // the composer and every sheet agree on "how tall the slot can get" and
+    // neither ever covers more than half the terminal. Content that exceeds
+    // the cap scrolls in the body. The slot's own height is the minimum (so
+    // a short question still reads as the drop-in composer replacement it is
+    // designed to be).
+    let available_above = crate::design::sheet_max_height(frame.area().height);
     let desired_h = desired.max(slot.height).min(available_above);
     let sheet_top = slot_bottom.saturating_sub(desired_h);
     let area = Rect::new(
@@ -162,6 +159,7 @@ pub fn draw_question_modal(
         slot_bottom.saturating_sub(sheet_top).max(1),
     );
     let f = modal_frame(frame, area, theme, true, true);
+    hit_map.mount(crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question), area);
     // Degrade gracefully rather than silently: if even the enlarged sheet
     // still cannot show a single option row (an extreme — tiny terminal, or
     // a resize race that collapsed the slot), the anchored layout would
@@ -226,9 +224,12 @@ pub fn draw_question_modal(
     // otherwise a multi-line field leaves the caret scrolled out of view.
     let mut other_caret_row: Option<usize> = None;
     let mut other_caret_col: usize = 0;
-    // 5-column indent of the "Other" free-text field, matching the `"     "`
-    // prefix passed to `push_wrapped_styled`.
-    const OTHER_FIELD_INDENT: usize = 5;
+    // 2-column indent of the "Other" free-text field: the `› ` prompt
+    // glyph (1 col) plus one gap col, matching the `"› "` prefix passed to
+    // `push_wrapped_styled`. Continuation rows use the same 2 columns so
+    // wrapped lines stay aligned under the prompt.
+    const OTHER_FIELD_INDENT: usize = 2;
+    let other_highlighted = question.is_some_and(|q| highlighted == q.options.len());
     if let Some(q) = question {
         if let Some(header) = &q.header {
             push_wrapped_styled(
@@ -254,7 +255,6 @@ pub fn draw_question_modal(
 
         let q_selected = selected.get(current_question);
         let other_index = q.options.len();
-        let other_highlighted = highlighted == other_index;
         let other_text_value = other_text
             .get(current_question)
             .map(String::as_str)
@@ -299,23 +299,59 @@ pub fn draw_question_modal(
             theme,
         );
         // The free-text field row sits directly beneath the "Other" option
-        // line. We render the typed text *without* a trailing `█` glyph: the
-        // terminal's own block cursor (placed below via `set_cursor_position`)
-        // is the caret, which is what the host IME samples to anchor its
-        // composition window. A painted glyph would be a fake cursor the IME
-        // cannot see.
-        if other_highlighted {
+        // line, and it is ALWAYS shown (not only while highlighted): a
+        // decision sheet whose last option is a text field must keep that
+        // field visible so the user can see their typed "Other" value (or
+        // that the option even has an input) without having to re-navigate
+        // to it. While highlighted it becomes the live input surface.
+        {
             let field_start_row = body_lines.len();
-            push_wrapped_styled(
-                &mut body_lines,
-                "     ",
-                "     ",
-                other_text_value,
-                Style::default().fg(theme.brand()),
-                body_width,
-            );
+            // The field is a real text-input line: a brand `›` prompt glyph
+            // (mirroring the composer's shell-style prompt) plus a gap, then
+            // the typed text. The 2-column prefix (the field's own prompt)
+            // sits under the checkbox column, so the input reads as "the
+            // Other value being typed" aligned with the label text start.
+            let field_prefix = "› ";
+            let field_indent = "  ";
+            if other_text_value.is_empty() {
+                // Empty: paint a muted placeholder so the user always sees
+                // the field is an input surface — the shell prompt + a dim
+                // "type your answer…" hint (shown while focused) or a quieter
+                // "your own…" (while the row is not active, so the row still
+                // reads as having an input without repeating the "Other"
+                // label verbatim below itself).
+                let hint = if other_highlighted {
+                    "type your answer…"
+                } else {
+                    "your own…"
+                };
+                push_wrapped_styled(
+                    &mut body_lines,
+                    field_prefix,
+                    field_indent,
+                    hint,
+                    Style::default().fg(theme.muted()),
+                    body_width,
+                );
+            } else {
+                // The user has typed: show the value in the brand color (the
+                // active input surface) or muted (a filled-but-unfocused
+                // field, still reviewing the choice).
+                push_wrapped_styled(
+                    &mut body_lines,
+                    field_prefix,
+                    field_indent,
+                    other_text_value,
+                    Style::default().fg(if other_highlighted {
+                        theme.brand()
+                    } else {
+                        theme.muted()
+                    }),
+                    body_width,
+                );
+            }
             // Resolve the caret location through the *same* `wrap_text` pass
-            // the renderer used (same indent budget) so the body-scroll follow
+            // the renderer used (same prefix budget) so the body-scroll follow
             // target and the cursor placement both point at the caret's real
             // visual row + column. The field is append-only, so the caret is
             // always at the end of the text: last wrapped row, end column.
@@ -326,8 +362,10 @@ pub fn draw_question_modal(
                 .last()
                 .map(|wl| mutx_engine::text::cursor_column(&wl.text, wl.text.len()))
                 .unwrap_or(0);
-            other_caret_row = Some(field_start_row + wrapped_rows.saturating_sub(1));
-            other_caret_col = caret_local_col;
+            if other_highlighted {
+                other_caret_row = Some(field_start_row + wrapped_rows.saturating_sub(1));
+                other_caret_col = caret_local_col;
+            }
         }
         option_rows.push((other_index, other_start, body_lines.len()));
     }
@@ -337,11 +375,26 @@ pub fn draw_question_modal(
     // can browse a long question or option list without the body snapping back
     // to the cursor. Mirrors the session / history modals.
     //
-    // When the "Other" free-text field is active, the caret can sit several
-    // rows below the "Other" label (the field wraps), so follow the *caret*
-    // row instead of the label row — otherwise typing past the first line
-    // scrolls the caret out of view.
-    let follow_target = other_caret_row.or(highlighted_row);
+    // The follow target is the **end** (last wrapped row) of the highlighted
+    // option, not its first line: an option with a wrapped label + a
+    // description spans several visual rows, and pinning the first row leaves
+    // the tail clipped below the fold. Following the last row guarantees the
+    // whole option stays inside the viewport whenever space allows (the
+    // shared `resolve_scroll` edge-pin logic then walks the scroll back up so
+    // the first row is also visible). `option_rows` records each option's
+    // `[start, end)` row range; the "Other" free-text field, when active,
+    // must keep its **caret** row (the very bottom of the field) visible
+    // instead — see below.
+    let follow_target = other_caret_row.or_else(|| {
+        // Find the highlighted option's end row (exclusive) minus one.
+        highlighted_row.map(|start_row| {
+            option_rows
+                .iter()
+                .find(|(_, start, _)| *start == start_row)
+                .map(|(_, _, end)| end.saturating_sub(1))
+                .unwrap_or(start_row)
+        })
+    });
     let follow = if follow_highlight {
         follow_target
     } else {
@@ -360,8 +413,8 @@ pub fn draw_question_modal(
     // Place the real terminal cursor in the "Other" free-text field — the only
     // text-input surface in this modal. This is what the host IME samples to
     // anchor its composition window; without it, IME-based input (CJK, etc.)
-    // cannot bind to the field. The field's 5-column indent matches the
-    // `"     "` prefix passed to `push_wrapped_styled`, and the caret sits at
+    // cannot bind to the field. The field's 2-column `› ` prompt matches the
+    // `"› "` prefix passed to `push_wrapped_styled`, and the caret sits at
     // the end of the typed text (the field is append-only, so the caret is
     // always at the end).
     //
@@ -412,6 +465,11 @@ pub fn draw_question_modal(
             hints.push(FooterHint::secondary(keyvocab::SPACE, "select"));
         }
         hints.push(FooterHint::secondary("1-9", "jump"));
+        if other_highlighted {
+            // The "Other" free-text field is the active input surface; tell
+            // the user they can type into it (and that Enter still advances).
+            hints.push(FooterHint::secondary("type", "fill"));
+        }
         hints.push(FooterHint::key_always(crate::keymap::Key::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
@@ -427,7 +485,7 @@ pub fn draw_question_modal(
 #[allow(clippy::too_many_arguments)]
 fn draw_question_modal_fallback(
     frame: &mut Frame,
-    hit_map: &mut ModalHitMap,
+    hit_map: &mut ComponentTree,
     request: &UserQuestionRequest,
     current_question: usize,
     selected: &[Vec<usize>],
@@ -478,18 +536,13 @@ fn draw_question_modal_fallback(
         let q_selected = selected.get(current_question);
         for (i, option) in q.options.iter().enumerate() {
             let row = body_lines.len();
-            let marker = if q.multi_select {
-                ChoiceMarker::Checkbox
-            } else {
-                ChoiceMarker::None
-            };
             ChoiceOptionRow {
                 label: &option.label,
                 description: None, // descriptions dropped in the fallback
                 selected: q_selected.is_some_and(|s| s.contains(&i)),
                 highlighted: i == highlighted,
                 tone: ChoiceTone::Flat,
-                marker,
+                marker: ChoiceMarker::Checkbox,
             }
             .push_lines(&mut body_lines, body_width, theme);
             option_rows.push((i, row, body_lines.len()));
@@ -505,11 +558,7 @@ fn draw_question_modal_fallback(
             selected: q_selected.is_some_and(|s| s.contains(&other_index)),
             highlighted: highlighted == other_index,
             tone: ChoiceTone::Flat,
-            marker: if q.multi_select {
-                ChoiceMarker::Checkbox
-            } else {
-                ChoiceMarker::None
-            },
+            marker: ChoiceMarker::Checkbox,
         }
         .push_lines(&mut body_lines, body_width, theme);
         option_rows.push((other_index, row, body_lines.len()));
@@ -540,6 +589,7 @@ fn draw_question_modal_fallback(
     let x = full.x + full.width.saturating_sub(w) / 2;
     let y = full.y + full.height.saturating_sub(panel_h) / 2;
     let area = Rect::new(x, y, w, panel_h);
+    hit_map.mount(crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question), area);
 
     frame.render_widget(Clear, area);
     frame.render_widget(panel_block(theme, theme.brand(), theme.panel()), area);
@@ -584,7 +634,7 @@ fn draw_question_modal_fallback(
 }
 
 fn record_question_hits(
-    hit_map: &mut ModalHitMap,
+    hit_map: &mut ComponentTree,
     body: Rect,
     option_rows: &[(usize, usize, usize)],
     scroll: usize,
@@ -600,7 +650,7 @@ fn record_question_hits(
         if top >= bottom {
             continue;
         }
-        hit_map.push_question_option(QuestionOptionHit {
+        hit_map.mount_question_option(QuestionOptionHit {
             option_index,
             rect: Rect::new(
                 body.x,
@@ -620,21 +670,23 @@ fn render_question_option(
     description: Option<&str>,
     is_selected: bool,
     is_highlighted: bool,
-    multi_select: bool,
+    _multi_select: bool,
     body_width: usize,
     theme: &Theme,
 ) {
+    // A checkbox marker (`[x]`/`[ ]`) is shown for EVERY question row —
+    // single-select included. That gives single-select rows a stable
+    // selection affordance: `[x]` marks the currently-chosen option, `[ ]`
+    // the rest, and the `›` cursor rides alongside (painted by the marker
+    // when highlighted) so the user's current position and their committed
+    // choice stay visually distinct in both modes.
     ChoiceOptionRow {
         label,
         description,
         selected: is_selected,
         highlighted: is_highlighted,
         tone: ChoiceTone::Flat,
-        marker: if multi_select {
-            ChoiceMarker::Checkbox
-        } else {
-            ChoiceMarker::None
-        },
+        marker: ChoiceMarker::Checkbox,
     }
     .push_lines(lines, body_width, theme);
 }
@@ -649,7 +701,7 @@ fn render_question_option(
 #[allow(clippy::too_many_arguments)]
 pub fn draw_permission_sheet(
     frame: &mut Frame,
-    hit_map: &mut ModalHitMap,
+    hit_map: &mut ComponentTree,
     request: &PermissionRequest,
     selected: usize,
     confirm_always: bool,
@@ -794,7 +846,7 @@ pub fn draw_permission_sheet(
     let sheet_h = desired_h.max(input_rect.height).min(area_bottom).max(1);
     let sheet_top = area_bottom.saturating_sub(sheet_h);
     let area = Rect::new(input_rect.x, sheet_top, input_rect.width, sheet_h);
-    hit_map.set_permission_sheet(area);
+    hit_map.mount_permission_sheet(area);
 
     frame.render_widget(Clear, area);
     frame.render_widget(panel_block(theme, theme.warn(), theme.panel()), area);
@@ -882,7 +934,7 @@ pub fn draw_permission_sheet(
         }
         let text = format!(" {} ", label);
         let width = text.width().min(u16::MAX as usize) as u16;
-        hit_map.push_permission_action(PermissionActionHit {
+        hit_map.mount_permission_action(PermissionActionHit {
             action_index: index,
             rect: Rect::new(action_x, footer_y, width, PERMISSION_FOOTER_HEIGHT),
         });
@@ -1050,8 +1102,9 @@ mod tests {
             origin: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-        let mut hit_map = ModalHitMap::new();
+        let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
+            hit_map.begin(frame.area(), crate::Modal::None);
             let mut scroll = 0;
             draw_question_modal(
                 frame,
@@ -1069,6 +1122,7 @@ mod tests {
             );
         });
 
+        hit_map.commit();
         assert!(find_question_hit(&hit_map, 80, 24, 0));
         assert!(find_question_hit(&hit_map, 80, 24, 1));
         assert!(find_question_hit(&hit_map, 80, 24, 2));
@@ -1089,8 +1143,9 @@ mod tests {
             ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-        let mut hit_map = ModalHitMap::new();
+        let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
+            hit_map.begin(frame.area(), crate::Modal::None);
             let rect = Rect::new(0, 16, 80, 8);
             let _ = draw_permission_sheet(
                 frame,
@@ -1108,6 +1163,7 @@ mod tests {
             );
         });
 
+        hit_map.commit();
         for action_index in 0..4 {
             assert!(
                 find_permission_hit(&hit_map, 80, 24, action_index),
@@ -1134,8 +1190,9 @@ mod tests {
         };
         let render = |depth: usize| {
             let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-            let mut hit_map = ModalHitMap::new();
+            let mut hit_map = ComponentTree::new();
             terminal.draw(|frame| {
+            hit_map.begin(frame.area(), crate::Modal::None);
                 let rect = Rect::new(0, 16, 80, 8);
                 let _ = draw_permission_sheet(
                     frame,
@@ -1165,7 +1222,7 @@ mod tests {
         );
     }
 
-    fn find_question_hit(map: &ModalHitMap, width: u16, height: u16, option_index: usize) -> bool {
+    fn find_question_hit(map: &ComponentTree, width: u16, height: u16, option_index: usize) -> bool {
         (0..height).any(|y| {
             (0..width).any(|x| {
                 map.question_option_at(x, y)
@@ -1175,7 +1232,7 @@ mod tests {
     }
 
     fn find_permission_hit(
-        map: &ModalHitMap,
+        map: &ComponentTree,
         width: u16,
         height: u16,
         action_index: usize,
@@ -1229,8 +1286,9 @@ mod tests {
             ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(30, 24);
-        let mut hit_map = ModalHitMap::new();
+        let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
+            hit_map.begin(frame.area(), crate::Modal::None);
             let rect = Rect::new(0, 16, 30, 8);
             let _ = draw_permission_sheet(
                 frame,
@@ -1274,8 +1332,9 @@ mod tests {
             ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(14, 24);
-        let mut hit_map = ModalHitMap::new();
+        let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
+            hit_map.begin(frame.area(), crate::Modal::None);
             let rect = Rect::new(0, 16, 14, 8);
             let _ = draw_permission_sheet(
                 frame,

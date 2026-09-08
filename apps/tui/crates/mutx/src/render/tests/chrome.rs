@@ -274,7 +274,8 @@ fn redesigned_components_render_without_panicking() {
             }],
             origin: None,
         };
-        let mut hit_map = crate::model::layout::ModalHitMap::new();
+        let mut hit_map = crate::ui::ComponentTree::new();
+        hit_map.begin(f.area(), crate::Modal::None);
         draw_question_modal(
             f,
             &mut hit_map,
@@ -305,7 +306,8 @@ fn redesigned_components_render_without_panicking() {
             ..Default::default()
         };
         let rect = mutx_engine::Rect::new(0, 0, 60, 3);
-        let mut hit_map = crate::model::layout::ModalHitMap::new();
+        let mut hit_map = crate::ui::ComponentTree::new();
+        hit_map.begin(f.area(), crate::Modal::None);
         let _ = draw_permission_sheet(
             f,
             &mut hit_map,

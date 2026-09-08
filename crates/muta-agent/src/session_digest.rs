@@ -14,6 +14,7 @@
 use muta_contracts::Provider;
 use muta_contracts::{Message, Role, SessionDigestInput};
 
+use std::sync::Arc;
 use crate::agent::Agent;
 
 /// Character budget for the transcript excerpt handed to the digest runner.
@@ -80,6 +81,98 @@ fn clean_digest(raw: muta_contracts::SessionDigest) -> Option<muta_contracts::Se
         intent,
         history,
     })
+}
+
+/// Character growth (since the stored anchor) that must have accumulated
+/// before an EOL or catch-up probe consults the Chronicler. Small enough that
+/// a long session's digest stays representative between refresh points; large
+/// enough that the probe is not consulted on every round. Lives here (not in
+/// orchestration) because the throttle is part of the maintenance routine's
+/// contract, shared by every trigger site.
+pub const DIGEST_REFRESH_DELTA_CHARS: usize = 8_000;
+
+/// Pure refresh decision, split out so the throttle is unit-testable.
+/// A session with no digest always needs one; a digest with a missing
+/// anchor (legacy data) refreshes once to establish the watermark; an
+/// anchored digest refreshes only after [`DIGEST_REFRESH_DELTA_CHARS`] of
+/// new transcript.
+pub fn digest_refresh_needed(
+    digest: Option<&muta_contracts::SessionDigest>,
+    anchor: Option<u64>,
+    transcript_chars: usize,
+) -> bool {
+    match (digest, anchor) {
+        (None, _) => true,
+        (Some(_), None) => true,
+        (Some(_), Some(anchor)) => {
+            transcript_chars >= anchor.saturating_add(DIGEST_REFRESH_DELTA_CHARS as u64) as usize
+        }
+    }
+}
+
+impl Agent {
+    /// Round-EOL digest maintenance (ADR-0193): read the session transcript,
+    /// apply the anchor throttle, consult the Chronicler when the delta has
+    /// grown past [`DIGEST_REFRESH_DELTA_CHARS`], and persist with the
+    /// anchor compare-and-set — the single-flight discipline. A CAS loser
+    /// (a concurrent refresh already covered this transcript) discards its
+    /// result; a caller that observes `false` reports nothing and loses
+    /// nothing.
+    ///
+    /// This is the shared routine behind the Round-EOL phase (ADR-0183
+    /// phase 5) and the admission catch-up checkpoint: convergence drives,
+    /// admission repairs.
+    pub async fn run_eol_digest_maintenance(
+        &self,
+        session: &muta_persistence::SessionStore,
+    ) -> Result<bool, String> {
+        let (digest, anchor) = session.digest().await;
+        let transcript = session.full_transcript().await;
+        let transcript_chars = transcript
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+        if !digest_refresh_needed(digest.as_ref(), anchor, transcript_chars) {
+            return Ok(false);
+        }
+        let Some(next) = self.generate_digest(&transcript, digest.as_ref()).await else {
+            return Ok(false); // provider unavailable/timeout: keep the previous digest
+        };
+        // CAS on the anchor: a concurrent refresh that persisted while this
+        // consult ran advanced the anchor past our snapshot, disqualifying
+        // this write. The persisted state is then already at least as fresh
+        // as what we generated.
+        session
+            .set_digest_if_anchor(Some(next.clone()), Some(transcript_chars as u64), anchor)
+            .await?;
+        // A non-`NULL` title is terminal (ADR-0186): the digest-derived title
+        // is written only while no title exists. The digest itself was
+        // already stored above.
+        let (_, has_title) = session.title().await;
+        if !has_title
+            && let Err(error) = session.set_title(Some(next.title), false).await
+        {
+            tracing::warn!(%error, "could not persist digest-derived session title");
+        }
+        Ok(true)
+    }
+
+    /// Spawn [`Self::run_eol_digest_maintenance`] as a detached, fail-open
+    /// task (the Chronicler carries its own timeout and never blocks the
+    /// round path). The detached form is the EOL-phase entry (ADR-0183
+    /// phase 5); admission catch-up calls the blocking form so the repair is
+    /// observable before the new round's work begins.
+    pub fn spawn_eol_digest_maintenance(
+        self: &Arc<Self>,
+        session: Arc<muta_persistence::SessionStore>,
+    ) {
+        let agent = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(error) = agent.run_eol_digest_maintenance(&session).await {
+                tracing::warn!(%error, "could not persist session digest");
+            }
+        });
+    }
 }
 
 /// Flatten to one render-safe line (control chars would spill the picker

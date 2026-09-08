@@ -74,10 +74,10 @@ row extends the steering without growing the executable command surface.
 
 ### `/serve`
 
-> **Superseded by the unified daemon (ADR-0096).** The `muta daemon start --fg`
+> **Superseded by the unified daemon (ADR-0096).** The `muta start --fg`
 > daemon now owns every session and serves them all
 > over the control plane; hot-attaching a listener to a single running TUI
-> session is a legacy of the per-session-server model. Use `muta daemon start` to run
+> session is a legacy of the per-session-server model. Use `muta start` to run
 > the daemon and `mutx attach` / `/dashboard` to drive its sessions. See the
 > [Server WebSocket API](server-api.md) for the current protocol.
 

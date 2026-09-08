@@ -304,12 +304,12 @@ fn test_build_overview_and_sticky_table_headers() {
 
     assert!(ov_text.contains("CONTEXT WINDOW"));
     assert!(ov_text.contains("Used Tokens"));
-    assert!(ov_text.contains("24500 tokens (12.2%)"));
+    assert!(ov_text.contains("24,500 tokens (12.2%)"));
     assert!(ov_text.contains("Capacity"));
-    assert!(ov_text.contains("200000 tokens"));
+    assert!(ov_text.contains("200,000 tokens"));
     assert!(ov_text.contains("SESSION TOKEN TOTALS"));
     assert!(ov_text.contains("Grand Total"));
-    assert!(ov_text.contains("4.3k (4300)"));
+    assert!(ov_text.contains("4.3k (4,300)"));
     assert!(ov_text.contains("75.0% hit rate"));
     assert!(ov_text.contains("STREAM PERFORMANCE & ACTIVITY"));
     assert!(ov_text.contains("100.0 tok/s"));
@@ -434,4 +434,91 @@ fn test_telemetry_burst_arrival_defensible_tps_fallback() {
         ov_text.contains("133.3 tok/s"),
         "Overview must show defensible TPS: {ov_text}"
     );
+}
+
+#[test]
+fn test_fmt_num_separators() {
+    assert_eq!(fmt_num(0), "0");
+    assert_eq!(fmt_num(999), "999");
+    assert_eq!(fmt_num(1000), "1,000");
+    assert_eq!(fmt_num(10000), "10,000");
+    assert_eq!(fmt_num(200000), "200,000");
+    assert_eq!(fmt_num(1234567), "1,234,567");
+    assert_eq!(fmt_num(-10000), "-10,000");
+}
+
+#[test]
+fn test_round_turns_sorted_descending_and_turn_labels() {
+    let theme = Theme::from_color_scheme("dark", &Default::default());
+    let mut report = TokenSourceReport::default();
+    let row = TokenSourceRow {
+        provider: "anthropic".to_string(),
+        model: "claude-3-7-sonnet".to_string(),
+        turns: Vec::new(),
+        requests: vec![
+            RequestUsageRecord {
+                key: RequestUsageKey {
+                    session_id: "s1".to_string(),
+                    round: 4,
+                    turn: 1,
+                    attempt: 1,
+                    actor_id: "master".to_string(),
+                },
+                provider: "anthropic".to_string(),
+                model: "claude-3-7-sonnet".to_string(),
+                status: RequestUsageStatus::Completed,
+                prompt_tokens: 100,
+                completion_tokens: 10,
+                generation_ms: 100,
+                ..Default::default()
+            },
+            RequestUsageRecord {
+                key: RequestUsageKey {
+                    session_id: "s1".to_string(),
+                    round: 4,
+                    turn: 2,
+                    attempt: 1,
+                    actor_id: "master".to_string(),
+                },
+                provider: "anthropic".to_string(),
+                model: "claude-3-7-sonnet".to_string(),
+                status: RequestUsageStatus::Completed,
+                prompt_tokens: 200,
+                completion_tokens: 20,
+                generation_ms: 200,
+                ..Default::default()
+            },
+        ],
+        totals: Default::default(),
+    };
+    report.rows.push(row);
+
+    let rounds = extract_telemetry_rounds(&report);
+    assert_eq!(rounds.len(), 1);
+    let r = &rounds[0];
+    assert_eq!(r.round_number, 4);
+    // Turns sorted descending: turn 2 first, then turn 1
+    assert_eq!(r.attempts.len(), 2);
+    assert_eq!(r.attempts[0].turn, 2);
+    assert_eq!(r.attempts[1].turn, 1);
+
+    // Build turns table: check first column shows #2 and #1, without redundant "Turn 4.1"
+    let (_, rows, _) = build_turns_table(&rounds, 0, 0, 80, &theme);
+    assert_eq!(rows.len(), 2);
+    let row0_text = rows[0]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    let row1_text = rows[1]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(row0_text.contains("#2"));
+    assert!(!row0_text.contains("Turn 4.2"));
+    assert!(row1_text.contains("#1"));
+    assert!(!row1_text.contains("Turn 4.1"));
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
   import type { ProviderPickerRow } from "../types.js";
 
   interface Props {
@@ -70,15 +71,15 @@
 <div class="backdrop" onclick={handleBackdrop} role="presentation">
   <div class="modal" role="dialog" aria-label="Choose model">
     <div class="modal-header">
-      <h3>Models</h3>
-      <button class="close" aria-label="Close" onclick={onclose}>×</button>
+      <h3>{t("models")}</h3>
+      <button class="close" aria-label={t("close")} onclick={onclose}>×</button>
     </div>
 
     <div class="modal-body">
       {#if !daemon.providerPicker}
-        <div class="empty">Model list not available — attach to a session first.</div>
+        <div class="empty">{t("modelsUnavailable")}</div>
       {:else if entries.length === 0}
-        <div class="empty">No providers configured.</div>
+        <div class="empty">{t("noProviders")}</div>
       {:else}
         {#each entries as entry (entry.provider.id + ":" + entry.id)}
           <button
@@ -95,16 +96,16 @@
             <span class="provider-name">{entry.provider.name}</span>
             <span class="flags">
               {#if entry.effort}
-                <span class="flag">effort: {entry.effort}</span>
+                <span class="flag">{t("effort")}: {entry.effort}</span>
               {/if}
               {#if entry.thinking}
-                <span class="flag">thinking</span>
+                <span class="flag">{t("thinking")}</span>
               {/if}
               {#if !entry.provider.key_ready}
-                <span class="flag no-key">no key</span>
+                <span class="flag no-key">{t("noApiKey")}</span>
               {/if}
               {#if entry.active}
-                <span class="flag current">current</span>
+                <span class="flag current">{t("current")}</span>
               {/if}
             </span>
           </button>
@@ -113,7 +114,7 @@
     </div>
 
     <div class="modal-footer">
-      Switching sets the default model, mirroring the TUI's Models picker.
+      {t("modelsFooter")}
     </div>
   </div>
 </div>
@@ -122,7 +123,7 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: color-mix(in srgb, var(--bg-app) 45%, transparent);
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -134,10 +135,10 @@
     width: 560px;
     max-width: calc(100vw - 32px);
     max-height: 70vh;
-    background-color: var(--bg-sidebar);
-    border: 1px solid var(--border-strong);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-modal);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -147,13 +148,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-subtle);
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line);
   }
 
   .modal-header h3 {
-    font-size: 14px;
+    font-family: var(--font-brush);
+    font-size: 0.95rem;
     font-weight: 600;
+    letter-spacing: 0.1em;
     color: var(--text-primary);
   }
 
@@ -196,12 +199,12 @@
   }
 
   .model-row:hover {
-    background: var(--bg-surface);
+    background: var(--bg-surface-hover);
   }
 
   .model-row.active {
-    border-color: var(--border-strong);
-    background: var(--bg-surface);
+    border-color: var(--line-strong);
+    background: var(--bg-surface-hover);
   }
 
   .model-row.unavailable {
@@ -243,24 +246,27 @@
     font-size: 10px;
     padding: 1px 5px;
     border-radius: var(--radius-sm);
-    background: var(--bg-surface-hover);
+    background: transparent;
+    border: 1px solid var(--line);
     color: var(--text-muted);
   }
 
   .flag.no-key {
     color: var(--accent-danger);
-    background: rgba(248, 81, 73, 0.15);
+    border-color: var(--accent-danger);
+    background: transparent;
   }
 
   .flag.current {
-    color: var(--accent-primary);
-    background: rgba(46, 160, 67, 0.15);
+    color: var(--accent-info);
+    border-color: var(--accent-info);
+    background: transparent;
   }
 
   .modal-footer {
-    padding: 10px 16px;
-    border-top: 1px solid var(--border-subtle);
-    font-size: 11px;
+    padding: 0.6rem 1rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.7rem;
     color: var(--text-muted);
   }
 </style>

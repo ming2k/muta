@@ -57,6 +57,8 @@ pub mod grid;
 pub mod layout;
 pub mod text;
 pub mod widgets;
+pub mod ui;
+pub mod render_tree;
 
 pub use cell::{Cell, Color, CompactSymbol, Modifier, Style};
 pub use diff::{Draw, DrawCmd};

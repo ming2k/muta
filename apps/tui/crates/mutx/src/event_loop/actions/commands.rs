@@ -269,7 +269,7 @@ pub(crate) fn handle_ctrl_c(
         &app.selection,
         app.focused_messages(),
         &app.input,
-        &app.layout_map,
+        &app.ui.document,
         app.drag.cell_info.as_ref(),
     ) {
         clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
@@ -358,10 +358,13 @@ pub(crate) fn handle_ctrl_c(
             app.copy_toast_until = None;
             app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         }
-    } else if app.active_modal() != Modal::None && app.active_sheet().is_none() {
+    } else if app.active_modal() != Modal::None {
         // Ctrl+C over a surface is the same dismiss as Esc (ADR-0139):
         // retained browse views hide with state saved, the quick switcher
         // cancels to its origin, everything else falls to plain close.
+        // A coexisting sheet does not downgrade this: the modal is the
+        // visual foreground, so Ctrl+C closes it first (the sheet beneath
+        // keeps its pending decision) — mirroring the Esc arms.
         super::modals::handle_close_modal(app, viewed_session_id);
     } else if app.in_side_view {
         // `/btw` aside view: Ctrl+C detaches back to the primary

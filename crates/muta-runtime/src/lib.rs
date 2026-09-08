@@ -28,7 +28,7 @@
 //!   project, one [`registry::HostedSession`] per assembled harness, and
 //!   lazily resumes persisted sessions on attach.
 //! - [`host`] is the daemon runtime; the core binary runs it via
-//!   `muta daemon start` or Mutx starts it on demand.
+//!   `muta start` or Mutx starts it on demand.
 //! - Clients — the `mutx` TUI and `apps/web` — talk to the daemon over the
 //!   [`serve`] WebSocket control
 //!   plane: owner-only native IPC by default (a Unix domain socket or Windows

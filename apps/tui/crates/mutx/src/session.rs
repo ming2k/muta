@@ -37,6 +37,10 @@ pub(crate) enum HintState {
     Command,
     Running(crate::app::ComposerSendMode),
     Completion,
+    /// The inline ↑/↓ recall pointer sits on a history row (ADR-0192). The
+    /// draft is stashed; the advertised chord set names the escape hatch
+    /// (`Esc draft`) so the state is never a dead end.
+    Recall,
 }
 
 /// Short session id prefix (up to 8 characters) for compact display.
@@ -63,6 +67,10 @@ pub(crate) fn live_chat_hints(
     use crate::keymap::Key;
     let hints: &[LiveHint] = match state {
         HintState::Idle | HintState::Command => &[LiveHint::action(Key::ENTER, "send")],
+        HintState::Recall => &[
+            LiveHint::nav(Key::ESC, "draft"),
+            LiveHint::action(Key::ENTER, "send"),
+        ],
         HintState::Running(crate::app::ComposerSendMode::Steer) => &[
             LiveHint::nav(toggle_mode_key, "follow-up mode"),
             LiveHint::action(Key::ENTER, "send steer"),
@@ -337,12 +345,16 @@ fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
 }
 
 /// Esc on the Session view. Priority order mirrors the pre-ADR-0172 central
-/// arm: dismiss an open completion first, then clear step focus, then
-/// interrupt a running round. (Runner and Side own their own Esc exits in
+/// arm: dismiss an open completion first, then cancel the inline history
+/// recall (ADR-0192 — the recall pointer is a transient navigation state
+/// that must be escapable), then clear step focus, then interrupt a running
+/// round. (Runner and Side own their own Esc exits in
 /// [`resolve_runner_key`] / [`resolve_side_key`].)
 fn resolve_esc(ctx: &InputContext) -> Option<InputAction> {
     if ctx.completion_kind != crate::completion::CompletionKind::None && !ctx.completion_dismissed {
         Some(InputAction::CloseCompletion)
+    } else if ctx.in_history_recall {
+        Some(InputAction::CancelHistoryRecall)
     } else if ctx.has_focused_target || ctx.transcript_focused {
         Some(InputAction::ClearFocusedTarget)
     } else if ctx.completion_kind != crate::completion::CompletionKind::None
@@ -975,6 +987,55 @@ mod tests {
         let action = resolve_view_key(View::Session, Key::ESC, &c, &mut String::new(), &mut 0);
         assert_ne!(action, Some(InputAction::ExitRunner));
         assert_ne!(action, Some(InputAction::ExitSideView));
+    }
+
+    /// ADR-0192: Esc while the inline ↑/↓ pointer sits on a history row
+    /// cancels the recall (restoring the stashed draft) — the recall state
+    /// must be escapable by the universal "get me back" chord, and the
+    /// advertised hint (`Esc draft`) must be a live resolver arm.
+    #[test]
+    fn esc_cancels_inline_history_recall() {
+        let mut c = ctx(Mode::Idle, |_| {});
+        c.in_history_recall = true;
+        assert_eq!(
+            resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
+            Some(InputAction::CancelHistoryRecall)
+        );
+        // A dismissed completion popup must not outrank the recall exit:
+        // the pointer state is the more urgent escape.
+        let mut c = ctx(Mode::Idle, |c| {
+            c.completion_kind = crate::completion::CompletionKind::Slash;
+            c.completion_dismissed = true;
+        });
+        c.in_history_recall = true;
+        assert_eq!(
+            resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
+            Some(InputAction::CancelHistoryRecall)
+        );
+        // Without the pointer the resolver keeps its ordinary arms.
+        let c = ctx(Mode::Idle, |_| {});
+        assert_ne!(
+            resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
+            Some(InputAction::CancelHistoryRecall)
+        );
+    }
+
+    /// ADR-0192: every chord the recall hint set advertises resolves in the
+    /// recall state (ADR-0172: hints and dispatch share one semantic origin).
+    #[test]
+    fn recall_hints_are_resolvable_in_the_recall_state() {
+        for hint in live_chat_hints(HintState::Recall, crate::keymap::Key::TAB) {
+            let mut c = ctx(Mode::Idle, |_| {});
+            c.in_history_recall = true;
+            let mut input = String::from("recalled");
+            let mut cursor = input.chars().count();
+            let resolved = resolve_chat_surface_key(hint.key, &c, &mut input, &mut cursor);
+            assert!(
+                resolved.is_some(),
+                "recall hint chord {key:?} did not resolve in the recall state",
+                key = hint.key
+            );
+        }
     }
 
     /// ADR-0174: the readline-style edge hand-off. On a single-line draft ↑

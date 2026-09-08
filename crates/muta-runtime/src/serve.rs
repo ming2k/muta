@@ -146,8 +146,8 @@ fn protocol_mismatch_error(client: u32, client_version: Option<&str>) -> String 
         format!(
             "client/daemon wire protocol mismatch: client protocol {client} is newer \
              than this daemon's protocol {current}. \
-             Stop the daemon and let it restart on demand: `muta daemon stop`, then rerun \
-             this command (or `muta daemon start` to bring it up explicitly){builds}.",
+             Stop the daemon and let it restart on demand: `muta stop`, then rerun \
+             this command (or `muta start` to bring it up explicitly){builds}.",
             current = PROTOCOL_VERSION
         )
     }
@@ -167,13 +167,13 @@ fn version_mismatch_error(client: &str, daemon: &str) -> String {
         ),
         VersionRelation::ClientNewer => format!(
             "client/daemon version mismatch: daemon ({daemon}) is older than client ({client}). \
-             Stop the daemon and let it restart on demand: `muta daemon stop`, then rerun \
-             this command (or `muta daemon start` to bring it up explicitly)."
+             Stop the daemon and let it restart on demand: `muta stop`, then rerun \
+             this command (or `muta start` to bring it up explicitly)."
         ),
         VersionRelation::Equal | VersionRelation::Unknown => format!(
             "client/daemon version mismatch: client {client} vs daemon {daemon}. \
-             Stop the daemon and let it restart on demand: `muta daemon stop`, then rerun \
-             this command (or `muta daemon start` to bring it up explicitly)."
+             Stop the daemon and let it restart on demand: `muta stop`, then rerun \
+             this command (or `muta start` to bring it up explicitly)."
         ),
     }
 }
@@ -361,7 +361,7 @@ pub struct ServeHandle {
     pub tasks: Arc<crate::shutdown::TaskBook>,
     pub token: Option<String>,
     /// The daemon's shutdown gate: `ControlRequest::Shutdown` (the
-    /// `muta daemon stop` verb) funnels into it like any other trigger.
+    /// `muta stop` verb) funnels into it like any other trigger.
     pub gate: Arc<ShutdownGate>,
     /// This daemon build's version, echoed to clients during handshake
     /// version negotiation (ADR-0100 rule 4).

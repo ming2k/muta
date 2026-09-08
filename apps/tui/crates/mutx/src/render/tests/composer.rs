@@ -2032,6 +2032,96 @@ fn composer_top_row_renders_history_mode_badges() {
     );
 }
 
+/// The inline ↑/↓ recall badge (ADR-0192): when the recall pointer sits on a
+/// history row the top breathing row declares it — 1-based position over the
+/// session slice, the `draft saved` reassurance while the stash is intact,
+/// the `edited` clause once the buffer forks from the loaded row. Draft mode
+/// renders the plain breathing row (no badge, zero indication tax).
+#[test]
+fn composer_top_row_declares_the_history_recall_pointer() {
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
+
+    let mut hints = ComposerHints {
+        compose_target: ComposeTarget::HistoryRecall,
+        history_recall: Some((1, 17, false)),
+        recall_draft_saved: true,
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("recalled prompt", true, hints);
+    let row0 = frame_row_text(&mut terminal, 0);
+    assert!(
+        row0.contains("[history 1/17 · draft saved]"),
+        "full-width badge names position, total, and the draft reassurance: {row0:?}"
+    );
+
+    // The edited clause replaces the reassurance once the buffer forks.
+    hints.history_recall = Some((3, 17, true));
+    let mut terminal = draw_frame_composer("recalled prompt EDITED", true, hints);
+    let row0 = frame_row_text(&mut terminal, 0);
+    assert!(
+        row0.contains("[history 3/17 · edited]"),
+        "an edited buffer is declared on the badge: {row0:?}"
+    );
+
+    // Draft mode: no badge at all.
+    let mut terminal = draw_frame_composer("live draft", true, ComposerHints::default());
+    let row0 = frame_row_text(&mut terminal, 0);
+    assert!(
+        row0.trim().is_empty(),
+        "draft mode renders the plain breathing row, no badge: {row0:?}"
+    );
+}
+
+/// The badge's width ladder: the full clause set on comfortable panels, the
+/// bare `position/total` pointer when space runs out — the pointer is the
+/// last element to go because it is the badge's entire point.
+#[test]
+fn composer_recall_badge_degrades_with_width() {
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
+
+    let hints = ComposerHints {
+        compose_target: ComposeTarget::HistoryRecall,
+        history_recall: Some((2, 9, false)),
+        recall_draft_saved: true,
+        ..Default::default()
+    };
+
+    // Narrow panel: pointer only.
+    let mut terminal = mutx_engine::TestTerminal::new(20, 6);
+    let theme = Theme::default();
+    terminal.draw(|f| {
+        draw_composer(
+            ComposerProps {
+                frame: f,
+                input_rect: Rect::new(0, 0, 20, 4),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: "row",
+                byte_cursor: 3,
+            },
+            true,
+            false,
+            false,
+            0,
+            0,
+            hints,
+        );
+    });
+    let row0 = frame_row_text(&mut terminal, 0);
+    assert!(
+        row0.contains("[2/9]"),
+        "narrow panel degrades to the bare pointer: {row0:?}"
+    );
+    assert!(
+        !row0.contains("draft saved"),
+        "the reassurance clause drops first: {row0:?}"
+    );
+}
+
 #[test]
 fn draw_composer_records_composer_rect_enabling_whole_component_focus() {
     let theme = Theme::default();

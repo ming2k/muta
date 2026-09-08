@@ -233,7 +233,7 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: color-mix(in srgb, var(--bg-app) 45%, transparent);
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -246,10 +246,10 @@
     max-width: calc(100vw - 32px);
     max-height: 84vh;
     overflow-y: auto;
-    background-color: var(--bg-sidebar);
-    border: 1px solid var(--border-strong);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-modal);
     display: flex;
     flex-direction: column;
   }
@@ -258,13 +258,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-subtle);
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line);
   }
 
   .modal-header h3 {
-    font-size: 14px;
+    font-family: var(--font-brush);
+    font-size: 0.95rem;
     font-weight: 600;
+    letter-spacing: 0.1em;
     color: var(--text-primary);
   }
 
@@ -290,7 +292,7 @@
 
   .loading {
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: 0.82rem;
     padding: 24px 0;
     text-align: center;
   }
@@ -306,7 +308,7 @@
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--text-muted);
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--line);
     border-radius: var(--radius-sm);
     padding: 1px 5px;
     margin-left: 6px;
@@ -324,8 +326,9 @@
   .section-hint code,
   .hint code {
     font-family: var(--font-mono);
-    background: rgba(255, 255, 255, 0.06);
-    padding: 1px 4px;
+    background: var(--bg-code);
+    border: 1px solid var(--line);
+    padding: 0 0.25rem;
     border-radius: var(--radius-sm);
   }
 
@@ -340,8 +343,8 @@
     flex-direction: column;
     gap: 3px;
     text-align: left;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-strong);
+    background: transparent;
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-md);
     padding: 9px 11px;
     cursor: pointer;
@@ -354,7 +357,8 @@
 
   .option.active {
     border-color: var(--accent-primary);
-    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 2px 0 0 var(--accent-primary);
+    background: var(--seal-soft);
   }
 
   .option.active .option-label {
@@ -405,7 +409,7 @@
   }
 
   .key-set {
-    color: var(--accent-success, #3fb950);
+    color: var(--accent-info);
     border: 1px solid currentColor;
     border-radius: var(--radius-sm);
     padding: 0 4px;
@@ -419,11 +423,11 @@
 
   input {
     background-color: var(--input-bg-inactive);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-md);
-    padding: 8px 10px;
+    padding: 0.5rem 0.6rem;
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: 0.82rem;
     font-family: var(--font-mono);
     outline: none;
     width: 100%;
@@ -456,25 +460,25 @@
   }
 
   .modal-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border-subtle);
+    padding: 0.7rem 1rem;
+    border-top: 1px solid var(--line);
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   .footer-note {
-    font-size: 10px;
+    font-size: 0.65rem;
     color: var(--text-muted);
     margin-right: auto;
   }
 
   .btn-primary,
   .btn-secondary {
-    font-size: 12px;
+    font-size: 0.78rem;
     font-weight: 500;
-    padding: 7px 14px;
+    padding: 0.4rem 0.85rem;
     border-radius: var(--radius-md);
     cursor: pointer;
     border: 1px solid transparent;
@@ -482,7 +486,7 @@
 
   .btn-primary {
     background-color: var(--accent-primary);
-    color: #fff;
+    color: var(--bg-app);
     border: none;
   }
 
@@ -493,11 +497,11 @@
 
   .btn-secondary {
     background: transparent;
-    border-color: var(--border-strong);
+    border-color: var(--line-strong);
     color: var(--text-secondary);
   }
 
   .btn-secondary:hover {
-    background: var(--bg-surface);
+    background: var(--bg-surface-hover);
   }
 </style>

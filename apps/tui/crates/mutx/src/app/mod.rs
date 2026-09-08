@@ -24,7 +24,7 @@ use crate::composer_attachments;
 use crate::event_loop::resolve_focused_mut;
 use crate::fuzzy;
 use crate::model::document::{NoticeSeverity, TranscriptMessage};
-use crate::model::layout::{InteractiveTarget, LayoutMap, ModalHitMap};
+use crate::model::layout::InteractiveTarget;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::providers::{
     CustomField, ProviderPreset, RankedModel, RankedProvider, edit_fields,
@@ -331,17 +331,6 @@ pub struct App {
     /// Expanded step pinned under the HUD bar (its message index + screen rect),
     /// when its body is scrolled into view. Clicks inside the rect collapse it.
     pub sticky_step: Option<usize>,
-    pub sticky_rect: Option<mutx_engine::Rect>,
-    /// Screen rect of the context-meter segment in the hint bar (the
-    /// `89.2k (8%)` indicator), so a click on it opens the Telemetry modal.
-    /// `None` when the hint bar or context meter is not shown.
-    pub hint_context_rect: Option<mutx_engine::Rect>,
-    /// Screen rect of the last-turn stream-rate segment in the hint bar.
-    /// Clicking it opens the Telemetry modal.
-    pub hint_performance_rect: Option<mutx_engine::Rect>,
-    /// Screen rect of the active model / connection segment in the model bar.
-    /// Clicking it opens the connection detail modal directly.
-    pub hint_connection_rect: Option<mutx_engine::Rect>,
     /// Shared token-source ledger (reported vs. estimated token accounting),
     /// read by the Telemetry modal. `Some` in the standalone path (the
     /// in-process harness shares this ledger); `None` in attach mode, where
@@ -357,9 +346,9 @@ pub struct App {
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<muta_contracts::ContextTokenSnapshot>,
-    /// Active tab in the Session Telemetry modal (`Overview` or `Activity`).
+    /// Active tab in the Session Stats modal (`Overview` or `Activity`).
     pub telemetry_tab: TelemetryTab,
-    /// Scroll offset of the Session Telemetry modal body.
+    /// Scroll offset of the Session Stats modal body.
     pub telemetry_scroll: usize,
     /// `true` when the Telemetry modal is drilled into one round's turns (L2).
     pub telemetry_detail: bool,
@@ -375,18 +364,6 @@ pub struct App {
     pub usage_stats: Option<muta_contracts::usage_stats::UsageStatsReport>,
     /// Scroll offset of the usage-statistics overlay body.
     pub usage_stats_scroll: usize,
-    /// Screen rect of the persistent queue bar (the one-row outbox summary),
-    /// so a click anywhere on it expands the full Queue modal. `None` when the
-    /// bar is hidden (chrome hidden or runner zoom).
-    pub queue_rect: Option<mutx_engine::Rect>,
-    /// Screen rect of the currently-open dismissable overlay modal (the
-    /// centered panel, not the full-screen backdrop), so a click that lands
-    /// outside it closes the modal — mirroring Esc. Written each render from
-    /// the rect returned by the modal renderer. `None` when no modal is open,
-    /// when the modal paints no full backdrop (Permission), or when it borrows
-    /// the composer input and therefore must close through its own restore
-    /// path (Provider / ModelEditor).
-    pub modal_rect: Option<mutx_engine::Rect>,
     /// The body (scrollable content) height of the currently-open overlay
     /// modal, captured each render from the rect the modal renderer paints
     /// its body into. This is the per-modal equivalent of `view_height` (which
@@ -396,11 +373,6 @@ pub struct App {
     /// no modal is open (or before the first render after one opens), in
     /// which case page handlers fall back to `view_height`.
     pub modal_body_height: u16,
-    /// Screen rect of the provider-delete confirm overlay panel
-    /// ([`App::pending_provider_delete`]), recorded each render so the
-    /// mouse branch can detect outside-click dismissal (a press outside the
-    /// panel cancels the staged deletion but leaves the provider picker open).
-    pub provider_delete_rect: Option<mutx_engine::Rect>,
     /// Content-line index of the sticky step's real summary. Used to re-anchor
     /// the scroll offset when the user collapses the pinned step so the summary
     /// lands at the top of the viewport instead of jumping to unrelated content.
@@ -456,13 +428,6 @@ pub struct App {
     /// following; wheel browsing and drag-selection edge autoscroll suspend
     /// it so a render cannot immediately undo the user's scroll gesture.
     pub input_scroll_follow_cursor: bool,
-    /// Screen rect of the composer panel in the last drawn frame (the whole
-    /// tinted box, chrome rows included), or `None` while no composer is
-    /// shown (overlay modal open, runner view). The spatial mouse router
-    /// uses it to route wheel ticks and selection edge-autoscroll to the
-    /// input's own viewport instead of the transcript. Zero-height rows
-    /// (a collapsed composer) never contain a pointer cell.
-    pub input_rect: Option<mutx_engine::Rect>,
     /// Edge-autoscroll direction armed while a mouse selection drag that
     /// started inside the composer leaves the input's text rows: `Some(true)`
     /// scrolls up (pointer above), `Some(false)` down. Stepped by the event
@@ -857,10 +822,8 @@ pub struct App {
     pub selection: SelectionState,
     /// Drag gesture state.
     pub drag: SelectionDrag,
-    /// Layout map for the current frame (updated each draw).
-    pub layout_map: LayoutMap,
-    /// Modal-local click targets for the current frame.
-    pub modal_hit_map: ModalHitMap,
+    /// Mounted UI instances and committed semantic geometry (ADR-0195).
+    pub ui: crate::ui::ComponentTree,
     /// Message index of the step (tool step or reasoning trace) whose header
     /// currently rests under the mouse pointer (inline or sticky pinned), so
     /// the next draw lights it up to the intermediate hover tone as a click

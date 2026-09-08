@@ -48,11 +48,11 @@ pub fn draw_telemetry_modal(
         modal_header_parts(
             frame,
             modal.header,
-            &[HeaderPart::title("Session Telemetry")],
+            &[HeaderPart::title("Session Stats")],
             theme,
         );
         let body = vec![placeholder(
-            "Loading session telemetry from daemon…",
+            "Loading session stats from daemon…",
             true,
             theme.muted(),
         )];
@@ -94,11 +94,7 @@ pub fn draw_telemetry_modal(
 
     if let Some((target_round, target_attempt)) = turn {
         // L3: Attempt Inspector
-        let levels = [
-            "Session Telemetry",
-            round_child.as_str(),
-            turn_child.as_str(),
-        ];
+        let levels = ["Session Stats", round_child.as_str(), turn_child.as_str()];
         let header = hierarchical_breadcrumb(&levels, header_width);
         let body = build_attempt_inspector_body(
             &rounds,
@@ -128,7 +124,7 @@ pub fn draw_telemetry_modal(
         area
     } else if detail {
         // L2: Turn List with Sticky Header
-        let header = breadcrumb_parts("Session Telemetry", &round_child).to_vec();
+        let header = breadcrumb_parts("Session Stats", &round_child).to_vec();
         let (table_header, rows, follow) =
             build_turns_table(&rounds, selected, turn_cursor, body_width, theme);
         let footer = [
@@ -180,7 +176,7 @@ pub fn draw_telemetry_modal(
         area
     } else {
         // L1: Top Level Tabs (Overview vs Activity)
-        let header = vec![HeaderPart::title("Session Telemetry")];
+        let header = vec![HeaderPart::title("Session Stats")];
 
         match tab {
             TelemetryTab::Overview => {
@@ -354,9 +350,9 @@ pub(crate) fn build_overview_body(
     };
 
     let used_text = if window_max > 0 {
-        format!("{} tokens ({:.1}%)", used, ratio * 100.0)
+        format!("{} tokens ({:.1}%)", fmt_num(used), ratio * 100.0)
     } else {
-        format!("{} tokens", used)
+        format!("{} tokens", fmt_num(used))
     };
 
     lines.push(kv_overview_line(
@@ -368,7 +364,7 @@ pub(crate) fn build_overview_body(
     if window_max > 0 {
         lines.push(kv_overview_line(
             "Capacity",
-            &format!("{} tokens", window_max),
+            &format!("{} tokens", fmt_num(window_max)),
             Style::default().fg(theme.muted()),
             theme,
         ));
@@ -376,7 +372,7 @@ pub(crate) fn build_overview_body(
     if context.draft_tokens > 0 {
         lines.push(kv_overview_line(
             "Draft Input",
-            &format!("~{} tokens", context.draft_tokens),
+            &format!("~{} tokens", fmt_num(context.draft_tokens)),
             Style::default().fg(theme.muted()),
             theme,
         ));
@@ -395,7 +391,7 @@ pub(crate) fn build_overview_body(
 
     lines.push(kv_overview_line(
         "Grand Total",
-        &format!("{} ({})", fmt_tokens(grand_total), grand_total),
+        &format!("{} ({})", fmt_tokens(grand_total), fmt_num(grand_total)),
         Style::default()
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD),
@@ -403,13 +399,13 @@ pub(crate) fn build_overview_body(
     ));
     lines.push(kv_overview_line(
         "Input (Prompt)",
-        &format!("{} tokens", total_prompt),
+        &format!("{} tokens", fmt_num(total_prompt)),
         Style::default().fg(theme.fg()),
         theme,
     ));
     lines.push(kv_overview_line(
         "Output (Completion)",
-        &format!("{} tokens", total_completion),
+        &format!("{} tokens", fmt_num(total_completion)),
         Style::default().fg(theme.fg()),
         theme,
     ));
@@ -421,7 +417,11 @@ pub(crate) fn build_overview_body(
     };
     lines.push(kv_overview_line(
         "Cache Read",
-        &format!("{} tokens ({:.1}% hit rate)", total_cache_read, hit_rate),
+        &format!(
+            "{} tokens ({:.1}% hit rate)",
+            fmt_num(total_cache_read),
+            hit_rate
+        ),
         Style::default().fg(if hit_rate > 0.0 {
             theme.ok()
         } else {
@@ -432,7 +432,7 @@ pub(crate) fn build_overview_body(
     if total_cache_write > 0 {
         lines.push(kv_overview_line(
             "Cache Written",
-            &format!("{} tokens", total_cache_write),
+            &format!("{} tokens", fmt_num(total_cache_write)),
             Style::default().fg(theme.muted()),
             theme,
         ));
@@ -786,7 +786,11 @@ pub(crate) fn build_turns_table(
             Style::default()
         };
 
-        let turn_label = format!("Turn {}.{}", att.round, att.turn);
+        let turn_label = if att.attempt > 1 {
+            format!("#{}.{}", att.turn, att.attempt)
+        } else {
+            format!("#{}", att.turn)
+        };
 
         let mut row_spans = vec![
             Span::styled("  ", Style::default()),
@@ -908,7 +912,7 @@ pub(crate) fn build_attempt_inspector_body(
             Span::raw("   "),
             Span::styled("Attempt: ", Style::default().fg(theme.text_muted)),
             Span::styled(
-                format!("Turn {}.{} (attempt #{})", att.round, att.turn, att.attempt),
+                format!("Turn #{} (attempt #{})", att.turn, att.attempt),
                 Style::default().fg(theme.text),
             ),
         ]));
@@ -941,10 +945,7 @@ pub(crate) fn build_attempt_inspector_body(
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(
-                    "{bar} {ctx_pct:.1}% of {} max",
-                    fmt_tokens(window_max as u64)
-                ),
+                format!("{bar} {ctx_pct:.1}% of {} max", fmt_num(window_max as u64)),
                 Style::default().fg(theme.text_muted),
             ),
         ]));

@@ -192,8 +192,12 @@ impl App {
     /// separate action, and the caret-owning text editors have no body scroll).
     pub(crate) fn modal_scroll_field(&mut self) -> Option<(&mut usize, Option<&mut bool>)> {
         // The question sheet (ADR-0173 §3) is not a modal, but its body
-        // scrolls through the same shared action path.
-        if self.active_sheet() == Some(crate::sheet::SheetKind::Question) {
+        // scrolls through the same shared action path. Only while it is the
+        // keyboard foreground — a coexisting modal renders above it and
+        // owns the scroll keys until it closes.
+        if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
+            && self.active_modal() == Modal::None
+        {
             return Some((
                 &mut self.question_scroll,
                 Some(&mut self.question_modal_follow),
@@ -748,7 +752,6 @@ impl App {
         self.selection = SelectionState::None;
         self.drag.cancel();
         self.sticky_step = None;
-        self.sticky_rect = None;
         self.sticky_summary_line = None;
         self.pin_summary_line = None;
         self.scroll_settle_pending = false;

@@ -4,7 +4,7 @@ info:
   version: 0.37.1
   description: |
     Machine-readable contract for the unified session-daemon transport
-    (`muta daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
+    (`muta start --fg`; ADR-0081/0089/0093/0094/0096/0119).
     One process owns every session across every project and serves them over a
     single WebSocket endpoint (Unix domain socket by default, TCP + bearer token
     when exposed). Client roles share the socket, distinguished by the client's
@@ -77,11 +77,11 @@ servers:
     host: 0.0.0.0:{port}
     protocol: ws
     description: |
-      `muta daemon start --fg --public` binds
+      `muta start --fg --public` binds
       all interfaces for LAN clients (ADR-0096).
       A bearer token is mandatory: send `Authorization: Bearer <token>` on the
       handshake, else HTTP 401. The daemon writes the token to its owner-only
-      discovery record; `muta daemon token` prints it on explicit operator
+      discovery record; `muta token` prints it on explicit operator
       request. Front with TLS for remote use.
     security:
       - bearerAuth: []

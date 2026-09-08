@@ -1580,7 +1580,7 @@ async fn version_skew_is_refused_with_both_versions() {
                 "names the daemon build: {message}"
             );
             assert!(
-                message.contains("muta daemon stop"),
+                message.contains("muta stop"),
                 "names the daemon restart fix: {message}"
             );
         }
@@ -1677,7 +1677,7 @@ async fn protocol_window_governs_when_declared() {
         Wire::Error { message, code } => {
             assert_eq!(code.as_deref(), Some("protocol_mismatch"));
             assert!(
-                message.contains("muta daemon stop"),
+                message.contains("muta stop"),
                 "names the fix: {message}"
             );
             assert!(

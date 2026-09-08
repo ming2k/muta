@@ -209,9 +209,7 @@ pub fn build_virtual_index(
     // Single flex solve for the prefix settled chunk geometry.
     let items: Vec<FlexItem> = plans
         .iter()
-        .map(|p| {
-            FlexItem::fixed(u16::try_from(p.height).unwrap_or(u16::MAX))
-        })
+        .map(|p| FlexItem::fixed(u16::try_from(p.height).unwrap_or(u16::MAX)))
         .collect();
     let solved = Flex::column().solve_with(Rect::new(0, 0, 0, u16::MAX), &items, &|_, _| 0);
 

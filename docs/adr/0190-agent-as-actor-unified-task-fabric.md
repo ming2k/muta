@@ -330,7 +330,7 @@ daemon. This pass therefore landed:
   gap).
 - **Monitor protocol extension** (additive per ADR-0134):
   `MonitorSnapshot.tasks` + `MonitoredTask` rows, and
-  `MonitorEvent::TaskUpdated`/`TaskRemoved` diffs. `muta daemon status`
+  `MonitorEvent::TaskUpdated`/`TaskRemoved` diffs. `muta status`
   renders a daemon-tasks section (tested); clients upsert via the new
   `upsert_task_row`.
 - The **interactive TUI panel** remains deferred to the frontend roadmap —

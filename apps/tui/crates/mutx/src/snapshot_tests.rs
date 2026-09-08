@@ -1234,7 +1234,8 @@ fn command_component_pending_classifies_plain() {
 /// owns the boundary before the following assistant text.
 #[test]
 fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
-    let mut reasoning = TranscriptMessage::reasoning("first thought\n\nsecond thought").with_turn(1);
+    let mut reasoning =
+        TranscriptMessage::reasoning("first thought\n\nsecond thought").with_turn(1);
     reasoning.pin_reasoning_expanded(true);
     let assistant = TranscriptMessage::new(Role::Assistant, "final answer").with_turn(2);
     let messages = vec![reasoning, assistant];

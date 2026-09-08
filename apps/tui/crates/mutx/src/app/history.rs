@@ -4,6 +4,52 @@ use super::*;
 
 impl App {
     pub(crate) const HISTORY_ATTACHMENTS_CAP: usize = 32;
+
+    /// The composer's inline-recall **pointer badge**, derived for the
+    /// composer's top chrome row (`[history 3/17 · draft saved]`).
+    ///
+    /// `None` while [`Self::history_index`] is `None` — the badge must not
+    /// exist in draft mode: ADR-0173/0174's zero-mode-indication-tax stance
+    /// means the only state worth announcing is the one the user can enter
+    /// silently and lose work from, and the ↑/↓ recall pointer is exactly
+    /// that state (the composer swaps its content under the user's feet).
+    ///
+    /// `position` is **1-based** (`history_index + 1`) because the badge is
+    /// prose for humans, not an index into the slice; `total` is the current
+    /// session's row count, computed fresh from [`Self::current_session_history`]
+    /// (cheap: the slice rebuilds on every render anyway via the arrow paths,
+    /// and a stale cached total would disagree with the live walk).
+    ///
+    /// `edited` is true when the composer's live text no longer matches the
+    /// loaded row: the pointer still addresses row `p`, but the buffer is a
+    /// user-modified fork of it. The badge says `· edited` so the indicator
+    /// never lies about what the buffer holds — the pointer model (see
+    /// `App::history_index`) treats history-row edits as temporary, but a
+    /// user who edits the recalled text deserves to see that fact before
+    /// pressing ↑ and silently discarding it.
+    ///
+    /// The `draft saved` reassurance is *not* computed here — it is a
+    /// presentation fact about [`Self::history_draft`] (non-empty vs empty),
+    /// appended by the renderer. This function answers only "where is the
+    /// pointer and has the buffer forked".
+    pub fn history_recall_badge(&self) -> Option<(usize, usize, bool)> {
+        let position = self.history_index?;
+        let rows = self.current_session_history();
+        if rows.is_empty() {
+            // A non-None pointer over an empty slice cannot survive a
+            // navigation step, but a session switch could theoretically land
+            // here between the pointer reset and the next render — never
+            // render a `0/0` badge that addresses nothing.
+            return None;
+        }
+        // The pointer is a position in the newest-first slice; the entry
+        // lookup needs the combined-space row index the slice stores.
+        let edited = self
+            .history_entry(rows[position.min(rows.len() - 1)])
+            .is_some_and(|entry| entry.text != self.input);
+        Some((position + 1, rows.len(), edited))
+    }
+
     /// Rows shown in the Ctrl+R history panel, as `(original_index,
     /// FuzzyMatch)` pairs indexing into [`App::input_history`]. The single
     /// source of truth for navigation (Up/Down clamp), Enter-accept, and

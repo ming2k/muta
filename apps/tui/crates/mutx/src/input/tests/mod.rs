@@ -353,4 +353,5 @@ mod editing;
 mod modals;
 mod navigation;
 mod paste_escape;
+mod sheet_modal_arbitration;
 mod submit;

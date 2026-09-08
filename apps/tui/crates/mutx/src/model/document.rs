@@ -2008,23 +2008,20 @@ impl TranscriptMessage {
     /// recovered from transient provider faults; the per-attempt fault lines
     /// ride as the expandable detail.
     pub fn retry_resolved(record: muta_contracts::RetryResolution) -> Self {
-        Self::notice(
-            NoticeSeverity::Info,
-            record.summary_line(),
-        )
-        .with_notice_parts(NoticeParts {
-            origin: Some(NoticeOrigin::System {
-                topic: SystemNoticeTopic::Interrupted,
-            }),
-            topic: Some("recovered".to_string()),
-            title: record.summary_line(),
-            detail: if record.faults.is_empty() {
-                None
-            } else {
-                Some(record.faults.join("\n"))
-            },
-        })
-        .with_sent_at_ms(record.at_ms)
+        Self::notice(NoticeSeverity::Info, record.summary_line())
+            .with_notice_parts(NoticeParts {
+                origin: Some(NoticeOrigin::System {
+                    topic: SystemNoticeTopic::Interrupted,
+                }),
+                topic: Some("recovered".to_string()),
+                title: record.summary_line(),
+                detail: if record.faults.is_empty() {
+                    None
+                } else {
+                    Some(record.faults.join("\n"))
+                },
+            })
+            .with_sent_at_ms(record.at_ms)
     }
 
     /// Construct a notice message. Replaces the ad-hoc

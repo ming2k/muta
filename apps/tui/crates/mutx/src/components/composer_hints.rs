@@ -56,6 +56,11 @@ pub(crate) enum ComposeTarget {
     Completion {
         kind: crate::completion::CompletionKind,
     },
+    /// Inline ↑/↓ recall pointer on a history row (ADR-0192). Distinct from
+    /// `HistorySearch` (the Ctrl+R modal): this is the chat-surface pointer
+    /// state, not a modal, and its hint set (`Esc draft / Enter send`) rides
+    /// the ordinary hint row.
+    HistoryRecall,
     /// History search panel active (Ctrl+R).
     HistorySearch,
 }
@@ -66,6 +71,7 @@ pub(crate) fn compose_target_for_extension(
     send_mode: Option<crate::app::ComposerSendMode>,
     is_slash: bool,
     extension: Option<crate::composer_extension::ComposerExtensionKind>,
+    in_history_recall: bool,
 ) -> ComposeTarget {
     match extension {
         Some(crate::composer_extension::ComposerExtensionKind::HistorySearch) => {
@@ -82,7 +88,9 @@ pub(crate) fn compose_target_for_extension(
             }
         }
         None => {
-            if busy {
+            if in_history_recall {
+                ComposeTarget::HistoryRecall
+            } else if busy {
                 ComposeTarget::Running(send_mode.unwrap_or_default())
             } else if is_slash {
                 ComposeTarget::Command
@@ -115,13 +123,25 @@ pub(crate) fn compose_target(
             _ => None,
         }
     };
-    compose_target_for_extension(busy, send_mode, is_slash, ext)
+    compose_target_for_extension(busy, send_mode, is_slash, ext, false)
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ComposerHints {
     pub compose_target: ComposeTarget,
     pub can_retry: bool,
+    /// The inline ↑/↓ recall pointer badge (`Some((position, total, edited))`,
+    /// 1-based) derived from `App::history_recall_badge`. `None` while the
+    /// composer shows the draft — the top chrome row then renders its
+    /// ordinary breathing row. The renderer appends the `draft saved` /
+    /// `edited` clauses; this field carries only the pointer facts so the
+    /// derivation stays testable without a `Theme`.
+    pub history_recall: Option<(usize, usize, bool)>,
+    /// Whether the stashed recall draft (`App::history_draft`) is non-empty
+    /// — the `· draft saved` reassurance clause on the badge. Kept separate
+    /// from `history_recall` so a future badge variant can consume either
+    /// fact independently.
+    pub recall_draft_saved: bool,
     /// The effective chord for toggling send mode while running (ADR-0172):
     /// the hint row advertises exactly the binding that fires. Defaults to the
     /// canonical `Tab` when unremapped.
@@ -133,6 +153,8 @@ impl Default for ComposerHints {
         Self {
             compose_target: ComposeTarget::Prompt,
             can_retry: false,
+            history_recall: None,
+            recall_draft_saved: false,
             toggle_mode_key: crate::keymap::Key::TAB,
         }
     }
@@ -216,6 +238,7 @@ pub(crate) fn hint_row_parts(
     let (state, action_label_style) = match target {
         ComposeTarget::Prompt => (HintState::Idle, hint_style),
         ComposeTarget::Command => (HintState::Command, hint_style),
+        ComposeTarget::HistoryRecall => (HintState::Recall, hint_style),
         ComposeTarget::Running(crate::app::ComposerSendMode::Steer) => (
             HintState::Running(crate::app::ComposerSendMode::Steer),
             verb_style.fg(theme.warn()),

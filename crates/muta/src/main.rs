@@ -68,7 +68,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// `muta daemon start` (detached, the default): spawn the daemon in the
+/// `muta start` (detached, the default): spawn the daemon in the
 /// background and return. If a daemon is already running, report it
 /// instead of spawning a second one.
 fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
@@ -122,7 +122,7 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     Ok(())
 }
 
-/// `muta daemon stop` (ADR-0100/0116): stop the running daemon through
+/// `muta stop` (ADR-0100/0116): stop the running daemon through
 /// the budget-aware shutdown pipeline (graceful control verb → SIGTERM →
 /// SIGKILL). Stopping a daemon that is not running (or whose record is
 /// stale) is a success — the operator's desired end state ("no daemon")
@@ -167,7 +167,7 @@ async fn stop_daemon() -> Result<(), String> {
     eprintln!("muta: daemon stopped (pid {}).", info.pid);
     Ok(())
 }
-/// `muta daemon <action>` dispatch (ADR-0116: the daemon noun owns
+/// daemon verb dispatch (ADR-0116: the daemon verbs own
 /// start/stop/status/token).
 async fn run_daemon_action(
     action: DaemonAction,
@@ -244,7 +244,7 @@ struct DaemonStart {
     shutdown_grace_secs: Option<u64>,
 }
 
-/// `muta daemon start`: detached unless `--fg`. Detaching is the default
+/// `muta start`: detached unless `--fg`. Detaching is the default
 /// because the user asked for a *daemon*; `--fg` is the supervisor shape
 /// (systemd/tmux foreground processes).
 async fn run_daemon_foreground(flags: DaemonStart) -> Result<(), Box<dyn std::error::Error>> {

@@ -258,7 +258,7 @@ pub fn incompatibility_error(info: &DaemonInfo) -> String {
     {
         format!(
             "client/daemon binary mismatch: running daemon (pid {}, version {}) executable differs from the installed muta core image (rebuilt binary). \
-             Stop it with `muta daemon stop` and rerun — the daemon restarts on demand.",
+             Stop it with `muta stop` and rerun — the daemon restarts on demand.",
             info.pid,
             crate::serve::daemon_version()
         )
@@ -276,7 +276,7 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
     let Some(daemon_ver) = info.version.as_deref() else {
         return format!(
             "client/daemon version mismatch: this client is {client_ver} but the running daemon (pid {}) is unknown (older than 0.24). \
-             Stop it with `muta daemon stop` and rerun — the daemon restarts on demand at the new version.",
+             Stop it with `muta stop` and rerun — the daemon restarts on demand at the new version.",
             info.pid
         );
     };
@@ -284,7 +284,7 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
     match compare_versions(client_ver, daemon_ver) {
         VersionRelation::ClientNewer => format!(
             "client/daemon version mismatch: running daemon (pid {}, version {daemon_ver}) is older than this client ({client_ver}). \
-             Stop it with `muta daemon stop` and rerun — the daemon restarts on demand at the new version.",
+             Stop it with `muta stop` and rerun — the daemon restarts on demand at the new version.",
             info.pid
         ),
         VersionRelation::ClientOlder => format!(
@@ -296,7 +296,7 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
             if !daemon_image_is_current(info.pid) {
                 format!(
                     "client/daemon binary mismatch: running daemon (pid {}, version {daemon_ver}) executable differs from the installed muta core image (rebuilt binary). \
-                     Stop it with `muta daemon stop` and rerun — the daemon restarts on demand.",
+                     Stop it with `muta stop` and rerun — the daemon restarts on demand.",
                     info.pid
                 )
             } else {
@@ -307,7 +307,7 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
         }
         VersionRelation::Unknown => format!(
             "client/daemon version mismatch: this client is {client_ver} but the running daemon (pid {}) is {daemon_ver}. \
-             If the daemon is outdated, stop it with `muta daemon stop` and rerun; if the client is outdated, update your client.",
+             If the daemon is outdated, stop it with `muta stop` and rerun; if the client is outdated, update your client.",
             info.pid
         ),
     }
@@ -325,7 +325,7 @@ pub fn protocol_mismatch(info: &DaemonInfo) -> String {
         format!(
             "client/daemon wire protocol mismatch: running daemon (pid {}) speaks protocol {daemon_proto}, \
              newer than this client's protocol {client_proto}. \
-             Stop it with `muta daemon stop` and rerun — the daemon restarts on demand at the new build.",
+             Stop it with `muta stop` and rerun — the daemon restarts on demand at the new build.",
             info.pid
         )
     } else {
@@ -603,7 +603,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
         if is_process_alive(holder_pid) {
             return Err(format!(
                 "another muta daemon (pid {holder_pid}) is running and holding the instance lock. \
-                 If it is unresponsive, stop it with `muta daemon stop`."
+                 If it is unresponsive, stop it with `muta stop`."
             ));
         }
     }
@@ -1424,7 +1424,7 @@ mod tests {
         };
         let msg = version_mismatch(&daemon_older);
         assert!(msg.contains("is older than this client"));
-        assert!(msg.contains("muta daemon stop"));
+        assert!(msg.contains("muta stop"));
 
         let daemon_newer = DaemonInfo {
             pid: 1234,
@@ -1458,7 +1458,7 @@ mod tests {
         };
         let msg = version_mismatch(&daemon_none);
         assert!(msg.contains("unknown (older than 0.24)"));
-        assert!(msg.contains("muta daemon stop"));
+        assert!(msg.contains("muta stop"));
 
         let daemon_equal_drift = DaemonInfo {
             pid: u32::MAX - 10,

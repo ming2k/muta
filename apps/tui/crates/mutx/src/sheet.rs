@@ -15,7 +15,7 @@
 use crate::modal::Claims;
 
 /// The AI-initiated interaction sheets, in queue arrival order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SheetKind {
     /// Tool-permission approval sheet.
     Permission,

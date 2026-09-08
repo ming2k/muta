@@ -127,15 +127,11 @@ pub(super) fn transcript_interrupts_from_records(
 /// Build durable retry-resolution rows from the session store's records —
 /// the success-side twin of [`transcript_interrupts_from_records`].
 pub(super) fn transcript_retry_resolutions_from_records(
-    records: Vec<muta_contracts::RetryResolution>,
+    _records: Vec<muta_contracts::RetryResolution>,
 ) -> Vec<TranscriptMessage> {
-    records
-        .into_iter()
-        .map(|record| {
-            let at_ms = record.at_ms;
-            TranscriptMessage::retry_resolved(record).with_sent_at_ms(at_ms)
-        })
-        .collect()
+    // ADR-0194: Retired. Transient transport retries that recovered successfully
+    // are implementation details; they never project onto the transcript history.
+    Vec::new()
 }
 
 /// Merge rebuilt round-interrupt rows into a restored transcript (C11),

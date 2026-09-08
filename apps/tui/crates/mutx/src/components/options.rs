@@ -175,7 +175,7 @@ impl<'a> ChoiceOptionRow<'a> {
         let wrap_width = body_width.saturating_sub(marker_w).max(1);
         let mut rows = wrap_text(self.label, wrap_width).len().max(1);
         if let Some(desc) = self.description {
-            rows += wrap_text(desc, body_width.saturating_sub(5).max(1))
+            rows += wrap_text(desc, body_width.saturating_sub(marker_w).max(1))
                 .len()
                 .max(1);
         }
@@ -190,8 +190,10 @@ impl<'a> ChoiceOptionRow<'a> {
     ) {
         let style = choice_style(self.tone, self.highlighted, theme);
 
-        // Prefix layout: "  <marker> " for the first line, an equal-width
-        // continuation indent so wrapped lines line up under the label.
+        // Prefix layout: the marker glyph plus a gap on the first line, a
+        // matching continuation indent so wrapped label lines line up under
+        // the label text (labels start at column 0, aligned with the
+        // question/header text above).
         let marker_glyph = style.marker_glyph(self.marker, self.selected);
         let marker_style = style.marker_style(self.marker, self.selected, self.highlighted, theme);
 
@@ -201,12 +203,14 @@ impl<'a> ChoiceOptionRow<'a> {
             Style::default().fg(style.fg)
         };
 
-        let first_prefix = format!("  {} ", marker_glyph);
-        let continuation_prefix = "     ";
+        let first_prefix = format!("{} ", marker_glyph);
+        // Continuation rows indent by the marker's display width so wrapped
+        // label lines line up under the label text, not under the marker.
+        let continuation_prefix = " ".repeat(first_prefix.width());
         push_wrapped_styled_with_prefix_style(
             lines,
             &first_prefix,
-            continuation_prefix,
+            &continuation_prefix,
             self.label,
             marker_style,
             text_style,
@@ -215,7 +219,17 @@ impl<'a> ChoiceOptionRow<'a> {
 
         if let Some(desc) = self.description {
             let desc_style = Style::default().fg(style.dim);
-            push_wrapped_styled(lines, "     ", "     ", desc, desc_style, body_width);
+            // Description indents under the label (same marker width) so it
+            // reads as the row's second line, aligned with the label text.
+            let desc_indent = " ".repeat(first_prefix.width());
+            push_wrapped_styled(
+                lines,
+                desc_indent.as_str(),
+                desc_indent.as_str(),
+                desc,
+                desc_style,
+                body_width,
+            );
         }
     }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
 
   interface Props {
     onclose: () => void;
@@ -24,10 +25,10 @@
     const probe = daemon.daemonProbe;
     if (!probe) return null;
     if (probe.auth && !token.trim()) {
-      return "This daemon requires a bearer token — read it from the discovery file (see below).";
+      return t("authRequired");
     }
-    if (probe.auth) return "Daemon reachable; auth enabled.";
-    return `Daemon reachable (v${probe.version}); no auth required.`;
+    if (probe.auth) return t("authEnabled");
+    return t("daemonReachable")(probe.version);
   });
 
   function save() {
@@ -129,7 +130,7 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: color-mix(in srgb, var(--bg-app) 45%, transparent);
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -142,10 +143,10 @@
     max-width: calc(100vw - 32px);
     max-height: 82vh;
     overflow-y: auto;
-    background-color: var(--bg-sidebar);
-    border: 1px solid var(--border-strong);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-modal);
     display: flex;
     flex-direction: column;
   }
@@ -154,13 +155,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-subtle);
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line);
   }
 
   .modal-header h3 {
-    font-size: 14px;
+    font-family: var(--font-brush);
+    font-size: 0.95rem;
     font-weight: 600;
+    letter-spacing: 0.1em;
     color: var(--text-primary);
   }
 
@@ -192,19 +195,19 @@
 
   .label {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 0.65rem;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.1em;
   }
 
   input {
     background-color: var(--input-bg-inactive);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-md);
-    padding: 8px 10px;
+    padding: 0.5rem 0.6rem;
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: 0.82rem;
     font-family: var(--font-mono);
     outline: none;
   }
@@ -219,15 +222,16 @@
   }
 
   .hint {
-    font-size: 11px;
+    font-size: 0.72rem;
     color: var(--text-muted);
     line-height: 1.5;
   }
 
   .hint code {
     font-family: var(--font-mono);
-    background: rgba(255, 255, 255, 0.06);
-    padding: 1px 4px;
+    background: var(--bg-code);
+    border: 1px solid var(--line);
+    padding: 0 0.25rem;
     border-radius: var(--radius-sm);
   }
 
@@ -239,44 +243,44 @@
 
   .status-row .value {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--accent-danger);
     text-transform: uppercase;
   }
 
   .status-row .value.ok {
-    color: var(--accent-primary);
+    color: var(--accent-info);
   }
 
   .probe-hint {
-    font-size: 11px;
+    font-size: 0.72rem;
     font-family: var(--font-mono);
     color: var(--text-secondary);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--bg-code);
+    border: 1px solid var(--line);
     border-radius: var(--radius-md);
-    padding: 8px 10px;
+    padding: 0.5rem 0.6rem;
     line-height: 1.5;
   }
 
   .probe-hint.warn {
     color: var(--accent-warning);
-    border-color: rgba(210, 153, 34, 0.4);
+    border-color: var(--accent-warning);
   }
 
   .modal-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border-subtle);
+    padding: 0.7rem 1rem;
+    border-top: 1px solid var(--line);
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   .btn-primary,
   .btn-secondary {
-    font-size: 12px;
+    font-size: 0.78rem;
     font-weight: 500;
-    padding: 7px 14px;
+    padding: 0.4rem 0.85rem;
     border-radius: var(--radius-md);
     cursor: pointer;
     border: 1px solid transparent;
@@ -284,7 +288,7 @@
 
   .btn-primary {
     background-color: var(--accent-primary);
-    color: #fff;
+    color: var(--bg-app);
     border: none;
   }
 
@@ -295,11 +299,11 @@
 
   .btn-secondary {
     background: transparent;
-    border-color: var(--border-strong);
+    border-color: var(--line-strong);
     color: var(--text-secondary);
   }
 
   .btn-secondary:hover {
-    background: var(--bg-surface);
+    background: var(--bg-surface-hover);
   }
 </style>

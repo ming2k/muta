@@ -35,6 +35,7 @@ pub mod config;
 mod event_loop;
 pub mod input;
 pub mod interaction;
+pub mod ui;
 pub mod keymap;
 pub mod paths;
 pub mod phase;
@@ -126,13 +127,12 @@ use crate::model::document::{
     CommandPhase, DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage,
     UserMessageOrigin, notice_severity_from_core,
 };
-use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::render::Theme;
 use crate::transcript::{
     finalize_streaming_reasoning, merge_command_rows, merge_round_interrupt_rows,
     rebase_transcript_rounds, transcript_commands_from_ledger, transcript_interrupts_from_records,
-    transcript_retry_resolutions_from_records, transcript_messages_from_core,
+    transcript_messages_from_core, transcript_retry_resolutions_from_records,
 };
 
 /// Where the session this TUI drives lives. All sessions in the unified
@@ -985,33 +985,12 @@ pub async fn run_tui(
                                 *activity_clone.lock().await = None;
                             }
                         }
-                        RoundEvent::RetryResolved(resolution) => {
-                            // The retry loop recovered: fold the transient
-                            // retry countdown into a permanent transcript
-                            // marker (the durable twin lives in the session's
-                            // retry-resolutions ledger and re-projects on
-                            // resume). `RoundCompleted` follows immediately;
-                            // its `retain(!is_provider_retry)` sweep no longer
-                            // finds a live entry because this fold already
-                            // replaced it with a Notice-kind row.
+                        RoundEvent::RetryResolved(_resolution) => {
+                            // ADR-0194: The retry loop recovered from transient faults.
+                            // Ephemeral in-flight state is retired; never synthesize a
+                            // permanent transcript notice row for successful recovery.
                             let mut msgs = buf.write().await;
-                            let folded = if let Some(last) =
-                                msgs.last_mut().filter(|m| m.is_provider_retry())
-                            {
-                                // Pin the fold state so the collapsed row keeps
-                                // whatever expansion the live entry had.
-                                let expanded = last.notice_expanded();
-                                *last = TranscriptMessage::retry_resolved(resolution.clone());
-                                if let Some(expanded) = expanded {
-                                    last.pin_notice_expanded(expanded);
-                                }
-                                true
-                            } else {
-                                false
-                            };
-                            if !folded {
-                                msgs.push(TranscriptMessage::retry_resolved(resolution));
-                            }
+                            msgs.retain(|m| !m.is_provider_retry());
                         }
                         RoundEvent::Activity(status) => {
                             // View-scoped chrome: record this session's own
@@ -1310,9 +1289,9 @@ pub async fn run_tui(
                                 // default). On completion the transition leaves it as-is
                                 // (no auto-collapse), so the user keeps what they were
                                 // reading.
-                                thinking.set_reasoning_expanded(config::reasoning_default_expanded(
-                                    &tui_config_clone,
-                                ));
+                                thinking.set_reasoning_expanded(
+                                    config::reasoning_default_expanded(&tui_config_clone),
+                                );
                                 let pre_append_tail = msgs.last().map(|tail| tail.id);
                                 msgs.record_append_message(pre_append_tail, thinking.clone());
                                 msgs.push(thinking);
@@ -1924,9 +1903,9 @@ pub async fn run_tui(
                                 muta_contracts::JobSpec::Process { command, label, .. } => {
                                     label.as_deref().unwrap_or(command)
                                 }
-                                muta_contracts::JobSpec::Timer { label, prompt, .. } => label
-                                    .as_deref()
-                                    .unwrap_or_else(|| prompt.as_str()),
+                                muta_contracts::JobSpec::Timer { label, prompt, .. } => {
+                                    label.as_deref().unwrap_or_else(|| prompt.as_str())
+                                }
                             };
                             let msg = format!("Background job started: {label} ({})", info.id.0);
                             push_local_notice(&mut msgs, NoticeSeverity::Info, msg);
@@ -2333,10 +2312,6 @@ pub async fn run_tui(
         view_height: 0,
         max_scroll: 0,
         sticky_step: None,
-        sticky_rect: None,
-        hint_context_rect: None,
-        hint_performance_rect: None,
-        hint_connection_rect: None,
         token_ledger,
         token_report: None,
         context_tokens: None,
@@ -2347,8 +2322,6 @@ pub async fn run_tui(
         telemetry_turn: None,
         usage_stats: None,
         usage_stats_scroll: 0,
-        queue_rect: None,
-        modal_rect: None,
         modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
@@ -2367,7 +2340,6 @@ pub async fn run_tui(
         cursor_position: 0,
         input_scroll: 0,
         input_scroll_follow_cursor: true,
-        input_rect: None,
         input_drag_scroll: None,
         modal_index: 0,
         last_key_press: std::time::Instant::now(),
@@ -2489,8 +2461,7 @@ pub async fn run_tui(
         running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
-        layout_map: LayoutMap::new(),
-        modal_hit_map: crate::model::layout::ModalHitMap::new(),
+        ui: crate::ui::ComponentTree::new(),
         hovered_step: None,
         transcript_focused: false,
         transcript_layout: crate::render::layout::Strategy::from_config(
@@ -2556,7 +2527,6 @@ pub async fn run_tui(
         model_modal_follow: true,
         pending_provider_delete: None,
         provider_delete_focus: ProviderDeleteChoice::default(),
-        provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
         theme: Theme::resolve_with_profile(
@@ -2706,9 +2676,9 @@ fn append_reasoning_delta(
     turn: Option<u64>,
     delta: &str,
 ) -> Option<u64> {
-    let target = messages
-        .iter_mut()
-        .rfind(|message| message.is_reasoning() && message.round == round && message.turn == turn)?;
+    let target = messages.iter_mut().rfind(|message| {
+        message.is_reasoning() && message.round == round && message.turn == turn
+    })?;
     target.push_stream(delta);
     if let MessageKind::Reasoning { content, .. } = &mut target.kind {
         content.push_str(delta);

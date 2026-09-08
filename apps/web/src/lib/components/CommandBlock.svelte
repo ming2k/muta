@@ -182,19 +182,19 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: 0.78rem;
     color: var(--text-muted);
     font-family: var(--font-mono);
-    margin-bottom: 12px;
+    margin-bottom: 0.75rem;
   }
 
   .command-ack .tick {
-    color: var(--accent-primary);
+    color: var(--accent-info);
     flex-shrink: 0;
   }
 
   .command-ack .invocation {
-    color: var(--accent-info);
+    color: var(--accent-primary);
     font-weight: 600;
     white-space: nowrap;
   }
@@ -206,20 +206,18 @@
   }
 
   .command-block {
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    margin-bottom: 12px;
+    border-top: 1px solid var(--line);
+    margin-bottom: 0.75rem;
     overflow: hidden;
   }
 
   .command-block.failed {
-    border-color: rgba(248, 81, 73, 0.4);
+    border-color: var(--accent-danger);
   }
 
   .command-header {
     width: 100%;
-    padding: 8px 12px;
+    padding: 0.45rem 0.25rem;
     background: transparent;
     border: none;
     display: flex;
@@ -229,11 +227,11 @@
     cursor: pointer;
     text-align: left;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 0.75rem;
   }
 
   .invocation {
-    color: var(--accent-info);
+    color: var(--accent-primary);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -248,27 +246,26 @@
   }
 
   .badge {
-    font-size: 10px;
-    padding: 1px 5px;
+    font-size: 0.65rem;
+    padding: 0.05rem 0.3rem;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
-    background: var(--bg-surface-hover);
+    border: 1px solid var(--line);
   }
 
   .badge.error {
     color: var(--accent-danger);
-    background: rgba(248, 81, 73, 0.15);
+    border-color: var(--accent-danger);
   }
 
   .chevron {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 0.7rem;
   }
 
   .command-result {
-    padding: 10px 12px;
-    border-top: 1px solid var(--border-subtle);
-    font-size: 13px;
+    padding: 0.1rem 0.25rem 0.6rem;
+    font-size: 0.82rem;
     line-height: 1.6;
     color: var(--text-secondary);
     max-height: 320px;
@@ -286,29 +283,6 @@
   .ack-detail {
     margin: 0;
     color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .command-result :global(pre) {
-    background-color: var(--bg-surface-hover);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 10px;
-    overflow-x: auto;
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  .command-result :global(code) {
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  .command-result :global(p) {
-    margin-bottom: 8px;
-  }
-
-  .command-result :global(p:last-child) {
-    margin-bottom: 0;
+    font-size: 0.75rem;
   }
 </style>

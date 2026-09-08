@@ -191,6 +191,22 @@ Navigation (the queue comes first — it is the newer, more urgent surface):
 - Only an exhausted queue hands `↑` on to input history, where the same
   gestures walk the history rows instead.
 
+**The recall badge (ADR-0192).** While the pointer sits on a history row, the
+top breathing row declares it — `[history 3/17 · draft saved]`:
+
+- `3/17` is the 1-based pointer position over the current session's
+  newest-first rows. Draft mode renders no badge: the indicator exists only
+  while the state that swaps the buffer exists.
+- `· draft saved` means the stashed draft (text + attachments) will come
+  back on `↓` past the newest row. On narrow panels the clause degrades
+  first, then the `history` word — the bare `[3/17]` pointer is the last
+  element to go.
+- `· edited` replaces the reassurance when you have typed into the recalled
+  row. The edit stays temporary (walking away discards it), so the badge
+  shows the fork before an accidental `↑` throws it away.
+- `Esc draft` on the hint row names the exit: Esc cancels the walk and
+  restores the stashed draft without sending.
+
 **Committing a queue edit.** `Enter` while the pointer is armed writes the
 composer's content back into the pointed-at item *in that item's slot*:
 editing `a` of a `[a, b, c]` queue into `d` yields `[d, b, c]` — never
@@ -246,7 +262,9 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
 ## Source
 
 `draw_composer` in `tui/composer.rs`; the hint sentence is built by
-`hint_row_spans` in `tui/components/composer_hints.rs`. Rendered manually
+`hint_row_spans` in `tui/components/composer_hints.rs`, and the recall
+pointer badge is derived by `App::history_recall_badge` in
+`tui/app/history.rs` (ADR-0192). Rendered manually
 (not via a `Block` widget) so the hint row, chips, selection, and the
 command-token accent can splice styled spans into the panel cell by cell.
 `INPUT_MSG_IDX = usize::MAX - 2` is the layout-map

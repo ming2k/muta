@@ -13,14 +13,14 @@ and for day-to-day use see
 ┌─ muta (the CLI) ──────────────── every verb is a client call
 │    serve / attach / status
 │
-├─ muta daemon start (the daemon) ─ one process per user; owns every session
+├─ muta start (the daemon) ─ one process per user; owns every session
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
 │      ├─ native local IPC (Unix socket / Windows Named Pipe)
 │      └─ TCP + token  (--public; for LAN clients and the web panel)
 │
 └─ clients ───────────────────────── all speak the control plane
-     TUI (/host, attach)   muta daemon status   a web control panel   scripts
+     TUI (/host, attach)   muta status   a web control panel   scripts
 ```
 
 One user-level daemon — not one per project, not one per session — holds
@@ -69,7 +69,7 @@ Two transports carry it:
   Named Pipe with a protected current-user DACL and remote clients disabled.
   The OS access boundary authenticates local CLI and TUI clients, so this
   channel needs no bearer token.
-- **TCP + bearer token** (`muta daemon start --fg --public`) — for LAN clients and
+- **TCP + bearer token** (`muta start --fg --public`) — for LAN clients and
   the web panel. Exposing is always an explicit opt-in that carries a token
   (ADR-0054's model); TLS is fronted by a reverse proxy. See
   [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
@@ -88,7 +88,7 @@ and calls control verbs — no web-specific server exists or is needed.
 
 1. Any `muta` or `mutx attach` finds no live daemon record
    (`daemon.json`) and spawns the daemon detached; or you run
-   `muta daemon start` yourself (detached by default; `--fg` for supervisors).
+   `muta start` yourself (detached by default; `--fg` for supervisors).
 2. The daemon binds native local IPC and a TCP port (loopback by default,
    exposed with `--public`), writes the global discovery record, and waits.
 3. Sessions are created on demand (a client's attach, or a control

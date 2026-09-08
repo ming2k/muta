@@ -8,24 +8,24 @@ CLI, web) talks to it over one control-plane protocol (ADR-0096).
 
 ## Concepts
 
-- **Session daemon** (`muta daemon start`): one
+- **Session daemon** (`muta start`): one
   process per user that hosts and manages all sessions. It starts on demand
-  (the first `muta` spawns it) or explicitly (`muta daemon start`).
+  (the first `muta` spawns it) or explicitly (`muta start`).
 - **Hosted sessions**: every session is daemon-held. It keeps running when
   its TUI closes, and any client can attach to it.
 - **Control plane**: the daemon's read/write API — observe (`Monitor`),
   drive (`Attach`), and manage (`CreateSession`, `SendPrompt`, `Interrupt`,
   `ResolvePermission`, `KillSession`).
-- **Control view**: `muta daemon status` in a terminal, `/dashboard` inside a TUI,
+- **Control view**: `muta status` in a terminal, `/dashboard` inside a TUI,
   or `mutx dashboard` to jump straight into that full-screen view from the
   shell.
 
 ## 1. Start (or don't) the daemon
 
 ```bash
-muta daemon start       # detached by default; --fg stays in the foreground
+muta start       # detached by default; --fg stays in the foreground
 # (detached is the default; auto-started on first `muta` anyway)
-muta daemon start --fg --public  # all interfaces + mandatory bearer token
+muta start --fg --public  # all interfaces + mandatory bearer token
 ```
 
 You usually never run this yourself — any `muta` or `mutx attach` spawns
@@ -36,7 +36,7 @@ systemd/tmux, or to expose the control plane to other machines — see
 A detached daemon runs in its own session (`setsid`), so it survives the
 terminal — or the compositor hosting it — that spawned it: closing the last
 terminal window does not stop the daemon or its sessions (ADR-0125). Use
-`muta daemon stop` or `kill <pid>` when you mean to stop it.
+`muta stop` or `kill <pid>` when you mean to stop it.
 
 ## 2. Work as usual — everything is a client
 
@@ -57,10 +57,10 @@ mutx attach <id>      # the round is still running (or just finished)
 Terminal, one-shot or live:
 
 ```bash
-muta daemon status       # sessions needing attention, across all projects
-muta daemon status --watch      # live table
-muta daemon status --all        # also list idle sessions
-muta daemon status --json       # raw monitor frames (scripts / a web panel)
+muta status       # sessions needing attention, across all projects
+muta status --watch      # live table
+muta status --all        # also list idle sessions
+muta status --json       # raw monitor frames (scripts / a web panel)
 ```
 
 Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
@@ -107,7 +107,7 @@ session only as the underlying carrier and raises the dashboard over it:
 double-press), and **`a`** on a card attaches into that session. Leaving the
 screen always exits the TUI entirely — there is no conversation to fall back
 into. Like
-`muta daemon status`, it never spawns a daemon, so it needs a running host with at
+`muta status`, it never spawns a daemon, so it needs a running host with at
 least one session.
 
 ```text
@@ -140,7 +140,7 @@ verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 | `ResolvePermission { session_id, request_id, decision }` | Approve/reject a pending tool call |
 | `SuspendSession { session_id }` | Park a session in memory only — the daemon frees its RAM, `SessionEnd` hooks do not fire, and the next attach rebuilds it from disk (lazy resume). Refused while a client is attached or a round is active |
 | `KillSession { session_id }` | Tear a session down |
-| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `muta daemon stop` sends) |
+| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `muta stop` sends) |
 
 Over native local IPC these need no token: Unix uses a `0600` socket and
 Windows uses a Named Pipe protected for the current user. Over an exposed TCP
@@ -149,11 +149,11 @@ listener every call needs `Authorization: Bearer <token>`.
 ## 5. Stop the daemon
 
 ```bash
-muta daemon stop       # graceful, through the control plane
-kill <pid>               # SIGTERM runs the same drain (pid is in `muta daemon status`)
+muta stop       # graceful, through the control plane
+kill <pid>               # SIGTERM runs the same drain (pid is in `muta status`)
 ```
 
-On Windows, use `muta daemon stop`; the protocol drain is the portable
+On Windows, use `muta stop`; the protocol drain is the portable
 shutdown contract. Process termination is only the final force tier.
 
 Both run the same budgeted drain: stop accepting, close live connections
@@ -176,7 +176,7 @@ attached, the pre-0125 behavior).
 
 ## 6. Build your own panel
 
-`muta daemon status --json` emits the exact frames a control panel consumes. The
+`muta status --json` emits the exact frames a control panel consumes. The
 full contract — handshake roles, `MonitoredSession` fields, control verbs —
 is documented in [Server WebSocket API](../reference/server-api.md) and
 machine-readable in [`server.asyncapi.yaml`](../reference/server.asyncapi.yaml).
@@ -185,7 +185,7 @@ verbs; there is no separate web backend to run.
 
 ## Scope and limits
 
-- One daemon per user. `muta daemon status` aggregates every project; TUI `/dashboard`
+- One daemon per user. `muta status` aggregates every project; TUI `/dashboard`
   is the same view in-terminal.
 - Sessions outlive their TUIs by design — `KillSession` (or stopping the
   daemon) is how a session ends.
@@ -193,4 +193,4 @@ verbs; there is no separate web backend to run.
   daemon + control plane), [ADR-0093](../adr/0093-daemon-observability-monitor-protocol.md)
   (monitor protocol), [ADR-0054](../adr/0054-server-layer-followups.md)
   (loopback-default security), [ADR-0101](../adr/0101-daemon-shutdown-correctness.md)
-  (shutdown correctness: budgeted drain, signals, `muta daemon stop`).
+  (shutdown correctness: budgeted drain, signals, `muta stop`).

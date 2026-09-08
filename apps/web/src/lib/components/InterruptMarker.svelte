@@ -40,23 +40,23 @@
     align-items: baseline;
     gap: 8px;
     padding: 6px 2px;
-    font-size: 13px;
-    color: var(--fg-muted, #9a9a9a);
+    font-size: 0.82rem;
+    color: var(--text-muted);
   }
 
   .glyph,
   .label {
-    color: var(--warn, #d9a03f);
+    color: var(--accent-warning);
     font-weight: 600;
   }
 
   .detail {
-    color: var(--fg, #d8d8d8);
+    color: var(--text-secondary);
   }
 
   .time {
     margin-left: auto;
-    color: var(--fg-muted, #9a9a9a);
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
 </style>

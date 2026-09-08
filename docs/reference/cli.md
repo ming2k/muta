@@ -27,11 +27,11 @@ muta [OPTIONS] <COMMAND>
 | `mcp probe <name>` | Connect once, list the advertised tools, disconnect |
 | `mcp import (- \| <file>)` | Merge `[mcp.*]` TOML into the user config, e.g. `aegis-mcp print-config \| muta mcp import -` |
 | `skill ls` | List discovered skills (the bare `muta skill` teaches the subcommand) |
-| `session rm <id>` | Terminate a hosted session by id — listing is `daemon status`, the daemon's view of what it hosts |
-| `daemon start [--fg] [--port <n>] [--public] [--idle-exit <min>] [--grace <secs>]` | Start the session daemon (detached by default; `--fg` stays in the foreground for supervisors) |
-| `daemon stop` | Stop the running daemon gracefully (budget-coordinated, ADR-0119) |
-| `daemon status [--watch] [--json] [--all] [--diagnostic]` | Show the daemon's sessions and endpoint health |
-| `daemon token` | Print the local TCP bearer token on explicit operator request; prints a diagnostic instead when authentication is disabled |
+| `session rm <id>` | Terminate a hosted session by id — listing is `status`, the daemon's view of what it hosts |
+| `start [--fg] [--port <n>] [--public] [--no-local-auth] [--idle-exit <min>] [--grace <secs>]` | Start the session daemon (detached by default; `--fg` stays in the foreground for supervisors) |
+| `stop` | Stop the running daemon gracefully (budget-coordinated, ADR-0119) |
+| `status [--watch] [--json] [--all] [--diagnostic]` | Show the daemon's sessions and endpoint health |
+| `token` | Print the local TCP bearer token on explicit operator request; prints a diagnostic instead when authentication is disabled |
 | `doctor` | Verify stored session integrity |
 | `completions <bash\|zsh\|fish>` | Print a shell completion script |
 | `help [command]` | Print top-level or command help |
@@ -87,7 +87,7 @@ mutx [OPTIONS] <COMMAND>
 
 ## The daemon
 
-`muta daemon start` runs the session daemon (normally spawned on demand
+`muta start` runs the session daemon (normally spawned on demand
 by `mutx`). It **detaches by default** — the verb asks for a
 daemon — and takes `--fg` for supervisors (systemd/tmux keep the process
 in the foreground and provide their own daemonization); `--no-local-auth`,
@@ -109,7 +109,7 @@ for an always-on deployment).
 
 The daemon's TCP port serves the WebSocket control plane and the generic
 `GET /healthz` probe. It does not embed or serve either frontend. Build and
-host `apps/web` independently, then use `muta daemon token` to configure its
+host `apps/web` independently, then use `muta token` to configure its
 authenticated connection.
 
 ## Shell completions
@@ -133,7 +133,7 @@ eval "$(mutx completions bash)"
 | Variable | Effect |
 |----------|--------|
 | `MUTA_HOME` | Instance root (ADR-0121): redirects config, data, state, cache, the daemon's runtime files, and (with `MUTA_PORT`) the default port under one root. Must be absolute; relative values are ignored |
-| `MUTA_PORT` | Default TCP port for `daemon start` when `--port` is absent (overrides the well-known 9800) |
+| `MUTA_PORT` | Default TCP port for `start` when `--port` is absent (overrides the well-known 9800) |
 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | Per-category directory overrides (see [Paths](paths.md)) |
 | `MUTA_LOG` | Log level for the file log under the XDG state dir: `off`, `error`, `warn`, `info` (default), `debug`, `trace` |
 | `MUTA_BIN` | Explicit `muta` executable used by `mutx` for on-demand daemon startup; normally unnecessary because a sibling binary and then `PATH` are checked |

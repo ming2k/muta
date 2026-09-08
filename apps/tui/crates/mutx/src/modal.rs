@@ -7,7 +7,7 @@
 //! per-modal renderers) and input dispatch. [`Recess`] is the single source
 //! of truth for how the live surface recedes behind a modal.
 
-#[derive(PartialEq, Clone, Copy, Debug, Default)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug, Default)]
 pub enum Modal {
     #[default]
     None,
@@ -124,7 +124,7 @@ pub enum Modal {
     /// the composer for editing; `Esc` closes. The body scrolls via
     /// `App::queue_scroll`.
     Queue,
-    /// Session Telemetry modal: unified context usage and request performance
+    /// Session Stats modal: unified context usage and request performance
     /// telemetry grouped by user round, with turn drill-down and attempt inspection.
     /// Opened by clicking the context/rate meters in the model bar or via `Ctrl+O`.
     Telemetry,

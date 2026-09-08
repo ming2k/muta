@@ -16,7 +16,7 @@ use crate::config::{TuiConfig, tool_default_expanded};
 use crate::model::document::ToolStepStatus;
 use crate::model::layout::{
     COMMAND_RESULT_BLOCK_IDX, InteractiveTarget, NOTICE_BLOCK_IDX, PROVIDER_RETRY_BLOCK_IDX,
-    SemanticCursor, REASONING_BLOCK_IDX, TOOL_STEP_BLOCK_IDX,
+    REASONING_BLOCK_IDX, SemanticCursor, TOOL_STEP_BLOCK_IDX,
 };
 
 /// Which kind of step a pointer hit resolved to.

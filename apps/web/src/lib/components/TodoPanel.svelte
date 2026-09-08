@@ -1,5 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import { t } from "../i18n.svelte.js";
 
   let collapsed = $state(false);
 
@@ -25,7 +26,7 @@
 {#if items.length > 0}
   <div class="todo-panel">
     <button class="todo-header" onclick={() => (collapsed = !collapsed)}>
-      <span class="title">Tasks</span>
+      <span class="title">{t("tasks")}</span>
       <span class="progress">{doneCount}/{items.length}</span>
       <span class="chevron">{collapsed ? "+" : "-"}</span>
     </button>
@@ -44,8 +45,9 @@
 
 <style>
   .todo-panel {
-    margin: 0 24px;
-    border: 1px solid var(--border-subtle);
+    width: min(var(--measure), 100%);
+    margin: 0 auto 0.6rem;
+    border: 1px solid var(--line);
     border-radius: var(--radius-md);
     background-color: var(--bg-surface);
     overflow: hidden;
@@ -56,16 +58,15 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
     background: transparent;
     border: none;
     cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-brush);
+    font-size: 0.78rem;
+    letter-spacing: 0.15em;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
   }
 
   .todo-header .title {
@@ -74,28 +75,31 @@
 
   .todo-header .progress {
     color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
   }
 
   .chevron {
     margin-left: auto;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
   }
 
   .todo-list {
     list-style: none;
     max-height: 160px;
     overflow-y: auto;
-    border-top: 1px solid var(--border-subtle);
-    padding: 6px 0;
+    border-top: 1px solid var(--line);
+    padding: 0.35rem 0;
   }
 
   .todo {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    padding: 3px 12px;
-    font-size: 12px;
+    gap: 0.5rem;
+    padding: 0.18rem 0.75rem;
+    font-size: 0.78rem;
     color: var(--text-primary);
   }
 
@@ -106,21 +110,23 @@
   }
 
   .status-completed .glyph {
-    color: var(--accent-primary);
+    color: var(--accent-info);
   }
 
   .status-completed .content {
     color: var(--text-muted);
-    text-decoration: line-through;
+    text-decoration: none;
+    opacity: 0.65;
   }
 
   .status-in_progress .glyph {
-    color: var(--accent-info);
+    color: var(--accent-warning);
   }
 
   .status-cancelled .content {
     color: var(--text-muted);
     text-decoration: line-through;
+    opacity: 0.65;
   }
 
   .content {

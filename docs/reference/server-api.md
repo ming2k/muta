@@ -11,7 +11,7 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 ## Roles and entry points
 
-The core daemon (`muta daemon start --fg`, ADR-0136) serves one
+The core daemon (`muta start --fg`, ADR-0136) serves one
 control-plane endpoint per user, on owner-only native local IPC plus a TCP
 loopback listener by default (fixed port 9800, ephemeral fallback), and on all
 interfaces when `--public` (ADR-0096/0105/0130). Unix uses a domain socket and
@@ -41,7 +41,7 @@ the unified daemon; the protocol below is the daemon's control plane.
   generated per daemon start and published in the owner-only (0600)
   discovery record — co-located CLI/TUI clients read it from there and
   authenticate transparently. Operators can print it explicitly with
-  `muta daemon token`. `--no-local-auth` / `local_auth = false`
+  `muta token`. `--no-local-auth` / `local_auth = false`
   restores trust-the-loopback. When the default port is taken, the daemon
   falls back to an ephemeral port; the record always carries the actual
   one. `MUTA_PORT` overrides the default (ADR-0121) — below an explicit
@@ -223,7 +223,7 @@ the new title; an unknown id answers
 The server sends `{ "type": "Monitor", "kind": "snapshot", … }` first, then —
 while `watch` holds — `session_added` / `session_updated` / `session_removed`
 diffs. With `watch: false` it closes after the snapshot (one-shot poll, which
-is what `muta daemon status` does). Each diff carries a whole
+is what `muta status` does). Each diff carries a whole
 [`MonitoredSession`](#monitoredsession) row; consumers upsert by `id`.
 
 `include_idle: false` (the default) filters both the snapshot and the diff
@@ -285,7 +285,7 @@ The verbs (`Select{action: {control: {…}}}`):
 | `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
 | `suspend_session` | `session_id` | Park the session **in memory only**: the driver is torn down but `SessionEnd` hooks do not fire and no `Exit` is broadcast — the transcript is durable, so the next attach rebuilds it via lazy resume (monitors get `session_removed`). Refused when a client is attached, the round is active, or the session has no persisted content |
 | `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
-| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `muta daemon stop` sends. |
+| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `muta stop` sends. |
 
 `ControlReply` is `{ ok, session_id?, error? }`. On `ok:false`, `error`
 explains (unknown session, host cannot create, …). The connection closes

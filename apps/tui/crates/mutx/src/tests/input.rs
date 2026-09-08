@@ -297,7 +297,9 @@ fn input_selection_relays_arrows_only_when_composer_owns_caret() {
 fn app_with_input_viewport(rows: usize, visible: usize) -> (App, tempfile::TempDir) {
     let (mut app, tmp) = app_in_tempdir(&[], &[]);
     let height = visible as u16 + crate::design::COMPOSER_VERTICAL_CHROME_ROWS;
-    app.input_rect = Some(mutx_engine::Rect::new(0, 40, 60, height));
+    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60), crate::Modal::None);
+    app.ui.mount(crate::ui::UiKey::Composer, mutx_engine::Rect::new(0, 40, 60, height));
+    app.ui.commit();
     app.input = (0..rows)
         .map(|i| char::from(b'a' + (i % 26) as u8).to_string())
         .collect::<Vec<_>>()
@@ -334,7 +336,8 @@ fn input_viewport_wheel_steps_clamp_to_hidden_rows() {
     );
 
     // No composer on screen (overlay modal, first frame): not scrollable.
-    app.input_rect = None;
+    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60), crate::Modal::None);
+    app.ui.commit();
     assert_eq!(app.input_scroll_max(), None);
     assert_eq!(app.step_input_scroll(false, 1), None);
 }

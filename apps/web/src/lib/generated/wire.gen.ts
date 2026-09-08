@@ -641,7 +641,26 @@ readiness?: Readiness | null,
 /**
  * Service restart policy; ignored for `Interactive`.
  */
-restart?: RestartPolicy | null, } | { "kind": "runner", description: string, role: string, prompt: string, };
+restart?: RestartPolicy | null, } | { "kind": "timer", 
+/**
+ * ISO-ish local datetime or cron-style descriptor (5-field cron or
+ * `in <duration>`), opaque to the fabric — the caller stores the
+ * human form; the fabric stores the absolute epoch-milliseconds
+ * `fire_at` computed at spawn time.
+ */
+label?: string | null, 
+/**
+ * Absolute fire time, Unix-epoch milliseconds.
+ */
+fire_at_ms: number, 
+/**
+ * For recurring timers: re-arm interval after each fire.
+ */
+interval_ms?: number | null, 
+/**
+ * The prompt delivered to the wake turn.
+ */
+prompt: string, };
 
 /**
  * Lifecycle state of a background job.
@@ -857,7 +876,7 @@ include_idle: boolean, };
 /**
  * A stream frame about the daemon as a whole.
  */
-export type MonitorEvent = { "kind": "snapshot" } & MonitorSnapshot | { "kind": "session_added" } & MonitoredSession | { "kind": "session_updated" } & MonitoredSession | { "kind": "session_removed", session_id: string, } | { "kind": "daemon_draining" };
+export type MonitorEvent = { "kind": "snapshot" } & MonitorSnapshot | { "kind": "session_added" } & MonitoredSession | { "kind": "session_updated" } & MonitoredSession | { "kind": "session_removed", session_id: string, } | { "kind": "daemon_draining" } | { "kind": "task_updated" } & MonitoredTask | { "kind": "task_removed", task_id: string, };
 
 /**
  * The daemon-level snapshot: who is serving and what is happening right now.
@@ -868,7 +887,15 @@ export type MonitorSnapshot = { project_root: string,
  * record; `0` when the registry was not created by a daemon, e.g. an
  * in-TUI `/serve` prehost).
  */
-daemon_started_at: number, sessions: Array<MonitoredSession>, };
+daemon_started_at: number, sessions: Array<MonitoredSession>, 
+/**
+ * Daemon-level task fabric rows (ADR-0190): rehosted services and any
+ * other task with no owning session. Session-scoped tasks stay in
+ * their session's own fabric; this is the human-side view of what the
+ * daemon itself is running on the operator's behalf. Empty for
+ * producers that predate the field.
+ */
+tasks?: Array<MonitoredTask>, };
 
 /**
  * One row of the control panel: a hosted session's identity, status, and
@@ -949,6 +976,41 @@ fork_kind: SessionForkKind,
  * the session has generated one.
  */
 digest: SessionDigest | null, };
+
+/**
+ * One row of the daemon-level task tree (ADR-0190 D6): identity, spec
+ * label, lifecycle state, and ownership. Content-free — the transcript
+ * stays in the session, the full log stays on disk (path included).
+ */
+export type MonitoredTask = { id: string, 
+/**
+ * Human label (job label, or the command's first word).
+ */
+label: string, 
+/**
+ * Spec summary line (command preview / timer descriptor).
+ */
+spec: string, state: JobState, 
+/**
+ * Owning session id; `None` = daemon-level (rehosted services).
+ */
+owner_session?: string | null, 
+/**
+ * Unix-epoch ms the task was created.
+ */
+created_at_ms: number, 
+/**
+ * Unix-epoch ms of settle, when terminal.
+ */
+completed_at_ms?: number | null, 
+/**
+ * Latest output line, for the at-a-glance tail.
+ */
+latest_output?: string | null, 
+/**
+ * On-disk full log path.
+ */
+log_path?: string | null, };
 
 export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack";
 

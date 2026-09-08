@@ -122,7 +122,7 @@ impl App {
     /// size: wrapped rows minus visible rows. `None` when no composer rect
     /// is known (nothing drawn yet, or an overlay owns the surface).
     pub fn input_scroll_max(&self) -> Option<usize> {
-        let rect = self.input_rect?;
+        let rect = self.ui.bounds(crate::ui::UiKey::Composer)?;
         let text_width = crate::composer::composer_text_width(rect.width as usize);
         let rows = crate::composer::input_row_count(&self.input, text_width, self.input.len());
         let visible = (rect.height as usize)
@@ -172,7 +172,7 @@ impl App {
         if !(self.drag.active && anchored_in_input) {
             return None;
         }
-        let rect = self.input_rect?;
+        let rect = self.ui.bounds(crate::ui::UiKey::Composer)?;
         let max = self.input_scroll_max()?;
         if max == 0 {
             return None; // every wrapped row is visible; nothing to scroll to
@@ -223,7 +223,7 @@ impl App {
         // renderer uses, and pin the selection head to its byte — hidden rows
         // are not in the layout map, so the head cannot be resolved from the
         // pointer; the edge *is* the pointer as far as the selection cares.
-        let Some(rect) = self.input_rect else {
+        let Some(rect) = self.ui.bounds(crate::ui::UiKey::Composer) else {
             return false;
         };
         let text_width = crate::composer::composer_text_width(rect.width as usize);
@@ -446,12 +446,15 @@ impl App {
                     CaretOwner::None
                 };
             }
-            if self.active_sheet() == Some(crate::sheet::SheetKind::InputInjection) {
+            if self.active_sheet() == Some(crate::sheet::SheetKind::InputInjection)
+                && self.active_modal() == Modal::None
+            {
                 return CaretOwner::Modal;
             }
             return if self.active_modal().owns_caret() {
                 CaretOwner::Modal
             } else if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
+                && self.active_modal() == Modal::None
                 && self
                     .question
                     .as_ref()

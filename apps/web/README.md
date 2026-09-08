@@ -45,8 +45,8 @@ Web is an independent static app; the daemon does not build or serve its
 assets. Start the backend and the Vite development server separately:
 
 ```sh
-muta daemon start
-muta daemon token          # copy the local TCP bearer token
+muta start
+muta token          # copy the local TCP bearer token
 pnpm run dev
 ```
 
@@ -54,7 +54,7 @@ Open the Vite URL, click the Online/Offline badge, and enter
 `ws://127.0.0.1:9800` plus the printed token. A production build in `dist/`
 can be deployed by any static host. Browser origins must be loopback when the
 daemon is loopback-only; a remote deployment therefore needs
-`muta daemon start --public` and a TLS-terminating reverse proxy as described
+`muta start --public` and a TLS-terminating reverse proxy as described
 in the server API guide.
 
 The daemon requires a bearer token by default (`[daemon] local_auth`). The

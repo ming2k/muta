@@ -205,6 +205,20 @@ pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;
 pub(crate) const COMPOSER_VERTICAL_CHROME_ROWS: u16 = 3;
 pub(crate) const COMPOSER_MIN_HEIGHT: u16 = 4;
 pub(crate) const COMPOSER_MAX_HEIGHT_DIVISOR: u16 = 2;
+
+/// The maximum height an interaction sheet (question / permission /
+/// input-injection) may grow to when it replaces the composer slot. It is
+/// the *composer's own* max-height rule — `terminal_height / 2` — so a
+/// sheet opens with the same footprint the input box would have at its
+/// largest, never covering more than half the terminal. The question sheet
+/// may still grow further up to the terminal top when its content demands
+/// it (a long question / many options), but this token is the "comfortable"
+/// cap the sheet prefers to stay within; composer, permission, and question
+/// all read the same formula so the slot never has two different ideas of
+/// "how big can this get".
+pub(crate) fn sheet_max_height(terminal_height: u16) -> u16 {
+    (terminal_height / COMPOSER_MAX_HEIGHT_DIVISOR).max(COMPOSER_MIN_HEIGHT)
+}
 /// Columns reserved before the composer text: the `›` prompt glyph plus one
 /// gap column on the first wrapped line; continuation lines indent the same
 /// amount so the caret stays aligned. Text starts at column 2 of the box.

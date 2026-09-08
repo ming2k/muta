@@ -1152,7 +1152,8 @@ mod tests {
 
         let mut terminal = mutx_engine::TestTerminal::new(width, height);
         terminal.draw(|f| {
-            let mut hit_map = crate::model::layout::ModalHitMap::new();
+            let mut hit_map = crate::ui::ComponentTree::new();
+            hit_map.begin(f.area(), crate::Modal::None);
             let mut scroll = 0;
             draw_question_modal(
                 f,

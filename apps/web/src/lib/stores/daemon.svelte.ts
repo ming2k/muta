@@ -324,6 +324,12 @@ function messageTimeMs(message: Message): number {
 
 export class DaemonStore {
   public connection = $state<ConnectionState>("disconnected");
+  /**
+   * True when the daemon demonstrably requires a bearer token and the
+   * present one was rejected (missing, stale after a daemon restart).
+   * The app surface opens the connection dialog on this signal.
+   */
+  public credentialChallenge = $state<boolean>(false);
   public draining = $state<boolean>(false);
   public sessions = $state<MonitoredSession[]>([]);
   public daemonProjectRoot = $state<string>("");
@@ -515,6 +521,7 @@ export class DaemonStore {
     ws.onopen = () => {
       if (generation !== this.monitorGeneration) return;
       this.connection = "connected";
+      this.credentialChallenge = false;
       this.reconnectDelay = RECONNECT_BASE_MS;
       ws.send(wireEnvelope({ monitor: { watch: true, include_idle: true } }, this.project));
     };
@@ -533,7 +540,16 @@ export class DaemonStore {
       this.connection = "disconnected";
       // A failed WS handshake is opaque to browsers; the health probe tells
       // "daemon needs a token" apart from "nothing is listening".
-      if (!this.daemonProbe) void this.probe();
+      const hadProbe = this.daemonProbe !== null;
+      if (!hadProbe) {
+        void this.probe();
+      } else {
+        // Probe already current: a reconnect loop against an auth-on daemon
+        // means the stored token was rejected (e.g. the daemon restarted and
+        // rotated it). Raise the credential challenge so the UI can surface
+        // the connection dialog immediately instead of silently retrying.
+        if (this.daemonProbe?.auth) this.credentialChallenge = true;
+      }
       if (!this.draining) {
         window.setTimeout(() => this.connectMonitor(), this.reconnectDelay);
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
@@ -842,13 +858,13 @@ export class DaemonStore {
           this.pushToast(
             "error",
             "Client/daemon protocol mismatch",
-            "Run `muta daemon stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
+            "Run `muta stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
           );
         } else if (frame.code === "version_mismatch") {
           this.pushToast(
             "error",
             "Client/daemon version mismatch",
-            "Run `muta daemon stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
+            "Run `muta stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
           );
         } else {
           this.pushToast("error", "Daemon error", frame.message);
@@ -951,11 +967,12 @@ export class DaemonStore {
     interrupts: RoundInterrupt[] = [],
     retryResolutions: RetryResolution[] = [],
   ): FeedItem[] {
+    // ADR-0194: Historical retry resolutions are excluded from the main feed;
+    // self-healed transport retries are execution details, not dialogue items.
     const items: FeedItem[] = [
       ...messages.map((m) => this.messageItem(m)),
       ...commands.map((c) => this.commandItem(c)),
       ...interrupts.map((r) => this.interruptItem(r)),
-      ...retryResolutions.map((r) => this.retryResolutionItem(r)),
     ];
     const time = (item: FeedItem): number =>
       item.kind === "message"
@@ -1138,14 +1155,11 @@ export class DaemonStore {
         });
       }
     } else if ("RetryResolved" in event) {
-      // The round recovered: replace the live countdown row with a permanent
-      // resolution marker (the durable twin lives in the session's
-      // retry-resolutions ledger and re-projects on resume).
+      // ADR-0194: The round recovered: clear any live countdown row.
+      // Do not inject a permanent resolution notice into the dialogue feed.
       const resolved = this.feed[this.feed.length - 1];
       if (resolved?.kind === "retry_scheduled") {
-        this.feed[this.feed.length - 1] = this.retryResolutionItem(event.RetryResolved);
-      } else {
-        this.pushFeed(this.retryResolutionItem(event.RetryResolved));
+        this.feed.pop();
       }
     } else if ("SteerAdmitted" in event) {
       this.appendInsertedInput(event.SteerAdmitted);

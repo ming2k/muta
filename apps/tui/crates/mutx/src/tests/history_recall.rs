@@ -922,6 +922,74 @@ async fn history_rows_are_readonly_snapshots() {
     assert_eq!(app.input, app.history_draft);
 }
 
+/// The composer's recall badge (ADR-0192): a 1-based pointer position over
+/// the current session's newest-first slice, present exactly while
+/// `history_index` is `Some`, with the `edited` clause when the live buffer
+/// has forked from the loaded row. Draft mode renders no badge — the
+/// zero-mode-indication-tax stance (ADR-0173) means the only announced state
+/// is the one that silently swaps the buffer.
+#[tokio::test]
+async fn history_recall_badge_tracks_the_pointer() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("older row".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("newest row".to_string(), Vec::new(), Vec::new());
+    let rows = app.current_session_history();
+    assert_eq!(rows.len(), 2);
+
+    // Draft mode: no badge.
+    assert_eq!(app.history_recall_badge(), None);
+
+    // First ↑ lands on the newest row: 1-based position 1 of 2, unedited.
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "newest row");
+    assert_eq!(app.history_recall_badge(), Some((1, 2, false)));
+
+    // Second ↑ walks to the older row: position 2 of 2, still unedited.
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "older row");
+    assert_eq!(app.history_recall_badge(), Some((2, 2, false)));
+
+    // Editing the buffer forks it from the loaded row → the badge's `edited`
+    // clause goes live while the pointer still addresses row 2.
+    app.input = "EDITED".to_string();
+    assert_eq!(app.history_recall_badge(), Some((2, 2, true)));
+
+    // ↓ back past the newest row returns to the draft: badge gone.
+    assert!(app.history_next(&rows));
+    assert!(!app.history_next(&rows));
+    assert_eq!(app.history_index, None);
+    assert_eq!(app.history_recall_badge(), None);
+}
+
+/// Esc during inline recall cancels it and restores the stashed draft —
+/// the universal "get me back" chord must exit the recall state (ADR-0192).
+#[tokio::test]
+async fn esc_cancels_history_recall_and_restores_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("older row".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("newest row".to_string(), Vec::new(), Vec::new());
+    let rows = app.current_session_history();
+
+    // A draft (with a staged attachment) exists before navigation.
+    app.input = "half-typed draft".to_string();
+    app.history_draft = app.input.clone();
+
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "newest row");
+    assert!(app.history_index.is_some());
+
+    app.cancel_history_recall();
+    assert_eq!(app.history_index, None, "recall cancelled");
+    assert_eq!(app.input, "half-typed draft", "draft restored");
+    // Cancel is a no-op in draft mode: the live draft is untouched.
+    app.cancel_history_recall();
+    assert_eq!(app.input, "half-typed draft");
+}
+
 /// Queue recall adopts the recalled content as the draft (text + attachments
 /// mirrored into both the pending slots and the remembered-draft stash).
 #[test]

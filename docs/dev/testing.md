@@ -79,7 +79,7 @@ rm -rf "$MUTA_HOME"
 cargo run -p mutx -- --home /tmp/dev-muta
 
 # Run daemon on a distinct port
-MUTA_HOME=/tmp/dev-muta MUTA_PORT=9801 cargo run -p muta -- daemon start
+MUTA_HOME=/tmp/dev-muta MUTA_PORT=9801 cargo run -p muta -- start
 ```
 
 ---
@@ -88,7 +88,7 @@ MUTA_HOME=/tmp/dev-muta MUTA_PORT=9801 cargo run -p muta -- daemon start
 
 | Symptom | Likely Cause | First Inspection |
 |---------|--------------|------------------|
-| `daemon lock already held` | Previous daemon test leaked or host daemon active | Check `MUTA_HOME` export; run `muta daemon stop` |
+| `daemon lock already held` | Previous daemon test leaked or host daemon active | Check `MUTA_HOME` export; run `muta stop` |
 | `Snapshot mismatch` | Rendered frame layout or ANSI escape codes modified | Run `cargo insta review` to inspect the visual diff |
 | `Connection refused / timeout` | Daemon IPC socket not bound in time | Inspect `RUST_BACKTRACE=1` and daemon stderr logs |
 | `Wire decode parse error` | Upstream provider schema payload mismatch | Check `crates/muta-providers/tests/wire.rs` mock fixtures |

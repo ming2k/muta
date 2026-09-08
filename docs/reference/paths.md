@@ -200,7 +200,7 @@ installation's daemon and data are never touched.
 | Run one terminal command isolated | `MUTA_HOME=/tmp/x mutx <args>` |
 | Isolate a whole shell / CI step | `export MUTA_HOME=/tmp/x MUTA_PORT=9801` |
 | Run the test suites isolated | `export MUTA_HOME=$(mktemp -d)` then `cargo nextest run` |
-| Confirm which instance a client sees | `MUTA_HOME=/tmp/x muta daemon status --diagnostic` |
+| Confirm which instance a client sees | `MUTA_HOME=/tmp/x muta status --diagnostic` |
 
 See [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md)
 for the decision record.

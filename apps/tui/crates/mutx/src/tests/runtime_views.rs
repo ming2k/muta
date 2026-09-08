@@ -435,7 +435,10 @@ async fn permission_sheet_does_not_steal_focus_rearmed_behind_it() {
             submission: None,
         });
     crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
-    assert_eq!(app.active_sheet(), Some(crate::sheet::SheetKind::Permission));
+    assert_eq!(
+        app.active_sheet(),
+        Some(crate::sheet::SheetKind::Permission)
+    );
     assert!(!app.transcript_focused, "parked at mount");
 
     // The user clicks the transcript behind the pass-through sheet — the

@@ -41,7 +41,15 @@ impl Rect {
     /// Clamp a point to be inside this rect. Used by the app to normalize
     /// mouse coordinates.
     pub fn contains(self, x: u16, y: u16) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
+
+    /// Intersection in terminal coordinates, including empty rectangles.
+    pub fn intersection(self, other: Self) -> Self {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        Self::new(x, y, self.right().min(other.right()).saturating_sub(x),
+            self.bottom().min(other.bottom()).saturating_sub(y))
     }
 
     /// Area (width × height) in cells.

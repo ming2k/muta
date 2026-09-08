@@ -84,11 +84,11 @@ impl App {
         let sticky_summary_line = self.sticky_summary_line;
 
         let transcript_top_y = self
-            .layout_map
+            .ui.document
             .transcript_content_rect()
             .map(|r| r.y)
             .unwrap_or(0);
-        let prev_region = self.layout_map.first_region_for_message(mi);
+        let prev_region = self.ui.document.first_region_for_message(mi);
         let summary_screen_y = prev_region.map(|r| r.rect.y);
         let msg_line_index = summary_screen_y
             .map(|y| self.scroll as usize + (y.saturating_sub(transcript_top_y) as usize));
@@ -180,7 +180,7 @@ impl App {
     }
 
     pub(crate) fn visible_interactive_targets(&self) -> Vec<InteractiveTarget> {
-        let mut targets = self.layout_map.interactive_targets();
+        let mut targets = self.ui.document.interactive_targets();
         if let Some(message_idx) = self.sticky_step
             && let Some(message) = self.focused_messages().get(message_idx)
         {

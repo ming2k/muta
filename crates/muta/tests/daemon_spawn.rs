@@ -19,7 +19,7 @@ struct DaemonCleanup {
 impl DaemonCleanup {
     fn stop(&mut self) -> Output {
         let output = Command::new(&self.cli)
-            .args(["daemon", "stop"])
+            .args(["stop"])
             .env("MUTA_HOME", &self.root)
             .stdin(Stdio::null())
             .output()
@@ -51,7 +51,7 @@ impl Drop for DaemonCleanup {
     fn drop(&mut self) {
         if self.reaper.is_some() {
             let _ = Command::new(&self.cli)
-                .args(["daemon", "stop"])
+                .args(["stop"])
                 .env("MUTA_HOME", &self.root)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -77,7 +77,7 @@ async fn spawned_daemon_inherits_the_muta_home_sandbox() {
     let cli = PathBuf::from(env!("CARGO_BIN_EXE_muta"));
 
     let mut command = Command::new(&cli);
-    command.args(["daemon", "start", "--fg"]);
+    command.args(["start", "--fg"]);
     command
         .env("MUTA_HOME", &own_root)
         .stdin(Stdio::null())

@@ -3,8 +3,8 @@
 //! control plane (owner-only native local IPC by default, TCP + bearer token
 //! with `--public`) so TUI/CLI/web clients can drive, observe, and manage them.
 //!
-//! Vocabulary: the *role* is the **daemon**; `muta daemon start --fg` runs
-//! it in the foreground and `muta daemon start` detaches it.
+//! Vocabulary: the *role* is the **daemon**; `muta start --fg` runs
+//! it in the foreground and `muta start` detaches it.
 //!
 //! # Lifecycle (ADR-0101)
 //!
@@ -331,7 +331,7 @@ async fn run_inner(
         local_endpoint: bound_local.clone(),
         version: Some(crate::serve::daemon_version().to_string()),
         protocol: Some(muta_contracts::PROTOCOL_VERSION),
-        // Publish the drain budget so `muta daemon stop` waits *this*
+        // Publish the drain budget so `muta stop` waits *this*
         // daemon's grace before escalating (ADR-0116): an early SIGTERM
         // would force-exit the daemon and skip the very session teardown
         // the stop requested.
@@ -365,7 +365,7 @@ async fn run_inner(
     eprintln!("muta: serving sessions on ws://{bind}:{port}");
     eprintln!("muta: health probe on http://{bind}:{port}/healthz");
     eprintln!(
-        "muta: observe with `muta daemon status --watch`, drive with `mutx attach [id]`, stop with `muta daemon stop`"
+        "muta: observe with `muta status --watch`, drive with `mutx attach [id]`, stop with `muta stop`"
     );
     if handle.token.is_some() {
         // Never print the token itself: it is a credential and stderr lands

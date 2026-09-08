@@ -46,8 +46,8 @@
 <style>
   .retry-marker {
     padding: 6px 2px;
-    font-size: 13px;
-    color: var(--fg-muted, #9a9a9a);
+    font-size: 0.82rem;
+    color: var(--text-muted);
   }
 
   .retry-marker summary {
@@ -64,24 +64,25 @@
 
   .glyph,
   .label {
-    color: var(--ok, #5fae6f);
+    color: var(--accent-info);
     font-weight: 600;
   }
 
   .detail {
-    color: var(--fg, #d8d8d8);
+    color: var(--text-secondary);
   }
 
   .time {
     margin-left: auto;
-    color: var(--fg-muted, #9a9a9a);
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
 
   .faults {
     margin: 6px 0 0;
     padding-left: 24px;
-    color: var(--fg-muted, #9a9a9a);
+    color: var(--text-muted);
+    font-size: 0.75rem;
   }
 
   .faults li {

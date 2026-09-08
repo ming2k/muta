@@ -13,14 +13,14 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 9;
+pub const CURRENT_DB_VERSION: u32 = 10;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "e03ffc333983f5ae04f9e5f5f64b14b44c451b30c898b44c52bbd64415adf656";
+    "b0252afc017b06817eb515e8ffc97db656b755f2854274c0df7f77a072b6b127";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -358,6 +358,33 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         sql: "",
     },
+    Migration {
+        // Corrective migration (ADR-0186 integrity fix): migration 5's
+        // `entries` CHECK `origin IS NULL OR hidden = 1` coupled two orthogonal
+        // concepts — `origin` (WHY a message exists) and `hidden` (whether it
+        // is shown). That coupling was false: the durable transcript
+        // legitimately carries *visible* harness injections (UserSteer /
+        // RunnerSteer / RunnerTask, CommandEcho "/cmd" & "!cmd", ToolImage, and
+        // SystemPrompt/SystemReminder), all of which ADR-0050 records
+        // `.hidden = false` with an `origin`. The false constraint then turned
+        // a lawful mid-round save (e.g. the steering fire-at-turn-boundary) into
+        // `CHECK constraint failed: origin IS NULL OR hidden = 1`.
+        //
+        // The constraint is replaced by two honest, orthogonal ones that still
+        // reject silent corruption:
+        //   - a hidden message must explain WHY (`origin` present);
+        //   - only a *visible user* envelope origin is outlawed — a checkpoint
+        //     is never visible dialogue, and user-role visible steering/echo/
+        //     image injections carry `origin = 'harness'`. (Role-level
+        //     preferencing is intended: decompact/checkpoint entries are the
+        //     only visible-non-user pathological case the old check guarded.)
+        // Because a column-level CHECK cannot be altered in place, `entries`
+        // is rebuilt (table rewrite) inside a transaction; the FK from
+        // `entry_memberships` is deferred so the transient missing-table step
+        // does not trip the referential guard.
+        version: 10,
+        sql: "",
+    },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -603,6 +630,68 @@ fn apply_usage_ledger_schema(tx: &rusqlite::Transaction) -> Result<()> {
     Ok(())
 }
 
+/// Migration 10 repair: rewrite `entries` with the corrected `origin`/`hidden`
+/// CHECKs (ADR-0186 integrity fix). The whole step runs in the caller's outer
+/// transaction; the FK from `entry_memberships` is deferred so the rebuild —
+/// which briefly drops `entries` and renames the replacement into place — never
+/// trips the referential guard. Data and FTS triggers are preserved: rows are
+/// copied byte-for-byte, the FTS-insert trigger is dropped before the rename
+/// (ALTER TABLE RENAME reparses trigger bodies) and re-anchored after.
+fn apply_entries_integrity_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    // The `entries` table exists only in databases that ran the ADR-0186
+    // transcript migration. An interim version-5 database (no transcript
+    // tables) converges later, when the entries/entry_memberships tables
+    // appear; skip the repair here exactly like the v2 schema guard does.
+    if !table_exists(tx, "entries")? || !table_exists(tx, "entry_memberships")? {
+        return Ok(());
+    }
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+    // `ALTER TABLE entries_new RENAME TO entries` re-parses every surviving
+    // trigger body that references `entries`; the migration-7 membership
+    // insert trigger selects from it, so it is dropped first and re-created
+    // byte-identically after the swap (mirrors the v2 FTS re-anchor). The
+    // old `entries` FTS triggers are dropped too (their bodies reference the
+    // renamed table) and re-anchored identically.
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS trg_memberships_ai;
+         DROP TRIGGER IF EXISTS trg_entries_ai;
+         DROP TRIGGER IF EXISTS trg_entries_ad;
+         CREATE TABLE entries_new (
+            id            TEXT PRIMARY KEY,
+            kind          TEXT NOT NULL CHECK (kind IN ('message','state')),
+            role          TEXT CHECK (role IN ('user','assistant','system','tool')),
+            content       TEXT,
+            origin        TEXT CHECK (origin IS NULL OR origin IN ('harness','checkpoint')),
+            hidden        INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            payload       TEXT NOT NULL,
+            CHECK ( hidden = 0 OR origin IS NOT NULL ),
+            CHECK ( origin IS NULL OR hidden = 1 OR origin <> 'checkpoint' ),
+            CHECK ( kind <> 'message' OR role IS NOT NULL )
+        );
+        INSERT INTO entries_new (id, kind, role, content, origin, hidden, created_at_ms, payload)
+            SELECT id, kind, role, content, origin, hidden, created_at_ms, payload FROM entries;
+        DROP TABLE entries;
+        ALTER TABLE entries_new RENAME TO entries;
+        -- Re-create the membership/entry FTS triggers with the exact pre-merge
+        -- definitions so the resulting schema matches a fresh migration 7 run.
+        CREATE TRIGGER trg_memberships_ai AFTER INSERT ON entry_memberships BEGIN
+            INSERT INTO fts_entries(entry_id, session_id, role, content)
+            SELECT new.entry_id, new.session_id, COALESCE(e.role, ''), COALESCE(e.content, '')
+            FROM entries e WHERE e.id = new.entry_id;
+        END;
+        CREATE TRIGGER trg_entries_ai AFTER INSERT ON entries BEGIN
+            INSERT INTO fts_entries(entry_id, session_id, role, content)
+            SELECT new.id, m.session_id, COALESCE(new.role, ''), COALESCE(new.content, '')
+            FROM entry_memberships m WHERE m.entry_id = new.id;
+        END;
+        CREATE TRIGGER trg_entries_ad AFTER DELETE ON entries BEGIN
+            DELETE FROM fts_entries WHERE entry_id = old.id;
+        END;",
+    )?;
+    Ok(())
+}
+
 fn insert_usage_record_tx(
     tx: &rusqlite::Connection,
     session_id: &str,
@@ -773,6 +862,9 @@ fn migrate_schema(conn: &mut Connection) -> Result<()> {
                             "ALTER TABLE sessions ADD COLUMN retry_resolutions TEXT NOT NULL DEFAULT '[]';",
                         )?;
                     }
+                }
+                if migration.version == 10 {
+                    apply_entries_integrity_schema(&tx)?;
                 }
             }
         }
@@ -2915,6 +3007,84 @@ mod tests {
             "the migration catalog changed; ship the change as version {} \
              with new SQL instead of rewriting an applied migration",
             CURRENT_DB_VERSION + 1
+        );
+    }
+
+    /// Regression (reported incident): the v5 `entries` CHECK coupled `origin`
+    /// and `hidden`, rejecting the legitimate *visible* harness injections the
+    /// durable transcript carries (UserSteer/RunnerSteer, CommandEcho "/cmd"
+    /// & "!cmd", ToolImage). A mid-round save of such a message then failed with
+    /// `CHECK constraint failed: origin IS NULL OR hidden = 1`. The corrected
+    /// schema (migration 10) accepts them without weakening the still-real
+    /// invariants.
+    #[test]
+    fn visible_harness_injections_persist_after_origin_hidden_split() {
+        use muta_contracts::{InjectionKind, Message, Role, TranscriptEntry};
+
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        engine.save_session_full(&data).unwrap();
+
+        // The exact repro: a user steering insert and a command echo are both
+        // visible (`hidden = false`) yet legitimately carry an `origin`.
+        let steer = Message::new(Role::User, "pls reconsider point 3")
+            .with_origin(muta_contracts::InjectionOrigin::new(InjectionKind::UserSteer));
+        let echo = Message::command_echo("/session list");
+        let image = Message::new(Role::User, "Image from screenshot")
+            .with_images(vec![muta_contracts::ImagePart {
+                mime: "image/png".into(),
+                data: "bytes".into(),
+            }])
+            .with_origin(muta_contracts::InjectionOrigin::new(InjectionKind::ToolImage));
+
+        assert!(!steer.hidden && steer.origin.is_some());
+        assert!(!echo.hidden && echo.origin.is_some());
+        assert!(!image.hidden && image.origin.is_some());
+
+        data.transcript.push(TranscriptEntry::from_message(0, &steer));
+        data.transcript.push(TranscriptEntry::from_message(1, &echo));
+        data.transcript.push(TranscriptEntry::from_message(2, &image));
+        // Was the reported failure: `CHECK constraint failed: origin IS NULL OR hidden = 1`.
+        engine.save_session_full(&data).unwrap();
+
+        let reloaded = engine.load_session_full(&data.id).unwrap().unwrap();
+        let messages: Vec<_> = reloaded
+            .transcript
+            .entries
+            .iter()
+            .filter_map(|e| e.to_message())
+            .collect();
+        assert_eq!(messages.len(), 3);
+        for m in messages {
+            assert!(m.origin.is_some(), "provenance must survive the round-trip");
+            assert!(!m.hidden || m.origin.is_some());
+        }
+    }
+
+    /// The corrected schema must still reject silent corruption: a *visible*
+    /// envelope origin that can never be legitimate. A checkpoint is an
+    /// elided-range stand-in and is hidden by construction (`transcript.rs`);
+    /// a visible `Role::User` row tagged `origin = 'checkpoint'` is thus
+    /// impossible and must fail on save.
+    #[test]
+    fn visible_checkpoint_origin_is_still_rejected() {
+        use muta_contracts::{Message, Role, TranscriptEntry};
+
+        let engine = DatabaseEngine::open_in_memory().unwrap();
+        let mut data = crate::session::SessionData::default();
+        let mut message = Message::new(Role::User, "bogus visible checkpoint");
+        message.hidden = false; // checkpoint is never visible dialogue
+        message.origin = Some(muta_contracts::InjectionOrigin::new(
+            muta_contracts::InjectionKind::CompactionCheckpoint,
+        ));
+        data.transcript
+            .push(TranscriptEntry::from_message(0, &message));
+
+        let err = engine.save_session_full(&data).err().expect("constraint must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("constraint failed") || msg.contains("CHECK"),
+            "expected a CHECK/constraint failure, got: {msg}"
         );
     }
 

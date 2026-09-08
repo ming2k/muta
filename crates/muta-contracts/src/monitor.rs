@@ -24,7 +24,7 @@ use crate::events::SessionForkKind;
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct MonitorAction {
     /// Keep the connection open and stream `MonitorEvent::Diff`s after the
-    /// initial snapshot (`muta daemon status --watch`, live control apps). When
+    /// initial snapshot (`muta status --watch`, live control apps). When
     /// `false` the server sends the snapshot and closes the connection.
     #[serde(default)]
     pub watch: bool,
@@ -265,7 +265,7 @@ impl SessionStatus {
         !matches!(self, Self::Idle)
     }
 
-    /// The wire string, also used directly by the `muta daemon status` table.
+    /// The wire string, also used directly by the `muta status` table.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",

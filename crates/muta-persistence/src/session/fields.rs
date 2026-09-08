@@ -135,19 +135,57 @@ impl SessionStore {
             .len()
     }
 
+    /// The current digest and its transcript watermark (ADR-0187
+    /// `digest_anchor`).
     pub async fn digest(&self) -> (Option<muta_contracts::SessionDigest>, Option<u64>) {
         let state = self.state.lock().await;
         (state.data.digest.clone(), state.data.digest_anchor)
     }
 
+    /// Unconditionally replace the digest and its anchor.
     pub async fn set_digest(
         &self,
         digest: Option<muta_contracts::SessionDigest>,
         anchor: Option<u64>,
     ) -> Result<(), String> {
+        self.store_digest(digest, anchor, None).await.map(|_| ())
+    }
+
+    /// Compare-and-set digest persist (ADR-0193): the write lands only while
+    /// the durable anchor still equals `expected_anchor` — the concurrent
+    /// digest probe discipline. A losing writer (its `transcript_chars`
+    /// snapshot already covered by a concurrent refresh's anchor) reports
+    /// `Ok(false)` and discards its generated digest; the winner's anchor
+    /// advance is exactly what disqualified it, so no additional lock or task
+    /// registry is needed. A `None` anchor means "only when absent" (first
+    /// generation racing a concurrent first generation).
+    pub async fn set_digest_if_anchor(
+        &self,
+        digest: Option<muta_contracts::SessionDigest>,
+        anchor: Option<u64>,
+        expected_anchor: Option<u64>,
+    ) -> Result<bool, String> {
+        self.store_digest(digest, anchor, Some(expected_anchor)).await
+    }
+
+    /// Shared persistence core: compute-and-persist under one state lock, with
+    /// an optional anchor CAS on the digest path.
+    async fn store_digest(
+        &self,
+        digest: Option<muta_contracts::SessionDigest>,
+        anchor: Option<u64>,
+        cas: Option<Option<u64>>,
+    ) -> Result<bool, String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
+            if let Some(expected) = &cas
+                && state.data.digest_anchor != *expected
+            {
+                return Ok(false);
+            }
             state.data.digest = digest;
+            // An anchor without a digest is meaningless (the anchor
+            // watermarks *this* digest's transcript coverage).
             state.data.digest_anchor = anchor.filter(|_| state.data.digest.is_some());
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
@@ -160,7 +198,7 @@ impl SessionStore {
             self.persist_off_runtime(path, data, self.blob_store.clone())
                 .await?;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub async fn parent_id(&self) -> Option<String> {

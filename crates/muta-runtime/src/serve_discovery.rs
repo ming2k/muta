@@ -2,7 +2,7 @@
 //! endpoint.
 //!
 //! Since ADR-0096 the record that matters is **global**: the unified daemon
-//! (`muta`, run by `muta daemon start`) writes one `daemon.json` per user
+//! (`muta`, run by `muta start`) writes one `daemon.json` per user
 //! ([`global_discovery_path`], in `$XDG_RUNTIME_DIR/muta/` when a runtime
 //! dir exists) once its port is bound, and removes it on clean shutdown.
 //! Clients (an attaching `mutx` TUI, the web app, the
@@ -65,7 +65,7 @@ pub struct Discovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The daemon's configured graceful-drain budget, **seconds**
-    /// (ADR-0116). `muta daemon stop` reads this so its escalation
+    /// (ADR-0116). `muta stop` reads this so its escalation
     /// tiers wait *the daemon's own budget* before SIGTERM/SIGKILL: a
     /// signal arriving mid-drain escalates the daemon to a forced exit,
     /// so a client that escalates early destroys the graceful drain it

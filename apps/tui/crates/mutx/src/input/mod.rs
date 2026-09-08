@@ -59,6 +59,12 @@ pub struct InputContext {
     pub has_focused_target: bool,
     /// Whether the transcript currently holds browse focus (e.g. via mouse click into viewport).
     pub transcript_focused: bool,
+    /// Whether the inline ↑/↓ recall pointer sits on a history row
+    /// (`App::history_index.is_some()`). While true, Esc first cancels the
+    /// recall (restoring the stashed draft) before any other Esc arm fires —
+    /// the pointer is a transient navigation state and the universal
+    /// "get me back" chord must be able to exit it (ADR-0192).
+    pub in_history_recall: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -128,11 +134,26 @@ impl InputContext {
 /// active (`history_searching` / `model_searching`); in browse mode those keys
 /// are inert so `/` can open search and stray letters never mutate a buffer the
 /// user isn't editing.
-/// Whether the permission sheet occupies the composer slot. The one
-/// pass-through surface: transcript navigation and scrolling stay live
-/// behind it (ADR-0173 §2).
-fn permission_sheet_up(context: &InputContext) -> bool {
+/// Whether an interaction sheet is the keyboard foreground (ADR-0173 §3).
+///
+/// A sheet owns its decision keys only while no overlay modal coexists: the
+/// modal renders centered above the bottom-slot sheet, so visual order makes
+/// the modal the foreground — it takes every non-global key until it closes,
+/// and the sheet beneath is inert (its pending decision untouched). Closing
+/// the modal hands the keyboard straight back to the sheet, which is why
+/// "Esc closes the modal" and "Esc rejects the permission" never fire in one
+/// press.
+fn sheet_foreground(context: &InputContext) -> bool {
+    context.active_sheet.is_some() && context.active_modal == super::Modal::None
+}
+
+/// Whether the permission sheet occupies the composer slot and is the
+/// keyboard foreground. The one pass-through surface: transcript navigation
+/// and scrolling stay live behind it (ADR-0173 §2) — a coexisting modal
+/// covers it and suspends the pass-through.
+fn permission_sheet_foreground(context: &InputContext) -> bool {
     context.active_sheet == Some(crate::sheet::SheetKind::Permission)
+        && context.active_modal == super::Modal::None
 }
 
 /// Whether no overlay is up at all — no modal, no sheet: the chat surface.
@@ -141,17 +162,20 @@ fn bare_chat_surface(context: &InputContext) -> bool {
 }
 
 /// Whether clicks, drags and hover reach the live transcript: on the bare
-/// chat surface, or behind the pass-through permission sheet.
+/// chat surface, or behind the foreground permission sheet. A coexisting
+/// modal owns the screen above the sheet, so the pass-through suspends.
 fn transcript_interactive(context: &InputContext) -> bool {
-    bare_chat_surface(context) || permission_sheet_up(context)
+    bare_chat_surface(context) || permission_sheet_foreground(context)
 }
 
 /// Whether the foreground surface (sheet or modal) pages its own body on the
 /// scroll keys — the claims-driven mirror of `App::modal_scroll_field`
-/// (ADR-0173 §2).
+/// (ADR-0173 §2). A coexisting modal outranks the sheet (visual order).
 fn foreground_scrolls_own_body(context: &InputContext) -> bool {
-    if let Some(kind) = context.active_sheet {
-        return kind.keyboard_claims().body_scroll;
+    if sheet_foreground(context) {
+        return context
+            .active_sheet
+            .is_some_and(|kind| kind.keyboard_claims().body_scroll);
     }
     context.active_modal.keyboard_claims().body_scroll
 }
@@ -161,13 +185,22 @@ fn edits_input_field(context: &InputContext) -> bool {
         return false;
     }
     // Sheet foreground: only the injection sheet borrows the composer line;
-    // the permission and question sheets never edit the shared draft.
-    if let Some(kind) = context.active_sheet {
-        return kind == crate::sheet::SheetKind::InputInjection;
+    // the permission and question sheets never edit the shared draft. A
+    // coexisting modal outranks the sheet — a text-entry modal keeps its
+    // borrowed field and the injection sheet's line is inert until the
+    // modal closes.
+    if context.active_sheet.is_some() {
+        if context.active_modal != super::Modal::None {
+            // Modal foreground: fall through to the modal's own claim
+            // below (ModelEditor's key field, the picker filters, …).
+        } else {
+            return context.active_sheet == Some(crate::sheet::SheetKind::InputInjection);
+        }
     }
     // The static column comes from the modal's declared `text_entry` claim
     // (modal.rs, ADR-0173 §2); the live gate (which field, which sub-mode)
-    // stays here beside the resolver.
+    // stays here beside the resolver. Also the modal-foreground path when a
+    // sheet coexists.
     if !context.active_modal.keyboard_claims().text_entry {
         return false;
     }
@@ -184,7 +217,10 @@ fn edits_input_field(context: &InputContext) -> bool {
 }
 
 fn question_other_field(context: &InputContext) -> bool {
+    // Foreground question sheet only: a coexisting modal owns the
+    // keyboard, and its paste must not splice into the "Other" field.
     context.active_sheet == Some(crate::sheet::SheetKind::Question)
+        && context.active_modal == super::Modal::None
         && context.question_other_highlighted
 }
 
@@ -509,6 +545,12 @@ pub enum InputAction {
     /// Clear the keyboard-focused target, returning every key to its ordinary
     /// input-box meaning. Triggered by `Esc` while a step is focused.
     ClearFocusedTarget,
+    /// Cancel the inline ↑/↓ history recall and restore the stashed draft
+    /// (text + attachments). Triggered by `Esc` while the recall pointer sits
+    /// on a history row — the universal "get me back" chord must exit the
+    /// recall state, which otherwise has no exit short of walking ↓ to the
+    /// end or sending (ADR-0192).
+    CancelHistoryRecall,
     /// Paste from the system clipboard (image or text). Resolved by the app
     /// loop, which reads the clipboard asynchronously.
     Paste,
@@ -1389,10 +1431,13 @@ pub fn process_event(
             // Sheet Verb Dispatch (ADR-0173 §3)
             // Each interaction sheet owns its single-key verbs in its own
             // scheme; a key the sheet does not own falls through to the
-            // modal schemes and the sheet arms below. A mounted sheet takes
-            // priority over a coexisting modal: the sheet blocks the agent
-            // (safety-critical approval flow), the modal is a browsing aid.
-            if let Some(kind) = context.active_sheet
+            // shared affordance library and the sheet arms below. A sheet is
+            // the keyboard foreground only while no modal coexists (the
+            // arbitration rule): the modal renders above it (visual order),
+            // so with both up the modal's own scheme is consulted first and
+            // the sheet's verbs are suspended until the modal closes.
+            if context.active_modal == super::Modal::None
+                && let Some(kind) = context.active_sheet
                 && let Some(action) = crate::sheet::resolve_sheet_key(kind, physical_key, &context)
             {
                 return action;
@@ -1413,7 +1458,46 @@ pub fn process_event(
                     // / clear step focus / interrupt) is resolved by the
                     // Session view's own scheme (ADR-0172) before this match.
                     // This arm is modal-only.
-                    if permission_sheet_up(&context) {
+                    //
+                    // Foreground order (visual order, ADR-0173 §3 as revised):
+                    // a coexisting modal renders above the bottom-slot sheet,
+                    // so every modal arm is checked BEFORE any sheet arm —
+                    // Esc closes the modal and only a later press reaches the
+                    // sheet's own Esc semantics. A sheet decision key pressed
+                    // over a modal would otherwise punch through to the
+                    // layer beneath (a stray Esc rejecting the pending
+                    // permission outright).
+                    if context.active_modal != super::Modal::None && context.active_sheet.is_some()
+                    {
+                        // Modal over sheet: fall through to the modal arms
+                        // below; the sheet is keyboard-inert.
+                        if context.active_modal == super::Modal::ProviderPreset {
+                            InputAction::CancelPresetChooser
+                        } else if context.active_modal == super::Modal::OauthPending {
+                            InputAction::CancelOauthPending
+                        } else if context.active_modal == super::Modal::CustomProvider {
+                            InputAction::CancelCustomProvider
+                        } else if matches!(
+                            context.active_modal,
+                            super::Modal::Models | super::Modal::Connections
+                        ) && context.model_searching
+                        {
+                            // Same two-stage Esc as the history modal: the
+                            // first Esc drops the picker's search sub-layer
+                            // back to the browse list; the next Esc (browse
+                            // mode) closes.
+                            InputAction::ModelExitSearch
+                        } else if context.active_modal == super::Modal::Config {
+                            InputAction::ConfigBack
+                        } else {
+                            // For every other surface — the retained browse
+                            // views and the quick switcher included
+                            // (ADR-0133) — Esc is the shared dismiss verb;
+                            // the dispatcher decides hide (state saved) vs
+                            // cancel-to-origin there.
+                            InputAction::CloseModal
+                        }
+                    } else if permission_sheet_foreground(&context) {
                         if context.permission_confirm_always {
                             InputAction::PermissionBack
                         } else if context.has_focused_target {
@@ -1525,13 +1609,22 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Enter => {
-                    // Sheet submits (ADR-0173 §3): Enter on a sheet commits
-                    // its pending decision.
-                    if let Some(kind) = context.active_sheet {
-                        return match kind {
-                            crate::sheet::SheetKind::Permission => InputAction::PermissionSubmit,
-                            crate::sheet::SheetKind::Question => InputAction::QuestionSubmit,
-                            crate::sheet::SheetKind::InputInjection => InputAction::InputSubmit,
+                    // Sheet submits (ADR-0173 §3): Enter on a foreground sheet
+                    // commits its pending decision. A coexisting modal is the
+                    // visual foreground and outranks the sheet — its own
+                    // Enter verb runs, the sheet's decision stays untouched
+                    // (a stray Enter over a modal must never punch through
+                    // and grant or reject the permission beneath).
+                    if sheet_foreground(&context) {
+                        return match context.active_sheet {
+                            Some(crate::sheet::SheetKind::Permission) => {
+                                InputAction::PermissionSubmit
+                            }
+                            Some(crate::sheet::SheetKind::Question) => InputAction::QuestionSubmit,
+                            Some(crate::sheet::SheetKind::InputInjection) => {
+                                InputAction::InputSubmit
+                            }
+                            None => InputAction::None,
                         };
                     }
                     match context.active_modal {
@@ -1609,8 +1702,12 @@ pub fn process_event(
                 KeyCode::BackTab => {
                     // Chat-surface BackTab (return focus from a step) is
                     // resolved by the Session view's scheme (ADR-0172). This
-                    // arm is modal-only.
-                    if context.active_sheet == Some(crate::sheet::SheetKind::Question) {
+                    // arm is modal-only. The question sheet's BackTab owns
+                    // only while it is the foreground — a coexisting modal
+                    // takes its own chords below.
+                    if context.active_sheet == Some(crate::sheet::SheetKind::Question)
+                        && context.active_modal == super::Modal::None
+                    {
                         InputAction::QuestionPrevious
                     } else if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
@@ -1811,6 +1908,11 @@ pub fn process_event(
                     // remains here: editing surfaces (chat composer, borrowed
                     // one-line modal filters, the key editor's API-key field)
                     // insert the character, everything else is inert.
+                    // `edits_input_field` resolves the foreground: a
+                    // coexisting modal outranks the sheet (the injection
+                    // sheet's borrowed line is inert until the modal closes),
+                    // and the question sheet's printable verbs are resolved
+                    // by its own scheme above — never reaching here.
                     if edits_input_field(&context)
                         && !(context.active_modal == super::Modal::ModelEditor
                             && matches!(context.editor_field, Some(2..=4)))
@@ -1834,8 +1936,12 @@ pub fn process_event(
                 }
                 KeyCode::Backspace => {
                     // The palette's query backspace is owned by its scheme
-                    // (modal_keys, ADR-0172).
-                    if context.active_sheet == Some(crate::sheet::SheetKind::Question) {
+                    // (modal_keys, ADR-0172). The question sheet's "Other"
+                    // field edits only while the sheet is the foreground; a
+                    // coexisting modal takes its own keys below.
+                    if context.active_sheet == Some(crate::sheet::SheetKind::Question)
+                        && context.active_modal == super::Modal::None
+                    {
                         InputAction::QuestionBackspace
                     } else if edits_input_field(&context) && *cursor_position > 0 {
                         // Alt+Backspace / Ctrl+Backspace delete the previous
@@ -2027,10 +2133,12 @@ pub fn process_event(
                 KeyCode::Up => {
                     // Sheet ↑ (ADR-0173 §3): the permission sheet passes
                     // transcript navigation through (claims), the question
-                    // sheet walks its own option cursor.
-                    if let Some(kind) = context.active_sheet {
-                        return match kind {
-                            crate::sheet::SheetKind::Permission => {
+                    // sheet walks its own option cursor — but only when the
+                    // sheet is the foreground. A coexisting modal is above
+                    // it, so the modal arms below take the key.
+                    if sheet_foreground(&context) {
+                        return match context.active_sheet {
+                            Some(crate::sheet::SheetKind::Permission) => {
                                 if context.has_focused_target {
                                     InputAction::FocusPrevTarget
                                 } else if context.permission_show_details {
@@ -2039,8 +2147,9 @@ pub fn process_event(
                                     InputAction::ScrollUp
                                 }
                             }
-                            crate::sheet::SheetKind::Question => InputAction::QuestionUp,
-                            crate::sheet::SheetKind::InputInjection => InputAction::None,
+                            Some(crate::sheet::SheetKind::Question) => InputAction::QuestionUp,
+                            Some(crate::sheet::SheetKind::InputInjection) => InputAction::None,
+                            None => InputAction::None,
                         };
                     }
                     match context.active_modal {
@@ -2081,10 +2190,11 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Down => {
-                    // Sheet ↓: mirror of the ↑ arm.
-                    if let Some(kind) = context.active_sheet {
-                        return match kind {
-                            crate::sheet::SheetKind::Permission => {
+                    // Sheet ↓: mirror of the ↑ arm — foreground sheets only;
+                    // a coexisting modal takes the key in its arms below.
+                    if sheet_foreground(&context) {
+                        return match context.active_sheet {
+                            Some(crate::sheet::SheetKind::Permission) => {
                                 if context.has_focused_target {
                                     InputAction::FocusNextTarget
                                 } else if context.permission_show_details {
@@ -2093,8 +2203,9 @@ pub fn process_event(
                                     InputAction::ScrollDown
                                 }
                             }
-                            crate::sheet::SheetKind::Question => InputAction::QuestionDown,
-                            crate::sheet::SheetKind::InputInjection => InputAction::None,
+                            Some(crate::sheet::SheetKind::Question) => InputAction::QuestionDown,
+                            Some(crate::sheet::SheetKind::InputInjection) => InputAction::None,
+                            None => InputAction::None,
                         };
                     }
                     match context.active_modal {
@@ -2136,10 +2247,10 @@ pub fn process_event(
                 // PageUp / PageDown: Scroll transcript or modal body by one viewport page.
                 KeyCode::PageUp => {
                     // Transcript paging on the bare chat surface and behind
-                    // the pass-through permission sheet; a body-scrolling
+                    // the foreground permission sheet; a body-scrolling
                     // sheet or modal pages itself (claims, ADR-0173 §2).
                     if bare_chat_surface(&context)
-                        || permission_sheet_up(&context)
+                        || permission_sheet_foreground(&context)
                         || foreground_scrolls_own_body(&context)
                     {
                         InputAction::ScrollPageUp
@@ -2149,10 +2260,10 @@ pub fn process_event(
                 }
                 KeyCode::PageDown => {
                     // Transcript paging on the bare chat surface and behind
-                    // the pass-through permission sheet; a body-scrolling
+                    // the foreground permission sheet; a body-scrolling
                     // sheet or modal pages itself (claims, ADR-0173 §2).
                     if bare_chat_surface(&context)
-                        || permission_sheet_up(&context)
+                        || permission_sheet_foreground(&context)
                         || foreground_scrolls_own_body(&context)
                     {
                         InputAction::ScrollPageDown
@@ -2163,7 +2274,7 @@ pub fn process_event(
                 KeyCode::Home
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && (bare_chat_surface(&context)
-                            || permission_sheet_up(&context)
+                            || permission_sheet_foreground(&context)
                             || foreground_scrolls_own_body(&context)) =>
                 {
                     InputAction::ScrollTop
@@ -2171,7 +2282,7 @@ pub fn process_event(
                 KeyCode::End
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && (bare_chat_surface(&context)
-                            || permission_sheet_up(&context)
+                            || permission_sheet_foreground(&context)
                             || foreground_scrolls_own_body(&context)) =>
                 {
                     InputAction::ScrollBottom
@@ -2180,7 +2291,7 @@ pub fn process_event(
                 // - When a target or browse focus is active (or in permission sheet): scroll transcript to top / bottom.
                 // - When composer or modal input field is active: move caret to line start / line end (readline convention).
                 KeyCode::Home => {
-                    if permission_sheet_up(&context)
+                    if permission_sheet_foreground(&context)
                         || context.has_focused_target
                         || context.transcript_focused
                     {
@@ -2193,7 +2304,7 @@ pub fn process_event(
                     }
                 }
                 KeyCode::End => {
-                    if permission_sheet_up(&context)
+                    if permission_sheet_foreground(&context)
                         || context.has_focused_target
                         || context.transcript_focused
                     {

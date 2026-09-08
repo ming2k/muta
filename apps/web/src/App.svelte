@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { daemon } from "./lib/stores/daemon.svelte.js";
+  import { resolveInitialTheme, toggleTheme, type Theme } from "./lib/theme.js";
+  import { t } from "./lib/i18n.svelte.js";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ChatHeader from "./lib/components/ChatHeader.svelte";
   import MessageItem from "./lib/components/MessageItem.svelte";
@@ -22,6 +24,7 @@
   let modelsOpen = $state(false);
   let connectionOpen = $state(false);
   let webSearchOpen = $state(false);
+  let theme = $state<Theme>(resolveInitialTheme());
 
   onMount(() => {
     // Surface unexpected client errors instead of dying silently.
@@ -30,12 +33,22 @@
         event instanceof ErrorEvent
           ? event.message
           : (event as PromiseRejectionEvent).reason?.toString?.() ?? "unknown error";
-      daemon.pushToast("error", "Client error", message);
+      daemon.pushToast("error", t("clientError"), message);
     };
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onError);
 
     daemon.init();
+    // First-impression credential check (ADR-0105): probe the daemon's
+    // `/healthz` immediately. When the daemon requires a bearer token and we
+    // have none, do not wait out the "maybe it will connect" timer — open the
+    // connection dialog right away with the auth hint visible. A stored
+    // token that the daemon has since rotated (its restart regenerates the
+    // token) still surfaces here as disconnected+auth-required: the probe
+    // says what the socket cannot.
+    void daemon.probe().then((probe) => {
+      if (probe?.auth && !daemon.token) connectionOpen = true;
+    });
 
     // Open the connection dialog when there is nothing to talk to yet.
     const openTimer = window.setTimeout(() => {
@@ -47,6 +60,14 @@
       window.removeEventListener("unhandledrejection", onError);
       window.clearTimeout(openTimer);
     };
+  });
+
+  $effect(() => {
+    // First-impression credential challenge (ADR-0105): the store raises
+    // `credentialChallenge` when the daemon requires a token and the present
+    // one was rejected — open the connection dialog immediately so the user
+    // never stares at a silently reconnecting badge.
+    if (daemon.credentialChallenge) connectionOpen = true;
   });
 
   $effect(() => {
@@ -68,6 +89,11 @@
     autoScroll =
       transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 80;
   }
+
+  /** Theme is resolved before mount; onMount just re-syncs in case it drifted. */
+  $effect(() => {
+    document.documentElement.dataset.theme = theme;
+  });
 </script>
 
 <div class="layout">
@@ -82,20 +108,33 @@
       onToggleSidebar={() => (sidebarOpen = !sidebarOpen)}
       onOpenModels={() => (modelsOpen = true)}
       onOpenWebSearch={() => (webSearchOpen = true)}
+      theme={theme}
+      onToggleTheme={() => (theme = toggleTheme(theme))}
     />
 
     <section class="transcript" bind:this={transcriptEl} onscroll={handleScroll}>
       {#if daemon.feed.length === 0 && !daemon.streamingAssistantText && Object.keys(daemon.liveTools).length === 0}
         <div class="empty-hero">
-          <div class="icon">⚡</div>
-          <h3>Muta Session Workspace</h3>
-          <p>
+          <!-- 朱砂印 + 远山: the seal above a distant-ridge line, pure 留白 around. -->
+          <img class="hero-seal" src="/logo-seal.png" alt="" draggable="false" />
+          <svg class="ridges" viewBox="0 0 320 120" fill="none" aria-hidden="true">
+            <path
+              class="ridge far"
+              d="M0 96 C 48 84 76 58 108 58 C 142 58 158 82 190 78 C 226 74 240 40 272 40 C 292 40 306 54 320 62 L 320 120 L 0 120 Z"
+            />
+            <path
+              class="ridge near"
+              d="M0 112 C 40 108 70 92 104 94 C 146 96 168 108 208 104 C 248 100 268 82 320 88 L 320 120 L 0 120 Z"
+            />
+          </svg>
+          <h3 class="hero-title">Muta</h3>
+          <p class="hero-line">
             {#if daemon.connection !== "connected"}
-              Connecting to the session daemon…
+              {t("connecting")}
             {:else if daemon.sessionAttached}
-              Send prompts below to orchestrate coding turns.
+              {t("startPrompting")}
             {:else}
-              Select or create a session to start.
+              {t("selectSession")}
             {/if}
           </p>
           {#if daemon.sessionError}
@@ -103,45 +142,47 @@
           {/if}
         </div>
       {:else}
-        {#each daemon.feed as item (item.key)}
-          {#if item.kind === "message"}
-            <MessageItem message={item.message} />
-          {:else if item.kind === "interrupt"}
-            <InterruptMarker record={item.record} />
-          {:else if item.kind === "retry_resolution"}
-            <RetryMarker record={item.record} />
-          {:else if item.kind === "retry_scheduled"}
-            <div class="retry-live" role="status">
-              <span class="glyph">↻</span>
-              <span class="label">retrying</span>
-              <span class="detail"
-                >{item.attempt}/{item.max_attempts} · {item.message}</span
-              >
+        <div class="thread">
+          {#each daemon.feed as item (item.key)}
+            {#if item.kind === "message"}
+              <MessageItem message={item.message} />
+            {:else if item.kind === "interrupt"}
+              <InterruptMarker record={item.record} />
+            {:else if item.kind === "retry_resolution"}
+              <RetryMarker record={item.record} />
+            {:else if item.kind === "retry_scheduled"}
+              <div class="retry-live" role="status">
+                <span class="glyph">↻</span>
+                <span class="label">{t("retrying")}</span>
+                <span class="detail"
+                  >{item.attempt}/{item.max_attempts} · {item.message}</span
+                >
+              </div>
+            {:else}
+              <CommandBlock record={item.record} />
+            {/if}
+          {/each}
+
+          <!-- Active Tool Executions -->
+          {#each Object.values(daemon.liveTools) as tool (tool.id)}
+            <ToolCard {tool} />
+          {/each}
+
+          <!-- Streaming Assistant Text -->
+          {#if daemon.streamingAssistantText || daemon.streamingReasoningText}
+            <div class="streaming-block">
+              {#if daemon.streamingReasoningText}
+                <details class="reasoning">
+                  <summary>thinking…</summary>
+                  <pre>{daemon.streamingReasoningText}</pre>
+                </details>
+              {/if}
+              {#if daemon.streamingAssistantText}
+                <div class="stream-text">{daemon.streamingAssistantText}</div>
+              {/if}
             </div>
-          {:else}
-            <CommandBlock record={item.record} />
           {/if}
-        {/each}
-
-        <!-- Active Tool Executions -->
-        {#each Object.values(daemon.liveTools) as tool (tool.id)}
-          <ToolCard {tool} />
-        {/each}
-
-        <!-- Streaming Assistant Text -->
-        {#if daemon.streamingAssistantText || daemon.streamingReasoningText}
-          <div class="message-bubble assistant streaming">
-            {#if daemon.streamingReasoningText}
-              <details class="reasoning">
-                <summary>thinking…</summary>
-                <pre>{daemon.streamingReasoningText}</pre>
-              </details>
-            {/if}
-            {#if daemon.streamingAssistantText}
-              <div class="stream-text">{daemon.streamingAssistantText}</div>
-            {/if}
-          </div>
-        {/if}
+        </div>
       {/if}
     </section>
 
@@ -168,29 +209,11 @@
 <ToastStack />
 
 <style>
-  .retry-live {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 6px 2px;
-    font-size: 13px;
-    color: var(--fg-muted, #9a9a9a);
-  }
-
-  .retry-live .glyph,
-  .retry-live .label {
-    color: var(--warn, #d9a03f);
-    font-weight: 600;
-  }
-
-  .retry-live .detail {
-    color: var(--fg, #d8d8d8);
-    overflow-wrap: anywhere;
-  }
-
+  /* ————— 骨架 ————— */
   .layout {
     display: flex;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
     background-color: var(--bg-app);
   }
@@ -204,85 +227,166 @@
     min-width: 0;
   }
 
+  /* The transcript is the 留白: a narrow centered column floating on the
+     paper, generous padding top and bottom. */
   .transcript {
     flex: 1;
     overflow-y: auto;
-    /* Extra breathing room at the top and bottom so the first and last message
-       never sit flush against the header or composer when scrolled to either end. */
-    padding: 36px 24px 44px;
+    padding: 3rem var(--pad-x) 4rem;
     display: flex;
     flex-direction: column;
+    scroll-behavior: smooth;
   }
 
+  .thread {
+    width: min(var(--measure), 100%);
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+  }
+
+  /* ————— 空态 · 远山 ————— */
   .empty-hero {
     margin: auto;
     text-align: center;
-    max-width: 440px;
+    max-width: 420px;
+    padding-bottom: 8vh;
   }
 
-  .empty-hero .icon {
-    font-size: 36px;
-    margin-bottom: 12px;
+  .hero-seal {
+    width: 64px;
+    height: 64px;
+    object-fit: contain;
+    margin: 0 auto 0.75rem;
+    display: block;
+    user-select: none;
+    opacity: 0.92;
   }
 
-  .empty-hero h3 {
-    font-size: 18px;
+  .ridges {
+    width: min(300px, 70%);
+    margin: 0 auto 1.25rem;
+    display: block;
+    overflow: visible;
+  }
+
+  .ridge {
+    stroke-linecap: round;
+    fill: none;
+    transition: stroke var(--t-slow);
+  }
+
+  .ridge.far {
+    stroke: var(--border-strong);
+    stroke-width: 1.5;
+  }
+
+  .ridge.near {
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    opacity: 0.7;
+  }
+
+  .hero-title {
+    font-family: var(--font-brush);
+    font-size: 1.6rem;
     font-weight: 600;
-    margin-bottom: 6px;
+    letter-spacing: 0.35em;
+    /* Drop the trailing letter-spacing so the word centers optically. */
+    margin-right: -0.35em;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
   }
 
-  .empty-hero p {
-    font-size: 13px;
-    color: var(--text-secondary);
+  .hero-line {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
   }
 
-  .empty-hero .error-line {
-    margin-top: 10px;
+  .hero-line + .error-line {
+    margin-top: 0.75rem;
+  }
+
+  .error-line {
     color: var(--accent-danger);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 0.75rem;
     word-break: break-word;
   }
 
-  .message-bubble.streaming {
-    align-self: flex-start;
+  /* ————— 事件行 (retry-live) ————— */
+  .retry-live {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .retry-live .glyph,
+  .retry-live .label {
+    color: var(--accent-warning);
+    font-weight: 600;
+  }
+
+  .retry-live .detail {
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
+
+  /* ————— 流式块 ————— */
+  .streaming-block {
     width: 100%;
-    margin-bottom: 16px;
+    padding: 0.25rem 0 1rem;
   }
 
   .reasoning {
-    border-left: 2px solid var(--border-strong);
-    padding-left: 10px;
-    margin-bottom: 8px;
+    border-left: 2px solid var(--line-strong);
+    padding-left: 0.7rem;
+    margin-bottom: 0.5rem;
   }
 
   .reasoning summary {
-    font-size: 11px;
+    font-size: 0.7rem;
     color: var(--text-muted);
     font-family: var(--font-mono);
     cursor: pointer;
+    letter-spacing: 0.05em;
   }
 
   .reasoning pre {
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: 0.72rem;
+    color: var(--text-muted);
     white-space: pre-wrap;
     max-height: 160px;
     overflow-y: auto;
-    margin: 4px 0 0;
+    margin: 0.25rem 0 0;
   }
 
   .stream-text {
     color: var(--text-primary);
-    line-height: 1.6;
-    font-size: 14px;
+    line-height: 1.75;
+    font-size: 0.95rem;
     white-space: pre-wrap;
     word-break: break-word;
   }
 
   @media (max-width: 900px) {
     .transcript {
-      padding: 24px 14px 28px;
+      padding: 1.5rem 1rem 2rem;
+    }
+
+    .hero-title {
+      font-size: 1.35rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .transcript {
+      scroll-behavior: auto;
     }
   }
 </style>

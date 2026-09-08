@@ -1,6 +1,5 @@
 ---
 source: apps/tui/crates/mutx/src/question_model.rs
-assertion_line: 1250
 expression: film
 ---
 === open (first row highlighted = selected) ===
@@ -11,12 +10,12 @@ expression: film
 
 
 
+
+
    Question
 
-   Style
-   Which error handling crate?
-
-      anyhow                                                  ▼
+   [x] anyhow                                                 ▲
+       Simple
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
@@ -28,12 +27,12 @@ expression: film
 
 
 
+
+
    Question
 
-                                                              ▲
-      anyhow
-        Simple
-      thiserror                                               ▼
+   [x] thiserror                                              ▲
+       Structured
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
@@ -44,12 +43,12 @@ expression: film
 
 
 
+
+
+
    Question
 
-      anyhow                                                  ▲
-        Simple
-      thiserror
-        Structured
-      Other
+   [x] Other                                                  ▲
+   › type your answer…
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel

@@ -24,7 +24,7 @@ expression: film
 
    Which features?
 
-     [ ] a                                                            ▼
+   [ ] a                                                              ▼
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
@@ -48,9 +48,9 @@ expression: film
 
    Question
 
-     [x] a                                                            ▲
-     [x] b
-     [x] c                                                            ▼
+   [x] a                                                              ▲
+   [x] b
+   [x] c                                                              ▼
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel
 
@@ -75,7 +75,7 @@ expression: film
    Question
 
                                                                       ▲
-     [x] a
-     [ ] b                                                            ▼
+   [x] a
+   [ ] b                                                              ▼
 
    ↑↓ navigate  wheel/Pg scroll  Enter submit  Esc cancel

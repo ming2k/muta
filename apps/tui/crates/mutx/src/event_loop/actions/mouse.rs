@@ -8,7 +8,7 @@ use crate::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::model::layout::{InteractiveTarget, SemanticCursor};
 use crate::model::selection::{CellDragInfo, SelectionState, floor_grapheme_boundary};
 use crate::step_interaction::StepKind;
-use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
+use crate::{App, CaretOwner, ProviderDeleteChoice, SelectionEdge};
 
 use super::super::runtime::UiRuntime;
 use super::super::transcript::resolve_focused_mut;
@@ -22,221 +22,109 @@ pub(super) async fn handle_selection_start(
     x: u16,
     y: u16,
 ) {
-    // A fresh press disarms any edge-autoscroll the previous drag armed —
-    // the arm is re-derived from this drag's own pointer movement.
+    use crate::ui::UiKey;
     app.input_drag_scroll = None;
-    // Provider-delete confirm overlay owns clicks while open: a
-    // press outside the panel cancels the staged deletion
-    // (mirrors Esc) but leaves the provider picker open, and a
-    // press inside is a no-op (the buttons are keyboard-only).
-    // Either way the click is consumed so it never reaches the
-    // picker or transcript behind the backdrop.
-    if app.pending_provider_delete.is_some()
-        && let Some(r) = app.provider_delete_rect
+    app.ui.runtime.release_pointer();
+    let target = app.ui.target(x, y);
+    if let Some(key) = target
+        && let Some(id) = app.ui.scene().id(&key)
     {
-        let inside = r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height;
-        if !inside {
-            app.pending_provider_delete = None;
-            app.provider_delete_focus = ProviderDeleteChoice::default();
+        // A non-focusable decoration cannot steal focus. Capture belongs to
+        // the component that received the press and is released on unmount.
+        let _ = app.ui.runtime.focus(id);
+        let _ = app.ui.runtime.capture_pointer(id);
+    }
+    match target {
+        Some(UiKey::ProviderDelete) => {
+            if !app.ui.contains(UiKey::ProviderDelete, x, y) {
+                app.pending_provider_delete = None;
+                app.provider_delete_focus = ProviderDeleteChoice::default();
+            }
         }
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal() == Modal::OauthPending {
-        if let Some(cursor) = app
-            .layout_map
-            .cursor_at(x, y)
-            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
-        {
-            app.drag.begin_range(&mut app.selection, cursor);
-            app.focused_target = None;
-            return;
+        Some(UiKey::QuestionOption(index)) => {
+            if let Some(question) = app.question.take() {
+                app.question = Some(question.update(
+                    crate::question_model::QuestionAction::Select(index + 1),
+                ).0);
+                app.question_modal_follow = true;
+            }
         }
-        app.selection = SelectionState::None;
-        app.drag.cancel();
-        app.focused_target = None;
-    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Question) {
-        if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
-            && let Some(qm) = app.question.take()
-        {
-            app.question = Some(
-                qm.update(crate::question_model::QuestionAction::Select(
-                    hit.option_index + 1,
-                ))
-                .0,
-            );
-            app.question_modal_follow = true;
+        Some(UiKey::PermissionAction(index)) => {
+            app.modal_index = index;
+            handle_permission_submit(app, runtime).await;
         }
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
-        && let Some(hit) = app.modal_hit_map.permission_action_at(x, y)
-    {
-        app.modal_index = hit.action_index;
-        handle_permission_submit(app, runtime).await;
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
-        && let Some(cursor) = app
-            .layout_map
-            .cursor_at(x, y)
-            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
-    {
-        // The sheet's body is a selectable document (tool arguments,
-        // description): a press on the text arms a drag-select so the
-        // payload can be copied while deciding. Buttons above stay
-        // keyboard-driven; presses on the sheet's chrome are inert as before.
-        app.drag.begin_range(&mut app.selection, cursor);
-    } else if app.active_sheet() == Some(crate::sheet::SheetKind::Permission)
-        && app.modal_hit_map.permission_sheet_contains(x, y)
-    {
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal().dismissable_by_outside_click() {
-        // Selectable modal documents (the `render_selectable_body` family
-        // register their rows under `MODAL_DOC_MSG_IDX`): a press that lands
-        // on registered text arms a drag-select instead of being a dead
-        // click, so modal content is copyable exactly like transcript text.
-        // Checked *before* the dismiss logic so a press inside the panel on
-        // text never closes the modal; presses on chrome/blank areas keep
-        // the previous behaviour.
-        if let Some(cursor) = app
-            .layout_map
-            .cursor_at(x, y)
-            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
-        {
-            app.drag.begin_range(&mut app.selection, cursor);
-        } else {
-            // Click-to-dismiss: while a dismissable overlay modal is
-            // open, the full-screen backdrop owns the click — a press
-            // outside the panel closes the modal (mirroring Esc), and a
-            // press inside is a no-op (these info modals have no click
-            // targets yet). Either way the click is consumed so it does
-            // not also fall through to the transcript behind the
-            // backdrop. Modals that hold precious input and need their
-            // own restore path (Provider / ModelEditor) report no rect
-            // and are skipped here, so a stray click never discards an
-            // API key. HistorySearch *is* dismissable: its filter is
-            // ephemeral and the draft is parked, so an outside click
-            // restores the draft (mirroring Esc / CloseModal).
-            //
-            // The close decision mirrors the `CloseModal` arm
-            // exactly, *including the deepest-level-first ordering*:
-            // an outside click while inside a drill-in sub-view (e.g.
-            // Sessions › Info) backs out to the parent view, not out
-            // to chat / quit — so the hierarchy is consistent between
-            // Esc and outside-click.
-            let inside = app
-                .modal_rect
-                .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height);
-            if !inside && app.click_outside_dismiss {
-                // Dismiss when `[tui] click_outside_dismiss` is on
-                // (default on): a click outside the panel closes
-                // a dismissable overlay like Esc. The dismissable
-                // set excludes modals holding precious in-progress
-                // input (they report no rect and are skipped above),
-                // so a stray click never discards an API key. When
-                // the flag is off the click is still consumed (this
-                // whole branch owns it) so it does not fall through
-                // to the transcript behind the backdrop.
-                //
-                // The close decision mirrors the `CloseModal` arm
-                // exactly, including the deepest-level-first
-                // ordering: an outside click while inside a drill-in
-                // sub-view (e.g. Sessions › Info) backs out to the
-                // parent view, not out to chat / quit — so the
-                // hierarchy is consistent between Esc and outside-
-                // click.
+        Some(UiKey::Sheet(crate::sheet::SheetKind::Permission)) => {
+            if let Some(cursor) = app.ui.document.cursor_at(x, y)
+                .filter(|cursor| cursor.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
+            {
+                app.drag.begin_range(&mut app.selection, cursor);
+                return;
+            }
+        }
+        Some(UiKey::Modal(_) | UiKey::OauthUrl | UiKey::OauthCode) => {
+            let modal = app.active_modal();
+            if let Some(cursor) = app.ui.document.cursor_at(x, y)
+                .filter(|cursor| cursor.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
+            {
+                app.drag.begin_range(&mut app.selection, cursor);
+                return;
+            }
+            if modal.dismissable_by_outside_click()
+                && app.click_outside_dismiss
+                && !app.ui.contains(UiKey::Modal(modal), x, y)
+            {
                 super::modals::handle_close_modal(app, viewed_session_id);
             }
+        }
+        Some(UiKey::CompletionItem(index)) => {
+            app.accept_completion(index);
+            app.suggestion_index = None;
+            app.completion_dismissed = true;
+        }
+        Some(UiKey::Queue) => {
+            super::enter_panel(app, crate::surfaces::PanelId::Queue, runtime, viewed_session_id);
+        }
+        Some(UiKey::Context | UiKey::Performance) => {
+            super::enter_panel(app, crate::surfaces::PanelId::Telemetry, runtime, viewed_session_id);
+        }
+        Some(UiKey::Connection) => {
+            super::open_active_connection_detail(app, runtime, viewed_session_id);
+        }
+        Some(UiKey::Sticky) => {
+            if let Some(mi) = app.sticky_step {
+                let mut messages = runtime.messages.write().await;
+                app.focused_target = app.focused_messages().get(mi).and_then(|message| {
+                    if message.is_reasoning() { Some(InteractiveTarget::reasoning(mi)) }
+                    else if message.is_tool_step() || message.is_runner_task() {
+                        Some(InteractiveTarget::tool_step(mi))
+                    } else { None }
+                });
+                app.toggle_step_pinned(&mut messages, mi);
+            }
             app.selection = SelectionState::None;
-            app.focused_target = None;
             app.drag.cancel();
+            return;
         }
-    } else if app.active_modal() == Modal::None
-        && let Some(idx) = app.modal_hit_map.completion_item_at(x, y)
-    {
-        app.accept_completion(idx);
-        app.suggestion_index = None;
-        app.completion_dismissed = true;
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal() == Modal::None && app.modal_hit_map.completion_menu_contains(x, y)
-    {
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal() == Modal::None
-        && app
-            .queue_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-    {
-        // Click anywhere on the persistent queue bar → expand
-        // the full Queue view. Retained (ADR-0133): cursor/scroll
-        // survive hide; the auto-block runs on every entry (an editing
-        // safety latch, mirrored by the hide-time resume).
-        super::enter_panel(
-            app,
-            crate::surfaces::PanelId::Queue,
-            runtime,
-            viewed_session_id,
-        );
-    } else if app.active_modal() == Modal::None
-        && (app
-            .hint_performance_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-            || app
-                .hint_context_rect
-                .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height))
-    {
-        // Click on context meter or stream rate gauge in the model bar →
-        // session telemetry modal.
-        super::enter_panel(
-            app,
-            crate::surfaces::PanelId::Telemetry,
-            runtime,
-            viewed_session_id,
-        );
-    } else if app.active_modal() == Modal::None
-        && app
-            .hint_connection_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-    {
-        // Click on model / connection in the model bar → active connection detail modal.
-        super::open_active_connection_detail(app, runtime, viewed_session_id);
-    } else if app.sticky_rect.is_some_and(|r| {
-        // Sticky pinned step header: collapse it on click.
-        r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
-    }) {
-        if let Some(mi) = app.sticky_step {
-            let mut messages = runtime.messages.write().await;
-            app.focused_target = app.focused_messages().get(mi).and_then(|message| {
-                if message.is_reasoning() {
-                    Some(InteractiveTarget::reasoning(mi))
-                } else if message.is_tool_step() || message.is_runner_task() {
-                    Some(InteractiveTarget::tool_step(mi))
-                } else {
-                    None
-                }
-            });
-            app.toggle_step_pinned(&mut messages, mi);
-            drop(messages);
+        Some(UiKey::Transcript | UiKey::Composer) => {
+            handle_document_press(app, runtime, x, y).await;
+            return;
         }
-        // Clicking the sticky header focuses that step (set
-        // above), so keyboard navigation can continue from it.
-        app.selection = SelectionState::None;
-        app.drag.cancel();
-    } else {
+        _ => {}
+    }
+    app.selection = SelectionState::None;
+    app.focused_target = None;
+    app.drag.cancel();
+    app.ui.runtime.release_pointer();
+}
+
+async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u16) {
+    {
         // Unified content hit-test cascade
         // interaction::classify_click runs the full priority
         // chain (input box → step summary → table cell →
         // generic content → gap → dead) so the event loop
         // only needs a single match.
-        match interaction::classify_click(&app.layout_map, x, y) {
+        match interaction::classify_click(&app.ui.document, x, y) {
             ClickTarget::InputBox { cursor } => {
                 // Click inside the live input box: clear any
                 // focused step so the next keypress edits rather
@@ -384,7 +272,7 @@ pub(super) async fn handle_right_click(app: &mut App, runtime: &UiRuntime, x: u1
     if let ClickTarget::StepSummary {
         message_idx,
         kind: StepKind::ToolStep,
-    } = interaction::classify_click(&app.layout_map, x, y)
+    } = interaction::classify_click(&app.ui.document, x, y)
     {
         app.focused_target = Some(InteractiveTarget::tool_step(message_idx));
         let mut messages = runtime.messages.write().await;
@@ -410,11 +298,12 @@ pub(super) fn handle_selection_update(app: &mut App, x: u16, y: u16) {
     }
     app.input_drag_scroll = None;
     app.drag
-        .update_from_point(&mut app.selection, &app.layout_map, x, y);
+        .update_from_point(&mut app.selection, &app.ui.document, x, y);
 }
 
 /// Loop stage (input dispatch): the `SelectionEnd` arm of the action match.
 pub(super) fn handle_selection_end(app: &mut App) {
+    app.ui.runtime.release_pointer();
     app.drag.finish(&mut app.selection);
     // An edge-autoscroll armed by this drag stops with it: holding the
     // pointer still after release must not keep scrolling the input.
@@ -446,7 +335,7 @@ pub(super) fn handle_selection_end(app: &mut App) {
 
 /// Loop stage (input dispatch): the `SelectBlock` arm of the action match.
 pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
-    if let Some((mi, bi)) = input::resolve_block(&app.layout_map, x, y) {
+    if let Some((mi, bi)) = input::resolve_block(&app.ui.document, x, y) {
         app.selection = SelectionState::Block {
             message_idx: mi,
             block_idx: bi,
@@ -468,9 +357,7 @@ pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: 
     // pinned variant — record its message index so the next draw
     // lights it up to the intermediate hover tone; otherwise
     // clear it.
-    if app
-        .sticky_rect
-        .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
+    if app.ui.target(x, y) == Some(crate::ui::UiKey::Sticky)
     {
         if let Some(mi) = app.sticky_step {
             let is_step = runtime
@@ -482,10 +369,12 @@ pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: 
                 .unwrap_or(false);
             app.hovered_step = is_step.then_some(mi);
         }
-    } else {
-        app.hovered_step = match interaction::classify_click(&app.layout_map, x, y) {
+    } else if app.ui.target(x, y) == Some(crate::ui::UiKey::Transcript) {
+        app.hovered_step = match interaction::classify_click(&app.ui.document, x, y) {
             ClickTarget::StepSummary { message_idx, .. } => Some(message_idx),
             _ => None,
         };
+    } else {
+        app.hovered_step = None;
     }
 }

@@ -38,7 +38,7 @@ make new architecture documentation ambiguous.
    and service assembly remain in the core; terminal capabilities remain in
    the app.
 5. Keep on-demand startup. A local `mutx` operation first discovers the Muta
-   daemon. If none is ready, it starts `muta daemon start --fg`, resolving
+   daemon. If none is ready, it starts `muta start --fg`, resolving
    `muta` from an explicit `MUTA_BIN`, then beside `mutx`, then through
    `PATH`. Compatibility checks compare the running daemon to the resolved
    `muta` image, never to the distinct `mutx` image.
@@ -53,7 +53,7 @@ make new architecture documentation ambiguous.
    and has no Web-specific asset crate or `panel` command. Its plain-HTTP
    surface is the application-neutral `/healthz` probe; Web connects over the
    same authenticated WebSocket protocol as any other client. The generic
-   `muta daemon token` command lets an operator retrieve the local TCP bearer
+   `muta token` command lets an operator retrieve the local TCP bearer
    credential without introducing a Web-specific service API.
 
 ## Alternatives considered

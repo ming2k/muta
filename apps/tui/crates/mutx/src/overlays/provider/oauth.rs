@@ -25,7 +25,7 @@ pub fn draw_oauth_pending(
     frame: &mut Frame,
     theme: &Theme,
     scroll: &mut usize,
-    hit_map: Option<&mut crate::model::layout::ModalHitMap>,
+    hit_map: Option<&mut crate::ui::ComponentTree>,
     selection: &SelectionState,
     layout_map: &mut LayoutMap,
 ) -> mutx_engine::Rect {
@@ -102,8 +102,8 @@ pub fn draw_oauth_pending(
     let f = modal_frame(frame, area, theme, true, true);
 
     if let Some(map) = hit_map {
-        map.set_oauth_modal_rect(area);
-        map.set_oauth_url_rect(f.body);
+        map.mount_oauth_modal(area);
+        map.mount_oauth_url(f.body);
     }
 
     if let Some(h) = f.header {

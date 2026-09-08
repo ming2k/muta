@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Question sheet interaction audit (Other field, slot cap, option follow).**
+  The `ask_user` question sheet now renders the "Other" free-text field
+  **always** (not only while the row is highlighted): an empty field shows a
+  muted `› type your answer…` hint, a filled-but-unfocused field shows the
+  typed value, and the focused field keeps the brand-colored prompt + the
+  terminal caret for IME anchoring. Option rows carry a checkbox marker in
+  **both** single- and multi-select (previously single-select had no marker,
+  making "the highlight is the selection" visually inconsistent), and option
+  labels no longer carry the extra 2-column leading indent — labels align
+  with the question text. Navigation follow now targets the **last** wrapped
+  row of the highlighted option (so a wrapped label + description stays fully
+  in view), and the sheet's upward growth is capped by a shared
+  `sheet_max_height` (`terminal_height / 2`, the composer's own cap) so the
+  composer, question sheet, and permission sheet all agree on the slot's
+  maximum footprint.
+
+- **Round-EOL session digest: convergence-driven summarization with an
+  anchor CAS (ADR-0193).** Session digest maintenance now fires at round
+  convergence through the previously unwired fifth aspect phase
+  (`AspectEngine::fire_round_eol`, closing the ADR-0183 pipeline and an
+  ADR-0190 unwired-harness-promise entry) instead of at round admission —
+  every digest now terminates at a settled round boundary (no unanswered
+  prompt folded into history) and a session that is never resumed still
+  carries its final round in its working-memory projection. Round admission
+  is demoted to a blocking catch-up checkpoint (crash/exit repair); the
+  orphan `AspectEngine::process_round_eol` is deleted; single-flight
+  concurrency between the EOL task and the catch-up is enforced by
+  compare-and-set on the persisted `digest_anchor`
+  (`SessionStore::set_digest_if_anchor`) with no new locks; title
+  terminality (ADR-0022/0186) is preserved verbatim.
+
 ## [0.40.3] - 2026-09-07
 
 ### Added

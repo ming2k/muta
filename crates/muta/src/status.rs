@@ -1,5 +1,5 @@
-//! `muta daemon status` (ADR-0093): the first control-plane client of the daemon
-//! monitor protocol. One-shot by default (`muta daemon status`), a live table with
+//! `muta status` (ADR-0093): the first control-plane client of the daemon
+//! monitor protocol. One-shot by default (`muta status`), a live table with
 //! `--watch`, machine-readable frames with `--json`.
 //!
 //! Unlike `mutx attach`, status never spawns a daemon: observing is only
@@ -19,7 +19,7 @@ use muta_contracts::{
 };
 use muta_runtime::client::{self, DaemonDiagnostics, upsert_session_row, upsert_task_row};
 
-/// How `muta daemon status` renders its stream.
+/// How `muta status` renders its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatusOptions {
     pub watch: bool,
@@ -83,7 +83,7 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
             }
             // The daemon is draining (ADR-0101): the stream ends right
             // after this frame. Print a note and stop watching — the next
-            // `muta daemon status` re-discovers (or reports none running).
+            // `muta status` re-discovers (or reports none running).
             MonitorEvent::DaemonDraining => {
                 if !opts.json {
                     eprintln!("muta: daemon is shutting down; watch ended.");
@@ -110,7 +110,7 @@ fn render_diagnostics(diag: &DaemonDiagnostics, json: bool) {
 /// The human-readable daemon diagnostics output.
 pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
     let mut out = String::new();
-    out.push_str("muta daemon — system status & diagnostics:\n");
+    out.push_str("muta status — system status & diagnostics:\n");
 
     // Instance scope first (ADR-0121): every path below reads differently
     // once the reader knows whether this client resolves the host instance
@@ -242,7 +242,7 @@ pub(crate) fn table(snapshot: &MonitorSnapshot) -> String {
         snapshot.project_root.as_str()
     };
     out.push_str(&format!(
-        "muta daemon — {} — {} session(s) needing attention\n",
+        "muta status — {} — {} session(s) needing attention\n",
         root,
         snapshot.sessions.len()
     ));

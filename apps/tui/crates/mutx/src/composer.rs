@@ -57,18 +57,65 @@ fn chrome_row(full_w: usize, bg: Color, theme: &Theme, dir: char, hidden: usize)
     ])
 }
 
-/// Build the top breathing row: overflow count when clipped above, or contextual
-/// mode declaration badge (e.g. `[edit: follow-up #1 · draft saved]` or `[history search · draft saved]`) when idle at top.
+/// Build the top breathing row: overflow count when clipped above, or the
+/// inline recall pointer badge (`[history 3/17 · draft saved]`) when the
+/// ↑/↓ pointer sits on a history row, or a contextual mode declaration badge
+/// (e.g. `[history search · draft saved]`) when idle at top.
+///
+/// Priority: overflow indicator > recall badge > extension badge. The
+/// overflow indicator wins because clipped content is a spatial fact about
+/// this very row's role; the recall badge outranks the extension badge
+/// because the recall pointer is a *content* state (what the buffer holds)
+/// while an extension badge is a *surface* state (what owns the keyboard),
+/// and content honesty always outranks surface naming when the two compete
+/// for the same row.
 fn top_chrome_row(
     full_w: usize,
     bg: Color,
     theme: &Theme,
     hidden_above: usize,
-    target: crate::components::composer_hints::ComposeTarget,
+    hints: &crate::components::composer_hints::ComposerHints,
     focused: bool,
 ) -> Line<'static> {
     if hidden_above > 0 {
         return chrome_row(full_w, bg, theme, '↑', hidden_above);
+    }
+    let target = hints.compose_target;
+    if focused && let Some((position, total, edited)) = hints.history_recall {
+        // Width-degradation ladder mirrors the overflow label's
+        // degrade-then-simplify discipline: the full clause set on
+        // comfortable widths, the bare pointer once space runs out. The
+        // pointer itself (`3/17`) is the last element to go — it is the
+        // badge's entire point (ADR-0192).
+        let label = if full_w >= 44 {
+            let mut label = format!("[history {position}/{total}");
+            if edited {
+                label.push_str(" · edited");
+            } else if hints.recall_draft_saved {
+                label.push_str(" · draft saved");
+            }
+            label.push(']');
+            label
+        } else if full_w >= 24 {
+            format!("[history {position}/{total}]")
+        } else {
+            format!("[{position}/{total}]")
+        };
+        let label_len = label.chars().count();
+        if full_w > label_len + 2 {
+            let gap_cols = full_w.saturating_sub(label_len + 1);
+            return Line::from(vec![
+                Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .bg(bg)
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(" ".to_string(), Style::default().bg(bg)),
+            ]);
+        }
     }
     if focused && target == crate::components::composer_hints::ComposeTarget::HistorySearch {
         let label = if full_w >= 36 {
@@ -495,7 +542,7 @@ fn draw_composer_impl(
         panel_bg,
         theme,
         hidden_above,
-        hints.compose_target,
+        &hints,
         focused,
     ));
 

@@ -1,14 +1,19 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
   import { roundActiveMs, roundTps } from "../types.js";
+  import type { Theme } from "../theme.js";
+  import { t, toggleLocale } from "../i18n.svelte.js";
 
   interface Props {
     onToggleSidebar: () => void;
     onOpenModels: () => void;
     onOpenWebSearch: () => void;
+    theme: Theme;
+    onToggleTheme: () => void;
   }
 
-  let { onToggleSidebar, onOpenModels, onOpenWebSearch }: Props = $props();
+  let { onToggleSidebar, onOpenModels, onOpenWebSearch, theme, onToggleTheme }: Props =
+    $props();
 
   function formatDuration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
@@ -37,18 +42,18 @@
 
   <div class="session-info">
     <h2 class="title">
-      {daemon.activeSession?.overview || daemon.activeSessionId || "No active session"}
+      {daemon.activeSession?.overview || daemon.activeSessionId || t("noActiveSession")}
     </h2>
     <div class="meta">
       {#if daemon.activeSession}
         {#if daemon.roundCounter > 0}
-          <span class="tag">round {daemon.roundCounter}</span>
+          <span class="tag">{t("round")} {daemon.roundCounter}</span>
         {/if}
         {#if daemon.currentTurn !== null && daemon.isBusy}
-          <span class="tag">turn {daemon.currentTurn + 1}</span>
+          <span class="tag">{t("turn")} {daemon.currentTurn + 1}</span>
         {/if}
         {#if daemon.contextTokens}
-          <span class="tag">{daemon.contextTokens.toLocaleString()} ctx</span>
+          <span class="tag">{daemon.contextTokens.toLocaleString()} {t("ctx")}</span>
         {/if}
         {#if daemon.activity && daemon.isBusy}
           <span class="tag activity">{daemon.activity}</span>
@@ -64,35 +69,62 @@
 
   <div class="actions">
     {#if daemon.unattended}
-      <span class="badge unattended" title="Unattended: permission prompts are bypassed">
-        unattended
+      <span class="badge warn" title={t("unattendedTip")}>
+        {t("unattended")}
       </span>
     {/if}
     {#if !daemon.confined}
-      <span class="badge unconfined" title="Unconfined: host-wide file access enabled">
-        unconfined
+      <span class="badge warn" title={t("unconfinedTip")}>
+        {t("unconfined")}
       </span>
     {/if}
     {#if daemon.providerInfo}
-      <button class="model-btn" title="Switch model" onclick={onOpenModels}>
+      <button class="chip" title={t("switchModel")} onclick={onOpenModels}>
         <span class="provider">{daemon.providerInfo.provider}</span>
         <span class="model">{daemon.providerInfo.model}</span>
       </button>
     {/if}
     <button
-      class="model-btn"
-      title="Web search backend & reader settings"
+      class="chip"
+      title={t("webSearchSettings")}
       onclick={onOpenWebSearch}
     >
       <span class="provider">⌕</span>
       <span class="model">{daemon.websearchConfig?.provider ?? "web"}</span>
     </button>
-    {#if daemon.isBusy}
-      <button class="btn-danger" onclick={() => daemon.interrupt()}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="6" y="6" width="12" height="12"/>
+    <button
+      class="icon-btn theme-btn"
+      title={theme === "dark" ? t("toLightTheme") : t("toDarkTheme")}
+      aria-label="Toggle color theme"
+      onclick={onToggleTheme}
+    >
+      {#if theme === "dark"}
+        <!-- 日 -->
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
         </svg>
-        Interrupt
+      {:else}
+        <!-- 月 -->
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      {/if}
+    </button>
+    <button
+      class="icon-btn lang-btn"
+      title={t("toChinese") === "切换到中文" ? "Switch to English" : t("toChinese")}
+      aria-label="Toggle language"
+      onclick={toggleLocale}
+    >
+      <span class="lang-mark">文</span>
+    </button>
+    {#if daemon.isBusy}
+      <button class="stop-btn" onclick={() => daemon.interrupt()}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="1"/>
+        </svg>
+        {t("interrupt")}
       </button>
     {/if}
   </div>
@@ -100,13 +132,13 @@
 
 <style>
   .header {
-    padding: 14px 24px;
+    padding: 0.85rem var(--pad-x);
     background-color: var(--bg-header);
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--line);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 0.75rem;
   }
 
   .menu-btn {
@@ -119,8 +151,10 @@
   }
 
   .title {
-    font-size: 16px;
+    font-family: var(--font-brush);
+    font-size: 1.05rem;
     font-weight: 600;
+    letter-spacing: 0.04em;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -129,15 +163,15 @@
 
   .meta {
     display: flex;
-    gap: 8px;
-    margin-top: 2px;
+    gap: 0.65rem;
+    margin-top: 0.1rem;
     overflow: hidden;
   }
 
   .tag {
     font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: 0.68rem;
+    color: var(--text-muted);
     white-space: nowrap;
   }
 
@@ -150,47 +184,50 @@
   .actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
     flex-shrink: 0;
   }
 
-  .badge.unattended,
-  .badge.unconfined {
+  .badge {
     font-family: var(--font-mono);
-    font-size: 10px;
-    padding: 2px 6px;
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
     border-radius: var(--radius-sm);
+    letter-spacing: 0.05em;
     text-transform: uppercase;
-    background: rgba(210, 153, 34, 0.15);
     color: var(--accent-warning);
+    border: 1px solid var(--accent-warning);
+    opacity: 0.85;
   }
 
-  .model-btn {
+  /* Machine-identity chips: quiet ink, no fill. */
+  .chip {
     display: flex;
     align-items: baseline;
-    gap: 6px;
-    padding: 5px 10px;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
     border-radius: var(--radius-md);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: transparent;
+    border: 1px solid var(--line);
     cursor: pointer;
     max-width: 320px;
+    transition: border-color var(--t-fast);
   }
 
-  .model-btn:hover {
-    border-color: var(--border-strong);
+  .chip:hover {
+    border-color: var(--line-strong);
   }
 
-  .model-btn .provider {
-    font-size: 10px;
+  .chip .provider {
+    font-size: 0.62rem;
     color: var(--text-muted);
     text-transform: uppercase;
     font-family: var(--font-mono);
   }
 
-  .model-btn .model {
-    font-size: 12px;
-    color: var(--text-primary);
+  .chip .model {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
     font-family: var(--font-mono);
     white-space: nowrap;
     overflow: hidden;
@@ -199,35 +236,50 @@
 
   .icon-btn {
     background: transparent;
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--line);
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     width: 30px;
     height: 30px;
+    display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     flex-shrink: 0;
+    transition: border-color var(--t-fast), color var(--t-fast);
   }
 
-  .btn-danger {
-    padding: 6px 12px;
+  .icon-btn:hover {
+    border-color: var(--line-strong);
+    color: var(--text-primary);
+  }
+
+  /* The language toggle carries a brush glyph rather than an abbreviation:
+     文 marks "the written word" — tap to switch tongue. */
+  .lang-mark {
+    font-family: var(--font-brush);
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+
+  .stop-btn {
+    padding: 0.32rem 0.7rem;
     border-radius: var(--radius-md);
-    background-color: rgba(248, 81, 73, 0.15);
+    background: transparent;
     color: var(--accent-danger);
-    border: 1px solid rgba(248, 81, 73, 0.3);
-    font-size: 12px;
+    border: 1px solid var(--accent-danger);
+    font-size: 0.75rem;
     font-weight: 500;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    transition: background-color 0.15s;
+    gap: 0.35rem;
+    transition: background-color var(--t-fast);
     flex-shrink: 0;
   }
 
-  .btn-danger:hover {
-    background-color: rgba(248, 81, 73, 0.25);
+  .stop-btn:hover {
+    background: var(--seal-soft);
   }
 
   @media (max-width: 900px) {
@@ -236,10 +288,10 @@
     }
 
     .header {
-      padding: 10px 14px;
+      padding: 0.6rem 1rem;
     }
 
-    .model-btn .provider {
+    .chip .provider {
       display: none;
     }
   }

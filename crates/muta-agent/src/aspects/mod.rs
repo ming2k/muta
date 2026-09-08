@@ -8,6 +8,7 @@
 //! 5. `RoundEol`: Post-round convergence, digest updating, and title synthesis.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use muta_contracts::{
     AspectVerdict, EnvironmentReminderOutput, EnvironmentSensorInput, ExecutionTier,
@@ -122,18 +123,17 @@ impl AspectEngine {
 
     // Phase 5: Round EOL
 
-    /// Asynchronously distill working memory and generate/revise session digest.
-    pub async fn process_round_eol(
+    /// Round-EOL digest maintenance (ADR-0193): the fifth aspect phase's
+    /// contract entry. Fires at round convergence; delegates to the shared
+    /// CAS routine (`Agent::spawn_eol_digest_maintenance`) — detached,
+    /// fail-open, anchor-throttled, single-flight. Never blocks the round
+    /// path; any failure keeps the previous digest.
+    pub fn fire_round_eol(
         &self,
-        excerpt: String,
-        previous_digest: Option<String>,
-    ) -> Option<muta_contracts::SessionDigest> {
-        self.cognitive
-            .generate_digest(muta_contracts::SessionDigestInput {
-                excerpt,
-                previous: previous_digest,
-            })
-            .await
+        agent: &Arc<crate::Agent>,
+        session: Arc<muta_persistence::SessionStore>,
+    ) {
+        agent.spawn_eol_digest_maintenance(session);
     }
 }
 

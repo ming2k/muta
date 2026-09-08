@@ -213,6 +213,7 @@ mod tests {
             None,
             false,
             Some(ComposerExtensionKind::HistorySearch),
+            false,
         );
         assert_eq!(history_target, ComposeTarget::HistorySearch);
 
@@ -221,6 +222,7 @@ mod tests {
             None,
             false,
             Some(ComposerExtensionKind::SlashCompletion),
+            false,
         );
         assert_eq!(
             slash_target,
@@ -234,6 +236,7 @@ mod tests {
             None,
             false,
             Some(ComposerExtensionKind::PathCompletion),
+            false,
         );
         assert_eq!(
             path_target,
@@ -242,7 +245,12 @@ mod tests {
             }
         );
 
-        let prompt_target = compose_target_for_extension(false, None, false, None);
+        let prompt_target = compose_target_for_extension(false, None, false, None, false);
         assert_eq!(prompt_target, ComposeTarget::Prompt);
+
+        // ADR-0192: the inline recall pointer outranks busy/slash derivation —
+        // the buffer holds a history row, and that content fact wins.
+        let recall_target = compose_target_for_extension(true, None, false, None, true);
+        assert_eq!(recall_target, ComposeTarget::HistoryRecall);
     }
 }

@@ -928,6 +928,48 @@ mod tests {
     }
 
     #[test]
+    fn flat_recent_isolates_same_model_across_different_connections() {
+        // Two connection instances offer the exact same model (e.g. gpt-4o).
+        // When only one connection has usage history for it, ONLY that
+        // (connection, model) row must appear in RECENT. The other instance
+        // must NOT be pulled into RECENT or elevated.
+        let mut row_a = row("openai-official", "OpenAI Official", &["gpt-4o"], true);
+        let mut info_a = info("gpt-4o");
+        info_a.last_used_ms = Some(5_000);
+        row_a.model_info = vec![info_a];
+
+        let mut row_b = row("openai-proxy", "OpenAI Proxy", &["gpt-4o"], false);
+        let info_b = info("gpt-4o");
+        row_b.model_info = vec![info_b];
+
+        let snapshot = ProviderPickerSnapshot {
+            default_id: "openai-official".to_string(),
+            rows: vec![row_a, row_b],
+        };
+
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        let recent_rows: Vec<&RankedModel> = rows
+            .iter()
+            .filter(|r| r.section() == ModelSection::Recent)
+            .collect();
+
+        assert_eq!(
+            recent_rows.len(),
+            1,
+            "only the activated connection row should be in RECENT"
+        );
+        assert_eq!(recent_rows[0].provider_id, "openai-official");
+        assert_eq!(recent_rows[0].model, "gpt-4o");
+
+        // In ALL MODELS, both instances still exist
+        let all_rows: Vec<&RankedModel> = rows
+            .iter()
+            .filter(|r| r.section() == ModelSection::All)
+            .collect();
+        assert_eq!(all_rows.len(), 2);
+    }
+
+    #[test]
     fn flat_favorite_outranks_recency() {
         // Precedence: a favorite always wins over the recency signal —
         // favorites are pinned user intent, recency is emergent. A starred

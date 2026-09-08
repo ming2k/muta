@@ -17,7 +17,7 @@ use crate::completion::CompletionKind;
 use crate::completion::{completion_anchor_x, mention_range_at, resolved_slash_command_len};
 use crate::config;
 use crate::event_loop::{display_status, focused_messages_mut};
-use crate::model::layout::{InteractiveTarget, LayoutMap};
+use crate::model::layout::InteractiveTarget;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::render::Theme;
 use crate::transcript::{
@@ -121,10 +121,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         view_height: 0,
         max_scroll: 0,
         sticky_step: None,
-        sticky_rect: None,
-        hint_context_rect: None,
-        hint_performance_rect: None,
-        hint_connection_rect: None,
         token_ledger: None,
         token_report: None,
         context_tokens: None,
@@ -135,8 +131,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         telemetry_turn: None,
         usage_stats: None,
         usage_stats_scroll: 0,
-        queue_rect: None,
-        modal_rect: None,
         modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
@@ -155,7 +149,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         cursor_position: 0,
         input_scroll: 0,
         input_scroll_follow_cursor: true,
-        input_rect: None,
         input_drag_scroll: None,
         modal_index: 0,
         last_key_press: std::time::Instant::now(),
@@ -253,8 +246,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
-        layout_map: LayoutMap::new(),
-        modal_hit_map: crate::model::layout::ModalHitMap::new(),
+        ui: crate::ui::ComponentTree::new(),
         hovered_step: None,
         transcript_focused: false,
         transcript_layout: crate::render::layout::Strategy::default(),
@@ -318,7 +310,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         model_modal_follow: true,
         pending_provider_delete: None,
         provider_delete_focus: crate::ProviderDeleteChoice::default(),
-        provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
         theme: Theme::default(),

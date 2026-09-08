@@ -8,6 +8,7 @@ use crate::model::layout::LayoutMap;
 use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ConfirmChoice;
 use crate::render;
 use crate::{App, Modal, ProviderDeleteChoice, Recess};
+use crate::ui::UiKey;
 
 use super::actions::effective_reasoning_effort;
 use super::transcript::display_status;
@@ -19,6 +20,14 @@ use super::transcript::display_status;
 /// Invoked through `Terminal::stage` (bottom-follow measurement pass) or
 /// `Terminal::draw`; extracted verbatim from the `render_frame` closure.
 pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str) {
+    let mut ui = std::mem::take(&mut app.ui);
+    compose_frame(app, f, viewed_session_id, &mut ui);
+    app.ui = ui;
+}
+
+fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str,
+    mut ui: &mut crate::ui::ComponentTree) {
+    ui.begin(f.area(), app.active_modal());
     let mut layout_map = LayoutMap::new();
 
     // ADR-0175: PreAttach interstitial takes over the terminal before
@@ -30,10 +39,11 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // `draw_pre_attach`.
     if let Some(pre_attach_state) = app.pre_attach.as_ref() {
         crate::pre_attach::draw_pre_attach(f, pre_attach_state, &app.theme);
+        ui.mount(crate::ui::UiKey::PreAttach, f.area());
         // Layout map / modal rect / modal hit map stay empty — there
         // is no chrome to interact with, and the PreAttach surface
         // owns its own hit-testing (it does not consume LayoutMap).
-        app.layout_map = layout_map;
+        ui.stage_document(layout_map);
         return;
     }
 
@@ -71,7 +81,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &mut layout_map,
         );
 
-        app.layout_map = layout_map;
+        ui.stage_document(layout_map);
         app.modal_body_height =
             drawn_modal_rect
                 .height
@@ -82,15 +92,10 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         footer: true,
                     },
                 ));
-        app.modal_rect = if app.active_modal().dismissable_by_outside_click() {
-            Some(drawn_modal_rect)
-        } else {
-            None
-        };
+        ui.mount(UiKey::Modal(app.active_modal()), drawn_modal_rect);
         return;
     }
 
-    app.modal_hit_map.clear();
     // Borrow the height cache out of `app` for the duration of the draw:
     // `view_messages` borrows `app` immutably below, so the cache cannot
     // also be reached through `app` at the same time. It is restored once
@@ -258,8 +263,9 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     };
 
     // Suppress the hover affordance whenever a full-overlay modal is
-    // open so no stale highlight bleeds through. The permission sheet
-    // keeps the transcript interactive, so it is exempted.
+    // open so no stale highlight bleeds through. The foreground
+    // permission sheet keeps the transcript interactive, so it is
+    // exempted; a coexisting modal covers it and restores the suppression.
     let chrome_interactive = app.active_modal() == Modal::None
         && app
             .active_sheet()
@@ -287,7 +293,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .collect();
     let queue_modal_items: Vec<render::QueueItemProps> = queue_items.clone();
 
-    let transcript_render = render::draw_transcript(
+    let transcript_render = ui.paint(f, UiKey::Root, |f| render::draw_transcript(
         f,
         &mut layout_map,
         render::TranscriptProps {
@@ -341,12 +347,25 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             layout: app.transcript_layout,
             height_cache: Some(&mut height_cache),
         },
-    );
+    ));
     let input_rect = transcript_render.input_rect;
     let hint_rect = transcript_render.hint_rect;
     let content_lines = transcript_render.content_lines;
     let view_height = transcript_render.view_height;
     let sticky = transcript_render.sticky;
+    for (key, rect) in &transcript_render.footer.rows {
+        let key = match key {
+            render::FooterRowId::TopGap => continue,
+            render::FooterRowId::Queue => UiKey::Queue,
+            render::FooterRowId::Activity => UiKey::Activity,
+            render::FooterRowId::Composer => UiKey::Composer,
+            render::FooterRowId::ModelBar => UiKey::ModelBar,
+        };
+        ui.mount(key, *rect);
+    }
+    if let Some(rect) = layout_map.transcript_content_rect() {
+        ui.mount(UiKey::Transcript, rect);
+    }
 
     // The input-action hint bar (with model/context metadata on
     // the right) lives directly below the input box. It is drawn
@@ -389,7 +408,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
         let _ = can_retry; // retry affordance now renders on the composer keys row
-        let model_bar_rects = render::draw_model_bar(
+        let model_bar_rects = ui.paint(f, UiKey::ModelBar, |f| render::draw_model_bar(
             f,
             hint_rect,
             render::ModelBarProps {
@@ -408,14 +427,14 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             },
             &app.theme,
             &app.key_overrides,
-        );
-        app.hint_performance_rect = model_bar_rects.performance;
-        app.hint_context_rect = model_bar_rects.context;
-        app.hint_connection_rect = model_bar_rects.connection;
-    } else {
-        app.hint_context_rect = None;
-        app.hint_performance_rect = None;
-        app.hint_connection_rect = None;
+        ));
+        for (key, rect) in [
+            (UiKey::Performance, model_bar_rects.performance),
+            (UiKey::Context, model_bar_rects.context),
+            (UiKey::Connection, model_bar_rects.connection),
+        ] {
+            if let Some(rect) = rect { ui.mount(key, rect); }
+        }
     }
 
     // The input box is only shown when no overlay modal is open. The
@@ -438,7 +457,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 );
                 let max_scroll = render::draw_permission_sheet(
                     f,
-                    &mut app.modal_hit_map,
+                    &mut ui,
                     request,
                     app.modal_index,
                     app.permission_confirm_always,
@@ -524,8 +543,13 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         Some(app.composer_send_mode),
                         slash_len.is_some() || app.input.starts_with('/'),
                         active_extension,
+                        app.history_index.is_some(),
                     ),
                     can_retry: !busy && viewed_chrome.can_retry,
+                    history_recall: app.history_recall_badge(),
+                    recall_draft_saved: !app.history_draft.is_empty()
+                        || !app.history_draft_images.is_empty()
+                        || !app.history_draft_text_pastes.is_empty(),
                     toggle_mode_key: app
                         .surface_overrides
                         .effective_binding(crate::keymap::SurfaceVerb::ToggleSendMode),
@@ -628,22 +652,69 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Hit-test rects for the footer bars, resolved from the one registry the
     // renderer placed this frame (`TranscriptRender::footer`) — one source
     // of truth instead of per-bar plumbing.
-    app.queue_rect = render::footer_rect(&transcript_render.footer, render::FooterRowId::Queue);
     // The composer panel's own rect, for the spatial mouse router (wheel
     // ticks and selection edge-autoscroll inside the box drive the input's
     // viewport, not the transcript). Zero-height / absent rows resolve to
     // `None` — a collapsed or hidden composer owns no pointer cell.
-    app.input_rect = render::footer_rect(&transcript_render.footer, render::FooterRowId::Composer);
     match sticky {
         Some(info) => {
             app.sticky_step = Some(info.message_idx);
-            app.sticky_rect = Some(info.rect);
+            ui.mount(UiKey::Sticky, info.rect);
             app.sticky_summary_line = Some(info.summary_line);
         }
         None => {
             app.sticky_step = None;
-            app.sticky_rect = None;
             app.sticky_summary_line = None;
+        }
+    }
+
+    // Interaction sheets (ADR-0173 §3): the AI-initiated sheets occupy the
+    // composer slot — the same bottom edge, extended over the hint bar —
+    // while the transcript behind them stays live. The question and
+    // input-injection sheets paint their own panel over the composer's
+    // slot; the permission sheet replaced the slot entirely above.
+    if !chrome_hidden {
+        match app.active_sheet() {
+            Some(crate::sheet::SheetKind::Question) => {
+                if let Some(ref qmodel) = app.question {
+                    let question_rect = mutx_engine::Rect::new(
+                        input_rect.x,
+                        input_rect.y,
+                        input_rect.width,
+                        input_rect.height
+                            + crate::design::COMPOSER_HINT_GAP_ROWS
+                            + hint_rect.height,
+                    );
+                    render::draw_question_modal(
+                        f,
+                        &mut ui,
+                        qmodel.request(),
+                        qmodel.current(),
+                        qmodel.selected(),
+                        qmodel.other_text(),
+                        qmodel.highlight(),
+                        &mut app.question_scroll,
+                        app.question_modal_follow,
+                        app.pending_question_depth,
+                        question_rect,
+                        &app.theme,
+                    );
+                }
+            }
+            Some(crate::sheet::SheetKind::InputInjection) => {
+                if let Some(ref req) = app.pending_input {
+                    ui.mount(UiKey::Sheet(crate::sheet::SheetKind::InputInjection), input_rect);
+                    render::draw_input_injection(
+                        f,
+                        req,
+                        &app.input,
+                        app.cursor_position,
+                        input_rect,
+                        &app.theme,
+                    );
+                }
+            }
+            _ => {}
         }
     }
 
@@ -686,7 +757,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             render::draw_completion_menu(
                 f,
                 &mut layout_map,
-                Some(&mut app.modal_hit_map),
+                Some(&mut ui),
                 &completions,
                 app.suggestion_index,
                 input_rect,
@@ -716,7 +787,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Done after the transcript + chrome are drawn and before the modal
     // panel so the panel overpaints its own crisp area on top of the
     // recessed background.
-    render::recess_backdrop(f, recess, &app.theme);
+    ui.mount(UiKey::Backdrop, f.area());
+    ui.paint(f, UiKey::Backdrop, |f| render::recess_backdrop(f, recess, &app.theme));
 
     let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
 
@@ -872,7 +944,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 f,
                 &app.theme,
                 &mut app.oauth_scroll,
-                Some(&mut app.modal_hit_map),
+                Some(&mut ui),
                 &app.selection,
                 &mut layout_map,
             ))
@@ -1188,7 +1260,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             .find(|r| &r.id == pending_id)
             .map(|r| r.name.clone())
             .unwrap_or_else(|| pending_id.clone());
-        app.provider_delete_rect = Some(render::draw_provider_delete_confirm(
+        let rect = render::draw_provider_delete_confirm(
             f,
             &provider_name,
             match app.provider_delete_focus {
@@ -1196,58 +1268,8 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 ProviderDeleteChoice::Delete => ConfirmChoice::Delete,
             },
             &app.theme,
-        ));
-    } else {
-        app.provider_delete_rect = None;
-    }
-
-    // Interaction sheets (ADR-0173 §3): the AI-initiated sheets occupy the
-    // composer slot — the same bottom edge, extended over the hint bar —
-    // while the transcript behind them stays live. The question and
-    // input-injection sheets paint their own panel over the composer's
-    // slot; the permission sheet replaced the slot entirely above.
-    if !chrome_hidden {
-        match app.active_sheet() {
-            Some(crate::sheet::SheetKind::Question) => {
-                if let Some(ref qmodel) = app.question {
-                    let question_rect = mutx_engine::Rect::new(
-                        input_rect.x,
-                        input_rect.y,
-                        input_rect.width,
-                        input_rect.height
-                            + crate::design::COMPOSER_HINT_GAP_ROWS
-                            + hint_rect.height,
-                    );
-                    render::draw_question_modal(
-                        f,
-                        &mut app.modal_hit_map,
-                        qmodel.request(),
-                        qmodel.current(),
-                        qmodel.selected(),
-                        qmodel.other_text(),
-                        qmodel.highlight(),
-                        &mut app.question_scroll,
-                        app.question_modal_follow,
-                        app.pending_question_depth,
-                        question_rect,
-                        &app.theme,
-                    );
-                }
-            }
-            Some(crate::sheet::SheetKind::InputInjection) => {
-                if let Some(ref req) = app.pending_input {
-                    render::draw_input_injection(
-                        f,
-                        req,
-                        &app.input,
-                        app.cursor_position,
-                        input_rect,
-                        &app.theme,
-                    );
-                }
-            }
-            _ => {}
-        }
+        );
+        ui.mount(UiKey::ProviderDelete, rect);
     }
 
     // Urgent confirmation toasts (Esc interrupt confirmation or Ctrl+C quit confirmation)
@@ -1276,7 +1298,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         );
     }
 
-    app.layout_map = layout_map;
+    ui.stage_document(layout_map);
 
     // Capture the open modal's body height for page-scroll step
     // sizing. The renderer returns the full panel rect; the body is
@@ -1309,9 +1331,7 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // dismissable) so a click on the backdrop outside it can close it.
     // The rect comes from the renderer that just painted the panel, so
     // dynamic-height modals and click hit-tests cannot drift apart.
-    app.modal_rect = if app.active_modal().dismissable_by_outside_click() {
-        drawn_modal_rect
-    } else {
-        None
-    };
+    if let Some(rect) = drawn_modal_rect {
+        ui.mount(UiKey::Modal(app.active_modal()), rect);
+    }
 }
