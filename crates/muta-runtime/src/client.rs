@@ -659,7 +659,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
 fn spawn_daemon() -> Result<std::process::Child, String> {
     let program = daemon_program();
     let mut command = std::process::Command::new(&program);
-    command.args(["daemon", "start", "--fg"]);
+    command.args(["start", "--fg"]);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
