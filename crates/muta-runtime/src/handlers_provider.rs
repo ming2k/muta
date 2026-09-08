@@ -10,6 +10,7 @@
 use muta_agent::Agent;
 use muta_agent::catalog;
 use muta_agent::orchestration::round_response;
+use muta_contracts::model::ModelTargetScope;
 use muta_contracts::{
     AgentNotice, AgentResponse, ClientIdentity, CommandRecord, CommandResult, Provider, RoundEvent,
     SecretString, WireProtocol,
@@ -17,6 +18,7 @@ use muta_contracts::{
 use muta_persistence::config::{Config, Credentials, DiscoveryCache};
 use muta_persistence::connection_usage::ConnectionUsage;
 use muta_persistence::connections::{Connection, Connections};
+use muta_persistence::presets::Presets;
 use muta_persistence::route_settings::RouteSettingsStore;
 use muta_persistence::session::{ProviderSelection, SessionStore};
 use std::sync::{Arc, RwLock};
@@ -328,9 +330,19 @@ pub(crate) async fn add(
         base_url: if is_preset { None } else { base_url },
         user_agent: if is_preset { None } else { user_agent },
         models: if is_preset {
-            Vec::new()
+            muta_contracts::model::ModelScopeConfig::default()
         } else {
-            declared_models
+            muta_contracts::model::ModelScopeConfig {
+                include: declared_models
+                    .into_iter()
+                    .map(|id| muta_contracts::model::DeclaredModel {
+                        id,
+                        ..Default::default()
+                    })
+                    .collect(),
+                exclude: Vec::new(),
+                overrides: std::collections::BTreeMap::new(),
+            }
         },
         extra_models: Vec::new(),
     };
@@ -488,73 +500,46 @@ pub(crate) async fn edit(
     }
 }
 
-/// `AgentRequest::RemoveProviderModel` — drop a declared model from a
-/// pure-custom connection, persist, and push a fresh picker snapshot. The last
-/// remaining model is kept (a connection must serve at least one model). If the
-/// removed model was the active `default_model`, it is cleared so the connection
-/// falls back to its first route.
-pub async fn remove_model(
+/// `AgentRequest::IncludeModel` — declare or include a model within a target scope (preset or connection) (ADR-0199).
+pub(crate) async fn include_model(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ConnectionUsage,
-    provider_id: String,
-    model: String,
-) {
-    let mut connections = Connections::load();
-    if let Some(connection) = connections.get_mut(&provider_id)
-        && connection.preset_id.is_none()
-        && connection.models.len() > 1
-        && let Some(pos) = connection.models.iter().position(|m| *m == model)
-    {
-        connection.models.remove(pos);
-        if connections.save().is_err() {
-            tracing::warn!("remove_model: could not persist connection");
-        }
-    }
-    catalog::prune_stale_models(config, provider_usage);
-    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
-        config,
-        provider_usage,
-    )));
-}
-
-/// `AgentRequest::AddConnectionModel` — declare one extra model on a **preset**
-/// connection (ADR-0198): a hidden or unstable upstream id the discovery
-/// intersection can never surface, pinned to this one connection. Validated
-/// (connection exists, is preset-derived, id non-blank and not an exact
-/// duplicate of a declaration), persisted to the connection record, and a
-/// fresh picker snapshot pushed. The union with the derived route set happens
-/// at derive time, so a later discovery refresh can never evict the id.
-/// Case-variant ids are allowed — model ids are exact (case-sensitive) on the
-/// wire, consistent with `registry::custom_baselines`.
-pub(crate) async fn add_connection_model(
-    config: &mut Config,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
-    connection_id: String,
+    scope: ModelTargetScope,
     model: muta_contracts::model::DeclaredModel,
 ) {
-    let mut connections = Connections::load();
-    let valid = match connections.get_mut(&connection_id) {
-        Some(connection) if connection.preset_id.is_some() => {
-            !connection.extra_models.iter().any(|m| m.id == model.id)
+    match scope {
+        ModelTargetScope::Preset(preset_id) => {
+            let mut presets = Presets::load();
+            let preset = presets.get_or_create_mut(&preset_id);
+            preset.exclude.retain(|id| id != &model.id);
+            if let Some(pos) = preset.include.iter().position(|m| m.id == model.id) {
+                preset.include[pos] = model;
+            } else {
+                preset.include.push(model);
+            }
+            if presets.save().is_err() {
+                tracing::warn!("include_model: could not persist presets.toml");
+                return;
+            }
         }
-        _ => false,
-    };
-    if !valid {
-        tracing::warn!(
-            connection_id = %connection_id,
-            model = %model.id,
-            "add_connection_model: unknown connection, non-preset connection, or duplicate id"
-        );
-        return;
-    }
-    if let Some(connection) = connections.get_mut(&connection_id) {
-        connection.extra_models.push(model);
-    }
-    if connections.save().is_err() {
-        tracing::warn!("add_connection_model: could not persist connection");
-        return;
+        ModelTargetScope::Connection(connection_id) => {
+            let mut connections = Connections::load();
+            let Some(conn) = connections.get_mut(&connection_id) else {
+                tracing::warn!(%connection_id, "include_model: unknown connection");
+                return;
+            };
+            conn.models.exclude.retain(|id| id != &model.id);
+            if let Some(pos) = conn.models.include.iter().position(|m| m.id == model.id) {
+                conn.models.include[pos] = model;
+            } else {
+                conn.models.include.push(model);
+            }
+            if connections.save().is_err() {
+                tracing::warn!("include_model: could not persist connections.toml");
+                return;
+            }
+        }
     }
     catalog::prune_stale_models(config, provider_usage);
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
@@ -563,29 +548,129 @@ pub(crate) async fn add_connection_model(
     )));
 }
 
-/// `AgentRequest::RemoveConnectionModel` — drop one declared extra model from
-/// a preset connection (ADR-0198), persist, and push a fresh picker snapshot.
-/// Only declared extras are removable (derived preset/discovered models are
-/// not); unknown ids are a no-op. Unlike pure-custom `remove_model` there is
-/// no "last model" floor: a preset connection always has its derived set to
-/// fall back on.
-pub(crate) async fn remove_connection_model(
+/// `AgentRequest::ExcludeModel` — exclude/hide a model within a target scope (ADR-0199).
+pub(crate) async fn exclude_model(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ConnectionUsage,
-    connection_id: String,
-    model: String,
+    scope: ModelTargetScope,
+    model_id: String,
 ) {
-    let mut connections = Connections::load();
-    if let Some(connection) = connections.get_mut(&connection_id)
-        && let Some(pos) = connection.extra_models.iter().position(|m| m.id == model)
-    {
-        connection.extra_models.remove(pos);
-        if connections.save().is_err() {
-            tracing::warn!("remove_connection_model: could not persist connection");
+    match scope {
+        ModelTargetScope::Preset(preset_id) => {
+            let mut presets = Presets::load();
+            let preset = presets.get_or_create_mut(&preset_id);
+            preset.include.retain(|m| m.id != model_id);
+            if !preset.exclude.contains(&model_id) {
+                preset.exclude.push(model_id);
+            }
+            if presets.save().is_err() {
+                tracing::warn!("exclude_model: could not persist presets.toml");
+                return;
+            }
+        }
+        ModelTargetScope::Connection(connection_id) => {
+            let mut connections = Connections::load();
+            let Some(conn) = connections.get_mut(&connection_id) else {
+                tracing::warn!(%connection_id, "exclude_model: unknown connection");
+                return;
+            };
+            conn.models.include.retain(|m| m.id != model_id);
+            if !conn.models.exclude.contains(&model_id) {
+                conn.models.exclude.push(model_id);
+            }
+            if connections.save().is_err() {
+                tracing::warn!("exclude_model: could not persist connections.toml");
+                return;
+            }
         }
     }
     catalog::prune_stale_models(config, provider_usage);
+    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+        config,
+        provider_usage,
+    )));
+}
+
+/// `AgentRequest::ClearModelRule` — clear explicit inclusion, exclusion, or overrides for a model (ADR-0199).
+pub(crate) async fn clear_model_rule(
+    config: &mut Config,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    scope: ModelTargetScope,
+    model_id: String,
+) {
+    match scope {
+        ModelTargetScope::Preset(preset_id) => {
+            let mut presets = Presets::load();
+            if let Some(preset) = presets.presets.get_mut(&preset_id) {
+                preset.include.retain(|m| m.id != model_id);
+                preset.exclude.retain(|m| m != &model_id);
+                preset.overrides.remove(&model_id);
+                if presets.save().is_err() {
+                    tracing::warn!("clear_model_rule: could not persist presets.toml");
+                    return;
+                }
+            }
+        }
+        ModelTargetScope::Connection(connection_id) => {
+            let mut connections = Connections::load();
+            if let Some(conn) = connections.get_mut(&connection_id) {
+                conn.models.include.retain(|m| m.id != model_id);
+                conn.models.exclude.retain(|m| m != &model_id);
+                conn.models.overrides.remove(&model_id);
+                if connections.save().is_err() {
+                    tracing::warn!("clear_model_rule: could not persist connections.toml");
+                    return;
+                }
+            }
+        }
+    }
+    catalog::prune_stale_models(config, provider_usage);
+    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+        config,
+        provider_usage,
+    )));
+}
+
+/// `AgentRequest::SetModelCapabilities` — update per-scope model capability overrides (ADR-0199).
+pub(crate) async fn set_model_capabilities(
+    config: &mut Config,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    scope: ModelTargetScope,
+    model_id: String,
+    overrides: muta_contracts::model::CapabilityOverrides,
+) {
+    match scope {
+        ModelTargetScope::Preset(preset_id) => {
+            let mut presets = Presets::load();
+            let preset = presets.get_or_create_mut(&preset_id);
+            if overrides.is_empty() {
+                preset.overrides.remove(&model_id);
+            } else {
+                preset.overrides.insert(model_id, overrides);
+            }
+            if presets.save().is_err() {
+                tracing::warn!("set_model_capabilities: could not persist presets.toml");
+                return;
+            }
+        }
+        ModelTargetScope::Connection(connection_id) => {
+            let mut connections = Connections::load();
+            if let Some(conn) = connections.get_mut(&connection_id) {
+                if overrides.is_empty() {
+                    conn.models.overrides.remove(&model_id);
+                } else {
+                    conn.models.overrides.insert(model_id, overrides);
+                }
+                if connections.save().is_err() {
+                    tracing::warn!("set_model_capabilities: could not persist connections.toml");
+                    return;
+                }
+            }
+        }
+    }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
         config,
         provider_usage,
@@ -1843,6 +1928,77 @@ mod tests {
 
         let picker = resp_rx.recv().await.expect("picker expected");
         assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
+
+        muta_persistence::paths::set_test_default(None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adr0199_handlers_mutate_preset_and_connection_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        let mut config = Config::default();
+        let mut usage = ConnectionUsage::default();
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // 1. Include on preset scope
+        include_model(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            ModelTargetScope::Preset("deepseek".into()),
+            muta_contracts::model::DeclaredModel {
+                id: "deepseek-v4-preview".into(),
+                context_window: Some(1_000_000),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let picker = resp_rx.recv().await.expect("picker after include");
+        assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
+
+        let presets = Presets::load();
+        let ds = presets.get("deepseek").expect("preset saved");
+        assert_eq!(ds.include.len(), 1);
+        assert_eq!(ds.include[0].id, "deepseek-v4-preview");
+
+        // 2. Exclude on preset scope
+        exclude_model(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            ModelTargetScope::Preset("deepseek".into()),
+            "deepseek-chat".into(),
+        )
+        .await;
+        let _ = resp_rx.recv().await;
+
+        let presets = Presets::load();
+        let ds = presets.get("deepseek").unwrap();
+        assert_eq!(ds.exclude, vec!["deepseek-chat"]);
+
+        // 3. Clear rule on preset scope
+        clear_model_rule(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            ModelTargetScope::Preset("deepseek".into()),
+            "deepseek-chat".into(),
+        )
+        .await;
+        let _ = resp_rx.recv().await;
+
+        let presets = Presets::load();
+        let ds = presets.get("deepseek").unwrap();
+        assert!(!ds.exclude.contains(&"deepseek-chat".to_string()));
 
         muta_persistence::paths::set_test_default(None);
     }

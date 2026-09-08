@@ -213,9 +213,10 @@ pub use master::{
 };
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities,
-    RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models, model_by_id,
-    register_fitted_models, resolve as resolve_model, sanitize_model_id,
+    BaselineModels, CapabilityOverrides, DeclaredModel, FittedModel, Model, ModelCapabilities,
+    ModelScopeConfig, ModelTargetScope, RemoteModelMetadata, RouteCapabilities, WireProtocol,
+    baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
+    sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,

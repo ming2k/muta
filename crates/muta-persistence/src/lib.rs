@@ -36,6 +36,7 @@ pub use muta_paths::lock;
 pub use muta_paths::paths;
 
 pub mod instances;
+pub mod presets;
 pub mod provider_usage;
 pub mod route_settings;
 pub mod session;

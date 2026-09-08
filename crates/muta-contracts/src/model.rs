@@ -267,20 +267,23 @@ impl CapabilityOverrides {
             && self.tool_call.is_none()
             && self.vision.is_none()
     }
+
+    /// Layer `over` on top of `self` (ADR-0199). Any explicitly set `Some(...)` field in `over`
+    /// takes precedence over `self`.
+    pub fn merge_with(&self, over: &CapabilityOverrides) -> CapabilityOverrides {
+        CapabilityOverrides {
+            family: over.family.clone().or_else(|| self.family.clone()),
+            context_window: over.context_window.or(self.context_window),
+            max_output_tokens: over.max_output_tokens.or(self.max_output_tokens),
+            thinking: over.thinking.or(self.thinking),
+            tool_call: over.tool_call.or(self.tool_call),
+            vision: over.vision.or(self.vision),
+        }
+    }
 }
 
-/// One user-declared model on a preset connection (ADR-0198): a hidden or
-/// unstable upstream id the discovery intersection can never surface, pinned
-/// to one connection. Lives in `muta-contracts` (not persistence) so the wire
-/// request can carry it — persistence keys it per connection inside
-/// `Connection::extra_models` and owns only storage, mirroring how
-/// [`CapabilityOverrides`] rides [`crate::AgentRequest::EditProviderModel`].
-///
-/// The id is exact (case-sensitive, consistent with
-/// `muta_providers::registry::custom_baselines`); every capability field is
-/// optional — a declared field overlays the registry default via the ADR-0149
-/// resolution order (materialized as `RemoteModelMetadata` on the derived
-/// channel), an absent field falls through to it.
+/// One user-declared model on a preset or connection scope (ADR-0199): a hidden,
+/// preview, or unlisted upstream id pinned to a scope with optional capability facts.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default)]
 pub struct DeclaredModel {
@@ -314,6 +317,78 @@ impl DeclaredModel {
             ..Self::default()
         })
     }
+
+    /// Convert declared capability facts into a [`CapabilityOverrides`] record.
+    pub fn to_overrides(&self) -> CapabilityOverrides {
+        CapabilityOverrides {
+            family: None,
+            context_window: self.context_window,
+            max_output_tokens: self.max_output_tokens,
+            thinking: self.thinking,
+            tool_call: self.tool_call,
+            vision: self.vision,
+        }
+    }
+}
+
+/// Unified model scope configuration for preset-level or connection-level customization (ADR-0199).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(default)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub struct ModelScopeConfig {
+    /// Explicitly declared or included models with optional capability facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<DeclaredModel>,
+    /// Explicitly excluded or hidden model ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Per-model capability overrides keyed by exact model id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub overrides: std::collections::BTreeMap<String, CapabilityOverrides>,
+}
+
+impl ModelScopeConfig {
+    /// Whether this configuration contains no rules.
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty() && self.overrides.is_empty()
+    }
+
+    /// Look up an included model declaration by exact id.
+    pub fn find_included(&self, id: &str) -> Option<&DeclaredModel> {
+        self.include.iter().find(|m| m.id == id)
+    }
+
+    /// Whether this scope explicitly excludes `id`.
+    pub fn is_excluded(&self, id: &str) -> bool {
+        self.exclude.iter().any(|m| m == id)
+    }
+
+    /// All model ids explicitly included, preserving order.
+    pub fn included_ids(&self) -> Vec<String> {
+        self.include.iter().map(|m| m.id.clone()).collect()
+    }
+}
+
+/// Target scope for model customizations (ADR-0199).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub enum ModelTargetScope {
+    /// Preset-level customization (affects all connections using this preset).
+    Preset(String),
+    /// Connection-level customization (affects this connection instance only).
+    Connection(String),
 }
 
 impl ModelCapabilities {

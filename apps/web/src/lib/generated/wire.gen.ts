@@ -53,7 +53,7 @@ preset_id: string | null,
 /**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
-client_identity: ClientProfile | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientProfile | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "AddConnectionModel": { connection_id: string, model: DeclaredModel, } } | { "RemoveConnectionModel": { connection_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
+client_identity: ClientProfile | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientProfile | null, } } | { "IncludeModel": { scope: ModelTargetScope, model: DeclaredModel, } } | { "ExcludeModel": { scope: ModelTargetScope, model_id: string, } } | { "ClearModelRule": { scope: ModelTargetScope, model_id: string, } } | { "SetModelCapabilities": { scope: ModelTargetScope, model_id: string, overrides: CapabilityOverrides, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1): `None` keeps the stored
  * overrides untouched; `Some(record)` replaces them wholesale (an
@@ -855,6 +855,28 @@ cache_frozen: boolean, };
  * Modal surface overrides (Layer 2: Center-anchored dialogs).
  */
 export type ModalThemeConfig = { surface: string | null, border: string | null, backdrop: string | null, dim_factor: number | null, };
+
+/**
+ * Unified model scope configuration for preset-level or connection-level customization (ADR-0199).
+ */
+export type ModelScopeConfig = { 
+/**
+ * Explicitly declared or included models with optional capability facts.
+ */
+include?: Array<DeclaredModel>, 
+/**
+ * Explicitly excluded or hidden model ids.
+ */
+exclude?: Array<string>, 
+/**
+ * Per-model capability overrides keyed by exact model id.
+ */
+overrides?: { [key in string]: CapabilityOverrides }, };
+
+/**
+ * Target scope for model customizations (ADR-0199).
+ */
+export type ModelTargetScope = { "Preset": string } | { "Connection": string };
 
 /**
  * Handshake action selecting a daemon-observability stream instead of a

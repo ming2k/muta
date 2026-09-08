@@ -197,28 +197,26 @@ pub enum AgentRequest {
     /// Remove a model (channel) from a user-defined provider, persist, and push a
     /// fresh picker snapshot. The last remaining model is kept (a provider must
     /// serve at least one model).
-    RemoveProviderModel {
-        provider_id: String,
-        model: String,
-    },
-    /// Declare one extra model on a **preset** connection (ADR-0198): a hidden
-    /// or unstable upstream id the discovery intersection can never surface,
-    /// pinned to this one connection. The declaration unions into the
-    /// connection's derived route set after discovery (a refresh that omits
-    /// the id can never evict it) and its optional capability facts ride the
-    /// ADR-0149 resolution order as the channel's remote layer. Only preset
-    /// connections accept declarations; the handler rejects unknown
-    /// connections, blank ids, and ids the connection already serves.
-    AddConnectionModel {
-        connection_id: String,
+    /// Include or declare a model within a scope (preset or connection) with optional capability facts (ADR-0199).
+    IncludeModel {
+        scope: crate::model::ModelTargetScope,
         model: crate::model::DeclaredModel,
     },
-    /// Drop one declared extra model from a preset connection (ADR-0198) and
-    /// push a fresh picker snapshot. Only declared extras are removable —
-    /// derived preset/discovered models are not. Unknown ids are a no-op.
-    RemoveConnectionModel {
-        connection_id: String,
-        model: String,
+    /// Exclude/hide a model from the resolved set within a scope (ADR-0199).
+    ExcludeModel {
+        scope: crate::model::ModelTargetScope,
+        model_id: String,
+    },
+    /// Clear explicit inclusion or exclusion rules for a model within a scope (ADR-0199).
+    ClearModelRule {
+        scope: crate::model::ModelTargetScope,
+        model_id: String,
+    },
+    /// Set capability overrides for a specific model within a scope (ADR-0199).
+    SetModelCapabilities {
+        scope: crate::model::ModelTargetScope,
+        model_id: String,
+        overrides: crate::model::CapabilityOverrides,
     },
     /// Edit settings for one model/channel of a user-defined provider. This is
     /// intentionally channel-scoped: OpenAI effort and Anthropic

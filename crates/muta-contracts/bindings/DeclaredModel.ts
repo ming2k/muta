@@ -2,18 +2,8 @@
 import type { ReasoningSupport } from "./ReasoningSupport";
 
 /**
- * One user-declared model on a preset connection (ADR-0198): a hidden or
- * unstable upstream id the discovery intersection can never surface, pinned
- * to one connection. Lives in `muta-contracts` (not persistence) so the wire
- * request can carry it — persistence keys it per connection inside
- * `Connection::extra_models` and owns only storage, mirroring how
- * [`CapabilityOverrides`] rides [`crate::AgentRequest::EditProviderModel`].
- *
- * The id is exact (case-sensitive, consistent with
- * `muta_providers::registry::custom_baselines`); every capability field is
- * optional — a declared field overlays the registry default via the ADR-0149
- * resolution order (materialized as `RemoteModelMetadata` on the derived
- * channel), an absent field falls through to it.
+ * One user-declared model on a preset or connection scope (ADR-0199): a hidden,
+ * preview, or unlisted upstream id pinned to a scope with optional capability facts.
  */
 export type DeclaredModel = { 
 /**

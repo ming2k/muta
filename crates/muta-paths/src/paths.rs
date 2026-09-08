@@ -117,6 +117,11 @@ impl Dirs {
         self.config_dir.join("config.toml")
     }
 
+    /// User-declared preset customizations (`$XDG_CONFIG_HOME/muta/presets.toml`, ADR-0199).
+    pub fn presets_file(&self) -> PathBuf {
+        self.config_dir.join("presets.toml")
+    }
+
     /// User-supplied color scheme files (`$XDG_CONFIG_HOME/muta/themes`).
     /// Each `*.toml` in this directory defines a named theme with metadata
     /// and semantic palette / component overrides.

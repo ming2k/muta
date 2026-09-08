@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::fsutil;
 use crate::paths;
 
-pub use muta_contracts::model::DeclaredModel;
+pub use muta_contracts::model::{DeclaredModel, ModelScopeConfig};
 
 /// One connection: a credentialed, configured use of a preset (or a pure-custom relay).
 /// The connection's id is the join key for its credential (`credentials.toml [connections.<id>]`),
@@ -66,17 +66,47 @@ pub struct Connection {
     /// `User-Agent` header override for a custom connection's routes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
-    /// The model ids a custom connection serves, in picker order. Preset
-    /// connections never set this — their model set is derived from the preset
-    /// (and live discovery).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<String>,
-    /// User-declared extra models for a preset connection (ADR-0198): hidden
-    /// or unstable upstream ids unioned into the derived set after discovery,
-    /// scoped to this connection only. Never set on pure-custom connections
-    /// (their `models` list is already the full declaration).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Model scope configuration (ADR-0199): explicit includes, excludes, and overrides.
+    /// For pure-custom connections (`preset_id = None`), `models.include` constitutes
+    /// the full declared model set.
+    #[serde(
+        default,
+        skip_serializing_if = "ModelScopeConfig::is_empty",
+        deserialize_with = "deserialize_connection_models"
+    )]
+    pub models: ModelScopeConfig,
+    /// Legacy field for ADR-0198 extra models, cleanly migrated into `models.include`
+    /// upon loading and never serialized back.
+    #[serde(default, skip_serializing)]
     pub extra_models: Vec<DeclaredModel>,
+}
+
+fn deserialize_connection_models<'de, D>(deserializer: D) -> Result<ModelScopeConfig, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawModels {
+        Scope(ModelScopeConfig),
+        List(Vec<String>),
+    }
+
+    match Option::<RawModels>::deserialize(deserializer)? {
+        Some(RawModels::Scope(scope)) => Ok(scope),
+        Some(RawModels::List(list)) => Ok(ModelScopeConfig {
+            include: list
+                .into_iter()
+                .map(|id| DeclaredModel {
+                    id,
+                    ..Default::default()
+                })
+                .collect(),
+            exclude: Vec::new(),
+            overrides: std::collections::BTreeMap::new(),
+        }),
+        None => Ok(ModelScopeConfig::default()),
+    }
 }
 
 impl Default for Connection {
@@ -91,7 +121,7 @@ impl Default for Connection {
             protocol: None,
             base_url: None,
             user_agent: None,
-            models: Vec::new(),
+            models: ModelScopeConfig::default(),
             extra_models: Vec::new(),
         }
     }
@@ -110,19 +140,19 @@ impl Connection {
     }
 
     /// The declared model ids of a pure-custom connection. Preset connections
-    /// return an empty slice (their set is derived).
-    pub fn declared_models(&self) -> &[String] {
-        &self.models
+    /// return their connection-scoped included models.
+    pub fn declared_models(&self) -> Vec<String> {
+        self.models.included_ids()
     }
 
-    /// The declared extra model for `model_id`, if this connection declares one.
+    /// Look up an explicitly declared/included model on this connection.
     pub fn extra_model(&self, model_id: &str) -> Option<&DeclaredModel> {
-        self.extra_models.iter().find(|m| m.id == model_id)
+        self.models.find_included(model_id)
     }
 
-    /// The declared extra model ids, in declaration order.
+    /// The declared included model ids, in declaration order.
     pub fn extra_model_ids(&self) -> Vec<String> {
-        self.extra_models.iter().map(|m| m.id.clone()).collect()
+        self.models.included_ids()
     }
 }
 
@@ -146,8 +176,20 @@ impl Connections {
         let Ok(content) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        match toml::from_str(&content) {
-            Ok(connections) => connections,
+        match toml::from_str::<Self>(&content) {
+            Ok(mut connections) => {
+                // Migrate any legacy extra_models cleanly into models.include
+                for conn in &mut connections.connections {
+                    if !conn.extra_models.is_empty() {
+                        for extra in conn.extra_models.drain(..) {
+                            if !conn.models.include.iter().any(|m| m.id == extra.id) {
+                                conn.models.include.push(extra);
+                            }
+                        }
+                    }
+                }
+                connections
+            }
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -251,55 +293,76 @@ mod tests {
         Connection {
             id: "deepseek-personal".into(),
             preset_id: Some("deepseek".into()),
-            extra_models: vec![DeclaredModel {
-                id: "deepseek-v4-pro-preview-0912".into(),
-                context_window: Some(1_000_000),
-                max_output_tokens: Some(8_192),
-                thinking: Some(ReasoningSupport::ReasoningContent),
-                vision: Some(false),
-                tool_call: Some(true),
-            }],
+            models: ModelScopeConfig {
+                include: vec![DeclaredModel {
+                    id: "deepseek-v4-pro-preview-0912".into(),
+                    context_window: Some(1_000_000),
+                    max_output_tokens: Some(8_192),
+                    thinking: Some(ReasoningSupport::ReasoningContent),
+                    vision: Some(false),
+                    tool_call: Some(true),
+                }],
+                exclude: Vec::new(),
+                overrides: std::collections::BTreeMap::new(),
+            },
             ..Default::default()
         }
     }
 
     #[test]
-    fn extra_models_roundtrip_through_toml() {
+    fn models_scope_roundtrip_through_toml() {
         let mut conn = deepseek_with_extras();
-        conn.extra_models.push(DeclaredModel {
+        conn.models.include.push(DeclaredModel {
             id: "bare-id".into(),
             ..Default::default()
         });
+        conn.models.exclude.push("deprecated-model".into());
         let store = Connections {
             connections: vec![conn],
         };
         let text = toml::to_string_pretty(&store).unwrap();
-        // Optional fields left unset must not serialize for the bare entry.
-        assert!(text.contains("[[connections.extra_models]]"));
-        assert!(!text.contains("bare-id ="), "sanity: id present as value");
-        let bare_section = text
-            .split("[[connections.extra_models]]")
-            .nth(2)
-            .expect("bare entry section");
-        assert!(
-            !bare_section.contains("context_window")
-                && !bare_section.contains("vision")
-                && !bare_section.contains("thinking"),
-            "unset fields skip serialization"
-        );
+        assert!(text.contains("[[connections.models.include]]"));
+        assert!(text.contains("deprecated-model"));
         let parsed: Connections = toml::from_str(&text).unwrap();
         assert_eq!(parsed, store);
     }
 
     #[test]
-    fn legacy_connection_without_extra_models_loads() {
+    fn legacy_connection_extra_models_migrates_on_load() {
         let legacy = r#"
 [[connections]]
 id = "ds"
 preset_id = "deepseek"
+
+[[connections.extra_models]]
+id = "legacy-preview"
+context_window = 500000
+"#;
+        let mut parsed: Connections = toml::from_str(legacy).unwrap();
+        for conn in &mut parsed.connections {
+            for extra in conn.extra_models.drain(..) {
+                conn.models.include.push(extra);
+            }
+        }
+        assert_eq!(parsed.connections[0].models.include.len(), 1);
+        assert_eq!(parsed.connections[0].models.include[0].id, "legacy-preview");
+        assert_eq!(
+            parsed.connections[0].models.include[0].context_window,
+            Some(500000)
+        );
+    }
+
+    #[test]
+    fn legacy_custom_connection_list_models_deserializes() {
+        let legacy = r#"
+[[connections]]
+id = "custom-ollama"
+models = ["llama3:latest", "mistral:latest"]
 "#;
         let parsed: Connections = toml::from_str(legacy).unwrap();
-        assert!(parsed.connections[0].extra_models.is_empty());
+        assert_eq!(parsed.connections[0].models.include.len(), 2);
+        assert_eq!(parsed.connections[0].models.include[0].id, "llama3:latest");
+        assert_eq!(parsed.connections[0].models.include[1].id, "mistral:latest");
     }
 
     #[test]

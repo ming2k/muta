@@ -100,7 +100,7 @@ fn discovered_model_list_prefers_the_cache() {
 #[test]
 fn declared_extra_models_union_after_the_derived_set() {
     let mut deepseek = instance("ds-personal", Some("deepseek"));
-    deepseek.extra_models = vec![muta_persistence::connections::DeclaredModel {
+    deepseek.models.include = vec![muta_persistence::connections::DeclaredModel {
         id: "deepseek-v4-pro-preview-0912".into(),
         context_window: Some(500_000),
         ..Default::default()
@@ -149,7 +149,7 @@ fn declared_extra_models_union_after_the_derived_set() {
 #[test]
 fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
     let mut deepseek = instance("ds-personal", Some("deepseek"));
-    deepseek.extra_models = vec![muta_persistence::connections::DeclaredModel {
+    deepseek.models.include = vec![muta_persistence::connections::DeclaredModel {
         id: "deepseek-v4-pro-preview-0912".into(),
         context_window: Some(500_000),
         vision: Some(true),
@@ -184,7 +184,16 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
 #[test]
 fn custom_instance_serves_its_declared_models() {
     let mut custom = instance("relay", None);
-    custom.models = vec!["a".to_string(), "b".to_string()];
+    custom.models.include = vec![
+        muta_contracts::model::DeclaredModel {
+            id: "a".to_string(),
+            ..Default::default()
+        },
+        muta_contracts::model::DeclaredModel {
+            id: "b".to_string(),
+            ..Default::default()
+        },
+    ];
     custom.protocol = Some(WireProtocol::OpenAiChatCompletions);
     custom.base_url = Some("https://relay.example.com/v1/chat/completions".to_string());
     assert_eq!(
@@ -928,7 +937,16 @@ fn antigravity_models_derivation_and_hidden_filter() {
 fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
     let _sandbox = sandboxed_paths();
     let mut conn = instance("my-custom", None);
-    conn.models = vec!["model-a".to_string(), "model-b".to_string()];
+    conn.models.include = vec![
+        muta_contracts::model::DeclaredModel {
+            id: "model-a".to_string(),
+            ..Default::default()
+        },
+        muta_contracts::model::DeclaredModel {
+            id: "model-b".to_string(),
+            ..Default::default()
+        },
+    ];
     let connections = Connections {
         connections: vec![conn],
     };
@@ -973,12 +991,18 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
 fn model_recency_isolation_across_same_preset_connections() {
     let _sandbox = sandboxed_paths();
     let mut conn1 = instance("conn-1", None);
-    conn1.models = vec!["shared-model".to_string()];
+    conn1.models.include = vec![muta_contracts::model::DeclaredModel {
+        id: "shared-model".to_string(),
+        ..Default::default()
+    }];
     conn1.protocol = Some(WireProtocol::OpenAiChatCompletions);
     conn1.base_url = Some("https://relay1.example.com".to_string());
 
     let mut conn2 = instance("conn-2", None);
-    conn2.models = vec!["shared-model".to_string()];
+    conn2.models.include = vec![muta_contracts::model::DeclaredModel {
+        id: "shared-model".to_string(),
+        ..Default::default()
+    }];
     conn2.protocol = Some(WireProtocol::OpenAiChatCompletions);
     conn2.base_url = Some("https://relay2.example.com".to_string());
 
@@ -1081,4 +1105,41 @@ async fn discovery_never_resurrects_deleted_connection() {
     let final_cache = DiscoveryCache::load();
     assert!(!final_cache.connection_models.contains_key("deleted-conn"));
     assert!(!final_cache.model_lists.contains_key("deleted-conn"));
+}
+
+#[test]
+fn adr0199_preset_scope_and_instance_scope_cascade() {
+    use super::derive::route_models_with_presets;
+    use muta_persistence::presets::Presets;
+
+    let mut presets = Presets::default();
+    let ds_preset = presets.get_or_create_mut("deepseek");
+    ds_preset.include.push(muta_contracts::model::DeclaredModel {
+        id: "deepseek-preset-preview".to_string(),
+        ..Default::default()
+    });
+    // Preset excludes deepseek-chat
+    ds_preset.exclude.push("deepseek-chat".to_string());
+
+    let mut conn1 = instance("ds-work", Some("deepseek"));
+    // Connection instance excludes deepseek-coder
+    conn1.models.exclude.push("deepseek-coder".to_string());
+    // Connection instance includes an instance-specific model
+    conn1.models.include.push(muta_contracts::model::DeclaredModel {
+        id: "deepseek-instance-private".to_string(),
+        ..Default::default()
+    });
+
+    let models1 = route_models_with_presets(&conn1, &DiscoveryCache::default(), &presets);
+    assert!(models1.contains(&"deepseek-preset-preview".to_string()), "preset include present");
+    assert!(models1.contains(&"deepseek-instance-private".to_string()), "instance include present");
+    assert!(!models1.contains(&"deepseek-chat".to_string()), "preset exclude applied");
+    assert!(!models1.contains(&"deepseek-coder".to_string()), "instance exclude applied");
+
+    // Second connection with same preset inherits preset include/exclude, but not instance1's deltas
+    let conn2 = instance("ds-personal", Some("deepseek"));
+    let models2 = route_models_with_presets(&conn2, &DiscoveryCache::default(), &presets);
+    assert!(models2.contains(&"deepseek-preset-preview".to_string()));
+    assert!(!models2.contains(&"deepseek-chat".to_string()));
+    assert!(!models2.contains(&"deepseek-instance-private".to_string()));
 }

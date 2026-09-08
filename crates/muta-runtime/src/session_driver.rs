@@ -799,39 +799,48 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::RemoveProviderModel { provider_id, model } => {
-                    crate::handlers_provider::remove_model(
+                AgentRequest::IncludeModel { scope, model } => {
+                    crate::handlers_provider::include_model(
                         &mut config,
                         &resp_tx,
                         &mut provider_usage,
-                        provider_id,
+                        scope,
                         model,
                     )
                     .await;
                 }
-                AgentRequest::AddConnectionModel {
-                    connection_id,
-                    model,
-                } => {
-                    crate::handlers_provider::add_connection_model(
+                AgentRequest::ExcludeModel { scope, model_id } => {
+                    crate::handlers_provider::exclude_model(
                         &mut config,
                         &resp_tx,
                         &mut provider_usage,
-                        connection_id,
-                        model,
+                        scope,
+                        model_id,
                     )
                     .await;
                 }
-                AgentRequest::RemoveConnectionModel {
-                    connection_id,
-                    model,
-                } => {
-                    crate::handlers_provider::remove_connection_model(
+                AgentRequest::ClearModelRule { scope, model_id } => {
+                    crate::handlers_provider::clear_model_rule(
                         &mut config,
                         &resp_tx,
                         &mut provider_usage,
-                        connection_id,
-                        model,
+                        scope,
+                        model_id,
+                    )
+                    .await;
+                }
+                AgentRequest::SetModelCapabilities {
+                    scope,
+                    model_id,
+                    overrides,
+                } => {
+                    crate::handlers_provider::set_model_capabilities(
+                        &mut config,
+                        &resp_tx,
+                        &mut provider_usage,
+                        scope,
+                        model_id,
+                        overrides,
                     )
                     .await;
                 }

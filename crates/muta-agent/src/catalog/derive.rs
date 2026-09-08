@@ -14,12 +14,14 @@
 //! `auth.toml` through a dynamic, per-connection credential source.
 
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
+use muta_contracts::model::CapabilityOverrides;
 use muta_contracts::{
     AnthropicMessagesDialect, ClientProfile, ConnectionAuth, Effort, GoogleGenerateContentDialect,
     OpenAiChatDialect, OpenAiResponsesDialect, ReasoningMode, SecretString, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::{Connection, Connections};
+use muta_persistence::presets::Presets;
 use muta_persistence::route_settings::RouteSettingsStore;
 use muta_providers::{provider_preset_spec, route_for_model as preset_route};
 
@@ -61,13 +63,22 @@ pub fn derive_entry(
     }
 }
 
-/// The model ids a connection serves, in picker order. Preset connections are
-/// derived from the preset (live-discovered lists when the preset supports
-/// discovery, else the compiled-in snapshot); pure-custom connections serve the
-/// declared `models`. User-declared `extra_models` (ADR-0198) union in after
-/// the derived set — deduped against it, declaration order preserved — so a
-/// discovery refresh that omits a declared id can never evict it.
+/// The model ids a connection serves, in picker order (ADR-0199).
+/// Evaluates the 3-step Set Delta Algebra:
+/// 1. S_base = (Baseline ∩ Discovery) or snapshot for preset connections; empty for pure-custom.
+/// 2. S_preset = (S_base ∪ Preset.include) \ Preset.exclude
+/// 3. S_effective = (S_preset ∪ Instance.include) \ Instance.exclude
 pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<String> {
+    let presets = Presets::load();
+    route_models_with_presets(connection, cache, &presets)
+}
+
+/// Route models evaluated with explicit preset configurations.
+pub fn route_models_with_presets(
+    connection: &Connection,
+    cache: &DiscoveryCache,
+    presets: &Presets,
+) -> Vec<String> {
     let mut models = if let Some(pid) = connection.preset_id.as_deref() {
         let Some(spec) = provider_preset_spec(pid) else {
             return Vec::new();
@@ -86,13 +97,29 @@ pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<Stri
             spec.models.iter().map(|m| (*m).to_string()).collect()
         }
     } else {
-        connection.models.clone()
+        Vec::new()
     };
-    for id in connection.extra_model_ids() {
+
+    // Preset delta application
+    if let Some(pid) = connection.preset_id.as_deref()
+        && let Some(preset_scope) = presets.get(pid)
+    {
+        for id in preset_scope.included_ids() {
+            if !models.contains(&id) {
+                models.push(id);
+            }
+        }
+        models.retain(|m| !preset_scope.is_excluded(m));
+    }
+
+    // Instance delta application
+    for id in connection.models.included_ids() {
         if !models.contains(&id) {
             models.push(id);
         }
     }
+    models.retain(|m| !connection.models.is_excluded(m));
+
     models
 }
 
@@ -105,27 +132,42 @@ pub fn derive_channel(
     routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Channel {
-    // Declared extras (ADR-0198) layer their capability facts over whatever
-    // discovery already knows for the id — the user's declaration wins on the
-    // fields it sets, discovery facts survive on the ones it leaves unset.
-    // Anything still absent falls through to the registry baseline inside
-    // `ModelCapabilities::for_channel` (ADR-0149).
-    let remote = match connection.extra_model(model) {
-        Some(declared) => {
-            let mut remote = cache
-                .remote_metadata_for(&connection.id, model)
-                .cloned()
-                .unwrap_or_default();
-            remote.context_window = declared.context_window.or(remote.context_window);
-            remote.max_output_tokens = declared.max_output_tokens.or(remote.max_output_tokens);
-            remote.thinking = declared.thinking.or(remote.thinking);
-            remote.vision = declared.vision.or(remote.vision);
-            remote.tool_call = declared.tool_call.or(remote.tool_call);
-            Some(remote)
-        }
-        None => cache.remote_metadata_for(&connection.id, model).cloned(),
-    };
+    // 4-layer descending capability cascade (ADR-0199):
+    // Instance Overrides > Preset Overrides > Discovery Advertised Metadata > Baseline Registry Spec
+    let presets = Presets::load();
+    let preset_scope = connection.preset_id.as_deref().and_then(|p| presets.get(p));
+
+    let mut remote = cache.remote_metadata_for(&connection.id, model).cloned();
+    if let Some(preset_declared) = preset_scope.and_then(|p| p.find_included(model)) {
+        let r = remote.get_or_insert_with(Default::default);
+        r.context_window = preset_declared.context_window.or(r.context_window);
+        r.max_output_tokens = preset_declared.max_output_tokens.or(r.max_output_tokens);
+        r.thinking = preset_declared.thinking.or(r.thinking);
+        r.vision = preset_declared.vision.or(r.vision);
+        r.tool_call = preset_declared.tool_call.or(r.tool_call);
+    }
+    if let Some(declared) = connection.models.find_included(model) {
+        let r = remote.get_or_insert_with(Default::default);
+        r.context_window = declared.context_window.or(r.context_window);
+        r.max_output_tokens = declared.max_output_tokens.or(r.max_output_tokens);
+        r.thinking = declared.thinking.or(r.thinking);
+        r.vision = declared.vision.or(r.vision);
+        r.tool_call = declared.tool_call.or(r.tool_call);
+    }
+
     let route_settings = routes.settings_for(&connection.id, model);
+
+    let mut effective_overrides = CapabilityOverrides::default();
+    if let Some(po) = preset_scope.and_then(|p| p.overrides.get(model)) {
+        effective_overrides = effective_overrides.merge_with(po);
+    }
+    if let Some(io) = connection.models.overrides.get(model) {
+        effective_overrides = effective_overrides.merge_with(io);
+    }
+    if let Some(ro) = route_settings.and_then(|r| r.capability_overrides.as_ref()) {
+        effective_overrides = effective_overrides.merge_with(ro);
+    }
+    let user_overrides = (!effective_overrides.is_empty()).then_some(effective_overrides);
     let prompt_cache = connection
         .preset_id
         .as_deref()
@@ -240,9 +282,7 @@ pub fn derive_channel(
         credentials,
         model: model.to_string(),
         remote,
-        user_overrides: route_settings
-            .and_then(|r| r.capability_overrides.clone())
-            .filter(|o| !o.is_empty()),
+        user_overrides,
         prompt_cache,
         prompt_cache_preference,
     }

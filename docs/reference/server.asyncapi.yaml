@@ -737,7 +737,10 @@ components:
         - $ref: '#/components/schemas/RequestConnectProvider'
         - $ref: '#/components/schemas/RequestAuthorizeOAuth'
         - $ref: '#/components/schemas/RequestEditProvider'
-        - $ref: '#/components/schemas/RequestRemoveProviderModel'
+        - $ref: '#/components/schemas/RequestIncludeModel'
+        - $ref: '#/components/schemas/RequestExcludeModel'
+        - $ref: '#/components/schemas/RequestClearModelRule'
+        - $ref: '#/components/schemas/RequestSetModelCapabilities'
         - $ref: '#/components/schemas/RequestEditProviderModel'
         - $ref: '#/components/schemas/RequestEditModelReasoning'
         - $ref: '#/components/schemas/RequestDeleteProvider'
@@ -913,14 +916,44 @@ components:
             api_key: { type: string }
           additionalProperties: false
       additionalProperties: false
-    RequestRemoveProviderModel:
+    RequestIncludeModel:
       type: object
-      required: [RemoveProviderModel]
+      required: [IncludeModel]
       properties:
-        RemoveProviderModel:
+        IncludeModel:
           type: object
-          required: [provider_id, model]
-          properties: { provider_id: { type: string }, model: { type: string } }
+          required: [scope, model]
+          properties: { scope: { type: object }, model: { type: object } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestExcludeModel:
+      type: object
+      required: [ExcludeModel]
+      properties:
+        ExcludeModel:
+          type: object
+          required: [scope, model_id]
+          properties: { scope: { type: object }, model_id: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestClearModelRule:
+      type: object
+      required: [ClearModelRule]
+      properties:
+        ClearModelRule:
+          type: object
+          required: [scope, model_id]
+          properties: { scope: { type: object }, model_id: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestSetModelCapabilities:
+      type: object
+      required: [SetModelCapabilities]
+      properties:
+        SetModelCapabilities:
+          type: object
+          required: [scope, model_id, overrides]
+          properties: { scope: { type: object }, model_id: { type: string }, overrides: { type: object } }
           additionalProperties: false
       additionalProperties: false
     RequestEditProviderModel:
