@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-09-09
+
+### Added
+
+- **Unified Cascading Model Resolution Architecture (ADR-0199).**
+  - Introduced two-tier scoped model customization across Preset level (`presets.toml`) and Connection instance level (`connections.toml`).
+  - Added Set Delta Algebra (`include` and `exclude` rules) and 4-layer descending capability cascade (`Instance Overrides` > `Preset Overrides` > `Discovery Metadata` > `Baseline Spec`).
+  - Replaced legacy asymmetrical model mutation APIs with unified `IncludeModel`, `ExcludeModel`, `ClearModelRule`, and `SetModelCapabilities` requests.
+  - Transparent backward-compatibility migration for existing connection records.
+
 ## [0.42.1] - 2026-09-08
 
 ### Fixed
