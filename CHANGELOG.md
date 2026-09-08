@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-08
+
+### Changed
+
+- **One frontend truth: the TUI shell is rebuilt as a strict client of the
+  engine and of the protocol (ADR-0197).** `App` is the sole state owner,
+  written by a single applier fed typed `AppMutation` values from a response
+  translator and the monitor client; the ~45 shared mirror cells, both
+  `Versioned` transcript buffers, the `TranscriptPatch` replay machinery, both
+  rev counters, and the engine's `render_tree` are deleted (~2,300 net lines
+  out of the shell, plus the engine-side render tree removal of M6). Modality
+  is scene-owned from mount through dispatch, the harness owns follow-up queue
+  dispatch (one `FollowUp` verb; the daemon ships at the round boundary), and
+  every swallowed protocol send now flows through `App::send_intent` with a
+  visible "daemon link lost" chrome state on failure. A new `muta-client`
+  facade carries the full client surface; `mutx` now depends only on
+  `muta-contracts`, `muta-client`, and the new `muta-paths` crate, enforced by
+  an edge test.
+
+- **Supervised persistence writer with typed errors and wire-level health
+  (ADR-0196).** The persistence writer is supervised and respawned on death,
+  persistence errors are typed, and `MonitorEvent::PersistenceHealth` carries
+  durability health on the wire for `muta status` and the TUI's render
+  degradation.
+
+- **Declared models on preset connections (ADR-0198).** Per-instance
+  user-intent model lists replace the previous fixed preset surface,
+  integrated with the three-layer catalog and capability resolution order.
+
 ## [0.41.2] - 2026-09-08
 
 ### Fixed
