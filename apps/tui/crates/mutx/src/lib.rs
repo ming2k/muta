@@ -415,9 +415,11 @@ pub async fn run_tui(
                 match event {
                     muta_contracts::MonitorEvent::Snapshot(snap) => {
                         rows = snap.sessions;
-                        mutations.send(event_loop::AppMutation::PersistenceHealth(
-                            snap.persistence_health,
-                        )).await;
+                        mutations
+                            .send(event_loop::AppMutation::PersistenceHealth(
+                                snap.persistence_health,
+                            ))
+                            .await;
                     }
                     muta_contracts::MonitorEvent::SessionAdded(row)
                     | muta_contracts::MonitorEvent::SessionUpdated(row) => {
@@ -433,16 +435,20 @@ pub async fn run_tui(
                     // Durability-health transitions (ADR-0196 D4): a degraded
                     // state retains the visible banner; Healthy clears it.
                     muta_contracts::MonitorEvent::PersistenceHealth(health) => {
-                        mutations.send(event_loop::AppMutation::PersistenceHealth(
-                            (!health.is_healthy()).then_some(health),
-                        )).await;
+                        mutations
+                            .send(event_loop::AppMutation::PersistenceHealth(
+                                (!health.is_healthy()).then_some(health),
+                            ))
+                            .await;
                     }
                     // The daemon began its graceful shutdown (ADR-0101): the
                     // stream closes right after; the next daemon interaction
                     // re-discovers or re-spawns.
                     muta_contracts::MonitorEvent::DaemonDraining => {}
                 }
-                mutations.send(event_loop::AppMutation::HostSessions(rows.clone())).await;
+                mutations
+                    .send(event_loop::AppMutation::HostSessions(rows.clone()))
+                    .await;
                 dirty.store(true, Ordering::SeqCst);
                 dirty_notify.notify_one();
             }
@@ -558,26 +564,32 @@ pub async fn run_tui(
                         };
                         macro_rules! transcript {
                             ($edit:expr) => {
-                                mutations.send(M::Transcript {
-                                    buffer,
-                                    edit: $edit,
-                                }).await;
+                                mutations
+                                    .send(M::Transcript {
+                                        buffer,
+                                        edit: $edit,
+                                    })
+                                    .await;
                             };
                         }
                         macro_rules! chrome {
                             ($edit:expr) => {
-                                mutations.send(M::ChromeEdit {
-                                    session_id: session_id.clone(),
-                                    edit: $edit,
-                                }).await;
+                                mutations
+                                    .send(M::ChromeEdit {
+                                        session_id: session_id.clone(),
+                                        edit: $edit,
+                                    })
+                                    .await;
                             };
                         }
                         match event {
                             RoundEvent::ContextTokens(snapshot) => {
-                                mutations.send(M::ContextTokens {
-                                    session_id: session_id.clone(),
-                                    snapshot,
-                                }).await;
+                                mutations
+                                    .send(M::ContextTokens {
+                                        session_id: session_id.clone(),
+                                        snapshot,
+                                    })
+                                    .await;
                             }
                             RoundEvent::TurnPerformance(performance) => {
                                 chrome!(event_loop::mutations::ChromeEdit::TurnPerformance(
@@ -591,10 +603,12 @@ pub async fn run_tui(
                                 transcript!(E::HoldInserted {
                                     insert_id: input_id.clone(),
                                 });
-                                mutations.send(M::DispatchRequeued {
-                                    session_id,
-                                    input_id,
-                                }).await;
+                                mutations
+                                    .send(M::DispatchRequeued {
+                                        session_id,
+                                        input_id,
+                                    })
+                                    .await;
                             }
                             RoundEvent::SteerAdmitted(input) => {
                                 let input_id = input.id.clone();
@@ -612,10 +626,12 @@ pub async fn run_tui(
                                     sent_at_ms: input.sent_at_ms,
                                     fallback: Some(fallback),
                                 });
-                                mutations.send(M::DispatchRemoved {
-                                    session_id,
-                                    input_id,
-                                }).await;
+                                mutations
+                                    .send(M::DispatchRemoved {
+                                        session_id,
+                                        input_id,
+                                    })
+                                    .await;
                             }
                             RoundEvent::SteerCancelled { .. } => {}
                             RoundEvent::SteerCancelFailed { .. } => {}
@@ -623,19 +639,23 @@ pub async fn run_tui(
                                 // The daemon admitted the follow-up into its
                                 // queue: the optimistic entry settles back to
                                 // Waiting (the queue bar keeps showing it).
-                                mutations.send(M::DispatchQueued {
-                                    session_id: session_id.clone(),
-                                    input_id,
-                                }).await;
+                                mutations
+                                    .send(M::DispatchQueued {
+                                        session_id: session_id.clone(),
+                                        input_id,
+                                    })
+                                    .await;
                             }
                             RoundEvent::QueueUpdated { items, paused } => {
                                 // The authoritative queue snapshot (ADR-0197
                                 // M4): full-replace projection.
-                                mutations.send(M::QueueSnapshot {
-                                    session_id: session_id.clone(),
-                                    items,
-                                    paused,
-                                }).await;
+                                mutations
+                                    .send(M::QueueSnapshot {
+                                        session_id: session_id.clone(),
+                                        items,
+                                        paused,
+                                    })
+                                    .await;
                             }
                             RoundEvent::FollowUpStarted(input) => {
                                 let input_id = input.id.clone();
@@ -653,10 +673,12 @@ pub async fn run_tui(
                                     sent_at_ms: input.sent_at_ms,
                                     fallback: Some(fallback),
                                 });
-                                mutations.send(M::DispatchRemoved {
-                                    session_id,
-                                    input_id,
-                                }).await;
+                                mutations
+                                    .send(M::DispatchRemoved {
+                                        session_id,
+                                        input_id,
+                                    })
+                                    .await;
                             }
                             RoundEvent::RoundCompleted(_summary) => {
                                 retry = None;
@@ -682,10 +704,12 @@ pub async fn run_tui(
                                 if notice.kind == muta_contracts::NoticeKind::ProviderRetry {
                                     // RetryScheduled owns the retry disclosure.
                                 } else if notice.surface == muta_contracts::NoticeSurface::Toast {
-                                    mutations.send(M::NoticeToast {
-                                        severity: notice_severity_from_core(notice.severity),
-                                        text: notice.render_text(),
-                                    }).await;
+                                    mutations
+                                        .send(M::NoticeToast {
+                                            severity: notice_severity_from_core(notice.severity),
+                                            text: notice.render_text(),
+                                        })
+                                        .await;
                                 } else {
                                     let message = TranscriptMessage::notice_from_core(&notice)
                                         .with_sent_at_ms(now_ms!());
@@ -780,7 +804,9 @@ pub async fn run_tui(
                                     turn,
                                 });
                                 if !routes_to_side {
-                                    mutations.send(M::SetPhase(Some(Phase::AwaitingModel))).await;
+                                    mutations
+                                        .send(M::SetPhase(Some(Phase::AwaitingModel)))
+                                        .await;
                                 }
                             }
                             RoundEvent::StreamStart => {
@@ -943,9 +969,11 @@ pub async fn run_tui(
                                 arguments,
                             } => {
                                 if !routes_to_side {
-                                    mutations.send(M::SetPhase(Some(Phase::Tool(
-                                        event_loop::tool_verb_for(&name),
-                                    )))).await;
+                                    mutations
+                                        .send(M::SetPhase(Some(Phase::Tool(
+                                            event_loop::tool_verb_for(&name),
+                                        ))))
+                                        .await;
                                 }
                                 let (provider, model) = attribution!();
                                 let effort = picker_effort!();
@@ -1033,22 +1061,30 @@ pub async fn run_tui(
                                 // for down-routing into the child.
                                 match &event {
                                     muta_contracts::RunnerEvent::PermissionRequest(req) => {
-                                        mutations.send(M::QueuePermission {
-                                            request: req.clone(),
-                                            parent_call_id: Some(parent_call_id.clone()),
-                                        }).await;
+                                        mutations
+                                            .send(M::QueuePermission {
+                                                request: req.clone(),
+                                                parent_call_id: Some(parent_call_id.clone()),
+                                            })
+                                            .await;
                                         if !routes_to_side {
-                                            mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                            mutations
+                                                .send(M::SetPhase(Some(Phase::AwaitingUser)))
+                                                .await;
                                             mutations.send(M::SetResponding(true)).await;
                                         }
                                     }
                                     muta_contracts::RunnerEvent::UserQuestionRequest(req) => {
-                                        mutations.send(M::QueueQuestion {
-                                            request: req.clone(),
-                                            parent_call_id: Some(parent_call_id.clone()),
-                                        }).await;
+                                        mutations
+                                            .send(M::QueueQuestion {
+                                                request: req.clone(),
+                                                parent_call_id: Some(parent_call_id.clone()),
+                                            })
+                                            .await;
                                         if !routes_to_side {
-                                            mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                            mutations
+                                                .send(M::SetPhase(Some(Phase::AwaitingUser)))
+                                                .await;
                                             mutations.send(M::SetResponding(true)).await;
                                         }
                                     }
@@ -1062,20 +1098,24 @@ pub async fn run_tui(
                             RoundEvent::PermissionRequest(request) => {
                                 // Stays global regardless of session so the modal
                                 // always surfaces (ADR-0017).
-                                mutations.send(M::QueuePermission {
-                                    request,
-                                    parent_call_id: None,
-                                }).await;
+                                mutations
+                                    .send(M::QueuePermission {
+                                        request,
+                                        parent_call_id: None,
+                                    })
+                                    .await;
                                 if !routes_to_side {
                                     mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
                                     mutations.send(M::SetResponding(true)).await;
                                 }
                             }
                             RoundEvent::UserQuestionRequest(request) => {
-                                mutations.send(M::QueueQuestion {
-                                    request,
-                                    parent_call_id: None,
-                                }).await;
+                                mutations
+                                    .send(M::QueueQuestion {
+                                        request,
+                                        parent_call_id: None,
+                                    })
+                                    .await;
                                 if !routes_to_side {
                                     mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
                                     mutations.send(M::SetResponding(true)).await;
@@ -1130,18 +1170,22 @@ pub async fn run_tui(
                                             )
                                             .is_some();
                                         if gate_needed {
-                                            mutations.send(M::PreAttach(crate::PreAttachSignal {
-                                                snapshot: harness.workspace_security.clone(),
-                                            })).await;
+                                            mutations
+                                                .send(M::PreAttach(crate::PreAttachSignal {
+                                                    snapshot: harness.workspace_security.clone(),
+                                                }))
+                                                .await;
                                         }
                                     }
                                     if running {
                                         // A new round resets the turn counter and
                                         // stamps the elapsed-timer origin.
                                         mutations.send(M::SetCurrentTurn(0)).await;
-                                        mutations.send(M::SetRoundStartedAt(Some(
-                                            std::time::Instant::now(),
-                                        ))).await;
+                                        mutations
+                                            .send(M::SetRoundStartedAt(Some(
+                                                std::time::Instant::now(),
+                                            )))
+                                            .await;
                                     }
                                     mutations.send(M::SetResponding(running)).await;
                                     if !running {
@@ -1149,10 +1193,12 @@ pub async fn run_tui(
                                         // command component still Pending will
                                         // never receive its reply on this pass
                                         // (ADR-0108) — mark Cancelled.
-                                        mutations.send(M::Transcript {
-                                            buffer: event_loop::mutations::Buffer::Primary,
-                                            edit: E::CancelPendingCommands,
-                                        }).await;
+                                        mutations
+                                            .send(M::Transcript {
+                                                buffer: event_loop::mutations::Buffer::Primary,
+                                                edit: E::CancelPendingCommands,
+                                            })
+                                            .await;
                                         mutations.send(M::SetPhase(None)).await;
                                         mutations.send(M::SetCurrentTurn(0)).await;
                                         mutations.send(M::SetRoundStartedAt(None)).await;
@@ -1163,12 +1209,14 @@ pub async fn run_tui(
                                         // arrived: rebase the reconstructed tail
                                         // exactly once, now that the persisted
                                         // round counter is known.
-                                        mutations.send(M::Transcript {
-                                            buffer: event_loop::mutations::Buffer::Primary,
-                                            edit: E::RebaseRounds {
-                                                round_counter: snapshot.round_counter,
-                                            },
-                                        }).await;
+                                        mutations
+                                            .send(M::Transcript {
+                                                buffer: event_loop::mutations::Buffer::Primary,
+                                                edit: E::RebaseRounds {
+                                                    round_counter: snapshot.round_counter,
+                                                },
+                                            })
+                                            .await;
                                         needs_round_rebase = false;
                                     }
                                     mutations.send(M::Harness(snapshot.clone())).await;
@@ -1219,7 +1267,9 @@ pub async fn run_tui(
                                 if !routes_to_side {
                                     // Transport setback, not a workflow phase: the
                                     // countdown rides the dedicated clause channel.
-                                    mutations.send(M::SetPhase(Some(Phase::AwaitingModel))).await;
+                                    mutations
+                                        .send(M::SetPhase(Some(Phase::AwaitingModel)))
+                                        .await;
                                     mutations.send(M::SetResponding(true)).await;
                                 }
                                 let mut fallback = TranscriptMessage::provider_retry(
@@ -1376,19 +1426,25 @@ pub async fn run_tui(
                             rebuilt,
                             transcript_interrupts_from_records(round_interrupts),
                         );
-                        mutations.send(M::Transcript {
-                            buffer: event_loop::mutations::Buffer::Side,
-                            edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
-                                messages: rebuilt,
-                            },
-                        }).await;
-                        mutations.send(M::SideView(event_loop::SideViewSignal::Opened { side_id })).await;
+                        mutations
+                            .send(M::Transcript {
+                                buffer: event_loop::mutations::Buffer::Side,
+                                edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
+                                    messages: rebuilt,
+                                },
+                            })
+                            .await;
+                        mutations
+                            .send(M::SideView(event_loop::SideViewSignal::Opened { side_id }))
+                            .await;
                     }
                     AgentResponse::SideViewClosed => {
                         // ADR-0103: leave the aside view. The routing keys are
                         // NOT dropped — background asides keep streaming; only
                         // the view flips.
-                        mutations.send(M::SideView(event_loop::SideViewSignal::Closed)).await;
+                        mutations
+                            .send(M::SideView(event_loop::SideViewSignal::Closed))
+                            .await;
                     }
                     AgentResponse::BtwList(rows) => {
                         // ADR-0103 §5: the asides list is also the routing-truth
@@ -1407,28 +1463,34 @@ pub async fn run_tui(
                         model,
                         overrides,
                     } => {
-                        mutations.send(M::RouteSettings {
-                            provider_id,
-                            model,
-                            overrides,
-                        }).await;
+                        mutations
+                            .send(M::RouteSettings {
+                                provider_id,
+                                model,
+                                overrides,
+                            })
+                            .await;
                     }
                     AgentResponse::PermissionsCleared => {
                         mutations.send(M::ClearPermissions).await;
                         mutations.send(M::SetPhase(None)).await;
                     }
                     AgentResponse::ProviderKeys(status) => {
-                        mutations.send(M::KeyStatus(status.into_iter().collect())).await;
+                        mutations
+                            .send(M::KeyStatus(status.into_iter().collect()))
+                            .await;
                     }
                     AgentResponse::ProviderPicker(snapshot) => {
                         picker = snapshot.clone();
                         mutations.send(M::ProviderPicker(snapshot)).await;
                     }
                     AgentResponse::ConversationCleared { session_id } => {
-                        mutations.send(M::Transcript {
-                            buffer: event_loop::mutations::Buffer::Primary,
-                            edit: event_loop::mutations::TranscriptEdit::Clear,
-                        }).await;
+                        mutations
+                            .send(M::Transcript {
+                                buffer: event_loop::mutations::Buffer::Primary,
+                                edit: event_loop::mutations::TranscriptEdit::Clear,
+                            })
+                            .await;
                         mutations.send(M::SetRoundCount(0)).await;
                         needs_round_rebase = false;
                         mutations.send(M::ClearContextTokens).await;
@@ -1437,7 +1499,9 @@ pub async fn run_tui(
                         mutations.send(M::LiveSession(session_id.clone())).await;
                         live_session = session_id.clone();
                         mutations.send(M::TokenReport(None)).await;
-                        mutations.send(M::SessionTree(muta_contracts::SessionTree::default())).await;
+                        mutations
+                            .send(M::SessionTree(muta_contracts::SessionTree::default()))
+                            .await;
                     }
                     AgentResponse::ConversationReplaced {
                         session_id,
@@ -1459,12 +1523,14 @@ pub async fn run_tui(
                             rebuilt,
                             transcript_retry_resolutions_from_records(retry_resolutions),
                         );
-                        mutations.send(M::Transcript {
-                            buffer: event_loop::mutations::Buffer::Primary,
-                            edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
-                                messages: rebuilt,
-                            },
-                        }).await;
+                        mutations
+                            .send(M::Transcript {
+                                buffer: event_loop::mutations::Buffer::Primary,
+                                edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
+                                    messages: rebuilt,
+                                },
+                            })
+                            .await;
                         needs_round_rebase = true;
                         // The model-window revision changed; do not reuse an API
                         // anchor from the previous session/projection.
@@ -1474,7 +1540,9 @@ pub async fn run_tui(
                         mutations.send(M::LiveSession(session_id.clone())).await;
                         live_session = session_id;
                         mutations.send(M::TokenReport(None)).await;
-                        mutations.send(M::SessionTree(muta_contracts::SessionTree::default())).await;
+                        mutations
+                            .send(M::SessionTree(muta_contracts::SessionTree::default()))
+                            .await;
                     }
                     AgentResponse::SessionsOverview(sessions) => {
                         mutations.send(M::SessionsOverview(sessions)).await;
@@ -1521,14 +1589,16 @@ pub async fn run_tui(
                         cursor,
                         items,
                     } => {
-                        mutations.send(M::CompletionSignal(
-                            event_loop::mutations::CompletionSignal {
-                                request_id,
-                                input: text,
-                                cursor,
-                                items,
-                            },
-                        )).await;
+                        mutations
+                            .send(M::CompletionSignal(
+                                event_loop::mutations::CompletionSignal {
+                                    request_id,
+                                    input: text,
+                                    cursor,
+                                    items,
+                                },
+                            ))
+                            .await;
                     }
                     AgentResponse::SessionContext(snapshot) => {
                         mutations.send(M::SessionContext(snapshot)).await;
@@ -1541,7 +1611,9 @@ pub async fn run_tui(
                         // (the acknowledgment is a command ack, ADR-0088).
                         current_provider = provider.clone();
                         current_model = model.clone();
-                        mutations.send(M::ProviderSwitched { provider, model }).await;
+                        mutations
+                            .send(M::ProviderSwitched { provider, model })
+                            .await;
                     }
                     AgentResponse::ConnectStatus(status) => {
                         match status {
@@ -1561,11 +1633,13 @@ pub async fn run_tui(
                                         }
                                     });
                                 }
-                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Pending {
-                                    url: url.clone(),
-                                    user_code: user_code.clone(),
-                                    message: message.clone(),
-                                })).await;
+                                mutations
+                                    .send(M::Oauth(crate::app::OauthAddSignal::Pending {
+                                        url: url.clone(),
+                                        user_code: user_code.clone(),
+                                        message: message.clone(),
+                                    }))
+                                    .await;
                                 // The add-flow surfaces the URL/code in the
                                 // OauthPending modal, so suppress the transcript
                                 // notice there. Only the reconnect flow gets it.
@@ -1583,27 +1657,33 @@ pub async fn run_tui(
                                     let notice =
                                         TranscriptMessage::notice(NoticeSeverity::Info, body)
                                             .with_sent_at_ms(now_ms!());
-                                    mutations.send(M::Transcript {
-                                        buffer: event_loop::mutations::Buffer::Primary,
-                                        edit: event_loop::mutations::TranscriptEdit::Append {
-                                            message: notice,
-                                        },
-                                    }).await;
+                                    mutations
+                                        .send(M::Transcript {
+                                            buffer: event_loop::mutations::Buffer::Primary,
+                                            edit: event_loop::mutations::TranscriptEdit::Append {
+                                                message: notice,
+                                            },
+                                        })
+                                        .await;
                                 }
                             }
                             muta_contracts::ConnectStatus::Done { provider } => {
-                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Done)).await;
+                                mutations
+                                    .send(M::Oauth(crate::app::OauthAddSignal::Done))
+                                    .await;
                                 let notice = TranscriptMessage::notice(
                                     NoticeSeverity::Info,
                                     format!("{provider} authorized."),
                                 )
                                 .with_sent_at_ms(now_ms!());
-                                mutations.send(M::Transcript {
-                                    buffer: event_loop::mutations::Buffer::Primary,
-                                    edit: event_loop::mutations::TranscriptEdit::Append {
-                                        message: notice,
-                                    },
-                                }).await;
+                                mutations
+                                    .send(M::Transcript {
+                                        buffer: event_loop::mutations::Buffer::Primary,
+                                        edit: event_loop::mutations::TranscriptEdit::Append {
+                                            message: notice,
+                                        },
+                                    })
+                                    .await;
                             }
                             muta_contracts::ConnectStatus::DiscoveryWarning {
                                 provider,
@@ -1616,28 +1696,34 @@ pub async fn run_tui(
                                 ),
                             )
                             .with_sent_at_ms(now_ms!());
-                                mutations.send(M::Transcript {
-                                    buffer: event_loop::mutations::Buffer::Primary,
-                                    edit: event_loop::mutations::TranscriptEdit::Append {
-                                        message: notice,
-                                    },
-                                }).await;
+                                mutations
+                                    .send(M::Transcript {
+                                        buffer: event_loop::mutations::Buffer::Primary,
+                                        edit: event_loop::mutations::TranscriptEdit::Append {
+                                            message: notice,
+                                        },
+                                    })
+                                    .await;
                             }
                             muta_contracts::ConnectStatus::Failed { provider, message } => {
-                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Failed {
-                                    message: message.clone(),
-                                })).await;
+                                mutations
+                                    .send(M::Oauth(crate::app::OauthAddSignal::Failed {
+                                        message: message.clone(),
+                                    }))
+                                    .await;
                                 let notice = TranscriptMessage::notice(
                                     NoticeSeverity::Error,
                                     format!("{provider} connect failed: {message}"),
                                 )
                                 .with_sent_at_ms(now_ms!());
-                                mutations.send(M::Transcript {
-                                    buffer: event_loop::mutations::Buffer::Primary,
-                                    edit: event_loop::mutations::TranscriptEdit::Append {
-                                        message: notice,
-                                    },
-                                }).await;
+                                mutations
+                                    .send(M::Transcript {
+                                        buffer: event_loop::mutations::Buffer::Primary,
+                                        edit: event_loop::mutations::TranscriptEdit::Append {
+                                            message: notice,
+                                        },
+                                    })
+                                    .await;
                             }
                         }
                     }
@@ -1645,10 +1731,14 @@ pub async fn run_tui(
                         mutations.send(M::ClearSwitchingSession).await;
                         let notice = TranscriptMessage::notice(NoticeSeverity::Error, msg)
                             .with_sent_at_ms(now_ms!());
-                        mutations.send(M::Transcript {
-                            buffer: event_loop::mutations::Buffer::Primary,
-                            edit: event_loop::mutations::TranscriptEdit::Append { message: notice },
-                        }).await;
+                        mutations
+                            .send(M::Transcript {
+                                buffer: event_loop::mutations::Buffer::Primary,
+                                edit: event_loop::mutations::TranscriptEdit::Append {
+                                    message: notice,
+                                },
+                            })
+                            .await;
                     }
                     AgentResponse::TuiLayoutUpdated(_value) => {
                         // The apply path already set `app.transcript_layout`

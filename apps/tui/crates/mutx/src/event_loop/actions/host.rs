@@ -90,7 +90,9 @@ fn spawn_control_verb(runtime: &UiRuntime, verb: ConsoleVerb, target: Option<usi
                 text: e,
             },
         };
-        mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
+        mutations
+            .send(crate::event_loop::AppMutation::HostConsole(line))
+            .await;
         wake(&dirty);
     });
 }
@@ -188,7 +190,9 @@ async fn dispatch_create(app: &mut App, runtime: &UiRuntime, raw: &str, text: Op
                 text: e,
             },
         };
-        mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
+        mutations
+            .send(crate::event_loop::AppMutation::HostConsole(line))
+            .await;
         wake(&dirty);
     });
 }
@@ -328,7 +332,9 @@ pub(super) async fn dispatch_console_command(
                             text: e,
                         },
                     };
-                    mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
+                    mutations
+                        .send(crate::event_loop::AppMutation::HostConsole(line))
+                        .await;
                 }
                 wake(&dirty);
             });
