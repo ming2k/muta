@@ -16,7 +16,7 @@ crossterm = { workspace = true }
 unicode-width = { workspace = true }
 unicode-segmentation.workspace = true
 similar = { workspace = true }
-arboard = "3.6"
+arboard = { workspace = true }
 dirs = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true }

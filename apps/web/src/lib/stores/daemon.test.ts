@@ -52,11 +52,22 @@ describe("resolveConfig", () => {
     expect(resolveConfig("?ws=localhost:7777", null).wsUrl).toBe("ws://localhost:7777");
   });
 
-  it("reads ?token= and persists an operator-authored deep link", () => {
-    const store = storage();
-    const cfg = resolveConfig("?token=abc123", store);
-    expect(cfg.token).toBe("abc123");
-    expect(store.map.get("muta.ws-token")).toBe("abc123");
+  it("ignores ?token= in query string to prevent history/referrer leakage", () => {
+    const local = storage();
+    const session = storage();
+    const cfg = resolveConfig("?token=abc123", local, "", session);
+    expect(cfg.token).toBeNull();
+    expect(local.map.get("muta.ws-token")).toBeUndefined();
+    expect(session.map.get("muta.ws-token")).toBeUndefined();
+  });
+
+  it("reads #token= from hash fragment and stores in sessionStorage only", () => {
+    const local = storage();
+    const session = storage();
+    const cfg = resolveConfig("", local, "#token=secret-hash-token", session);
+    expect(cfg.token).toBe("secret-hash-token");
+    expect(session.map.get("muta.ws-token")).toBe("secret-hash-token");
+    expect(local.map.get("muta.ws-token")).toBeUndefined();
   });
 });
 

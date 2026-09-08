@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
 muta-runtime = { path = "../muta-runtime" }

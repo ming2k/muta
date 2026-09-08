@@ -56,6 +56,14 @@ web_proto="$(sed -n 's/^const PROTOCOL_VERSION = \([0-9]*\);/\1/p' apps/web/src/
 [ "$rust_min" -le "$rust_proto" ] \
     || die "MIN_PROTOCOL_VERSION ($rust_min) exceeds PROTOCOL_VERSION ($rust_proto)"
 
+# Package version parity: Rust workspace version vs web package.json version
+rust_pkg_ver="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+web_pkg_ver="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' apps/web/package.json)"
+[ -n "$rust_pkg_ver" ] || die "workspace version not found in Cargo.toml"
+[ -n "$web_pkg_ver" ] || die "version not found in apps/web/package.json"
+[ "$rust_pkg_ver" = "$web_pkg_ver" ] \
+    || die "version parity failure: Cargo.toml=$rust_pkg_ver, apps/web/package.json=$web_pkg_ver"
+
 # ── 2. Bump-or-label on wire-surface changes ───────────────────────────
 # Files whose change can alter the wire shape. wire.rs and the generated
 # mirror are the envelope itself; the contracts sources are the payload

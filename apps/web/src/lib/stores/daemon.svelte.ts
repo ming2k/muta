@@ -230,19 +230,39 @@ export interface DaemonProbe {
   auth: boolean;
 }
 
+/** Extract one-time token from URL fragment (e.g. `#token=abc`). */
+export function extractHashToken(hash: string): string | null {
+  if (!hash) return null;
+  const cleanHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  const params = new URLSearchParams(cleanHash);
+  return params.get("token")?.trim() || null;
+}
+
 /**
  * Resolve the daemon endpoint and project scope, highest priority first:
- * URL query params (`?ws=` / `?host=`+`?port=` / `?project=` / `?token=`),
- * then persisted localStorage settings, then the loopback default.
- * Query-param values are persisted so a shared/deep-linked URL sticks across
- * reloads. The token is a loopback-scoped credential supplied through the
- * connection dialog or an operator-authored deep link.
+ * URL query params (`?ws=` / `?host=`+`?port=` / `?project=`),
+ * URL hash fragment `#token=` (one-time credential, scrubbed immediately from address bar),
+ * then tab-scoped sessionStorage, then persisted localStorage settings (for endpoint only),
+ * then loopback defaults.
+ *
+ * Security contract:
+ * - Query-string `?token=` is deliberately NOT supported to prevent bearer tokens
+ *   from leaking into browser history, HTTP referrers, server logs, or copied URLs.
+ * - Hash fragments (`#token=...`) are parsed and scrubbed from the address bar via `history.replaceState`.
+ * - Tokens are stored only in tab-scoped `sessionStorage` (or memory), NEVER in persistent `localStorage`.
  */
-export function resolveConfig(search: string, storage: ConfigStorage | null): DaemonConfig {
+export function resolveConfig(
+  search: string,
+  storage: ConfigStorage | null,
+  hash: string = "",
+  sessionStore: ConfigStorage | null = null,
+): DaemonConfig {
   const params = new URLSearchParams(search);
   const storedUrl = storage?.getItem(WS_URL_STORAGE_KEY) ?? null;
   const storedProject = storage?.getItem(PROJECT_STORAGE_KEY) ?? null;
-  const storedToken = storage?.getItem(TOKEN_STORAGE_KEY) ?? null;
+  // Tokens are read from sessionStore (or fallback storage for backwards-compatible test environments)
+  const storedToken =
+    sessionStore?.getItem(TOKEN_STORAGE_KEY) ?? storage?.getItem(TOKEN_STORAGE_KEY) ?? null;
 
   let wsUrl =
     sanitizeWsUrl(params.get("ws")) ??
@@ -255,24 +275,42 @@ export function resolveConfig(search: string, storage: ConfigStorage | null): Da
     DEFAULT_WS_URL;
 
   const project = params.get("project")?.trim() || storedProject?.trim() || null;
-  const token = params.get("token")?.trim() || storedToken?.trim() || null;
+
+  // Prefer hash token (#token=...) over stored session token.
+  // Query-param token (?token=) is intentionally ignored for security.
+  const hashToken = extractHashToken(hash);
+  const token = hashToken || storedToken?.trim() || null;
 
   if (storage) {
     if (params.get("ws") || params.get("host")) storage.setItem(WS_URL_STORAGE_KEY, wsUrl);
     if (params.get("project")) storage.setItem(PROJECT_STORAGE_KEY, project ?? "");
-    if (params.get("token")) storage.setItem(TOKEN_STORAGE_KEY, token ?? "");
+  }
+
+  // Token is saved into tab-scoped sessionStore, NEVER into persistent localStorage
+  if (sessionStore && token) {
+    sessionStore.setItem(TOKEN_STORAGE_KEY, token);
   }
 
   return { wsUrl, project, token };
 }
 
-/** Persist connection settings from the connection dialog. */
-export function persistConfig(storage: ConfigStorage, config: DaemonConfig): void {
+/** Persist connection settings: endpoint config goes to localStorage, token only to sessionStorage. */
+export function persistConfig(
+  storage: ConfigStorage,
+  config: DaemonConfig,
+  sessionStore?: ConfigStorage | null,
+): void {
   storage.setItem(WS_URL_STORAGE_KEY, config.wsUrl);
   if (config.project) storage.setItem(PROJECT_STORAGE_KEY, config.project);
   else storage.removeItem(PROJECT_STORAGE_KEY);
-  if (config.token) storage.setItem(TOKEN_STORAGE_KEY, config.token);
-  else storage.removeItem(TOKEN_STORAGE_KEY);
+
+  // Security: never persist bearer credentials in localStorage
+  storage.removeItem(TOKEN_STORAGE_KEY);
+
+  if (sessionStore) {
+    if (config.token) sessionStore.setItem(TOKEN_STORAGE_KEY, config.token);
+    else sessionStore.removeItem(TOKEN_STORAGE_KEY);
+  }
 }
 
 /** Derive the HTTP(S) base URL for the daemon's static/health endpoints. */
@@ -449,11 +487,31 @@ export class DaemonStore {
       Object.keys(this.liveTools).some((id) => this.liveTools[id].status === "running"),
   );
 
-  /** Read the persisted + query-param configuration without connecting. */
+  /** Read the persisted + query/hash configuration without connecting. */
   public loadConfig(): DaemonConfig {
     const storage = typeof window !== "undefined" ? window.localStorage : null;
+    const sessionStore = typeof window !== "undefined" ? window.sessionStorage : null;
     const search = typeof window !== "undefined" ? window.location.search : "";
-    return resolveConfig(search, storage);
+    const hash = typeof window !== "undefined" ? window.location.hash : "";
+
+    // Scrub token from hash immediately so it does not linger in browser address bar/history
+    if (typeof window !== "undefined" && window.location.hash.includes("token=")) {
+      const cleanHash = window.location.hash.replace(/#?token=[^&]*&?/, "").replace(/^#$/, "");
+      const newUrl =
+        window.location.pathname + window.location.search + (cleanHash ? `#${cleanHash}` : "");
+      window.history.replaceState(null, "", newUrl);
+    }
+
+    // Clean up any legacy token inadvertently left in localStorage from older versions
+    if (storage) {
+      const legacyToken = storage.getItem(TOKEN_STORAGE_KEY);
+      if (legacyToken && sessionStore) {
+        sessionStore.setItem(TOKEN_STORAGE_KEY, legacyToken);
+      }
+      storage.removeItem(TOKEN_STORAGE_KEY);
+    }
+
+    return resolveConfig(search, storage, hash, sessionStore);
   }
 
   public init(overrides?: Partial<DaemonConfig>) {
@@ -467,7 +525,7 @@ export class DaemonStore {
   /** Apply new connection settings, persist them, and reconnect everything. */
   public applyConfig(config: DaemonConfig) {
     if (typeof window !== "undefined") {
-      persistConfig(window.localStorage, config);
+      persistConfig(window.localStorage, config, window.sessionStorage);
     }
     this.wsUrl = config.wsUrl;
     this.project = config.project;

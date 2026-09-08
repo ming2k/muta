@@ -23,6 +23,8 @@
 //! - the clipboard SPI ([`UiBridge`], [`CopyOutcome`]) frontends implement
 //!   for the runtime to call back into.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub use muta_contracts::wire::ControlRequest;
 pub use muta_runtime::client::{
     AttachAction, DaemonInfo, Handshake, RemoteDaemon, connect, control, discover, ensure_daemon,

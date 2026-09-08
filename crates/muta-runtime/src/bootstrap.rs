@@ -83,7 +83,7 @@ pub struct Bootstrap {
     /// (`tokio::spawn(driver.run())`).
     pub driver: SessionDriver,
     /// The frontend's request sender (the driver holds the receiver).
-    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub req_tx: mpsc::Sender<AgentRequest>,
     /// The frontend's response receiver (the driver holds the sender).
     pub resp_rx: mpsc::UnboundedReceiver<AgentResponse>,
     /// An `Arc` handle on the primary agent so the caller can fire
@@ -190,7 +190,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
     }
 
-    let (req_tx, req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    /// Bound capacity for inbound session requests to prevent unbounded memory growth.
+    const SESSION_REQUEST_CAPACITY: usize = 512;
+    let (req_tx, req_rx) = mpsc::channel::<AgentRequest>(SESSION_REQUEST_CAPACITY);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
 
     let mut config = Config::load();
@@ -209,9 +211,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // handles the refresh and broadcasts updated snapshots to the client.
     let req_tx_for_discovery = req_tx.clone();
     tokio::spawn(async move {
-        let _ = req_tx_for_discovery.send(AgentRequest::RefreshProviderModels {
-            user_initiated: false,
-        });
+        let _ = req_tx_for_discovery
+            .send(AgentRequest::RefreshProviderModels {
+                user_initiated: false,
+            })
+            .await;
     });
 
     // Background refresh of the models.dev third-party catalog cache

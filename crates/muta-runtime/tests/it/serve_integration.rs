@@ -40,7 +40,7 @@ async fn prehosted(
     session: Arc<SessionStore>,
 ) -> (
     Arc<SessionRegistry>,
-    mpsc::UnboundedReceiver<AgentRequest>,
+    mpsc::Receiver<AgentRequest>,
     broadcast::Sender<AgentResponse>,
 ) {
     prehosted_with_catalog(session, muta_contracts::CommandCatalog::default()).await
@@ -51,10 +51,10 @@ async fn prehosted_with_catalog(
     command_catalog: muta_contracts::CommandCatalog,
 ) -> (
     Arc<SessionRegistry>,
-    mpsc::UnboundedReceiver<AgentRequest>,
+    mpsc::Receiver<AgentRequest>,
     broadcast::Sender<AgentResponse>,
 ) {
-    let (req_tx, req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let registry = Arc::new(SessionRegistry::prehost_only());
     // The synthetic project has no contributed assets, so the attach path has
@@ -81,9 +81,7 @@ async fn prehosted_with_catalog(
     let tap_tracker = tracker.clone();
     let mut tap_rx = bc_tx.subscribe();
     let registry_for_tap = registry.clone();
-    let sync_buffer = Arc::new(Mutex::new(
-        std::collections::VecDeque::<AgentResponse>::new(),
-    ));
+    let sync_buffer = Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new()));
     let sync_buffer_for_tap = sync_buffer.clone();
     tokio::spawn(async move {
         while let Ok(response) = tap_rx.recv().await {
@@ -99,7 +97,7 @@ async fn prehosted_with_catalog(
                     | AgentResponse::ProviderPicker(_)
                     | AgentResponse::ProviderKeys(_)
             ) {
-                sync_buffer_for_tap.lock().await.push_back(response);
+                sync_buffer_for_tap.lock().await.observe(&response);
             }
         }
     });
@@ -266,7 +264,7 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
         project.join("sessions").join("session.json"),
     ));
     let id = session.id().await;
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         idle_base(id.clone()),
@@ -287,7 +285,7 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
             events: bc_tx,
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker,
-            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sync_buffer: Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new())),
             command_catalog: muta_contracts::CommandCatalog::default(),
             created_at: std::time::Instant::now(),
             last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
@@ -1250,7 +1248,7 @@ async fn host_bare(
     broadcast::Sender<AgentResponse>,
     String,
 ) {
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let registry = Arc::new(SessionRegistry::prehost_only());
     let base = idle_base(session.id().await);
@@ -1274,7 +1272,7 @@ async fn host_bare(
             events: bc_tx.clone(),
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker,
-            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sync_buffer: Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new())),
             command_catalog: muta_contracts::CommandCatalog::default(),
             created_at,
             last_activity: tokio::sync::Mutex::new(created_at),
@@ -1809,7 +1807,7 @@ async fn control_suspend_session_parks_a_contentful_session() {
         .await
         .unwrap();
 
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         idle_base(id.clone()),
@@ -1830,7 +1828,7 @@ async fn control_suspend_session_parks_a_contentful_session() {
             events: bc_tx,
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker,
-            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sync_buffer: Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new())),
             command_catalog: muta_contracts::CommandCatalog::default(),
             created_at: std::time::Instant::now(),
             last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
@@ -1880,9 +1878,9 @@ async fn attach_trust_workspace(
         ),
     );
     let registry = Arc::new(SessionRegistry::prehost_only());
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
-    let sync_buffer = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let sync_buffer = Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new()));
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         idle_base(session.id().await),
         muta_contracts::SessionStatus::Idle,
@@ -1951,9 +1949,9 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
     );
 
     let registry = Arc::new(SessionRegistry::prehost_only());
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
-    let sync_buffer = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let sync_buffer = Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new()));
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         idle_base(session.id().await),
         muta_contracts::SessionStatus::Idle,
@@ -2098,4 +2096,164 @@ async fn changed_workspace_keeps_banner_escalation_on_attach() {
         }
     }
     assert!(saw_banner, "changed-workspace banner never pushed");
+}
+
+#[tokio::test]
+async fn second_client_attach_receives_complete_non_drained_sync_state() {
+    let session = Arc::new(SessionStore::load_for_project(std::path::PathBuf::from(
+        "/tmp/muta-test-multi-attach",
+    )));
+    let (registry, _req_rx, bc_tx) = prehosted(session.clone()).await;
+
+    // Send an attach-sync event through the session's broadcast channel,
+    // which the tap task captures into sync_buffer.
+    bc_tx
+        .send(AgentResponse::ProviderKeys(vec![(
+            "test-provider".to_string(),
+            true,
+        )]))
+        .unwrap();
+    // Yield briefly to let the tap task observe the event
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let session_id = session.id().await;
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry.clone());
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    // Client 1 attaches
+    let (mut ws1, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws1.send(WsMessage::Text(
+        serde_json::to_string(&Wire::Select {
+            version: None,
+            action: AttachAction::Attach(Some(session_id.clone())),
+            project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
+            protocol: Some(muta_contracts::PROTOCOL_VERSION),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let mut ws1_saw_keys = false;
+    for _ in 0..10 {
+        let raw = tokio::time::timeout(Duration::from_secs(2), ws1.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame: Wire = serde_json::from_str(raw.to_text().unwrap_or("")).unwrap();
+        if let Wire::Response {
+            response: AgentResponse::ProviderKeys(keys),
+        } = frame
+            && keys.iter().any(|(p, _)| p == "test-provider")
+        {
+            ws1_saw_keys = true;
+            break;
+        }
+    }
+    assert!(ws1_saw_keys, "client 1 did not receive ProviderKeys");
+
+    // Client 2 attaches to the same session
+    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws2.send(WsMessage::Text(
+        serde_json::to_string(&Wire::Select {
+            version: None,
+            action: AttachAction::Attach(Some(session_id.clone())),
+            project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
+            protocol: Some(muta_contracts::PROTOCOL_VERSION),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let mut ws2_saw_keys = false;
+    for _ in 0..10 {
+        let raw = tokio::time::timeout(Duration::from_secs(2), ws2.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame: Wire = serde_json::from_str(raw.to_text().unwrap_or("")).unwrap();
+        if let Wire::Response {
+            response: AgentResponse::ProviderKeys(keys),
+        } = frame
+            && keys.iter().any(|(p, _)| p == "test-provider")
+        {
+            ws2_saw_keys = true;
+            break;
+        }
+    }
+    // Client 2 MUST also receive the ProviderKeys (verifying the buffer was not drained by client 1!)
+    assert!(
+        ws2_saw_keys,
+        "client 2 did not receive ProviderKeys (buffer was drained by client 1)"
+    );
+}
+
+#[tokio::test]
+async fn bounded_request_ingress_sheds_load_with_server_busy() {
+    let session = Arc::new(SessionStore::load_for_project(std::path::PathBuf::from(
+        "/tmp/muta-test-overload",
+    )));
+    // Intentionally do NOT drain _req_rx so the bounded channel fills up
+    let (registry, _req_rx, _bc_tx) = prehosted(session.clone()).await;
+    let session_id = session.id().await;
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry.clone());
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws.send(WsMessage::Text(
+        serde_json::to_string(&Wire::Select {
+            version: None,
+            action: AttachAction::Attach(Some(session_id.clone())),
+            project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
+            protocol: Some(muta_contracts::PROTOCOL_VERSION),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Consume the initial welcome frame
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Flood the channel beyond capacity (SESSION_REQUEST_CAPACITY = 512)
+    for _ in 0..600 {
+        let req = Wire::Request {
+            request: AgentRequest::Interrupt,
+        };
+        let _ = ws
+            .send(WsMessage::Text(serde_json::to_string(&req).unwrap().into()))
+            .await;
+    }
+
+    // Read until server_busy error is seen
+    let mut saw_server_busy = false;
+    while let Ok(Some(Ok(raw))) = tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
+        if let Ok(Wire::Error { code, .. }) =
+            serde_json::from_str::<Wire>(raw.to_text().unwrap_or(""))
+            && code.as_deref() == Some("server_busy")
+        {
+            saw_server_busy = true;
+            break;
+        }
+    }
+    assert!(
+        saw_server_busy,
+        "server did not respond with server_busy error upon queue saturation"
+    );
 }

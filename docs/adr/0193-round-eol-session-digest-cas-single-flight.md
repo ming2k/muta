@@ -1,7 +1,7 @@
 # 0193. Round-EOL Session Digest: Convergence-Driven Summarization with a Single-Flight Cas Ledger
 
 - **Status:** Accepted
-- **Date:** 2026-09-30
+- **Date:** 2026-09-08
 - **Builds on:** ADR-0183 (five-phase spatiotemporal aspect engine — this decision wires the fifth phase), ADR-0022 (session-level AI title — the trigger-policy lineage this decision revises), ADR-0186 (single-transcript projection directives — the persistence substrate), ADR-0187 (persistence v2 — `digest_anchor`), ADR-0190 (agent-as-actor — detached task discipline and the contract for unwired harness promises)
 - **Supersedes:** the digest-trigger clauses of ADR-0022 §Decision 2 (first-turn-auto and admission-side refresh); the title clauses of ADR-0022 remain in force until this ADR's implementation removes the last admission-side caller
 

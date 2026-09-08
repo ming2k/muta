@@ -62,8 +62,8 @@ cargo fmt --all --check
 # Clippy (clippy job).
 RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --locked
 
-# Tests (test job).
-cargo test --workspace --locked --no-fail-fast
+# Tests (test job via nextest).
+cargo nextest run --workspace --locked
 
 # Docs (doc job). Catches broken intra-doc links and private-item links.
 RUSTDOCFLAGS="-D warnings" cargo doc \
@@ -88,12 +88,13 @@ The version bump is a single dedicated commit, separate from any code
 fixes. The commit message follows the established convention
 `release: bump version to vX.Y.Z`.
 
-Bump the workspace package version once. Every member inherits this value, so
-Cargo applies the release version consistently across the workspace.
+Bump the workspace package version once in `Cargo.toml`, and update `apps/web/package.json` to match (enforced by `scripts/check-wire-compat.sh` in CI). Every Rust member inherits the workspace value.
 
 ```bash
 # Edit `[workspace.package] version` in the root manifest.
 sed -i 's/^version = "0.13.0"/version = "0.14.0"/' Cargo.toml
+# Edit `version` in the web client package.
+sed -i 's/"version": "0.13.0"/"version": "0.14.0"/' apps/web/package.json
 ```
 
 Refresh `Cargo.lock` so it carries the new version. `cargo check`
@@ -156,7 +157,7 @@ git push origin v0.14.0
 ```
 
 Pushing the tag triggers `release.yml`, which builds release binaries
-for five targets and publishes a GitHub Release with auto-generated
+for six targets and publishes a GitHub Release with auto-generated
 notes. Do not delete and re-tag: anyone who pulled the tag now has a
 different object. If the release workflow fails, fix forward with a new
 patch tag.
@@ -164,7 +165,7 @@ patch tag.
 ## After the release
 
 Watch the `Release` workflow run to completion. Confirm the GitHub
-Release appears with all five archive assets attached:
+Release appears with all six archive assets attached:
 
 | Asset | Target |
 |-------|--------|
@@ -173,6 +174,7 @@ Release appears with all five archive assets attached:
 | `muta-<ver>-x86_64-unknown-linux-musl.tar.gz` | Linux x86-64 (static) |
 | `muta-<ver>-aarch64-apple-darwin.tar.gz` | macOS ARM64 |
 | `muta-<ver>-x86_64-apple-darwin.tar.gz` | macOS x86-64 |
+| `muta-<ver>-x86_64-pc-windows-msvc.zip` | Windows x86-64 |
 
 If an asset is missing, the `build` job for that target failed. Re-run
 the failed job from the Actions UI; the artifacts are not published

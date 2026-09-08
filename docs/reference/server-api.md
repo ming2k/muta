@@ -143,9 +143,11 @@ The server answers one of:
 From then on the connection carries zero or more live frames in both
 directions — `{ "type": "Request", … }` client → server,
 `{ "type": "Response", … }` server → client. The server subscribes to the
-live broadcast after sending `Welcome`, so an event produced in that narrow
-interval can be missed; the transport has no sequence numbers or replay
-cursor.
+live broadcast before generating and sending `Welcome` and snapshot state,
+buffering any concurrent emissions in the channel so events produced during
+initial handshake transfer are never missed. Every attacher receives an
+idempotent snapshot of current provider-key, picker, and harness state,
+and request ingress is bounded with `server_busy` error protection under load.
 
 Node client with a token:
 

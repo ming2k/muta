@@ -1,0 +1,16 @@
+name: Models.dev Freshness Guard
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-freshness:
+    name: Check models.dev snapshot freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare committed snapshot against live catalog
+        run: bash scripts/check-models-dev-snapshot.sh

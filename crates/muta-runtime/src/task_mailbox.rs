@@ -33,7 +33,7 @@ pub(crate) struct MailboxEnv {
 }
 
 pub type ResponseTx = tokio::sync::mpsc::UnboundedSender<muta_contracts::AgentResponse>;
-pub type RequestTx = tokio::sync::mpsc::UnboundedSender<muta_contracts::AgentRequest>;
+pub type RequestTx = tokio::sync::mpsc::Sender<muta_contracts::AgentRequest>;
 
 /// Classify a fabric event for wake eligibility (ADR-0190 D3).
 pub(crate) enum FabricWake {
@@ -80,10 +80,13 @@ pub(crate) async fn request_wake_turn(env: &MailboxEnv, session_id: &str, digest
             sent_at_ms: None,
             images: Vec::new(),
         };
-        let _ = env.req_tx.send(muta_contracts::AgentRequest::FollowUp {
-            session_id: session_id.to_string(),
-            message: queued,
-        });
+        let _ = env
+            .req_tx
+            .send(muta_contracts::AgentRequest::FollowUp {
+                session_id: session_id.to_string(),
+                message: queued,
+            })
+            .await;
     } else {
         let input = RoundInput {
             prompt: digest,

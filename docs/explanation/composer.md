@@ -282,7 +282,7 @@ To ensure zero draft loss:
 ## References
 
 - [ADR-0038: In-house grid + diff rendering engine](../adr/0038-in-house-grid-diff-rendering-engine.md)
-- [ADR-0126: Unified outbox and delivery queues](../adr/0126-unified-outbox-and-delivery-queues.md)
+- [ADR-0126: Queue affordances](../adr/0126-queue-affordances-ctrl-row-transcript-inserts-queue-pointer.md)
 - [ADR-0162: Zero-latency two-tier composer completion and flicker-free rendering](../adr/0162-zero-latency-two-tier-completion-and-flicker-free-composer.md)
 - [Input Box Reference](../reference/tui/input-box.md)
 - [Terminal UI Explanation](tui.md)

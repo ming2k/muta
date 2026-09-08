@@ -34,12 +34,121 @@ const DRAIN_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// accept resets it.
 const ACCEPT_BACKOFF_CAP: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Cap on the per-session attach-sync buffer (ADR-0096). Only a handful of
-/// distinct state-sync events ever land here (the initial
-/// `ContextTokens`/`HarnessState`/`ProviderKeys`/`ProviderPicker` set plus
-/// one re-sync per mutation), so a small bound is plenty and a pathological
-/// emitter cannot grow it without limit.
-pub(crate) const ATTACH_SYNC_BUFFER_CAP: usize = 64;
+/// Attach-time state sync buffer.
+///
+/// Rather than an ephemeral FIFO queue that is drained destructively by the
+/// first attacher and evicts startup provider/picker state over long sessions,
+/// `AttachSyncBuffer` retains latest-value state projections for each
+/// attach-time event class (keys readiness, picker state, context tokens, harness state).
+///
+/// Every attaching client (initial attach, second attacher, or lagged reconnect)
+/// receives an idempotent, non-destructive snapshot of the current state.
+#[derive(Debug, Clone, Default)]
+pub struct AttachSyncBuffer {
+    provider_switched: Option<AgentResponse>,
+    provider_keys: Option<AgentResponse>,
+    provider_picker: Option<AgentResponse>,
+    context_tokens: Option<AgentResponse>,
+    harness_state: Option<AgentResponse>,
+}
+
+impl AttachSyncBuffer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Update the buffer with an incoming response if it is an attach-sync event.
+    pub fn observe(&mut self, response: &AgentResponse) {
+        match response {
+            AgentResponse::ProviderSwitched { .. } => {
+                self.provider_switched = Some(response.clone());
+            }
+            AgentResponse::ProviderKeys(_) => {
+                self.provider_keys = Some(response.clone());
+            }
+            AgentResponse::ProviderPicker(_) => {
+                self.provider_picker = Some(response.clone());
+            }
+            AgentResponse::Round {
+                event: muta_contracts::RoundEvent::ContextTokens(_),
+                ..
+            } => {
+                self.context_tokens = Some(response.clone());
+            }
+            AgentResponse::Round {
+                event: muta_contracts::RoundEvent::HarnessState(_),
+                ..
+            } => {
+                self.harness_state = Some(response.clone());
+            }
+            _ => {}
+        }
+    }
+
+    /// Convenience method for pushing/recording an event into the buffer.
+    pub fn push(&mut self, response: AgentResponse) {
+        self.observe(&response);
+    }
+
+    /// Produce a non-destructive snapshot of the buffered startup state.
+    /// Order is deterministic: switched -> keys -> picker -> context tokens -> harness state.
+    pub fn snapshot(&self) -> Vec<AgentResponse> {
+        let mut items = Vec::with_capacity(5);
+        if let Some(ref ps) = self.provider_switched {
+            items.push(ps.clone());
+        }
+        if let Some(ref pk) = self.provider_keys {
+            items.push(pk.clone());
+        }
+        if let Some(ref pp) = self.provider_picker {
+            items.push(pp.clone());
+        }
+        if let Some(ref ct) = self.context_tokens {
+            items.push(ct.clone());
+        }
+        if let Some(ref hs) = self.harness_state {
+            items.push(hs.clone());
+        }
+        items
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.provider_switched.is_none()
+            && self.provider_keys.is_none()
+            && self.provider_picker.is_none()
+            && self.context_tokens.is_none()
+            && self.harness_state.is_none()
+    }
+
+    pub fn len(&self) -> usize {
+        let mut count = 0;
+        if self.provider_switched.is_some() {
+            count += 1;
+        }
+        if self.provider_keys.is_some() {
+            count += 1;
+        }
+        if self.provider_picker.is_some() {
+            count += 1;
+        }
+        if self.context_tokens.is_some() {
+            count += 1;
+        }
+        if self.harness_state.is_some() {
+            count += 1;
+        }
+        count
+    }
+}
+
+/// Read-only snapshot of the attach-sync buffer:
+/// every attacher (initial connect, second attacher, or lagging resync)
+/// receives the current state non-destructively.
+pub(crate) async fn snapshot_attach_sync(
+    buffer: &tokio::sync::Mutex<AttachSyncBuffer>,
+) -> Vec<AgentResponse> {
+    buffer.lock().await.snapshot()
+}
 
 /// Inform a newly attached client that previously trusted project-authored
 /// configurations have changed on disk and are quarantined pending review.
@@ -94,7 +203,9 @@ fn workspace_trust_notice(
 /// a new client right after the welcome so the TUI hydrates immediately.
 pub(crate) fn is_attach_sync_event(response: &AgentResponse) -> bool {
     match response {
-        AgentResponse::ProviderKeys(_) | AgentResponse::ProviderPicker(_) => true,
+        AgentResponse::ProviderSwitched { .. }
+        | AgentResponse::ProviderKeys(_)
+        | AgentResponse::ProviderPicker(_) => true,
         AgentResponse::Round { event, .. } => matches!(
             event,
             muta_contracts::RoundEvent::ContextTokens(_)
@@ -102,23 +213,6 @@ pub(crate) fn is_attach_sync_event(response: &AgentResponse) -> bool {
         ),
         _ => false,
     }
-}
-
-/// Drain the attach-sync buffer, returning the buffered events in emission
-/// order. Called by the WS attach path right after the welcome.
-async fn drain_attach_sync(
-    buffer: &tokio::sync::Mutex<std::collections::VecDeque<AgentResponse>>,
-) -> Vec<AgentResponse> {
-    buffer.lock().await.drain(..).collect()
-}
-
-/// Read-only snapshot of the attach-sync buffer for the Lagged resync path:
-/// unlike [`drain_attach_sync`] (consumed once by a *new* client), a lagging
-/// client's re-anchor must leave the buffer intact for the next attacher.
-async fn snapshot_attach_sync(
-    buffer: &tokio::sync::Mutex<std::collections::VecDeque<AgentResponse>>,
-) -> Vec<AgentResponse> {
-    buffer.lock().await.iter().cloned().collect()
 }
 
 /// Refuse a wire-protocol-skewed attach (ADR-0134) with an actionable
@@ -918,6 +1012,13 @@ async fn handle_wire_stream(
             return Ok(());
         }
     };
+    // Subscribe to the live broadcast channel FIRST, before taking snapshots or
+    // sending Welcome. Any events produced during transcript collection, initial
+    // state generation, or socket handshakes are held in `rx`'s broadcast buffer
+    // and delivered seamlessly when entering the live event loop, eliminating
+    // the attach event-loss window.
+    let mut rx = bound.events.subscribe();
+    let req_tx = bound.req_tx.clone();
     let messages = bound.session.full_transcript().await;
     let round_counter = bound.session.round_counter().await;
     let session_id = bound.session.id().await;
@@ -1019,8 +1120,6 @@ async fn handle_wire_stream(
                 .map_err(|e| format!("send performance restore: {e}"))?;
         }
     }
-    let req_tx = bound.req_tx.clone();
-    let mut rx = bound.events.subscribe();
     // ADR-0141: fold this client's declared posture into the session's
     // human channel. First interactive attach flips the session interactive;
     // this never *removes* interactivity (only a detach can). The trust
@@ -1037,7 +1136,9 @@ async fn handle_wire_stream(
     // Replay the buffered attach-sync events (ADR-0096) so a client that
     // attached after the session began hydrates its picker/key/context
     // state immediately, before joining the live broadcast.
-    for event in drain_attach_sync(&bound.sync_buffer).await {
+    // Non-destructive snapshot ensures subsequent attachers or resyncs
+    // receive the complete latest-value state without loss.
+    for event in snapshot_attach_sync(&bound.sync_buffer).await {
         wire_sink
             .send(Wire::Response { response: event })
             .await
@@ -1138,7 +1239,21 @@ async fn handle_wire_stream(
                     return Ok(());
                 }
                 Some(Ok(Wire::Request { request })) => {
-                    let _ = req_tx.send(request);
+                    match req_tx.try_send(request) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            tracing::warn!("muta daemon: session request queue full, shedding load");
+                            let err = Wire::Error {
+                                message: "daemon session request queue is full (server busy)".to_string(),
+                                code: Some("server_busy".to_string()),
+                            };
+                            let _ = wire_sink.send(err).await;
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            tracing::warn!("muta daemon: session driver channel closed");
+                            break;
+                        }
+                    }
                 }
                 Some(Ok(_)) => {}
                 Some(Err(e)) => tracing::warn!(error = %e, "muta daemon: bad wire request"),
@@ -1686,5 +1801,52 @@ mod tests {
         // And a frame from an older daemon (no code) still parses.
         let back: Wire = serde_json::from_str(r#"{"type":"Error","message":"m"}"#).unwrap();
         assert!(matches!(back, Wire::Error { code: None, .. }));
+    }
+
+    #[test]
+    fn attach_sync_buffer_is_latest_value_and_non_destructive() {
+        let mut buf = AttachSyncBuffer::new();
+        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
+
+        let keys1 = AgentResponse::ProviderKeys(vec![("openai".to_string(), true)]);
+        buf.observe(&keys1);
+        assert_eq!(buf.len(), 1);
+
+        // Snapshot is non-destructive (calling it repeatedly does not drain)
+        let snap1 = buf.snapshot();
+        assert_eq!(snap1.len(), 1);
+        let snap2 = buf.snapshot();
+        assert_eq!(snap2.len(), 1);
+
+        // Observe multiple turns of ContextTokens
+        for i in 1..=10 {
+            let tokens = AgentResponse::Round {
+                session_id: "s1".to_string(),
+                event: muta_contracts::RoundEvent::ContextTokens(
+                    muta_contracts::ContextTokenSnapshot::new(
+                        i * 100,
+                        muta_contracts::ContextTokenSource::Projection,
+                    ),
+                ),
+            };
+            buf.observe(&tokens);
+        }
+
+        // Buffer length has at most keys + context tokens = 2
+        assert_eq!(buf.len(), 2);
+
+        // Later update to keys overwrites rather than growing unbounded
+        let keys2 = AgentResponse::ProviderKeys(vec![("anthropic".to_string(), true)]);
+        buf.observe(&keys2);
+        assert_eq!(buf.len(), 2);
+        let snap3 = buf.snapshot();
+        assert_eq!(snap3.len(), 2);
+        match &snap3[0] {
+            AgentResponse::ProviderKeys(s) => {
+                assert_eq!(s, &vec![("anthropic".to_string(), true)])
+            }
+            _ => panic!("expected ProviderKeys"),
+        }
     }
 }

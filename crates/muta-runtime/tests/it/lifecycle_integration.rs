@@ -109,7 +109,7 @@ impl muta_runtime::UiBridge for HeadlessProbe {
 /// registry (fixtures mirror `serve_integration::prehosted`, minus the tap).
 async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
     let session = Arc::new(SessionStore::load_for_project(project.into()));
-    let (req_tx, _req_rx) = mpsc::unbounded_channel::<muta_contracts::AgentRequest>();
+    let (req_tx, _req_rx) = mpsc::channel::<muta_contracts::AgentRequest>(512);
     let (bc_tx, _) = broadcast::channel::<muta_contracts::AgentResponse>(16);
     let id = session.id().await;
     let tracker = Arc::new(Mutex::new(
@@ -133,7 +133,7 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
             events: bc_tx,
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker,
-            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sync_buffer: Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new())),
             command_catalog: muta_contracts::CommandCatalog::default(),
             created_at: std::time::Instant::now(),
             last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
@@ -362,7 +362,7 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         session: Arc<SessionStore>,
         project_root: &std::path::Path,
     ) {
-        let (req_tx, _req_rx) = mpsc::unbounded_channel::<muta_contracts::AgentRequest>();
+        let (req_tx, _req_rx) = mpsc::channel::<muta_contracts::AgentRequest>(512);
         let (bc_tx, _) = broadcast::channel::<muta_contracts::AgentResponse>(16);
         let tracker = Arc::new(Mutex::new(
             muta_runtime::monitor::MonitorTracker::bootstrap(
@@ -385,7 +385,7 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
                 events: bc_tx,
                 cancel: tokio_util::sync::CancellationToken::new(),
                 tracker,
-                sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                sync_buffer: Arc::new(Mutex::new(muta_runtime::serve::AttachSyncBuffer::new())),
                 command_catalog: muta_contracts::CommandCatalog::default(),
                 created_at: std::time::Instant::now(),
                 last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),

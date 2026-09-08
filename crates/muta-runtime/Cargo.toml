@@ -18,7 +18,7 @@ ignore = { workspace = true }
 muta-mcp = { path = "../muta-mcp" }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time", "test-util"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true }
 bytes = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -38,6 +38,7 @@ dirs = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 muta-paths = { path = "../muta-paths", features = ["test-path-override"] }
 
 [lints]

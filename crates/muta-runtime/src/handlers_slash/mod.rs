@@ -44,7 +44,7 @@ pub struct SlashEnv<'a> {
     pub provider_for_task: &'a Arc<RwLock<Arc<dyn Provider>>>,
     pub provider_usage: &'a mut ConnectionUsage,
     pub skills_registry: &'a Arc<SkillRegistry>,
-    pub req_tx_for_commands: &'a mpsc::UnboundedSender<AgentRequest>,
+    pub req_tx_for_commands: &'a mpsc::Sender<AgentRequest>,
     pub project_root_for_side: &'a std::path::Path,
     pub startup: &'a SessionStart,
     pub ui: &'a dyn crate::UiBridge,

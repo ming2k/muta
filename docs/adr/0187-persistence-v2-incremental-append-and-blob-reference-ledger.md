@@ -116,4 +116,4 @@ consistency.
 ## Links
 
 - Supersedes the event-ledger claims of [ADR-0186](0186-single-transcript-projection-directives-persistence.md) (the single-transcript model itself stands).
-- Related: [ADR-0168](0168-sqlite-single-source-of-truth.md) (SQLite SSOT).
+- Related: [ADR-0168](0168-complete-sqlite-unification-and-legacy-persistence-purge.md) (SQLite SSOT).

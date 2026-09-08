@@ -151,12 +151,12 @@ impl FollowUpQueue {
 
 pub struct SessionDriver {
     /// Inbound requests consumed by this driver.
-    pub req_rx: mpsc::UnboundedReceiver<AgentRequest>,
+    pub req_rx: mpsc::Receiver<AgentRequest>,
     /// Responses bound for the frontend (`resp_tx` in the old code).
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     /// Inbound request sender, cloned so `/repeat` can self-fire a `Chat`
     /// (`req_tx_for_commands` in the old code).
-    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub req_tx: mpsc::Sender<AgentRequest>,
     /// The primary agent.
     pub agent: Arc<Agent>,
     /// The primary session store.
@@ -198,8 +198,7 @@ pub struct SessionDriver {
     pub base_tools: Arc<Vec<Arc<dyn Tool>>>,
     /// Project root for side-session pinning (`project_root_for_side`).
     pub project_root: PathBuf,
-    /// Startup mode — read by the misplaced SessionStart-hooks block inside
-    /// `/pursue status` (preserved verbatim; see note in [`Self::run`]).
+    /// Startup mode of the session.
     pub startup: SessionStart,
     /// Whether the sessions picker should open on launch (`mutx attach`
     /// with no id).

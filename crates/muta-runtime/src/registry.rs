@@ -1,14 +1,14 @@
 use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
-use crate::serve::{ATTACH_SYNC_BUFFER_CAP, AttachAction, is_attach_sync_event};
+use crate::serve::{AttachAction, AttachSyncBuffer, is_attach_sync_event};
 use muta_agent::{Agent, AgentIdentity, MasterPreset};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
     PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
 };
 use muta_persistence::session::SessionStore;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
@@ -37,7 +37,7 @@ pub struct HostedSession {
     /// ADR-0141: channel accounting shared with the assembled agent.
     pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
-    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub req_tx: mpsc::Sender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     pub cancel: CancellationToken,
     pub shared_confinement: muta_contracts::SharedConfinement,
@@ -53,10 +53,9 @@ pub struct HostedSession {
 
     /// Attach-time state-sync buffer: the startup events an attaching client
     /// cannot reconstruct (active provider/model, picker snapshot, key
-    /// readiness). Filled by the broadcast-tap; drained into each new client
-    /// after it subscribes so it hydrates immediately. Bounded; see
-    /// `ATTACH_SYNC_BUFFER_CAP`.
-    pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
+    /// readiness, harness state). Filled by the broadcast-tap; snapshotted into
+    /// each attaching client so it hydrates immediately.
+    pub sync_buffer: Arc<Mutex<AttachSyncBuffer>>,
     /// Backend-owned slash-command vocabulary for every attached frontend.
     pub command_catalog: muta_contracts::CommandCatalog,
     /// When this hosted session was created (wall-clock, monotonic). Drives
@@ -104,12 +103,12 @@ pub struct BoundSession {
     pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
     pub shared_confinement: muta_contracts::SharedConfinement,
-    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub req_tx: mpsc::Sender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     /// Attach-time state-sync events buffered for this session (see
-    /// [`HostedSession::sync_buffer`]). Drained by the WS layer into a new
-    /// client right after it subscribes, before it joins the live broadcast.
-    pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
+    /// [`HostedSession::sync_buffer`]). Non-destructively snapshotted by the WS
+    /// layer into every attaching client right after it subscribes.
+    pub sync_buffer: Arc<Mutex<AttachSyncBuffer>>,
     pub command_catalog: muta_contracts::CommandCatalog,
     /// Durable workspace trust store for this session's project. The
     /// WS attach path reads it to detect unreviewed workspace contributions
@@ -524,7 +523,7 @@ impl SessionRegistry {
                 "session '{session_id}' is not hosted on this server"
             ));
         };
-        let _ = e.req_tx.send(AgentRequest::Interrupt);
+        let _ = e.req_tx.send(AgentRequest::Interrupt).await;
         Ok(())
     }
 
@@ -541,11 +540,14 @@ impl SessionRegistry {
                 "session '{session_id}' is not hosted on this server"
             ));
         };
-        let _ = e.req_tx.send(AgentRequest::PermissionReply {
-            request_id,
-            decision,
-            parent_call_id: None,
-        });
+        let _ = e
+            .req_tx
+            .send(AgentRequest::PermissionReply {
+                request_id,
+                decision,
+                parent_call_id: None,
+            })
+            .await;
         Ok(())
     }
 
@@ -558,11 +560,14 @@ impl SessionRegistry {
                 "session '{session_id}' is not hosted on this server"
             ));
         };
-        let _ = e.req_tx.send(AgentRequest::Prompt {
-            text,
-            images: Vec::new(),
-            sent_at_ms: None,
-        });
+        let _ = e
+            .req_tx
+            .send(AgentRequest::Prompt {
+                text,
+                images: Vec::new(),
+                sent_at_ms: None,
+            })
+            .await;
         Ok(())
     }
 
@@ -1174,7 +1179,7 @@ impl SessionRegistry {
         )));
         let tracker_for_tap = tracker.clone();
         let monitor_bus = self.monitor.clone();
-        let sync_buffer = Arc::new(Mutex::new(VecDeque::<AgentResponse>::new()));
+        let sync_buffer = Arc::new(Mutex::new(AttachSyncBuffer::new()));
         let sync_buffer_for_tap = sync_buffer.clone();
         // Idle-suspension clock: bumped once per folded event (cheap atomic,
         // no mutex) so the reaper can distinguish "alive but quiet because
@@ -1199,15 +1204,11 @@ impl SessionRegistry {
                         let _ = monitor_bus.send(MonitorEvent::SessionUpdated(row));
                     }
                     // Buffer the attach-sync events before broadcasting so a
-                    // client that attaches later still hydrates. Order within
-                    // the buffer matches emission order, so draining
-                    // reproduces the startup sync faithfully.
+                    // client that attaches later still hydrates. Latest-value
+                    // semantics retain startup keys/picker state across turns.
                     if is_attach_sync_event(&r) {
                         let mut buf = sync_buffer_for_tap.lock().await;
-                        if buf.len() >= ATTACH_SYNC_BUFFER_CAP {
-                            buf.pop_front();
-                        }
-                        buf.push_back(r.clone());
+                        buf.observe(&r);
                     }
                     let _ = tap.send(r);
                 });
