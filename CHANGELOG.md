@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-09-08
+
+### Fixed
+
+- **`mutx` on-demand daemon spawn used the retired `muta daemon start`
+  spelling (ADR-0116).** The unified client spawn path and the shipped
+  systemd unit still invoked `muta daemon start --fg`, so auto-start exited
+  2 with "unrecognized command 'daemon'". Both now use the top-level
+  `muta start --fg` verb.
+
 ## [0.41.0] - 2026-09-08
 
 ### Changed
