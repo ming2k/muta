@@ -14,6 +14,7 @@ use std::time::Duration;
 
 /// Service interface for dispatching and querying background jobs.
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait BackgroundJobService: Send + Sync {
     /// Spawn a shell process asynchronously in the background.
     async fn spawn_process(
@@ -133,12 +134,13 @@ pub enum JobKind {
 }
 
 /// How a service task declares itself ready (ADR-0190 §D1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "readiness", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum Readiness {
     /// First output line after spawn (banner, "listening on …"). Default.
     #[serde(rename = "first_output")]
+    #[default]
     FirstOutput,
     /// Fixed grace after spawn (ms) — for fully silent services.
     #[serde(rename = "after_ms")]
@@ -157,12 +159,6 @@ pub struct RestartPolicy {
     pub max_retries: u32,
     /// Base backoff between attempts, doubled per attempt.
     pub backoff_ms: u64,
-}
-
-impl Default for Readiness {
-    fn default() -> Self {
-        Readiness::FirstOutput
-    }
 }
 
 /// The specification for a background job.

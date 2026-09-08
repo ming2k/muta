@@ -284,9 +284,7 @@ fn handle_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAc
 }
 
 fn handle_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
-    if app.pending_provider_delete.is_none() {
-        return None;
-    }
+    app.pending_provider_delete.as_ref()?;
 
     let Event::Key(k) = event else {
         return Some(input::InputAction::None);

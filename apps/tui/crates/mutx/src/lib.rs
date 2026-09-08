@@ -1330,7 +1330,7 @@ pub async fn run_tui(
                                         label.as_deref().unwrap_or(command)
                                     }
                                     muta_contracts::JobSpec::Timer { label, prompt, .. } => {
-                                        label.as_deref().unwrap_or_else(|| prompt.as_str())
+                                        label.as_deref().unwrap_or(prompt.as_str())
                                     }
                                 };
                                 let message = TranscriptMessage::notice(

@@ -3696,8 +3696,7 @@ mod tests {
 
         let err = engine
             .save_session_full(&data)
-            .err()
-            .expect("constraint must reject");
+            .expect_err("constraint must reject");
         let msg = err.to_string();
         assert!(
             msg.contains("constraint failed") || msg.contains("CHECK"),

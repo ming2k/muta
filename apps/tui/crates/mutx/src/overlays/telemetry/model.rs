@@ -143,7 +143,7 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
 
     let mut result = Vec::new();
     for (round_num, mut attempts) in round_map.into_iter().rev() {
-        attempts.sort_by(|a, b| (b.turn, b.attempt).cmp(&(a.turn, a.attempt)));
+        attempts.sort_by_key(|attempt| std::cmp::Reverse((attempt.turn, attempt.attempt)));
 
         let mut prompt_tokens = 0u64;
         let mut completion_tokens = 0u64;

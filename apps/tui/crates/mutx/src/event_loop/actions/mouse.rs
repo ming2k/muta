@@ -35,11 +35,9 @@ pub(super) async fn handle_selection_start(
         let _ = app.ui.runtime.capture_pointer(id);
     }
     match target {
-        Some(UiKey::ProviderDelete) => {
-            if !app.ui.contains(UiKey::ProviderDelete, x, y) {
-                app.pending_provider_delete = None;
-                app.provider_delete_focus = ProviderDeleteChoice::default();
-            }
+        Some(UiKey::ProviderDelete) if !app.ui.contains(UiKey::ProviderDelete, x, y) => {
+            app.pending_provider_delete = None;
+            app.provider_delete_focus = ProviderDeleteChoice::default();
         }
         Some(UiKey::QuestionOption(index)) => {
             if let Some(question) = app.question.take() {

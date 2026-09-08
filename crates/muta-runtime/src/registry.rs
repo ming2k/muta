@@ -257,6 +257,7 @@ impl SessionRegistry {
     /// supervisor's transitions are folded into the snapshot cache and
     /// published as `MonitorEvent::PersistenceHealth` diffs, so every
     /// frontend (and `muta status`) sees degradation, not just the log.
+    #[allow(clippy::unwrap_used)] // A poisoned snapshot mutex is an unrecoverable registry invariant.
     pub fn start_persistence_health_monitor(self: &Arc<Self>) {
         let registry = Arc::downgrade(self);
         let mut rx = muta_persistence::db::get_persistence_handle().subscribe_health();
@@ -276,6 +277,7 @@ impl SessionRegistry {
 
     /// Fold one fabric event into the snapshot cache and publish the diff.
     /// Runs on a dedicated subscriber task per registry instance.
+    #[allow(clippy::unwrap_used)] // A poisoned task-row mutex is an unrecoverable registry invariant.
     pub fn start_daemon_task_monitor(self: &Arc<Self>) {
         let mgr = self.daemon_tasks.clone();
         let rows = self.daemon_task_rows.clone();
@@ -346,6 +348,7 @@ impl SessionRegistry {
         });
     }
 
+    #[allow(clippy::unwrap_used)] // A poisoned task-row mutex is an unrecoverable registry invariant.
     fn upsert_task_row(
         rows: &Arc<std::sync::Mutex<HashMap<String, muta_contracts::MonitoredTask>>>,
         info: &muta_contracts::BackgroundJobInfo,
@@ -369,7 +372,7 @@ impl SessionRegistry {
                     prompt.clone(),
                 ),
             };
-            let log_path = info.id.0.is_empty().then(|| None).flatten();
+            let log_path = None;
             muta_contracts::MonitoredTask {
                 id: info.id.0.clone(),
                 label,
@@ -1339,6 +1342,7 @@ impl SessionRegistry {
 
     /// The current monitor snapshot: every hosted session's row, newest
     /// activity first, honouring the client's `include_idle` filter.
+    #[allow(clippy::unwrap_used)] // A poisoned snapshot mutex is an unrecoverable registry invariant.
     pub async fn monitor_snapshot(&self, action: MonitorAction) -> MonitorSnapshot {
         let mut sessions = Vec::new();
         {

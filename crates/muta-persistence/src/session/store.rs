@@ -3,9 +3,10 @@
 use super::*;
 
 /// Retry a `save_session` across the supervisor's respawn window
-/// (ADR-0196 D3). Only [`PersistenceError::WriterDown`] is retried — it is
-/// the one transient variant (the actor is being respawned); engine
-/// rejections and encode failures are deterministic and surface immediately.
+/// (ADR-0196 D3). Only [`crate::db::PersistenceError::WriterDown`] is
+/// retried — it is the one transient variant (the actor is being
+/// respawned); engine rejections and encode failures are deterministic and
+/// surface immediately.
 /// Five attempts over ~3.1 s covers the supervisor's `Recovering` budget.
 async fn save_retrying(
     writer: &crate::db::PersistenceHandle,

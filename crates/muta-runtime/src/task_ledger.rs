@@ -89,7 +89,7 @@ pub fn prune(engine: &mut muta_persistence::db::DatabaseEngine, keep: &[String])
     };
     for key in keys {
         let job = key.trim_start_matches(LEDGER_PREFIX).to_string();
-        if !keep.iter().any(|k| *k == job)
+        if !keep.contains(&job)
             && let Err(error) = engine.delete_kv(&key)
         {
             tracing::warn!(%error, key = %key, "task ledger prune failed");
@@ -224,7 +224,7 @@ mod tests {
         record_outcome(&mut engine, &keep_me, None);
         record_outcome(&mut engine, &drop_me, None);
 
-        prune(&mut engine, &[keep_me.job_id.0.clone()]);
+        prune(&mut engine, std::slice::from_ref(&keep_me.job_id.0));
 
         let rows = load_all(&mut engine);
         assert_eq!(rows.len(), 1);

@@ -2,6 +2,9 @@
 //!
 //! Asserts that `commit_turn` remains O(delta) and does not degrade with session length.
 
+// Test setup and persistence failures should stop the regression immediately.
+#![allow(clippy::expect_used)]
+
 use std::time::Instant;
 
 use muta_contracts::{Message, Role};

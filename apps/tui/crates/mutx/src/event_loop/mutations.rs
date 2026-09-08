@@ -212,6 +212,8 @@ pub(crate) enum ChromeEdit {
 
 /// Everything the response translator (and monitor client) can ask the event
 /// loop to do to `App`. One enum, one applier, one writer.
+// Payloads stay inline because this bounded channel is the ownership-transfer seam.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum AppMutation {
     Transcript {
         buffer: Buffer,

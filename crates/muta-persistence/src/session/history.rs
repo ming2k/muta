@@ -128,7 +128,7 @@ impl SessionStore {
                     .retry_resolutions
                     .iter()
                     .any(|existing| existing.round == Some(round))
-            }) || (!record.round.is_some()
+            }) || (record.round.is_none()
                 && state
                     .data
                     .retry_resolutions

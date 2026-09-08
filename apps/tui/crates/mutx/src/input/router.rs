@@ -212,6 +212,7 @@ fn scrolls_own_body(modal: crate::Modal) -> bool {
 /// Process a crossterm event into a high-level action.
 ///
 /// `input` and `cursor_position` are mutable because some events modify them directly.
+#[allow(clippy::too_many_arguments)]
 pub fn route_event(
     event: Event,
     input: &mut String,
@@ -361,20 +362,20 @@ pub fn route_event(
                             return InputAction::None;
                         }
                     }
-                    crate::keymap::CommandId::OpenTelemetry => {
+                    crate::keymap::CommandId::OpenTelemetry
+                        if dispatch.modal == crate::Modal::None =>
+                    {
                         // Ctrl+O (model-bar telemetry keycap). Top level only:
                         // the model bar is session chrome, never visible
                         // behind a modal.
-                        if dispatch.modal == crate::Modal::None {
-                            return InputAction::OpenTelemetry;
-                        }
+                        return InputAction::OpenTelemetry;
                     }
-                    crate::keymap::CommandId::OpenActiveConnectionDetail => {
+                    crate::keymap::CommandId::OpenActiveConnectionDetail
+                        if dispatch.modal == crate::Modal::None =>
+                    {
                         // Ctrl+N (model-bar connection keycap). Top level only,
                         // matching the telemetry binding above.
-                        if dispatch.modal == crate::Modal::None {
-                            return InputAction::OpenActiveConnectionDetail;
-                        }
+                        return InputAction::OpenActiveConnectionDetail;
                     }
                     crate::keymap::CommandId::InterruptTask => return InputAction::Interrupt,
                     crate::keymap::CommandId::Quit => return InputAction::CtrlC,

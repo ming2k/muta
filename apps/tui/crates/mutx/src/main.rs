@@ -180,9 +180,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Cap on how long exit is allowed to wait for the input-history write
-/// before giving up (the write keeps running detached in the background).
-
 /// The dashboard's data (the live `MonitorEvent` snapshot) and its control
 /// verbs (interrupt / prompt / create) ride their own daemon connections, so
 /// it never depends on the attached session — but the TUI still needs one

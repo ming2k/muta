@@ -82,6 +82,7 @@ impl StreamReadersFallback {
 
     /// Restore the drained handles after a refused adoption, returning the
     /// child and its process tree for the legacy kill path.
+    #[allow(clippy::unwrap_used)] // `take` initializes every shuttle slot exactly once.
     fn restore(
         mut self,
     ) -> (
@@ -102,7 +103,7 @@ impl StreamReadersFallback {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::unwrap_used)] // Adoption consumes initialized shuttle slots.
 pub async fn run_episodic_command(
     command: &str,
     timeout_duration: Duration,
@@ -208,7 +209,10 @@ pub async fn run_episodic_command(
     // job fabric, which keeps draining its pipes and notifies the session on
     // exit. Silence-from-birth (a stdin prompt the agent cannot answer)
     // still kills: there is nothing worth adopting.
-    if idle_blocked && job_service.is_some() && !collector.is_empty() {
+    if idle_blocked
+        && !collector.is_empty()
+        && let Some(job_service) = job_service.as_ref()
+    {
         {
             let mut readers_fallback =
                 StreamReadersFallback::take(&mut readers, child, process_tree);
@@ -234,8 +238,6 @@ pub async fn run_episodic_command(
             let captured: Vec<String> = collector.lines().iter().map(|l| l.text.clone()).collect();
 
             match job_service
-                .as_ref()
-                .unwrap()
                 .adopt_process(
                     command.to_string(),
                     None,

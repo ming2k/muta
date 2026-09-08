@@ -1,7 +1,8 @@
 //! Loop ↔ translator coordination facts (ADR-0197 M1).
 //!
 //! After the translator seam, the response listener and the monitor client
-//! own **no** application state: they send [`AppMutation`]s (see
+//! own **no** application state: they send
+//! [`crate::event_loop::mutations::AppMutation`]s (see
 //! `mutations.rs`) and the event loop — the sole `App` writer — applies
 //! them. What remains here is *not* mirrored state. These are the few
 //! cross-task coordination facts that cannot be a mutation because they flow

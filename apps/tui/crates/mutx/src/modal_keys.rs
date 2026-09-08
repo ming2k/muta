@@ -452,7 +452,7 @@ fn resolve_picker_key(c: char, is_models: bool, keys: &ModalKeys) -> Option<Inpu
     if keys.model_searching {
         return None;
     }
-    if (is_models || !is_models) && c == '/' {
+    if c == '/' {
         // Browse mode: `/` opens the search sub-layer rather than inserting
         // a literal slash — mirrors the history modal.
         return Some(InputAction::ModelEnterSearch);

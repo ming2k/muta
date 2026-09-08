@@ -800,7 +800,7 @@ fn apply_chrome(app: &mut App, session_id: &str, edit: ChromeEdit) {
     let chrome = app
         .session_chrome
         .entry(session_id.to_string())
-        .or_insert_with(crate::app::SessionChrome::default);
+        .or_default();
     match edit {
         ChromeEdit::RoundLifecycle {
             round_count,

@@ -367,7 +367,7 @@ impl BackgroundJobManager {
     /// `Interactive` delegates to [`Self::spawn_process`]. `Service` reports
     /// `Ready` when the readiness condition is met, never settles while
     /// running, wakes the session with `Failed` on unsolicited death, and
-    /// honors an optional [`RestartPolicy`].
+    /// honors an optional [`muta_contracts::RestartPolicy`].
     pub async fn spawn_process_ex(
         &self,
         command: String,

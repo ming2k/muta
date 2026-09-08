@@ -1254,13 +1254,12 @@ mod surface_tests {
 
     #[test]
     fn daemon_noun_is_not_accepted() {
-        for command in ["daemon"] {
-            assert!(parse(&[command]).is_err(), "{command}");
-            assert!(parse(&[command, "start"]).is_err(), "{command} start");
-            assert!(parse(&[command, "stop"]).is_err(), "{command} stop");
-            assert!(parse(&[command, "status"]).is_err(), "{command} status");
-            assert!(parse(&[command, "token"]).is_err(), "{command} token");
-        }
+        let command = "daemon";
+        assert!(parse(&[command]).is_err(), "{command}");
+        assert!(parse(&[command, "start"]).is_err(), "{command} start");
+        assert!(parse(&[command, "stop"]).is_err(), "{command} stop");
+        assert!(parse(&[command, "status"]).is_err(), "{command} status");
+        assert!(parse(&[command, "token"]).is_err(), "{command} token");
     }
 
     #[test]

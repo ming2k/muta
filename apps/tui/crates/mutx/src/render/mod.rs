@@ -985,10 +985,13 @@ pub fn draw_transcript(
 
     // The durability-health banner (ADR-0196 D4) leads the visible chrome:
     // a degraded writer must be seen before anything else in the footer.
-    footer_stack::rect_of(&placed_footer, FooterRowId::PersistenceHealth)
-        .filter(|_| persistence_health_row_needed)
-        .zip(persistence_health)
-        .map(|(rect, state)| draw_persistence_health_bar(frame, rect, state, theme));
+    if let Some((rect, state)) =
+        footer_stack::rect_of(&placed_footer, FooterRowId::PersistenceHealth)
+            .filter(|_| persistence_health_row_needed)
+            .zip(persistence_health)
+    {
+        draw_persistence_health_bar(frame, rect, state, theme);
+    }
 
     // The persistent queue bar leads the footer stack below the top gap. It is a
     // stable one-row outbox summary so pending messages never have to be

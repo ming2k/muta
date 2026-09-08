@@ -809,6 +809,8 @@ pub fn diagnose_daemon() -> DaemonDiagnostics {
     }
 }
 
+// Boxing the attached payload would make this public protocol-facing API less direct.
+#[allow(clippy::large_enum_variant)]
 pub enum Handshake {
     Attached {
         req_tx: mpsc::UnboundedSender<AgentRequest>,

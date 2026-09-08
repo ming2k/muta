@@ -2522,8 +2522,8 @@ impl TranscriptMessage {
             tail.first(),
         ) {
             (Some(prev), Some(next)) => {
-                !matches!(prev, Block::Break)
-                    && !(matches!(prev, Block::ListItem { .. })
+                !(matches!(prev, Block::Break)
+                    || matches!(prev, Block::ListItem { .. })
                         && matches!(next, Block::ListItem { .. }))
             }
             _ => false,

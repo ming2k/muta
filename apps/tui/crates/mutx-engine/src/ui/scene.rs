@@ -34,19 +34,14 @@ pub enum PointerPolicy {
 
 /// Placement is separate from logical ownership. Viewport placement is the
 /// explicit escape hatch for popups that outgrow their owner's clipping box.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LayoutBox {
+    #[default]
     Fill,
     /// Absolute terminal coordinates, clipped by the parent's content box.
     Placed(Rect),
     /// Absolute terminal coordinates clipped only by the viewport.
     Viewport(Rect),
-}
-
-impl Default for LayoutBox {
-    fn default() -> Self {
-        Self::Fill
-    }
 }
 
 /// A declaration, not the lifetime owner of a component's state.

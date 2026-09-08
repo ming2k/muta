@@ -2423,23 +2423,21 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
 pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
     use crate::ui::UiKey;
     match app.ui.scene().hit_test(x, y).copied() {
-        Some(UiKey::Modal(modal)) => {
-            if app.ui.contains(UiKey::Modal(modal), x, y) {
-                scroll_tick(app, !up);
-            }
+        Some(UiKey::Modal(modal)) if app.ui.contains(UiKey::Modal(modal), x, y) => {
+            scroll_tick(app, !up);
         }
         Some(UiKey::OauthUrl | UiKey::OauthCode) => scroll_tick(app, !up),
         Some(UiKey::ProviderDelete | UiKey::PreAttach) => {}
-        Some(UiKey::Sheet(crate::sheet::SheetKind::Permission) | UiKey::PermissionAction(_)) => {
-            if app.permission_show_details {
-                app.permission_scroll = if up {
-                    app.permission_scroll.saturating_sub(1)
-                } else {
-                    app.permission_scroll
-                        .saturating_add(1)
-                        .min(app.permission_max_scroll)
-                };
-            }
+        Some(UiKey::Sheet(crate::sheet::SheetKind::Permission) | UiKey::PermissionAction(_))
+            if app.permission_show_details =>
+        {
+            app.permission_scroll = if up {
+                app.permission_scroll.saturating_sub(1)
+            } else {
+                app.permission_scroll
+                    .saturating_add(1)
+                    .min(app.permission_max_scroll)
+            };
         }
         Some(UiKey::Sheet(crate::sheet::SheetKind::Question) | UiKey::QuestionOption(_)) => {
             app.question_modal_follow = false;
@@ -2465,10 +2463,8 @@ pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
                 });
             }
         }
-        Some(UiKey::Composer) => {
-            if app.step_input_scroll(up, 4).is_none() {
-                scroll_tick(app, !up);
-            }
+        Some(UiKey::Composer) if app.step_input_scroll(up, 4).is_none() => {
+            scroll_tick(app, !up);
         }
         Some(
             UiKey::Transcript

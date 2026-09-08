@@ -488,7 +488,7 @@ fn compose_frame(
                 );
                 let max_scroll = render::draw_permission_sheet(
                     f,
-                    &mut ui,
+                    ui,
                     request,
                     app.modal_index,
                     app.permission_confirm_always,
@@ -718,7 +718,7 @@ fn compose_frame(
                     );
                     render::draw_question_modal(
                         f,
-                        &mut ui,
+                        ui,
                         qmodel.request(),
                         qmodel.current(),
                         qmodel.selected(),
