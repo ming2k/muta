@@ -14,17 +14,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// signed-in account and may add generations this seed does not list. The seed
 /// stays current enough that a connection with no network still offers the
 /// current tiered generation.
-pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
-    "gemini-3.8-flash",
-    "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash",
-    "gemini-3.7-flash-tiered",
-    "gemini-pro-agent",
-    "gemini-3.1-pro-low",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-];
+pub use muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS;
 
 /// Baseline capability metadata for the models this provider serves.
 pub const MODELS: &[Model] = &[

@@ -1,6 +1,9 @@
 # 0195. Retained TUI runtime and component lifecycle
 
-- Status: Accepted
+- Status: Accepted (partially superseded by ADR-0197 D7: the separate
+  `render_tree` half of this decision — the Flutter-style retained box tree —
+  never gained a production consumer and was deleted; the component/scene
+  lifecycle this decision's other half specifies stands)
 - Date: 2026-09-08
 - Deciders: ming
 - Consulted: —

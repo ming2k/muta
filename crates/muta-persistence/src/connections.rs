@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 use crate::fsutil;
 use crate::paths;
 
+pub use muta_contracts::model::DeclaredModel;
+
 /// One connection: a credentialed, configured use of a preset (or a pure-custom relay).
 /// The connection's id is the join key for its credential (`credentials.toml [connections.<id>]`),
 /// its OAuth token set (`auth.toml [tokens.<id>]`), its discovery cache, and `config.toml`'s
@@ -69,6 +71,12 @@ pub struct Connection {
     /// (and live discovery).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// User-declared extra models for a preset connection (ADR-0198): hidden
+    /// or unstable upstream ids unioned into the derived set after discovery,
+    /// scoped to this connection only. Never set on pure-custom connections
+    /// (their `models` list is already the full declaration).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_models: Vec<DeclaredModel>,
 }
 
 impl Default for Connection {
@@ -84,6 +92,7 @@ impl Default for Connection {
             base_url: None,
             user_agent: None,
             models: Vec::new(),
+            extra_models: Vec::new(),
         }
     }
 }
@@ -105,11 +114,21 @@ impl Connection {
     pub fn declared_models(&self) -> &[String] {
         &self.models
     }
+
+    /// The declared extra model for `model_id`, if this connection declares one.
+    pub fn extra_model(&self, model_id: &str) -> Option<&DeclaredModel> {
+        self.extra_models.iter().find(|m| m.id == model_id)
+    }
+
+    /// The declared extra model ids, in declaration order.
+    pub fn extra_model_ids(&self) -> Vec<String> {
+        self.extra_models.iter().map(|m| m.id.clone()).collect()
+    }
 }
 
 /// The persisted set of connections (`connections.toml`). Program-managed
 /// state, separate from the user-edited `config.toml`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connections {
     #[serde(default)]
@@ -220,5 +239,89 @@ pub fn slug(name: &str) -> String {
         "custom".to_string()
     } else {
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muta_contracts::reasoning::ReasoningSupport;
+
+    fn deepseek_with_extras() -> Connection {
+        Connection {
+            id: "deepseek-personal".into(),
+            preset_id: Some("deepseek".into()),
+            extra_models: vec![DeclaredModel {
+                id: "deepseek-v4-pro-preview-0912".into(),
+                context_window: Some(1_000_000),
+                max_output_tokens: Some(8_192),
+                thinking: Some(ReasoningSupport::ReasoningContent),
+                vision: Some(false),
+                tool_call: Some(true),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn extra_models_roundtrip_through_toml() {
+        let mut conn = deepseek_with_extras();
+        conn.extra_models.push(DeclaredModel {
+            id: "bare-id".into(),
+            ..Default::default()
+        });
+        let store = Connections {
+            connections: vec![conn],
+        };
+        let text = toml::to_string_pretty(&store).unwrap();
+        // Optional fields left unset must not serialize for the bare entry.
+        assert!(text.contains("[[connections.extra_models]]"));
+        assert!(!text.contains("bare-id ="), "sanity: id present as value");
+        let bare_section = text
+            .split("[[connections.extra_models]]")
+            .nth(2)
+            .expect("bare entry section");
+        assert!(
+            !bare_section.contains("context_window")
+                && !bare_section.contains("vision")
+                && !bare_section.contains("thinking"),
+            "unset fields skip serialization"
+        );
+        let parsed: Connections = toml::from_str(&text).unwrap();
+        assert_eq!(parsed, store);
+    }
+
+    #[test]
+    fn legacy_connection_without_extra_models_loads() {
+        let legacy = r#"
+[[connections]]
+id = "ds"
+preset_id = "deepseek"
+"#;
+        let parsed: Connections = toml::from_str(legacy).unwrap();
+        assert!(parsed.connections[0].extra_models.is_empty());
+    }
+
+    #[test]
+    fn extra_model_lookup_is_exact_and_empty_by_default() {
+        let conn = deepseek_with_extras();
+        assert_eq!(
+            conn.extra_model("deepseek-v4-pro-preview-0912")
+                .unwrap()
+                .context_window,
+            Some(1_000_000)
+        );
+        // Exact id match — case variants are distinct ids.
+        assert!(conn.extra_model("Deepseek-v4-pro-preview-0912").is_none());
+        assert!(conn.extra_model("deepseek-v4-flash").is_none());
+        assert!(Connection::default().extra_model("anything").is_none());
+    }
+
+    #[test]
+    fn sanitized_declared_model_rejects_blank_ids() {
+        assert!(DeclaredModel::sanitized("  ").is_none());
+        let declared = DeclaredModel::sanitized("  deepseek-x  ").unwrap();
+        assert_eq!(declared.id, "deepseek-x");
+        assert!(declared.context_window.is_none());
     }
 }

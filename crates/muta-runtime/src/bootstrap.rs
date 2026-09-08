@@ -400,8 +400,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // ADR-0190 D5: bind the owning session so every task this service
     // spawns is stamped with it (snapshots + ledger rows).
     session_job_service.bind_owner(session.id().await);
-    let job_service: Arc<dyn muta_contracts::BackgroundJobService> =
-        Arc::new(session_job_service);
+    let job_service: Arc<dyn muta_contracts::BackgroundJobService> = Arc::new(session_job_service);
 
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();

@@ -51,7 +51,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use muta_contracts::{RemoteModelMetadata, SecretString, ReasoningSupport, WireProtocol};
+use muta_contracts::{ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol};
 use serde_json::Value;
 
 /// The protocol a discovery request speaks. Model-catalog APIs are related to,

@@ -401,8 +401,11 @@ impl App {
                 // never shows the same prompt twice.
                 self.prune_backfill_after_record(&refreshed.text);
                 if self.input_history_persist {
-                    tokio::task::spawn_blocking(move || {
-                        let _ = crate::config::save_history(std::slice::from_ref(&refreshed), true);
+                    // Daemon-side SSOT merge (ADR-0197): the TUI never opens
+                    // the shared SQLite store itself.
+                    self.send_intent(muta_contracts::AgentRequest::RecordInputHistory {
+                        entries: vec![refreshed],
+                        dedup: true,
                     });
                 }
                 return;
@@ -410,8 +413,9 @@ impl App {
             let recorded = muta_contracts::HistoryEntry::new(entry, session_id, workspace, now);
             self.push_history(recorded.clone());
             if self.input_history_persist {
-                tokio::task::spawn_blocking(move || {
-                    let _ = crate::config::save_history(std::slice::from_ref(&recorded), true);
+                self.send_intent(muta_contracts::AgentRequest::RecordInputHistory {
+                    entries: vec![recorded],
+                    dedup: true,
                 });
             }
             return;
@@ -439,8 +443,9 @@ impl App {
         // lock and must not block the event loop. Skipped entirely when disk
         // persistence is disabled (tests).
         if self.input_history_persist {
-            tokio::task::spawn_blocking(move || {
-                let _ = crate::config::save_history(std::slice::from_ref(&recorded), false);
+            self.send_intent(muta_contracts::AgentRequest::RecordInputHistory {
+                entries: vec![recorded],
+                dedup: false,
             });
         }
     }
@@ -630,12 +635,11 @@ impl App {
         let identity = (removed.text.clone(), removed.session_id.clone());
         self.history_attachments.remove(&identity);
         self.history_attachments_order.retain(|k| k != &identity);
-        // Cascade 3: Invalidate on-disk SQLite record off-thread
+        // Cascade 3: invalidate the daemon's on-disk record.
         if self.input_history_persist {
-            let text = removed.text.clone();
-            let created_at_ms = removed.created_at_ms;
-            tokio::task::spawn_blocking(move || {
-                let _ = crate::config::delete_history_entry(&text, created_at_ms);
+            self.send_intent(muta_contracts::AgentRequest::DeleteInputHistoryEntry {
+                text: removed.text.clone(),
+                created_at_ms: removed.created_at_ms,
             });
         }
         Some(removed)

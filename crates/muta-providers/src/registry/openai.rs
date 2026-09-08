@@ -13,14 +13,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// The legacy `gpt-4o`/`gpt-4o-mini` ids stay registered for existing
 /// configs but are no longer seeded for the official provider. Each id exists
 /// in the model registry.
-pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-];
+pub use muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see

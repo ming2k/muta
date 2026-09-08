@@ -11,22 +11,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// canonical text-generation family that Google plus common relays/中转站
 /// advertise — image/embedding/video/audio-only models are excluded since an
 /// agent only consumes the `generateContent` text surface.
-pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
-    // Gemini 3.x
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-3-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-pro-preview-customtools",
-    // Gemini 2.5
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash-lite",
-    // Gemini 2.0 (still widely served by relays)
-    "gemini-2.0-flash",
-];
+pub use muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see

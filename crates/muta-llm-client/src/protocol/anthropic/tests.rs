@@ -8,7 +8,7 @@ use super::request::{self, BodyInput};
 use super::response;
 use super::*;
 use muta_contracts::{
-    Effort, Message, PromptCacheMode, ResolvedCachePlan, Role, ReasoningMode, Tool,
+    Effort, Message, PromptCacheMode, ReasoningMode, ResolvedCachePlan, Role, Tool,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;

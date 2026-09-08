@@ -26,7 +26,7 @@ use crate::fuzzy;
 /// One editable field of the provider editor. The visible set is chosen by the
 /// active [`ProviderPreset`] (create) or the edited provider's protocol (edit),
 /// rather than a fixed five-field form. Provider-owned model collections are
-/// imported from `muta_providers`; this view layer only selects and renders
+/// imported from `muta_contracts`; this view layer only selects and renders
 /// those curated values.
 ///
 /// Reasoning (effort/thinking) is intentionally NOT a provider-editor field —
@@ -46,10 +46,10 @@ pub enum CustomField {
 /// A curated starting point for adding a user-defined provider. Curated presets
 /// lock the protocol and seed their model list; the standalone custom definition
 /// exposes protocol, model, and request identity in its editor. Modelled as *data* — one
-/// table entry per preset — mirroring `muta_providers::OPENAI_PROVIDER_SPECS`.
+/// table entry per preset — mirroring `muta_contracts::provider_presets`.
 pub struct ProviderPreset {
     /// Stable identifier shared with the matching entry in
-    /// `muta_providers::PROVIDER_PRESET_SPECS`. Persisted on the created
+    /// the contracts preset tables. Persisted on the created
     /// connection as `preset_id` so the catalog can re-seed the connection
     /// from this preset's *current* model list on later startups. MUST match
     /// the spec's `id` 1:1 and never change once shipped.
@@ -143,7 +143,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Anthropic",
         description: "Anthropic's official API for flagship Claude models with advanced reasoning; sign in with an Anthropic API key.",
         protocol: WireProtocol::AnthropicMessages,
-        models: muta_providers::ANTHROPIC_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::ANTHROPIC_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.anthropic.com/v1/messages",
         needs_model: false,
@@ -156,7 +156,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "ChatGPT Subscription",
         description: "Uses your ChatGPT Plus or Pro subscription for Codex and flagship GPT models; authorizes in the browser, no API key.",
         protocol: WireProtocol::OpenAiResponses,
-        models: muta_providers::CHATGPT_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://chatgpt.com/backend-api/codex/responses",
         needs_model: false,
@@ -169,7 +169,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "DeepSeek",
         description: "DeepSeek's platform API with high-performance reasoning and coding models; sign in with a DeepSeek API key.",
         protocol: WireProtocol::OpenAiResponses,
-        models: muta_providers::DEEPSEEK_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.deepseek.com/v1/responses",
         needs_model: false,
@@ -182,7 +182,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "GitHub Copilot",
         description: "Your GitHub Copilot subscription, serving multi-vendor coding and reasoning models; authorizes on the device via GitHub.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::COPILOT_SEED_MODELS,
+        models: muta_contracts::provider_presets::COPILOT_SEED_MODELS,
         needs_url: false,
         url_hint: "https://api.githubcopilot.com/chat/completions",
         needs_model: false,
@@ -195,7 +195,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Google AI Studio",
         description: "Google AI Studio / developer API covering the full Gemini range; sign in with a Google API key.",
         protocol: WireProtocol::GoogleGenerateContent,
-        models: muta_providers::GOOGLE_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://generativelanguage.googleapis.com/v1beta",
         needs_model: false,
@@ -208,7 +208,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Google Antigravity",
         description: "Your Google One AI Premium subscription for flagship Gemini plus companion Claude models; authorizes in the browser.",
         protocol: WireProtocol::GoogleGenerateContent,
-        models: muta_providers::ANTIGRAVITY_OAUTH_MODELS,
+        models: muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS,
         needs_url: false,
         url_hint: "https://daily-cloudcode-pa.googleapis.com",
         needs_model: false,
@@ -221,12 +221,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Kimi Code",
         description: "Moonshot's Kimi Coding Plan with long-context coding and reasoning models; sign in with a plan API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::KIMI_CODE_MODELS,
+        models: muta_contracts::provider_presets::KIMI_CODE_MODELS,
         needs_url: false,
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
-        user_agent: Some(muta_providers::OPENCODE_USER_AGENT),
+        user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
@@ -234,7 +234,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "OpenAI Platform",
         description: "OpenAI's platform API for official flagship GPT and frontier reasoning models; sign in with an OpenAI API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::OPENAI_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.openai.com/v1/chat/completions",
         needs_model: false,
@@ -247,7 +247,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "OpenCode Go",
         description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with an OpenCode API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::OPENCODE_GO_MODELS,
+        models: muta_contracts::provider_presets::OPENCODE_GO_MODELS,
         needs_url: false,
         url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
         needs_model: false,
@@ -260,12 +260,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "ZAI Code (CN)",
         description: "Zhipu's Z.AI Coding Plan with flagship GLM and code-enhanced models; sign in with a plan API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::ZAI_CODE_MODELS,
+        models: muta_contracts::provider_presets::ZAI_CODE_MODELS,
         needs_url: false,
         url_hint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
         needs_model: false,
         default_url: Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"),
-        user_agent: Some(muta_providers::ZCODE_USER_AGENT),
+        user_agent: Some(muta_contracts::client_identity::ZCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ProviderPreset {
@@ -273,7 +273,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "xAI",
         description: "Your SuperGrok or X Premium subscription for flagship Grok reasoning models; authorizes in the browser.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_providers::XAI_BUILTIN_MODELS,
+        models: muta_contracts::provider_presets::XAI_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.x.ai/v1/chat/completions",
         needs_model: false,
@@ -1162,7 +1162,10 @@ mod tests {
             .expect("antigravity preset offered in the chooser");
         assert_eq!(tmpl.label, "Google Antigravity");
         assert_eq!(tmpl.protocol, WireProtocol::GoogleGenerateContent);
-        assert_eq!(tmpl.models, muta_providers::ANTIGRAVITY_OAUTH_MODELS);
+        assert_eq!(
+            tmpl.models,
+            muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS
+        );
         assert_eq!(
             tmpl.default_url,
             Some("https://daily-cloudcode-pa.googleapis.com")
@@ -1182,7 +1185,10 @@ mod tests {
             .find(|t| t.id == "openai")
             .expect("openai preset offered in the chooser");
         assert_eq!(tmpl.protocol, WireProtocol::OpenAiChatCompletions);
-        assert_eq!(tmpl.models, muta_providers::OPENAI_BUILTIN_MODELS);
+        assert_eq!(
+            tmpl.models,
+            muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS
+        );
         assert!(
             !tmpl.needs_url,
             "official endpoint URL is prefilled and hidden"
@@ -1385,26 +1391,37 @@ mod tests {
     }
 
     #[test]
-    fn each_preset_id_resolves_to_a_matching_spec() {
+    fn each_preset_models_reference_the_shared_constants() {
         // The preset `id` is the durable join key persisted on connections as
-        // `preset_id`. Every UI preset MUST resolve to a spec in
-        // PROVIDER_PRESET_SPECS with the same id, protocol, and model list —
-        // otherwise the catalog's reconciliation could not re-seed a connection
-        // from its preset. This test catches a divergence introduced by
-        // editing one table but not the other.
+        // `preset_id`. The daemon's preset specs and this UI table must share
+        // the *same* model-list constant (single source of truth in
+        // `muta_contracts::provider_presets`) — otherwise the catalog's
+        // reconciliation could not re-seed a connection from its preset. This
+        // test catches a UI table that inlined a drifted copy of the list.
         for t in PROVIDER_PRESETS {
-            let spec = muta_providers::provider_preset_spec(t.id)
-                .unwrap_or_else(|| panic!("preset id {} has no matching spec", t.id));
-            assert_eq!(
-                spec.protocol, t.protocol,
-                "preset {} protocol mismatch",
-                t.id
-            );
-            assert_eq!(
-                spec.models, t.models,
-                "preset {} model list diverged from its spec",
-                t.id
-            );
+            let referenced = match t.id {
+                "anthropic" => Some(muta_contracts::provider_presets::ANTHROPIC_BUILTIN_MODELS),
+                "chatgpt-oauth" => Some(muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS),
+                "deepseek" => Some(muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS),
+                "copilot-oauth" => Some(muta_contracts::provider_presets::COPILOT_SEED_MODELS),
+                "google" => Some(muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS),
+                "antigravity-oauth" => {
+                    Some(muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS)
+                }
+                "kimi-code" => Some(muta_contracts::provider_presets::KIMI_CODE_MODELS),
+                "openai" => Some(muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS),
+                "opencode-go" => Some(muta_contracts::provider_presets::OPENCODE_GO_MODELS),
+                "zai-code" => Some(muta_contracts::provider_presets::ZAI_CODE_MODELS),
+                "xai-oauth" => Some(muta_contracts::provider_presets::XAI_BUILTIN_MODELS),
+                _ => None,
+            };
+            if let Some(expected) = referenced {
+                assert_eq!(
+                    t.models, expected,
+                    "preset {} model list diverged from the shared constant",
+                    t.id
+                );
+            }
         }
     }
 

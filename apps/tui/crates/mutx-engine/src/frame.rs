@@ -340,17 +340,6 @@ impl<W: io::Write> Terminal<W> {
         self.commit()
     }
 
-    /// Layout and paint a retained RenderTree, diff against current screen, and flush.
-    pub fn draw_tree(&mut self, tree: &mut crate::render_tree::RenderTree) -> io::Result<()> {
-        let (w, h) = self.back.size();
-        tree.layout(crate::render_tree::Size::new(w, h));
-        self.render_frame(|f| {
-            let mut ctx = crate::render_tree::PaintContext::new(f);
-            tree.paint(&mut ctx);
-        });
-        self.commit()
-    }
-
     /// Render into the retained back grid without emitting terminal output.
     /// The next [`Self::draw`] replaces or completes this staged frame and
     /// commits only the final grid. This supports layout-dependent state such
@@ -439,15 +428,6 @@ impl TestTerminal {
         let mut frame = Frame::new(&mut self.back);
         render(&mut frame);
         self.cursor = frame.take_cursor();
-    }
-
-    /// Layout and paint a retained RenderTree directly to the test buffer.
-    pub fn draw_tree(&mut self, tree: &mut crate::render_tree::RenderTree) {
-        let (w, h) = self.back.size();
-        tree.layout(crate::render_tree::Size::new(w, h));
-        let mut frame = Frame::new(&mut self.back);
-        let mut ctx = crate::render_tree::PaintContext::new(&mut frame);
-        tree.paint(&mut ctx);
     }
 
     /// Read the rendered grid (the "buffer" the tests inspect).

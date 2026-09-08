@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use muta_contracts::SecretString;
 
-use crate::oauth::config::OAuthConfig;
 use crate::oauth::token::TokenResponse;
+use muta_contracts::provider_auth::OAuthConfig;
 
 /// Response from the device-authorization endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]

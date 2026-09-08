@@ -34,12 +34,42 @@ pub enum AgentRequest {
         session_id: String,
         input_id: String,
     },
-    /// Queue a follow-up message into an explicit live session to execute when
-    /// the active round finishes (or start an explicit session round).
+    /// Queue a follow-up message into an explicit live session. The
+    /// **driver owns the queue** (ADR-0197 M4): when the target round is
+    /// idle the message starts immediately ([`RoundEvent::FollowUpStarted`]);
+    /// when it is running the driver enqueues it
+    /// ([`RoundEvent::FollowUpQueued`]) and ships it automatically at the
+    /// round boundary. The frontend sends one verb and renders the state
+    /// the backend reports — it never decides when a follow-up ships.
     FollowUp {
         session_id: String,
         #[serde(alias = "input")]
         message: QueuedMessage,
+    },
+    /// Remove one queued follow-up (the queue modal's delete / destructive
+    /// recall-to-composer). Idempotent: removing an unknown id is a no-op.
+    QueueRemove {
+        session_id: String,
+        input_id: String,
+    },
+    /// Clear every queued follow-up for the session (the queue modal's clear).
+    QueueClear {
+        session_id: String,
+    },
+    /// Reorder one queued follow-up within its session's queue by `delta`
+    /// positions (the queue modal's `K`/`J`). Clamped at the session's
+    /// slice boundaries; unknown ids are a no-op.
+    QueueReorder {
+        session_id: String,
+        input_id: String,
+        delta: i32,
+    },
+    /// Pause or resume automatic shipping of the session's follow-up queue
+    /// (`Ctrl+P` / the queue modal's block control). Enqueueing still works
+    /// while paused; only the round-boundary auto-ship is gated.
+    QueuePaused {
+        session_id: String,
+        paused: bool,
     },
     SlashCommand(String),
     /// Trust project-authored asset domains for the active workspace.
@@ -169,6 +199,25 @@ pub enum AgentRequest {
     /// serve at least one model).
     RemoveProviderModel {
         provider_id: String,
+        model: String,
+    },
+    /// Declare one extra model on a **preset** connection (ADR-0198): a hidden
+    /// or unstable upstream id the discovery intersection can never surface,
+    /// pinned to this one connection. The declaration unions into the
+    /// connection's derived route set after discovery (a refresh that omits
+    /// the id can never evict it) and its optional capability facts ride the
+    /// ADR-0149 resolution order as the channel's remote layer. Only preset
+    /// connections accept declarations; the handler rejects unknown
+    /// connections, blank ids, and ids the connection already serves.
+    AddConnectionModel {
+        connection_id: String,
+        model: crate::model::DeclaredModel,
+    },
+    /// Drop one declared extra model from a preset connection (ADR-0198) and
+    /// push a fresh picker snapshot. Only declared extras are removable —
+    /// derived preset/discovered models are not. Unknown ids are a no-op.
+    RemoveConnectionModel {
+        connection_id: String,
         model: String,
     },
     /// Edit settings for one model/channel of a user-defined provider. This is
@@ -362,6 +411,32 @@ pub enum AgentRequest {
     /// is a raw config string (e.g. "turn_band"); interpretation into a [`crate`] layout
     /// `Strategy` happens in the renderer, keeping the core free of render types.
     UpdateTuiLayout(String),
+    /// Request the persisted prompt input history. The daemon is the source
+    /// of truth for the shared SQLite store; the frontend never opens the
+    /// database directly (ADR-0197). Replies with
+    /// [`AgentResponse::InputHistory`].
+    QueryInputHistory,
+    /// Record (lock + merge) prompt input history entries on the daemon —
+    /// one entry per recorded prompt, or the frontend's whole buffer on the
+    /// exit flush. Fire-and-forget: the frontend's local list already
+    /// reflects the entries.
+    RecordInputHistory {
+        entries: Vec<crate::HistoryEntry>,
+        dedup: bool,
+    },
+    /// Delete one prompt input history row by content and timestamp.
+    /// Fire-and-forget; the frontend has already updated its local list.
+    DeleteInputHistoryEntry {
+        text: String,
+        created_at_ms: u64,
+    },
+    /// Request the stored capability overrides for one provider/model route
+    /// (the model editor's prefill). Replies with
+    /// [`AgentResponse::RouteSettings`].
+    QueryRouteSettings {
+        provider_id: String,
+        model: String,
+    },
     /// Update the TUI color scheme preference (from the `/config` modal).
     /// The harness persists the selected preset id and the custom semantic
     /// palette together so switching away from Custom does not discard it.
@@ -632,6 +707,16 @@ pub enum AgentResponse {
     /// Pushed on every list mutation (open, detach-with-discard, close) and
     /// in reply to [`AgentRequest::QueryBtwList`].
     BtwList(Vec<BtwAsideSummary>),
+    /// The persisted prompt input history, in stored order — reply to
+    /// [`AgentRequest::QueryInputHistory`].
+    InputHistory(Vec<crate::HistoryEntry>),
+    /// The stored capability overrides for one provider/model route — reply
+    /// to [`AgentRequest::QueryRouteSettings`].
+    RouteSettings {
+        provider_id: String,
+        model: String,
+        overrides: Option<crate::model::CapabilityOverrides>,
+    },
     PermissionsCleared,
     /// Lowercase provider name → whether a usable API key is configured.
     ProviderKeys(Vec<(String, bool)>),
@@ -1097,7 +1182,11 @@ impl RetryResolution {
         let mut line = format!(
             "Recovered after {} provider {}",
             self.attempts,
-            if self.attempts == 1 { "retry" } else { "retries" }
+            if self.attempts == 1 {
+                "retry"
+            } else {
+                "retries"
+            }
         );
         if let Some(round) = self.round {
             line.push_str(&format!(" (round {round})"));
@@ -1225,6 +1314,22 @@ pub enum RoundEvent {
     /// could be admitted. A frontend may safely retain it as a paused follow-up item.
     SteerUnavailable {
         input_id: String,
+    },
+    /// The driver accepted a follow-up into its queue while the target round
+    /// was running (ADR-0197 M4). The item will ship automatically at the
+    /// round boundary, unless the queue is paused; the authoritative queue
+    /// snapshot rides [`RoundEvent::QueueUpdated`].
+    FollowUpQueued {
+        input_id: String,
+    },
+    /// The authoritative follow-up queue snapshot for a session, sent after
+    /// every queue change (enqueue, ship, remove, clear, promote, pause).
+    /// A full-replace diff: frontends rebuild their queue projection from
+    /// `items` verbatim. Ships also emit [`RoundEvent::FollowUpStarted`] —
+    /// the snapshot reflects the queue *after* the ship.
+    QueueUpdated {
+        items: Vec<QueuedMessage>,
+        paused: bool,
     },
     /// A pending steering message was cancelled before admission.
     SteerCancelled {

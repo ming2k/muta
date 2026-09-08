@@ -289,7 +289,9 @@ impl App {
             self.resume_queue(&sid);
         }
         if self.input_history_persist {
-            self.input_history = crate::config::load_history();
+            // Re-hydrate from the daemon SSOT (ADR-0197); the snapshot lands
+            // as an `InputHistory` mutation.
+            self.send_intent(muta_contracts::AgentRequest::QueryInputHistory);
         }
         self.surfaces.show_session_view();
         self.panels.close_all();
@@ -329,7 +331,9 @@ impl App {
             self.deactivate_panel(current);
         }
         if id == crate::surfaces::PanelId::HistorySearch && self.input_history_persist {
-            self.input_history = crate::config::load_history();
+            // Re-hydrate from the daemon SSOT (ADR-0197); the snapshot lands
+            // as an `InputHistory` mutation.
+            self.send_intent(muta_contracts::AgentRequest::QueryInputHistory);
         }
         let first = self.panels.open(id).is_none();
         self.surfaces.show_panel(id);

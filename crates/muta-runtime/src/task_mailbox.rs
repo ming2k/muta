@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use muta_agent::orchestration::{RoundDriver, RoundInput};
 use muta_contracts::{BackgroundJobOutcome, JobSpec, JobState};
-use tokio::sync::{ RwLock};
+use tokio::sync::RwLock;
 
 use crate::side::SideRegistry;
 use crate::task_digest::outcome_digest;
@@ -68,11 +68,7 @@ pub(crate) fn classify_outcome(outcome: &BackgroundJobOutcome) -> FabricWake {
 /// Queue a wake turn. If a round is active the digest is delivered at the
 /// round boundary (queued follow-up, ADR-0126); if idle it starts a fresh
 /// round immediately. This is the mailbox arm's action.
-pub(crate) async fn request_wake_turn(
-    env: &MailboxEnv,
-    session_id: &str,
-    digest: String,
-) {
+pub(crate) async fn request_wake_turn(env: &MailboxEnv, session_id: &str, digest: String) {
     let running = env.lifecycle.is_running().await;
     if running {
         // Round-boundary delivery: dispatch through the request channel as a

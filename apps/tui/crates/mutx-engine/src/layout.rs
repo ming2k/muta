@@ -48,8 +48,12 @@ impl Rect {
     pub fn intersection(self, other: Self) -> Self {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
-        Self::new(x, y, self.right().min(other.right()).saturating_sub(x),
-            self.bottom().min(other.bottom()).saturating_sub(y))
+        Self::new(
+            x,
+            y,
+            self.right().min(other.right()).saturating_sub(x),
+            self.bottom().min(other.bottom()).saturating_sub(y),
+        )
     }
 
     /// Area (width × height) in cells.

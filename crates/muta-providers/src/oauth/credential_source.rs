@@ -1,9 +1,9 @@
 //! Transactional OAuth credential resolution for provider connections.
 
-use super::config::config_by_provider_id;
 use super::store::{AuthStore, LockedAuthStore, TokenSet};
 use super::{ACCESS_TOKEN_REFRESH_SKEW_MS, OAuth, access_token_is_expiring};
 use futures::future::BoxFuture;
+use muta_contracts::provider_auth::config_by_provider_id;
 use muta_contracts::{ConnectionAuth, CredentialSource, ResolvedAuth, SecretString};
 use std::collections::HashMap;
 use std::fmt;

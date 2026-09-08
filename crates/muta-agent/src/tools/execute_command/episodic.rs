@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::tools::execute_command::pipes::{
-    OutputCollector, StreamReaders, spawn_stream_readers,
-};
+use crate::tools::execute_command::pipes::{OutputCollector, StreamReaders, spawn_stream_readers};
 use tokio::task::JoinHandle;
 
 pub fn workspace_sandbox_shell(
@@ -49,7 +47,9 @@ impl muta_contracts::CrateChildBridge for AdoptableChild {
 /// Ownership shuttle for the detach-then-fallback flow: handles are moved out
 /// for the adoption attempt and restored if the fabric refuses.
 struct StreamReadersFallback {
-    rx: Option<tokio::sync::mpsc::UnboundedReceiver<(muta_contracts::tool_output::ShellStream, String)>>,
+    rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<(muta_contracts::tool_output::ShellStream, String)>,
+    >,
     stdout_task: Option<JoinHandle<()>>,
     stderr_task: Option<JoinHandle<()>>,
     child: Option<tokio::process::Child>,
@@ -82,13 +82,23 @@ impl StreamReadersFallback {
 
     /// Restore the drained handles after a refused adoption, returning the
     /// child and its process tree for the legacy kill path.
-    fn restore(mut self) -> (StreamReaders, tokio::process::Child, muta_platform::process::OwnedProcessTree) {
+    fn restore(
+        mut self,
+    ) -> (
+        StreamReaders,
+        tokio::process::Child,
+        muta_platform::process::OwnedProcessTree,
+    ) {
         let readers = StreamReaders {
             rx: self.rx.take().unwrap(),
             stdout_task: self.stdout_task.take().unwrap(),
             stderr_task: self.stderr_task.take().unwrap(),
         };
-        (readers, self.child.take().unwrap(), self.process_tree.take().unwrap())
+        (
+            readers,
+            self.child.take().unwrap(),
+            self.process_tree.take().unwrap(),
+        )
     }
 }
 
@@ -200,23 +210,28 @@ pub async fn run_episodic_command(
     // still kills: there is nothing worth adopting.
     if idle_blocked && job_service.is_some() && !collector.is_empty() {
         {
-            let mut readers_fallback = StreamReadersFallback::take(&mut readers, child, process_tree);
+            let mut readers_fallback =
+                StreamReadersFallback::take(&mut readers, child, process_tree);
             let mut rx = readers_fallback.rx.take().unwrap();
             collector.drain_remaining_rx(&mut rx);
             drop(rx);
-            if let Some(h) = readers_fallback.stdout_task.take() { h.abort(); }
-            if let Some(h) = readers_fallback.stderr_task.take() { h.abort(); }
+            if let Some(h) = readers_fallback.stdout_task.take() {
+                h.abort();
+            }
+            if let Some(h) = readers_fallback.stderr_task.take() {
+                h.abort();
+            }
 
-            let pid = readers_fallback.child.as_ref().and_then(|c| c.id()).unwrap_or_default();
+            let pid = readers_fallback
+                .child
+                .as_ref()
+                .and_then(|c| c.id())
+                .unwrap_or_default();
             let adoptable = AdoptableChild {
                 child: readers_fallback.child.take().unwrap(),
                 process_tree: readers_fallback.process_tree.take().unwrap(),
             };
-            let captured: Vec<String> = collector
-                .lines()
-                .iter()
-                .map(|l| l.text.clone())
-                .collect();
+            let captured: Vec<String> = collector.lines().iter().map(|l| l.text.clone()).collect();
 
             match job_service
                 .as_ref()

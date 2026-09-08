@@ -14,8 +14,8 @@
 use muta_contracts::Provider;
 use muta_contracts::{Message, Role, SessionDigestInput};
 
-use std::sync::Arc;
 use crate::agent::Agent;
+use std::sync::Arc;
 
 /// Character budget for the transcript excerpt handed to the digest runner.
 /// Generous enough to show the opening request and the recent arc (so a
@@ -149,9 +149,7 @@ impl Agent {
         // is written only while no title exists. The digest itself was
         // already stored above.
         let (_, has_title) = session.title().await;
-        if !has_title
-            && let Err(error) = session.set_title(Some(next.title), false).await
-        {
+        if !has_title && let Err(error) = session.set_title(Some(next.title), false).await {
             tracing::warn!(%error, "could not persist digest-derived session title");
         }
         Ok(true)

@@ -1823,10 +1823,9 @@ pub fn relay_agent_event(
             session_id,
             RoundEvent::BackgroundJobProgress { job_id, line },
         ),
-        AgentEvent::BackgroundJobReady { job_id } => round_response(
-            session_id,
-            RoundEvent::BackgroundJobReady { job_id },
-        ),
+        AgentEvent::BackgroundJobReady { job_id } => {
+            round_response(session_id, RoundEvent::BackgroundJobReady { job_id })
+        }
         AgentEvent::BackgroundJobCompleted(outcome) => {
             round_response(session_id, RoundEvent::BackgroundJobCompleted(outcome))
         }
@@ -2247,7 +2246,11 @@ mod digest_tests {
             crate::session_digest::DIGEST_REFRESH_DELTA_CHARS + 1_000
         ));
         // Missing anchor (legacy data) → refresh once to establish it.
-        assert!(crate::session_digest::digest_refresh_needed(Some(&digest), None, 0));
+        assert!(crate::session_digest::digest_refresh_needed(
+            Some(&digest),
+            None,
+            0
+        ));
     }
 }
 

@@ -23,13 +23,13 @@ pub fn base64_image(data: &[u8]) -> String {
     base64_encode_bytes(data)
 }
 
-/// Adapter implementing [`muta_runtime::UiBridge`] by delegating to the TUI's
+/// Adapter implementing [`muta_client::UiBridge`] by delegating to the TUI's
 /// real clipboard path. Used by the slash-command dispatcher so it stays frontend-agnostic.
 pub struct TuiClipboard;
 
 #[async_trait::async_trait]
-impl muta_runtime::UiBridge for TuiClipboard {
-    async fn copy_to_clipboard(&self, text: &str) -> Result<muta_runtime::CopyOutcome, String> {
+impl muta_client::UiBridge for TuiClipboard {
+    async fn copy_to_clipboard(&self, text: &str) -> Result<muta_client::CopyOutcome, String> {
         copy(text).await
     }
 }

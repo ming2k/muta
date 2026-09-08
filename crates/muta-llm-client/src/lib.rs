@@ -41,7 +41,7 @@ pub use transport::{decode_response_json, ensure_success, retry_after_ms, transp
 // Re-export the concrete provider types at the crate root for ergonomic access
 // and stable intra-doc links.
 pub use prompt_cache::PromptCacheConfig;
-pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ThinkingConfig, ReasoningMode};
+pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ReasoningMode, ThinkingConfig};
 pub use protocol::google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
 pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvider};
 

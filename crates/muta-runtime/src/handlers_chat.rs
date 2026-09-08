@@ -6,8 +6,8 @@
 //! `lifecycle`, `resp_tx`, `pursuit_service`, `config`, …) so the body reads
 //! exactly as it did inline.
 
-use muta_agent::Agent;
 use muta_agent::orchestration::{RoundInput, round_response};
+use muta_agent::{Agent, RoundLifecycle};
 use muta_contracts::{AgentResponse, QueuedMessage, RoundEvent};
 use muta_persistence::session::SessionStore;
 use std::sync::Arc;
@@ -115,7 +115,66 @@ pub async fn cancel_steer(
 /// Dispatch a paused outbox item into a fresh round without consulting the
 /// frontend's current view. If its side session vanished, hand ownership back
 /// to the outbox through `SteerUnavailable`.
-pub(crate) async fn follow_up(env: SideEnv<'_>, session_id: String, input: QueuedMessage) {
+/// `AgentRequest::FollowUp` — the driver-owned follow-up queue authority
+/// (ADR-0197 M4). The daemon decides: an idle, un-paused target starts
+/// immediately ([`RoundEvent::FollowUpStarted`]); a running (or paused)
+/// target enqueues the message ([`RoundEvent::FollowUpQueued`]) and the
+/// driver ships it at the round boundary. The frontend never decides when a
+/// follow-up ships.
+pub(crate) async fn follow_up(
+    env: SideEnv<'_>,
+    queue: &mut crate::session_driver::FollowUpQueue,
+    wake: &mpsc::Sender<String>,
+    session_id: String,
+    input: QueuedMessage,
+) {
+    let SideEnv {
+        side,
+        master: agent,
+        primary_session: session,
+        primary_lifecycle: lifecycle,
+        tx: resp_tx,
+        config: _,
+    } = env;
+    let Some(target) =
+        crate::side::resolve_turn_target(side, agent, session, lifecycle, &session_id).await
+    else {
+        // The aside was closed after the message entered the frontend
+        // outbox — the item cannot run anywhere.
+        let _ = resp_tx.send(round_response(
+            &session_id,
+            RoundEvent::SteerUnavailable { input_id: input.id },
+        ));
+        return;
+    };
+    let running = target.lifecycle.is_running().await;
+    if running || queue.is_paused(&session_id) {
+        let input_id = input.id.clone();
+        queue.enqueue(&session_id, input);
+        let _ = resp_tx.send(round_response(
+            &session_id,
+            RoundEvent::FollowUpQueued { input_id },
+        ));
+        emit_queue_snapshot(resp_tx, queue, &session_id);
+        if running {
+            // Watch this target's round boundary so the queue ships the
+            // moment the round ends (unless the round was interrupted —
+            // the boundary handler parks the queue then).
+            spawn_boundary_watcher(target.lifecycle.clone(), wake.clone(), session_id.clone());
+        }
+        return;
+    }
+    start_queued_follow_up(env, session_id, input, queue).await;
+}
+
+/// Start one dequeued follow-up (the shared ship path for direct dispatch
+/// and round-boundary shipping).
+pub(crate) async fn start_queued_follow_up(
+    env: SideEnv<'_>,
+    session_id: String,
+    input: QueuedMessage,
+    queue: &mut crate::session_driver::FollowUpQueue,
+) {
     let SideEnv {
         side,
         master: agent,
@@ -155,4 +214,87 @@ pub(crate) async fn follow_up(env: SideEnv<'_>, session_id: String, input: Queue
             RoundEvent::FollowUpStarted(input),
         ));
     }
+    emit_queue_snapshot(resp_tx, queue, &session_id);
+}
+
+/// The authoritative queue snapshot for one session, after every queue
+/// change (ADR-0197 M4).
+pub(crate) fn emit_queue_snapshot(
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    queue: &crate::session_driver::FollowUpQueue,
+    session_id: &str,
+) {
+    let (items, paused) = queue.snapshot(session_id);
+    let _ = resp_tx.send(round_response(
+        session_id,
+        RoundEvent::QueueUpdated { items, paused },
+    ));
+}
+
+/// Spawn a one-shot boundary watcher: wake the driver's follow-up queue the
+/// moment this target's round ends (ADR-0197 M4).
+pub(crate) fn spawn_boundary_watcher(
+    lifecycle: Arc<RoundLifecycle>,
+    wake: mpsc::Sender<String>,
+    session_id: String,
+) {
+    tokio::spawn(async move {
+        loop {
+            if !lifecycle.is_running().await {
+                break;
+            }
+            lifecycle.finished().notified().await;
+        }
+        let _ = wake.send(session_id).await;
+    });
+}
+
+/// `AgentRequest::QueueRemove` — the queue modal's delete / destructive
+/// recall-to-composer. Idempotent.
+pub(crate) async fn queue_remove(
+    env: SideEnv<'_>,
+    queue: &mut crate::session_driver::FollowUpQueue,
+    session_id: String,
+    input_id: String,
+) {
+    let SideEnv { tx: resp_tx, .. } = env;
+    queue.remove(&session_id, &input_id);
+    emit_queue_snapshot(resp_tx, queue, &session_id);
+}
+
+/// `AgentRequest::QueueClear` — the queue modal's clear.
+pub(crate) async fn queue_clear(
+    env: SideEnv<'_>,
+    queue: &mut crate::session_driver::FollowUpQueue,
+    session_id: String,
+) {
+    let SideEnv { tx: resp_tx, .. } = env;
+    queue.clear(&session_id);
+    emit_queue_snapshot(resp_tx, queue, &session_id);
+}
+
+/// `AgentRequest::QueueReorder` — the queue modal's `K`/`J` reorder.
+pub(crate) async fn queue_reorder(
+    env: SideEnv<'_>,
+    queue: &mut crate::session_driver::FollowUpQueue,
+    session_id: String,
+    input_id: String,
+    delta: i32,
+) {
+    let SideEnv { tx: resp_tx, .. } = env;
+    queue.reorder(&session_id, &input_id, delta);
+    emit_queue_snapshot(resp_tx, queue, &session_id);
+}
+
+/// `AgentRequest::QueuePaused` — the queue modal's block control
+/// (`Ctrl+P`). Pausing gates only the round-boundary auto-ship.
+pub(crate) async fn queue_paused(
+    env: SideEnv<'_>,
+    queue: &mut crate::session_driver::FollowUpQueue,
+    session_id: String,
+    paused: bool,
+) {
+    let SideEnv { tx: resp_tx, .. } = env;
+    queue.set_paused(&session_id, paused);
+    emit_queue_snapshot(resp_tx, queue, &session_id);
 }

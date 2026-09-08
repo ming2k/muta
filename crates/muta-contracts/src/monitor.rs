@@ -98,6 +98,52 @@ pub enum MonitorEvent {
     TaskUpdated(MonitoredTask),
     /// A daemon-level task left the snapshot entirely (pruned / aborted).
     TaskRemoved { task_id: String },
+    /// The daemon's durable-storage writer changed state (ADR-0196): healthy
+    /// again after a degradation, degraded further, or recovering. A
+    /// `Healthy` transition clears any retained degradation banner.
+    PersistenceHealth(PersistenceHealth),
+}
+
+/// User-visible durability health of the daemon's single-writer persistence
+/// actor (ADR-0196 D4). While not `Healthy`, durability is degraded: every
+/// frontend should retain a visible banner until the next `Healthy` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum PersistenceHealth {
+    /// Serving normally. Clears a previously shown degradation banner.
+    Healthy,
+    /// The writer died (or failed to open the database) and the supervisor
+    /// is respawning it with backoff. Writes in this window fail with a
+    /// retryable "writer down" error.
+    Recovering {
+        attempt: u32,
+        since_ms: u64,
+        error: String,
+    },
+    /// Respawn attempts exceeded the recovering budget; retries continue
+    /// forever, but durability is effectively unavailable and must be
+    /// surfaced to the user, not just logged.
+    Down {
+        attempt: u32,
+        since_ms: u64,
+        error: String,
+    },
+}
+
+impl PersistenceHealth {
+    /// Whether durability is currently expected to work.
+    pub fn is_healthy(&self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+
+    /// The degradation banner line: severity already implied by the variant.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Healthy => None,
+            Self::Recovering { error, .. } | Self::Down { error, .. } => Some(error),
+        }
+    }
 }
 
 /// The daemon-level snapshot: who is serving and what is happening right now.
@@ -117,6 +163,11 @@ pub struct MonitorSnapshot {
     /// producers that predate the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<MonitoredTask>,
+    /// Latest durability-health state (ADR-0196 D4), folded from the
+    /// supervisor's transitions. `None` for producers that predate the
+    /// field or when the writer has never degraded (healthy by omission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence_health: Option<PersistenceHealth>,
 }
 
 /// One row of the daemon-level task tree (ADR-0190 D6): identity, spec
@@ -362,6 +413,7 @@ mod tests {
             project_root: "/tmp/proj".into(),
             daemon_started_at: 1_700_000_000,
             tasks: Vec::new(),
+            persistence_health: None,
             sessions: vec![MonitoredSession {
                 id: "s-1".into(),
                 overview: "fix the flaky test".into(),

@@ -23,13 +23,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// Flash Vision over the Responses API, one key). Each id exists in the model
 /// registry. The dated ids pin a snapshot (`-0731` / `-0813`); the bare ids
 /// float with the upstream latest.
-pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
-    "deepseek-v4-flash",
-    "deepseek-v4-flash-0731",
-    "deepseek-v4-pro",
-    "deepseek-v4-pro-0813",
-    "deepseek-v4-flash-vision-exp",
-];
+pub use muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see

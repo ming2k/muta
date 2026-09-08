@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-use muta_runtime::client;
+use muta_client as client;
 use mutx::start_tui;
 mod cli;
 mod headless;
@@ -9,7 +9,7 @@ use cli::{CliArgs, Mode};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _tracing_guard = muta_runtime::startup::init_tracing();
+    let _tracing_guard = muta_client::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -182,35 +182,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Cap on how long exit is allowed to wait for the input-history write
 /// before giving up (the write keeps running detached in the background).
-const EXIT_HISTORY_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// Persist the input history off the async executor (`save_history` does
-/// blocking `flock` + read-merge-write file I/O), with a bound on how long
-/// exit waits for it. The TUI has already restored the terminal by now, so
-/// a slow or contended write must not hold the user's shell prompt hostage:
-/// after the timeout the blocking task keeps running detached and the
-/// process exits anyway. The write itself is atomic (temp + rename), so an
-/// interrupted process can at worst lose the merge, never corrupt the file.
-async fn save_history_bounded(history: Vec<muta_contracts::HistoryEntry>, dedup: bool) {
-    let save = tokio::task::spawn_blocking(move || {
-        mutx::config::save_history(&history, dedup).map_err(|error| error.to_string())
-    });
-    match tokio::time::timeout(EXIT_HISTORY_SAVE_TIMEOUT, save).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(error))) => {
-            tracing::warn!(%error, "could not save input history on exit");
-        }
-        Ok(Err(join_error)) => {
-            tracing::warn!(%join_error, "input-history save task failed");
-        }
-        Err(_) => {
-            tracing::warn!(
-                timeout_ms = EXIT_HISTORY_SAVE_TIMEOUT.as_millis() as u64,
-                "input-history save outlived the exit bound; finishing detached"
-            );
-        }
-    }
-}
 
 /// The dashboard's data (the live `MonitorEvent` snapshot) and its control
 /// verbs (interrupt / prompt / create) ride their own daemon connections, so
@@ -409,18 +380,22 @@ async fn run_attached(
             }
         };
         if let Some(prompt) = initial_prompt.take() {
-            let _ = tx.send(muta_contracts::AgentRequest::Prompt {
+            tx.send(muta_contracts::AgentRequest::Prompt {
                 text: prompt,
                 images: Vec::new(),
                 sent_at_ms: None,
-            });
+            })
+            .map_err(|error| format!("daemon link lost before initial prompt: {error}"))?;
         }
         let mutx_config = mutx::config::TuiConfig::load();
-        let input_history = mutx::config::load_history();
+        // History is hydrated from the daemon (SSOT) after the TUI starts;
+        // the frontend never opens the shared database itself (ADR-0197).
+        let input_history = Vec::new();
         let tui_config = mutx_config.clone();
         let input_history_config = mutx_config.input_history.clone();
         let startup_overlay =
             std::mem::replace(&mut startup_overlay_pending, mutx::StartupOverlay::None);
+        let exit_tx = tx.clone();
         let outcome = start_tui(
             tx,
             rx,
@@ -444,7 +419,15 @@ async fn run_attached(
             },
         )
         .await?;
-        save_history_bounded(outcome.history, mutx_config.input_history.dedup).await;
+        // Exit flush: merge the final buffer into the daemon's store. Each
+        // prompt was already recorded during the session, so a lost flush at
+        // most drops the last dedup pass — never the entries themselves.
+        if let Err(error) = exit_tx.send(muta_contracts::AgentRequest::RecordInputHistory {
+            entries: outcome.history,
+            dedup: mutx_config.input_history.dedup,
+        }) {
+            tracing::error!(%error, "daemon link lost before exit history flush");
+        }
         match outcome.switch_to {
             Some(id) => {
                 target = Some(id);

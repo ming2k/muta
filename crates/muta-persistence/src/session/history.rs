@@ -42,10 +42,7 @@ fn _persist_guard_doc() {}
 /// Implemented via zero-copy `semantic_wire_eq` to eliminate repetitive heap
 /// allocations and clones on the ReAct turn hot path.
 fn wire_eq(a: &[Message], b: &[Message]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b.iter())
-            .all(|(x, y)| x.semantic_wire_eq(y))
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.semantic_wire_eq(y))
 }
 
 impl SessionStore {
@@ -125,21 +122,18 @@ impl SessionStore {
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            let already = record
-                .round
-                .is_some_and(|round| {
-                    state
-                        .data
-                        .retry_resolutions
-                        .iter()
-                        .any(|existing| existing.round == Some(round))
-                })
-                || (!record.round.is_some()
-                    && state
-                        .data
-                        .retry_resolutions
-                        .iter()
-                        .any(|existing| existing.round.is_none()));
+            let already = record.round.is_some_and(|round| {
+                state
+                    .data
+                    .retry_resolutions
+                    .iter()
+                    .any(|existing| existing.round == Some(round))
+            }) || (!record.round.is_some()
+                && state
+                    .data
+                    .retry_resolutions
+                    .iter()
+                    .any(|existing| existing.round.is_none()));
             if already {
                 return Ok(());
             }
@@ -323,7 +317,10 @@ impl SessionStore {
             // 1. Message-tail delta against the projection.
             let durable_len = state.get_or_project_messages().len();
             let prefix_matches = commit.messages.len() >= durable_len
-                && wire_eq(&commit.messages[..durable_len], state.get_or_project_messages());
+                && wire_eq(
+                    &commit.messages[..durable_len],
+                    state.get_or_project_messages(),
+                );
             let old_entries_len = state.data.transcript.entries.len();
             let mut children = Vec::new();
             let mut full_rewrite = false;
@@ -434,12 +431,7 @@ impl SessionStore {
                     state.data.transcript.entries[old_entries_len..].to_vec();
                 delta
             };
-            (
-                state.path.clone(),
-                data,
-                children,
-                usage_upserts,
-            )
+            (state.path.clone(), data, children, usage_upserts)
         };
         persist_runner_children(&self.db_path, &self.blob_store, &children);
         self.persist_with_usage(path, data, usage_upserts).await

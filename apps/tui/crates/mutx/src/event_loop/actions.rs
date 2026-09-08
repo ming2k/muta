@@ -153,7 +153,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
     let config = preset
         .auth
         .oauth_provider_id()
-        .and_then(muta_providers::oauth::config_by_provider_id);
+        .and_then(muta_contracts::provider_auth::config_by_provider_id);
     let method = forced_method.or_else(|| {
         config
             .as_ref()
@@ -189,7 +189,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
     }
 
     app.begin_oauth_add(preset, method);
-    let _ = app.tx.send(AgentRequest::AuthorizeOAuth {
+    app.send_intent(AgentRequest::AuthorizeOAuth {
         method,
         auth: preset.auth,
     });
@@ -261,7 +261,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // redraw on the very next frame at the new geometry.
         }
         input::InputAction::Quit => {
-            let _ = app.tx.send(AgentRequest::EndSession);
+            app.send_intent(AgentRequest::EndSession);
             tracing::info!(reason = "slash_exit", "app exiting");
             return ActionFlow::Exit;
         }
@@ -337,7 +337,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::CancelOauthPending => {
             if app.active_modal() == Modal::OauthPending {
-                let _ = app.tx.send(AgentRequest::CancelAuthorizeOAuth);
+                app.send_intent(AgentRequest::CancelAuthorizeOAuth);
                 app.awaiting_oauth_add = false;
                 app.oauth_pending_url.clear();
                 app.oauth_pending_user_code.clear();
@@ -418,7 +418,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // The confirm overlay's Enter-on-Delete: dispatch the
             // staged deletion and tear the overlay down.
             if let Some(req) = app.confirm_provider_delete() {
-                let _ = app.tx.send(req);
+                app.send_intent(req);
             }
         }
         input::InputAction::DeleteProviderCancel => {
@@ -482,7 +482,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if app.active_modal() == Modal::Models {
                 let ranked = app.models_flat_filtered();
                 if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
-                    let _ = app.tx.send(AgentRequest::ToggleFavorite {
+                    app.send_intent(AgentRequest::ToggleFavorite {
                         id: row.model.clone(),
                     });
                 }
@@ -663,10 +663,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     if let Some(detail) = app.connection_detail.as_mut() {
                         detail.usage = muta_contracts::ConnectionUsageState::Fetching;
                     }
-                    let _ = app.tx.send(AgentRequest::QueryConnectionDetail { id });
+                    app.send_intent(AgentRequest::QueryConnectionDetail { id });
                 }
             } else if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
-                let _ = app.tx.send(AgentRequest::RefreshProviderModels {
+                app.send_intent(AgentRequest::RefreshProviderModels {
                     user_initiated: true,
                 });
             }
@@ -841,7 +841,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                         &app.custom_color_scheme,
                                         ws_path,
                                     );
-                                    let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                    app.send_intent(AgentRequest::UpdateTuiColorScheme {
                                         name: app.color_scheme.clone(),
                                         custom: app.custom_color_scheme.clone(),
                                     });
@@ -912,7 +912,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                         } else {
                                             (current + 5).max(5)
                                         };
-                                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                        app.send_intent(AgentRequest::UpdateWebSearchConfig(
                                             Box::new(muta_contracts::WebSearchConfigUpdate {
                                                 timeout_secs: Some(next),
                                                 ..Default::default()
@@ -927,30 +927,26 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                                 .as_ref()
                                                 .and_then(|ws| ws.search_connections.get(conn_idx))
                                             {
-                                                let _ =
-                                                    app.tx
-                                                        .send(AgentRequest::UpdateWebSearchConfig(
-                                                        Box::new(
-                                                            muta_contracts::WebSearchConfigUpdate {
-                                                                provider: Some(conn.id.clone()),
-                                                                ..Default::default()
-                                                            },
-                                                        ),
+                                                let request =
+                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                        muta_contracts::WebSearchConfigUpdate {
+                                                            provider: Some(conn.id.clone()),
+                                                            ..Default::default()
+                                                        },
                                                     ));
+                                                app.send_intent(request);
                                             }
                                         } else if let Some(conn) = app
                                             .websearch_config
                                             .as_ref()
                                             .and_then(|ws| ws.reader_connections.get(conn_idx))
                                         {
-                                            let _ = app.tx.send(
-                                                AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                    muta_contracts::WebSearchConfigUpdate {
-                                                        reader: Some(conn.id.clone()),
-                                                        ..Default::default()
-                                                    },
-                                                )),
-                                            );
+                                            app.send_intent(AgentRequest::UpdateWebSearchConfig(
+                                                Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                    reader: Some(conn.id.clone()),
+                                                    ..Default::default()
+                                                }),
+                                            ));
                                         }
                                     }
                                     idx if idx == 2 + connection_count => {
@@ -983,7 +979,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                         .as_ref()
                         .and_then(|ws| ws.search_connections.get(conn_idx))
                     {
-                        let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(
+                        app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
                             muta_contracts::WebSearchConfigUpdate {
                                 delete_search_connection: Some(conn.id.clone()),
                                 ..Default::default()
@@ -995,7 +991,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     .as_ref()
                     .and_then(|ws| ws.reader_connections.get(conn_idx))
                 {
-                    let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(Box::new(
+                    app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
                         muta_contracts::WebSearchConfigUpdate {
                             delete_reader_connection: Some(conn.id.clone()),
                             ..Default::default()
@@ -1053,7 +1049,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 .as_ref()
                 .and_then(|s| s.mcp.get(app.modal_index))
             {
-                let _ = app.tx.send(AgentRequest::ToggleMcpServer {
+                app.send_intent(AgentRequest::ToggleMcpServer {
                     name: server.name.clone(),
                     enabled: server.disabled,
                 });
@@ -1067,7 +1063,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 .as_ref()
                 .and_then(|s| s.mcp.get(app.modal_index))
             {
-                let _ = app.tx.send(AgentRequest::ReconnectMcpServer {
+                app.send_intent(AgentRequest::ReconnectMcpServer {
                     name: server.name.clone(),
                 });
             }
@@ -1078,7 +1074,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if let Some(snapshot) = app.session_context.as_ref()
                 && let Some(rule) = snapshot.permissions.get(app.modal_index)
             {
-                let _ = app.tx.send(AgentRequest::RevokePermission {
+                app.send_intent(AgentRequest::RevokePermission {
                     tool: rule.tool.clone(),
                     scope: rule.scope.clone(),
                 });
@@ -1087,7 +1083,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::PermissionsClearAll => {
             // Clear every cached rule. The harness replies with a fresh
             // (empty) snapshot.
-            let _ = app.tx.send(AgentRequest::ClearAllPermissions);
+            app.send_intent(AgentRequest::ClearAllPermissions);
             app.modal_index = 0;
         }
         input::InputAction::SessionSelect { forward } => {
@@ -1149,7 +1145,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // normal agent channel; the harness replies with a fresh
             // snapshot that re-renders the dashboard.
             if let Some(req) = app.session_activate_request() {
-                let _ = app.tx.send(req);
+                app.send_intent(req);
             }
         }
         input::InputAction::OpenSelectedSession => {
@@ -1167,12 +1163,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 // transient overlays (Esc = dismiss, not quit).
                 app.startup_overlay = crate::StartupOverlay::None;
                 app.switching_session = Some(short_id.clone());
-                *runtime.switching_session.lock().await = Some(short_id);
+                let _ = short_id;
                 app.messages.clear();
                 app.scroll = 0;
-                let _ = app
-                    .tx
-                    .send(AgentRequest::SlashCommand(format!("/sessions {}", id)));
+                app.send_intent(AgentRequest::SlashCommand(format!("/sessions {}", id)));
             }
         }
         input::InputAction::HostPreviewSelected => {
@@ -1281,13 +1275,13 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.modal_index = app
                     .modal_index
                     .min(app.sessions_overview.len().saturating_sub(1));
-                let _ = app.tx.send(AgentRequest::DeleteSession { id: deleted.id });
+                app.send_intent(AgentRequest::DeleteSession { id: deleted.id });
             }
         }
         input::InputAction::CreateNewSession => {
             app.startup_overlay = crate::StartupOverlay::None;
             app.hide_active_panel();
-            let _ = app.tx.send(AgentRequest::SlashCommand("/new".to_string()));
+            app.send_intent(AgentRequest::SlashCommand("/new".to_string()));
         }
         input::InputAction::OpenSessionInfo => {
             // Drill into the session-info sub-view for the highlighted
@@ -1302,7 +1296,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.session_info_detail = true;
                 app.session_detail = None;
                 app.session_info_scroll = 0;
-                let _ = app.tx.send(AgentRequest::QuerySessionDetail {
+                app.send_intent(AgentRequest::QuerySessionDetail {
                     id: session.id.clone(),
                 });
             }
@@ -1316,7 +1310,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.connection_info_standalone = false;
                 app.connection_detail = None;
                 app.connection_info_scroll = 0;
-                let _ = app.tx.send(AgentRequest::QueryConnectionDetail {
+                app.send_intent(AgentRequest::QueryConnectionDetail {
                     id: ranked.id.clone(),
                 });
             }
@@ -1526,9 +1520,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::ActivateFocusedTarget => {
             if let Some(target) = app.focused_target {
+                // ADR-0197 M1: the transcript document lives on `App` —
+                // take it, edit, restore (the loop is the sole writer).
+                let mut messages = std::mem::take(&mut app.messages);
+                let mut toggled = false;
                 match target.kind {
                     InteractiveTargetKind::ToolStep => {
-                        let mut messages = runtime.messages.write().await;
                         let enter_id = resolve_focused_mut(
                             &mut messages,
                             &app.focus_stack,
@@ -1542,7 +1539,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             }
                         });
                         if let Some(id) = enter_id {
-                            drop(messages);
+                            app.messages = messages;
                             app.enter_runner(id);
                         } else {
                             // Enter mirrors the mouse click on a tool
@@ -1551,46 +1548,24 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             // popping a modal. Keeping keyboard and
                             // pointer parity is the expected behavior
                             // for the disclosure affordance.
-                            app.toggle_step_pinned(&mut messages, target.message_idx);
-                            drop(messages);
+                            toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
+                            app.messages = messages;
                         }
                     }
-                    InteractiveTargetKind::Reasoning => {
-                        let mut messages = runtime.messages.write().await;
-                        let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                        drop(messages);
-                        if toggled {
-                            app.selection = SelectionState::None;
-                        }
+                    InteractiveTargetKind::Reasoning
+                    | InteractiveTargetKind::ProviderRetry
+                    | InteractiveTargetKind::CommandResult
+                    | InteractiveTargetKind::Notice => {
+                        // Enter mirrors the mouse click on the row's
+                        // summary: toggle its expandable body.
+                        toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
+                        app.messages = messages;
                     }
-                    InteractiveTargetKind::ProviderRetry => {
-                        let mut messages = runtime.messages.write().await;
-                        let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                        drop(messages);
-                        if toggled {
-                            app.selection = SelectionState::None;
-                        }
-                    }
-                    InteractiveTargetKind::CommandResult => {
-                        // Enter mirrors the mouse click on a command
-                        // row: toggle its expandable result body.
-                        let mut messages = runtime.messages.write().await;
-                        let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                        drop(messages);
-                        if toggled {
-                            app.selection = SelectionState::None;
-                        }
-                    }
-                    InteractiveTargetKind::Notice => {
-                        // Enter mirrors the mouse click on a notice header:
-                        // toggle its expandable detail/JSON body.
-                        let mut messages = runtime.messages.write().await;
-                        let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                        drop(messages);
-                        if toggled {
-                            app.selection = SelectionState::None;
-                        }
-                    }
+                }
+                if toggled {
+                    app.layout_height_cache.clear();
+                    app.transcript_changed_pending = true;
+                    app.selection = SelectionState::None;
                 }
             }
         }
@@ -1626,7 +1601,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if app.in_side_view {
                 app.exit_side_view();
                 app.arm_esc(None);
-                let _ = app.tx.send(AgentRequest::ExitSideView);
+                app.send_intent(AgentRequest::ExitSideView);
             }
         }
         input::InputAction::InterruptSide => {
@@ -1759,7 +1734,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
                 app.hide_active_panel();
-                let _ = app.tx.send(AgentRequest::FocusSide { side_id });
+                app.send_intent(AgentRequest::FocusSide { side_id });
             }
         }
         input::InputAction::BtwCloseSelected => {
@@ -1768,7 +1743,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // session files). The modal stays open on the refreshed list.
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
-                let _ = app.tx.send(AgentRequest::CloseSide { side_id });
+                app.send_intent(AgentRequest::CloseSide { side_id });
                 // Optimistically drop the row so the selection does not
                 // point at a stale entry before the fresh list lands; clamp
                 // the cursor in case the last row was removed.
@@ -1785,7 +1760,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.cycle_sibling(1);
         }
         input::InputAction::InsertChar(c) => {
-            // Already handled by process_event mutating app.input
+            // Already handled by route_event mutating app.input
             let _ = c;
             app.suggestion_index = None;
             // The user is editing again, so live completions are
@@ -1815,7 +1790,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::DeleteForward => {
             // Forward delete runs the same post-edit passes as Backspace: the
-            // text mutation already happened in `process_event`; this arm
+            // text mutation already happened in `route_event`; this arm
             // only keeps the completion latch, focus ownership, and staged
             // attachments consistent with the new buffer (a chip-aware
             // forward delete may have orphaned a staged entry).
@@ -1928,11 +1903,15 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::QueueToggleBlock => {
             // `Ctrl+P` (top-level or inside the queue modal): toggle the
-            // hard block on the viewed session's outbox. While blocked
-            // no queued message auto-drains, even after the round
-            // completes. This is the persistent user choice, distinct
-            // from the modal's editing-safety auto-block.
-            app.toggle_queue_block(viewed_session_id);
+            // hard block on the viewed session's outbox. ADR-0197 M4: the
+            // pause is the *daemon's* queue flag — the local toggle is the
+            // optimistic projection and the verb is authoritative.
+            let paused = !app.is_queue_blocked(viewed_session_id);
+            app.set_queue_blocked(viewed_session_id, paused);
+            app.send_intent(AgentRequest::QueuePaused {
+                session_id: viewed_session_id.to_string(),
+                paused,
+            });
         }
         input::InputAction::QueueDelete => {
             // `D` in the queue modal: remove the highlighted
@@ -1958,6 +1937,13 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // session's items.
             if app.active_modal() == Modal::Queue {
                 let idx = app.modal_index;
+                if let Some(item) = app.queued_at(viewed_session_id, idx) {
+                    app.send_intent(AgentRequest::QueueReorder {
+                        session_id: viewed_session_id.to_string(),
+                        input_id: item.id.clone(),
+                        delta,
+                    });
+                }
                 app.move_queued(viewed_session_id, idx, delta);
                 // Follow the moved item if it changed position.
                 let count = app.pending_count(viewed_session_id);
@@ -2093,16 +2079,15 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 if let Some(req) = app.pending_input.take() {
                     // Drain the matching front so the per-frame sync
                     // closes the modal and restores the composer draft.
-                    runtime.pending_input.lock().await.pop_front();
-                    let parent_call_id =
-                        runtime.runner_question_parent.lock().await.remove(&req.id);
-                    let _ = app.tx.send(AgentRequest::StdinReply {
+                    app.pending_inputs.pop_front();
+                    let parent_call_id = app.runner_question_parent.remove(&req.id);
+                    app.send_intent(AgentRequest::StdinReply {
                         request_id: req.id.clone(),
                         text,
                         parent_call_id,
                     });
                 }
-                let next = runtime.pending_input.lock().await.front().cloned();
+                let next = app.pending_inputs.front().cloned();
                 if let Some(next) = next {
                     app.pending_input = Some(next);
                     app.input.clear();
@@ -2119,13 +2104,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             {
                 // Empty reply = cancel → the command runs with closed
                 // stdin and fails fast with a non-interactive remedy.
-                let next = {
-                    let mut queue = runtime.pending_input.lock().await;
-                    queue.pop_front();
-                    queue.front().cloned()
-                };
-                let parent_call_id = runtime.runner_question_parent.lock().await.remove(&req.id);
-                let _ = app.tx.send(AgentRequest::StdinReply {
+                app.pending_inputs.pop_front();
+                let next = app.pending_inputs.front().cloned();
+                let parent_call_id = app.runner_question_parent.remove(&req.id);
+                app.send_intent(AgentRequest::StdinReply {
                     request_id: req.id.clone(),
                     text: String::new(),
                     parent_call_id,
@@ -2202,17 +2184,15 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::PermissionReject => {
             // Rejecting settles the whole concurrent permission batch;
             // resolve every queued request so its tool futures finish.
-            let queued: Vec<PermissionRequest> =
-                runtime.pending_permission.lock().await.drain(..).collect();
+            let queued: Vec<PermissionRequest> = app.pending_permissions.drain(..).collect();
             app.pending_permission = None;
             app.dismiss_sheet();
             app.modal_index = 0;
             app.permission_confirm_always = false;
             app.permission_show_details = false;
-            let mut parents = runtime.runner_permission_parent.lock().await;
             for pending in queued {
-                let parent_call_id = parents.remove(&pending.id);
-                let _ = app.tx.send(AgentRequest::PermissionReply {
+                let parent_call_id = app.runner_permission_parent.remove(&pending.id);
+                app.send_intent(AgentRequest::PermissionReply {
                     request_id: pending.id,
                     decision: PermissionDecision::Reject,
                     parent_call_id,
@@ -2281,9 +2261,7 @@ pub(crate) fn open_active_connection_detail(
     app.connection_detail = None;
     app.connection_info_scroll = 0;
     if !target_id.is_empty() {
-        let _ = app
-            .tx
-            .send(AgentRequest::QueryConnectionDetail { id: target_id });
+        app.send_intent(AgentRequest::QueryConnectionDetail { id: target_id });
     }
 }
 
@@ -2342,7 +2320,13 @@ pub(super) fn enter_panel(
         app.history_search = true;
     }
     if id == PanelId::Queue {
-        app.block_queue(viewed_session_id);
+        // ADR-0197 M4: the editing-safety auto-pause is mirrored to the
+        // daemon queue authority (resume on close, via `queue_exit_session`).
+        app.set_queue_blocked(viewed_session_id, true);
+        app.send_intent(AgentRequest::QueuePaused {
+            session_id: viewed_session_id.to_string(),
+            paused: true,
+        });
         app.queue_exit_session = Some(viewed_session_id.to_string());
     }
 
@@ -2366,7 +2350,7 @@ pub(super) fn enter_panel(
         _ => None,
     };
     if let Some(request) = request
-        && app.tx.send(request).is_err()
+        && !app.send_intent(request)
     {
         show_local_toast(
             app,
@@ -2424,7 +2408,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
         View::Session | View::Runner | View::Side => None,
     };
     if let Some(request) = request
-        && app.tx.send(request).is_err()
+        && !app.send_intent(request)
     {
         show_local_toast(
             app,
@@ -2451,14 +2435,19 @@ pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
                 app.permission_scroll = if up {
                     app.permission_scroll.saturating_sub(1)
                 } else {
-                    app.permission_scroll.saturating_add(1).min(app.permission_max_scroll)
+                    app.permission_scroll
+                        .saturating_add(1)
+                        .min(app.permission_max_scroll)
                 };
             }
         }
         Some(UiKey::Sheet(crate::sheet::SheetKind::Question) | UiKey::QuestionOption(_)) => {
             app.question_modal_follow = false;
-            app.question_scroll = if up { app.question_scroll.saturating_sub(1) }
-                else { app.question_scroll.saturating_add(1) };
+            app.question_scroll = if up {
+                app.question_scroll.saturating_sub(1)
+            } else {
+                app.question_scroll.saturating_add(1)
+            };
         }
         Some(UiKey::Completion | UiKey::CompletionItem(_)) => {
             let count = app.completions().len();
@@ -2469,15 +2458,28 @@ pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
                         Some(i) => i.saturating_sub(1),
                     }
                 } else {
-                    match app.suggestion_index { Some(i) if i + 1 < count => i + 1, _ => 0 }
+                    match app.suggestion_index {
+                        Some(i) if i + 1 < count => i + 1,
+                        _ => 0,
+                    }
                 });
             }
         }
         Some(UiKey::Composer) => {
-            if app.step_input_scroll(up, 4).is_none() { scroll_tick(app, !up); }
+            if app.step_input_scroll(up, 4).is_none() {
+                scroll_tick(app, !up);
+            }
         }
-        Some(UiKey::Transcript | UiKey::Sticky | UiKey::Queue | UiKey::Activity |
-             UiKey::ModelBar | UiKey::Context | UiKey::Performance | UiKey::Connection) => {
+        Some(
+            UiKey::Transcript
+            | UiKey::Sticky
+            | UiKey::Queue
+            | UiKey::Activity
+            | UiKey::ModelBar
+            | UiKey::Context
+            | UiKey::Performance
+            | UiKey::Connection,
+        ) => {
             scroll_tick(app, !up);
         }
         _ => {}
@@ -2540,7 +2542,7 @@ mod transcript_scroll_tests {
     fn wheel_spatial_routing_under_permission_modal() {
         let mut app = scrollable_app();
         app.set_active_sheet_for_test(crate::sheet::SheetKind::Permission);
-        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::None);
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24));
         app.ui
             .mount_permission_sheet(mutx_engine::Rect::new(0, 15, 80, 5));
         app.ui.commit();
@@ -2568,8 +2570,11 @@ mod transcript_scroll_tests {
     fn wheel_spatial_routing_under_overlay_modal_isolates_backdrop() {
         let mut app = scrollable_app();
         app.set_active_modal_for_test(Modal::Help);
-        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::Help);
-        app.ui.mount(crate::ui::UiKey::Modal(Modal::Help), mutx_engine::Rect::new(10, 5, 60, 10));
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24));
+        app.ui.mount(
+            crate::ui::UiKey::Modal(Modal::Help),
+            mutx_engine::Rect::new(10, 5, 60, 10),
+        );
         app.ui.commit();
         app.help_scroll = 5;
 
@@ -2589,9 +2594,8 @@ mod transcript_scroll_tests {
         let mut app = scrollable_app();
         app.input = "/m".to_string();
         app.cursor_position = 2;
-        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24), Modal::None);
-        app.ui
-            .mount_completion(mutx_engine::Rect::new(0, 8, 30, 2));
+        app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24));
+        app.ui.mount_completion(mutx_engine::Rect::new(0, 8, 30, 2));
         app.ui
             .mount_completion_item(0, mutx_engine::Rect::new(0, 8, 30, 1));
         app.ui
@@ -2755,7 +2759,7 @@ async fn execute_command_by_id(
             handle_esc_interrupt_with_runtime(app, runtime, false).await;
         }
         CommandId::Quit => {
-            let _ = app.tx.send(AgentRequest::EndSession);
+            app.send_intent(AgentRequest::EndSession);
             return ActionFlow::Exit;
         }
         CommandId::CopySelection => {
@@ -2936,13 +2940,19 @@ async fn execute_command_by_id(
             );
         }
         CommandId::PermissionsClearAll => {
-            if let Some(ref ctx) = app.session_context {
-                for perm in &ctx.permissions {
-                    let _ = app.tx.send(AgentRequest::RevokePermission {
+            let revocations = match app.session_context.as_ref() {
+                Some(ctx) => ctx
+                    .permissions
+                    .iter()
+                    .map(|perm| AgentRequest::RevokePermission {
                         tool: perm.tool.clone(),
                         scope: perm.scope.clone(),
-                    });
-                }
+                    })
+                    .collect::<Vec<_>>(),
+                None => Vec::new(),
+            };
+            for revocation in revocations {
+                app.send_intent(revocation);
             }
             show_local_toast(
                 app,
@@ -2993,7 +3003,7 @@ async fn apply_pre_attach_decision(
                 ?domains,
                 "mutx: PreAttach decision — granting workspace trust directly"
             );
-            let _ = app.tx.send(AgentRequest::TrustWorkspace { domains });
+            app.send_intent(AgentRequest::TrustWorkspace { domains });
             // The per-frame sync clears `pre_attach` once the
             // republished snapshot reports Trusted. The PreAttach surface
             // shows a `Trusting workspace...` state while awaiting the snapshot.
@@ -3009,7 +3019,7 @@ async fn apply_pre_attach_decision(
             // listener publishes before the loop terminates cannot
             // re-mount PreAttach on the dying frame.
             app.should_quit.store(true, Ordering::SeqCst);
-            let _ = app.tx.send(AgentRequest::EndSession);
+            app.send_intent(AgentRequest::EndSession);
         }
     }
 }

@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
+muta-paths = { path = "../muta-paths" }
 muta-persistence = { path = "../muta-persistence" }
 muta-platform = { path = "../muta-platform" }
 muta-providers = { path = "../muta-providers" }
@@ -37,7 +38,7 @@ dirs = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-muta-persistence = { path = "../muta-persistence", features = ["test-path-override"] }
+muta-paths = { path = "../muta-paths", features = ["test-path-override"] }
 
 [lints]
 workspace = true

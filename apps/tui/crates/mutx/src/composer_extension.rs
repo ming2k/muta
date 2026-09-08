@@ -14,7 +14,7 @@
 //!    - **Layer 2 (Active Extension Interceptor)**: Candidate navigation (↑/↓), item pruning (Shift+Delete), selection acceptance (Enter/Tab).
 //!    - **Layer 3 (Composer Text Engine)**: Unbounded text editing (Backspace, DeleteForward, typing printable characters, Ctrl+C buffer clear).
 
-use crate::input::{InputAction, InputContext};
+use crate::input::InputAction;
 use crate::keymap::{Key, LiveHint};
 
 /// Exhaustive discriminator for extensions attaching to the Composer.
@@ -49,7 +49,7 @@ pub trait ComposerExtension: Send + Sync {
 
     /// Layer 2 Key Interceptor: returns `Some(action)` if handled,
     /// or `None` to let the key fall through to the Layer 3 text editing engine.
-    fn intercept_key(&self, key: Key, ctx: &InputContext) -> Option<InputAction>;
+    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction>;
 }
 
 /// History Search (`Ctrl+R`) extension implementation.
@@ -64,7 +64,7 @@ impl ComposerExtension for HistorySearchExtension {
         crate::modal_keys::live_history_hints()
     }
 
-    fn intercept_key(&self, key: Key, _ctx: &InputContext) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, _keys: &crate::session::ViewKeys) -> Option<InputAction> {
         crate::modal_keys::resolve_history_search_key(key)
     }
 }
@@ -86,15 +86,15 @@ impl ComposerExtension for SlashCompletionExtension {
         SLASH_HINTS
     }
 
-    fn intercept_key(&self, key: Key, ctx: &InputContext) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction> {
         match key.code {
-            crossterm::event::KeyCode::Esc if !ctx.completion_dismissed => {
+            crossterm::event::KeyCode::Esc if !keys.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
             }
             crossterm::event::KeyCode::Tab
-                if ctx.suggestion_count > 0 && !ctx.completion_dismissed =>
+                if keys.suggestion_count > 0 && !keys.completion_dismissed =>
             {
-                let idx = ctx.suggestion_index.unwrap_or(0);
+                let idx = keys.suggestion_index.unwrap_or(0);
                 Some(InputAction::CommitSuggestion(idx.to_string()))
             }
             _ => None,
@@ -119,15 +119,15 @@ impl ComposerExtension for PathCompletionExtension {
         PATH_HINTS
     }
 
-    fn intercept_key(&self, key: Key, ctx: &InputContext) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction> {
         match key.code {
-            crossterm::event::KeyCode::Esc if !ctx.completion_dismissed => {
+            crossterm::event::KeyCode::Esc if !keys.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
             }
             crossterm::event::KeyCode::Tab
-                if ctx.suggestion_count > 0 && !ctx.completion_dismissed =>
+                if keys.suggestion_count > 0 && !keys.completion_dismissed =>
             {
-                let idx = ctx.suggestion_index.unwrap_or(0);
+                let idx = keys.suggestion_index.unwrap_or(0);
                 Some(InputAction::CommitSuggestion(idx.to_string()))
             }
             _ => None,
@@ -157,11 +157,11 @@ mod tests {
     #[test]
     fn test_history_extension_intercepts_shift_delete_not_bare_delete() {
         let ext = HistorySearchExtension;
-        let ctx = InputContext::default();
+        let keys = crate::session::ViewKeys::default();
 
         // Shift+Delete is intercepted
         assert_eq!(
-            ext.intercept_key(Key::SHIFT_DELETE, &ctx),
+            ext.intercept_key(Key::SHIFT_DELETE, &keys),
             Some(InputAction::HistoryDeleteSelected)
         );
 
@@ -170,7 +170,7 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
             code: KeyCode::Delete,
         };
-        assert_eq!(ext.intercept_key(bare_delete, &ctx), None);
+        assert_eq!(ext.intercept_key(bare_delete, &keys), None);
     }
 
     #[test]
@@ -178,28 +178,28 @@ mod tests {
         let slash_ext = SlashCompletionExtension;
         let path_ext = PathCompletionExtension;
 
-        let ctx = InputContext {
+        let keys = crate::session::ViewKeys {
             completion_dismissed: false,
             suggestion_count: 2,
             suggestion_index: Some(1),
-            ..InputContext::default()
+            ..Default::default()
         };
 
         assert_eq!(
-            slash_ext.intercept_key(Key::ESC, &ctx),
+            slash_ext.intercept_key(Key::ESC, &keys),
             Some(InputAction::CloseCompletion)
         );
         assert_eq!(
-            path_ext.intercept_key(Key::ESC, &ctx),
+            path_ext.intercept_key(Key::ESC, &keys),
             Some(InputAction::CloseCompletion)
         );
 
         assert_eq!(
-            slash_ext.intercept_key(Key::TAB, &ctx),
+            slash_ext.intercept_key(Key::TAB, &keys),
             Some(InputAction::CommitSuggestion("1".into()))
         );
         assert_eq!(
-            path_ext.intercept_key(Key::TAB, &ctx),
+            path_ext.intercept_key(Key::TAB, &keys),
             Some(InputAction::CommitSuggestion("1".into()))
         );
     }

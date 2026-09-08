@@ -13,7 +13,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// `GET api.githubcopilot.com/models` at runtime — this seed only needs one
 /// universally available id so a brand-new instance activates without a 400.
 /// `gpt-4o-mini` is unlocked on every Copilot plan (incl. Free/Student).
-pub const COPILOT_SEED_MODELS: &[&str] = &["gpt-4o-mini"];
+pub use muta_contracts::provider_presets::COPILOT_SEED_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see

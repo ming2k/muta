@@ -17,11 +17,14 @@ fn enter_in_compose_while_busy_steers_immediate_by_default() {
     let mut input = "steer message".to_string();
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             is_responding: true,
             ..Default::default()
         },
@@ -39,11 +42,14 @@ fn enter_in_compose_while_busy_queues_follow_up_in_follow_up_mode() {
     let mut input = "follow up message".to_string();
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::FollowUp,
             ..Default::default()
@@ -119,14 +125,17 @@ fn space_in_transcript_is_inert() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            has_focused_target: true,
+        Dispatch {
+            focused_target: true,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);

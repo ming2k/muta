@@ -297,8 +297,11 @@ fn input_selection_relays_arrows_only_when_composer_owns_caret() {
 fn app_with_input_viewport(rows: usize, visible: usize) -> (App, tempfile::TempDir) {
     let (mut app, tmp) = app_in_tempdir(&[], &[]);
     let height = visible as u16 + crate::design::COMPOSER_VERTICAL_CHROME_ROWS;
-    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60), crate::Modal::None);
-    app.ui.mount(crate::ui::UiKey::Composer, mutx_engine::Rect::new(0, 40, 60, height));
+    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60));
+    app.ui.mount(
+        crate::ui::UiKey::Composer,
+        mutx_engine::Rect::new(0, 40, 60, height),
+    );
     app.ui.commit();
     app.input = (0..rows)
         .map(|i| char::from(b'a' + (i % 26) as u8).to_string())
@@ -336,7 +339,7 @@ fn input_viewport_wheel_steps_clamp_to_hidden_rows() {
     );
 
     // No composer on screen (overlay modal, first frame): not scrollable.
-    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60), crate::Modal::None);
+    app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 60));
     app.ui.commit();
     assert_eq!(app.input_scroll_max(), None);
     assert_eq!(app.step_input_scroll(false, 1), None);
@@ -432,4 +435,13 @@ fn input_edge_autoscroll_ignores_transcript_anchored_drags() {
     assert_eq!(app.input_drag_scroll_edge(0), None);
     assert!(!app.step_input_drag_scroll());
     assert_eq!(app.input_scroll, 0);
+}
+
+#[test]
+fn failed_intent_send_latches_the_daemon_link_down_state() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    assert!(!app.link_down);
+    assert!(!app.send_intent(AgentRequest::Interrupt));
+    assert!(app.link_down);
 }

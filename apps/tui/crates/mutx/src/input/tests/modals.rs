@@ -7,14 +7,17 @@ fn star_in_models_modal_toggles_model_favorite() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Models,
+        Dispatch {
+            modal: crate::Modal::Models,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::ProviderPickerToggleFavorite);
@@ -25,14 +28,17 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Connections,
+        Dispatch {
+            modal: crate::Modal::Connections,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_ne!(action, InputAction::ProviderPickerToggleFavorite);
@@ -43,15 +49,20 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Models,
+        Dispatch {
+            modal: crate::Modal::Models,
+            ..Default::default()
+        },
+        &ModalKeys {
             model_searching: true,
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('k'));
@@ -63,24 +74,30 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let ctx = || InputContext {
-        active_modal: crate::Modal::Models,
+    let ctx = || Dispatch {
+        modal: crate::Modal::Models,
         ..Default::default()
     };
-    let letter = process_event(
+    let letter = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         ctx(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(letter, InputAction::None);
     assert_eq!(input, "");
-    let slash = process_event(
+    let slash = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
         ctx(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(slash, InputAction::ModelEnterSearch);
@@ -110,7 +127,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
-        process_event(
+        route_event(
             Event::Mouse(crossterm::event::MouseEvent {
                 kind,
                 column: 5,
@@ -119,10 +136,13 @@ fn mouse_wheel_scrolls_question_modal_body() {
             }),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_sheet: Some(crate::sheet::SheetKind::Question),
+            Dispatch {
+                sheet: Some(crate::sheet::SheetKind::Question),
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         )
     };
@@ -150,7 +170,7 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
     drag.start(SemanticCursor::new(0, 0, 0));
     let mut input = String::new();
     let mut cursor = 0;
-    let action = process_event(
+    let action = route_event(
         Event::Mouse(crossterm::event::MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: 10,
@@ -159,10 +179,13 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
         }),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_sheet: Some(crate::sheet::SheetKind::Permission),
+        Dispatch {
+            sheet: Some(crate::sheet::SheetKind::Permission),
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(

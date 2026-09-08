@@ -48,6 +48,9 @@ pub(crate) enum FooterRowId {
     /// (`FOOTER_TOP_GAP_ROWS`). Never interactive; in the registry only so
     /// the stack's geometry is complete in one place.
     TopGap,
+    /// The durability-health banner (ADR-0196 D4). Present only while the
+    /// daemon's persistence writer is degraded; cleared by `Healthy`.
+    PersistenceHealth,
     /// The ambient outbox summary (`QUEUE n · preview · keys`). Click →
     /// Queue modal.
     Queue,

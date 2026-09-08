@@ -14,6 +14,29 @@
 
 use crate::modal::Claims;
 
+/// The sheet handlers' own sub-state (ADR-0197 M2): which sheet row/sub-view
+/// is live and whether the transcript navigation facts pass through. Built
+/// once per event by the caller; every read below is sheet-local.
+#[derive(Debug, Default, Clone)]
+pub struct SheetKeys {
+    /// Whether the Question sheet's synthetic "Other" free-text row is the
+    /// highlighted row. Only meaningful while the foreground sheet is
+    /// `SheetKind::Question`: when `true` the sheet owns a text-input
+    /// surface, so printable keys (including Space) insert into the "Other"
+    /// field instead of toggling an option. Mirrors
+    /// `App::question.is_some_and(|q| q.is_other_highlighted())`.
+    pub question_other_highlighted: bool,
+    /// Whether the permission sheet's decision cursor sits on "Always allow".
+    pub permission_confirm_always: bool,
+    /// Whether the inline permission sheet is expanded to "Details". Drives
+    /// whether ↑/↓ in the compose zone scroll the details body or the
+    /// transcript behind it.
+    pub permission_show_details: bool,
+    /// Whether a transcript step/action target holds keyboard focus behind
+    /// the sheet (the permission sheet is the one pass-through surface).
+    pub focused_target: bool,
+}
+
 /// The AI-initiated interaction sheets, in queue arrival order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SheetKind {
@@ -83,10 +106,18 @@ impl SheetKind {
 /// "Other" free-text field. The permission and input-injection sheets are
 /// keyboard-driven through Enter/Esc/←/→ (decision cursor) and own no
 /// printable verbs.
+/// Whether `kind` (the foreground sheet) owns a bracketed-paste text field:
+/// the Question sheet's "Other" free-text row, when it is highlighted. The
+/// field owns its own buffer, so the paste payload routes there instead of
+/// through the shared composer-line path.
+pub fn sheet_owns_bracketed_paste(kind: SheetKind, keys: &SheetKeys) -> bool {
+    matches!(kind, SheetKind::Question) && keys.question_other_highlighted
+}
+
 pub(crate) fn resolve_sheet_key(
     kind: SheetKind,
     key: crate::keymap::Key,
-    ctx: &crate::input::InputContext,
+    keys: &SheetKeys,
 ) -> Option<crate::input::InputAction> {
     use crate::input::InputAction;
     use crossterm::event::KeyCode;
@@ -103,19 +134,46 @@ pub(crate) fn resolve_sheet_key(
             KeyCode::Right if !ctrl_alt_super => Some(InputAction::PermissionNextOption),
             KeyCode::Tab if !ctrl_alt_super => Some(InputAction::PermissionNextOption),
             KeyCode::BackTab => Some(InputAction::PermissionPrevOption),
+            // Decision + navigation family moved from the router's fallback
+            // arms (ADR-0173 §3): Enter commits the pending decision (Alt+
+            // Enter stays the shared multi-line newline chord), and ↑/↓ act
+            // on the focused step first, then the details body, then fall
+            // back to transcript scrolling — the permission sheet is the one
+            // pass-through surface.
+            KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                Some(InputAction::PermissionSubmit)
+            }
+            KeyCode::Up => {
+                if keys.focused_target {
+                    Some(InputAction::FocusPrevTarget)
+                } else if keys.permission_show_details {
+                    Some(InputAction::PermissionDetailsUp)
+                } else {
+                    Some(InputAction::ScrollUp)
+                }
+            }
+            KeyCode::Down => {
+                if keys.focused_target {
+                    Some(InputAction::FocusNextTarget)
+                } else if keys.permission_show_details {
+                    Some(InputAction::PermissionDetailsDown)
+                } else {
+                    Some(InputAction::ScrollDown)
+                }
+            }
             _ => None,
         },
         SheetKind::Question => match key.code {
             KeyCode::Tab if !ctrl_alt_super => Some(InputAction::QuestionNext),
             KeyCode::BackTab => Some(InputAction::QuestionPrevious),
-            KeyCode::Left if !ctrl_alt_super && !ctx.question_other_highlighted => {
+            KeyCode::Left if !ctrl_alt_super && !keys.question_other_highlighted => {
                 Some(InputAction::QuestionPrevious)
             }
-            KeyCode::Right if !ctrl_alt_super && !ctx.question_other_highlighted => {
+            KeyCode::Right if !ctrl_alt_super && !keys.question_other_highlighted => {
                 Some(InputAction::QuestionNext)
             }
             KeyCode::Char(c) if !ctrl_alt_super => {
-                if c == ' ' && !ctx.question_other_highlighted {
+                if c == ' ' && !keys.question_other_highlighted {
                     Some(InputAction::QuestionToggle)
                 } else if let Some(d) = c.to_digit(10)
                     && (1..=9).contains(&d)
@@ -125,8 +183,40 @@ pub(crate) fn resolve_sheet_key(
                     Some(InputAction::QuestionInsertChar(c))
                 }
             }
+            // Decision + navigation family moved from the router's fallback
+            // arms (ADR-0173 §3): Enter commits, ↑/↓ walk the option cursor,
+            // Backspace edits the "Other" field, and Ctrl+V routes the paste
+            // into that field's own buffer.
+            KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                Some(InputAction::QuestionSubmit)
+            }
+            KeyCode::Up => Some(InputAction::QuestionUp),
+            KeyCode::Down => Some(InputAction::QuestionDown),
+            KeyCode::Backspace => Some(InputAction::QuestionBackspace),
+            KeyCode::Char('v')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && keys.question_other_highlighted =>
+            {
+                // The "Other" field owns its own buffer (not `App::input`),
+                // so it can't share `edits_input_field` with the readline
+                // modals. Route through the same async paste path; the event
+                // loop applies the read to `QuestionModel::other_text`.
+                Some(InputAction::Paste)
+            }
             _ => None,
         },
-        SheetKind::InputInjection => None,
+        SheetKind::InputInjection => {
+            // Enter submits the injected input (Alt+Enter stays the shared
+            // newline chord); ↑/↓ are inert — the injection sheet borrows
+            // the composer line but has no option list.
+            match key.code {
+                KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                    Some(InputAction::InputSubmit)
+                }
+                _ => None,
+            }
+        }
     }
 }

@@ -338,7 +338,7 @@ impl App {
     /// caret position instead of acting on the *visible* (stale) caret:
     /// `true` while a whole-input selection is active on the composer and
     /// the composer owns the caret. Callers run this check *after* the
-    /// direction key has been mapped through `process_event` but before its
+    /// direction key has been mapped through `route_event` but before its
     /// cursor mutation takes effect for the user — see the event loop's key
     /// relay for the exact sequencing.
     pub fn input_selection_relays_arrows(&self) -> bool {

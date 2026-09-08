@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+muta-paths = { path = "../muta-paths" }
 muta-contracts = { path = "../muta-contracts" }
 muta-platform = { path = "../muta-platform" }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "rt-multi-thread", "sync", "time"] }
@@ -28,7 +29,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = { workspace = true }
 # Self dev-dependency that enables the sandbox hook for this crate's own
 # integration tests (`tests/` cannot see the lib's `cfg(test)`).
-muta-persistence = { path = ".", features = ["test-path-override"] }
+muta-paths = { path = "../muta-paths", features = ["test-path-override"] }
 
 [features]
 # Exposes the test-only `paths::set_test_default` override to *other crates'*

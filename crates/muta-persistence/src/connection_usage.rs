@@ -197,7 +197,11 @@ impl ConnectionUsage {
                 self.models.remove(connection_id);
             }
         }
-        if self.last_models.get(connection_id).is_some_and(|m| m == model) {
+        if self
+            .last_models
+            .get(connection_id)
+            .is_some_and(|m| m == model)
+        {
             self.last_models.remove(connection_id);
         }
     }

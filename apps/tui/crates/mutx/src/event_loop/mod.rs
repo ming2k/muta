@@ -1,8 +1,10 @@
 //! The main TUI event/render loop and its modular subsystems.
 
 pub(crate) mod actions;
+pub(crate) mod apply;
+pub(crate) mod component_input;
 pub(crate) mod input_reader;
-pub(crate) mod probes;
+pub(crate) mod mutations;
 pub(crate) mod render;
 pub(crate) mod runtime;
 pub(crate) mod sync;
@@ -10,15 +12,10 @@ pub(crate) mod transcript;
 
 #[allow(unused_imports)]
 pub(crate) use actions::{effective_reasoning_effort, modal_page_step};
-pub(crate) use probes::probe_input_selection_relay;
+pub(crate) use mutations::{AppMutation, Buffer, CompletionSignal, TranscriptEdit};
 #[cfg(test)]
 pub(crate) use render::render_frame;
-pub(crate) use runtime::{
-    CompletionSignal, NoticeToastSignal, OauthAddSignal, OutboxSignal, SideViewSignal, UiRuntime,
-    now_epoch_ms,
-};
-#[cfg(test)]
-pub(crate) use transcript::apply_transcript_patch;
+pub(crate) use runtime::{SideViewSignal, UiRuntime, now_epoch_ms};
 #[cfg(test)]
 pub(crate) use transcript::focused_messages_mut;
 #[allow(unused_imports)]
@@ -39,9 +36,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use mutx_engine::Terminal;
-use tokio::sync::{Mutex, mpsc};
-
-use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
+use tokio::sync::mpsc;
 
 use crate::App;
 use crate::clipboard;
@@ -51,10 +46,9 @@ use crate::modal::Modal;
 use crate::model::document::TranscriptMessage;
 
 use input_reader::InputReader;
-use probes::{probe_config_dropdown, probe_delete_overlay};
 use sync::{
-    drain_outbox_signals, sync_runtime_state_to_app, sync_transcripts_and_session,
-    tick_toast_timers,
+    consume_completion_signal, consume_navigation_signals, sync_request_surfaces,
+    sync_transcripts_and_session, tick_toast_timers,
 };
 
 /// Whether an event expresses an editing/caret-navigation intent in the live
@@ -119,90 +113,11 @@ pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
     }
 }
 
-pub(crate) async fn attribution(
-    provider: &Arc<Mutex<String>>,
-    model: &Arc<Mutex<String>>,
-) -> (String, String) {
-    (provider.lock().await.clone(), model.lock().await.clone())
-}
-
-pub(crate) async fn picker_effort(
-    picker: &Arc<Mutex<ProviderPickerSnapshot>>,
-    provider: &Arc<Mutex<String>>,
-    model: &Arc<Mutex<String>>,
-) -> Option<String> {
-    let provider = provider.lock().await.clone();
-    let model = model.lock().await.clone();
-    let picker = picker.lock().await;
-    picker
-        .rows
-        .iter()
-        .find(|row| row.id == provider)
-        .and_then(|row| row.model_info.iter().find(|m| m.model == model))
-        .and_then(|m| {
-            let show = match m.protocol.as_str() {
-                "anthropic" => m.thinking == Some(true),
-                _ => m.effort.is_some(),
-            };
-            show.then(|| m.effort.clone()).flatten()
-        })
-}
-
-pub(crate) fn auto_dispatch_ready_round(app: &mut App, viewed_session_id: &str) {
-    let ready_session = if app.naturally_completed_sessions.contains(viewed_session_id)
-        && app.idle_sessions.contains(viewed_session_id)
-        && !app.is_queue_blocked(viewed_session_id)
-        && app.pending_dispatch.iter().any(|item| {
-            item.session_id == viewed_session_id
-                && item.state == crate::app::QueuedDispatchState::Waiting
-        }) {
-        Some(viewed_session_id.to_string())
-    } else {
-        app.naturally_completed_sessions
-            .iter()
-            .find(|session_id| {
-                app.idle_sessions.contains(*session_id)
-                    && !app.is_queue_blocked(session_id)
-                    && app.pending_dispatch.iter().any(|item| {
-                        item.session_id == session_id.as_str()
-                            && item.state == crate::app::QueuedDispatchState::Waiting
-                    })
-            })
-            .cloned()
-    };
-
-    let Some(session_id) = ready_session else {
-        return;
-    };
-
-    if let Some(dispatch) = app.begin_next_round_dispatch(&session_id) {
-        let sent_at_ms = now_epoch_ms();
-        let expanded_text =
-            crate::composer_attachments::expand_paste_chips(&dispatch.text, &dispatch.text_pastes);
-        let expanded_text = crate::composer_attachments::strip_orphan_image_chips(
-            &expanded_text,
-            dispatch.images.len(),
-        );
-        app.naturally_completed_sessions.remove(&session_id);
-        app.idle_sessions.remove(&session_id);
-        app.running_sessions.insert(session_id.clone());
-        let _ = app.tx.send(AgentRequest::FollowUp {
-            session_id,
-            message: muta_contracts::QueuedMessage {
-                id: dispatch.id,
-                text: expanded_text,
-                display_text: Some(dispatch.text),
-                images: dispatch.images,
-                sent_at_ms: Some(sent_at_ms),
-            },
-        });
-    }
-}
-
 pub async fn run_app_loop(
     terminal: &mut Terminal<std::io::Stdout>,
     app: &mut App,
     runtime: UiRuntime,
+    mutation_rx: mpsc::Receiver<AppMutation>,
     session: crate::SessionSource,
 ) -> io::Result<()> {
     let (copy_tx, mut copy_rx) =
@@ -218,8 +133,7 @@ pub async fn run_app_loop(
 
     let mut input_redraw_pending = true;
     let mut was_animating = true;
-    let mut sessions_overview_rev_seen: u64 = 0;
-    let mut host_sessions_rev_seen: u64 = 0;
+    let mut mutation_rx = mutation_rx;
 
     loop {
         if app.should_quit.load(Ordering::SeqCst) {
@@ -242,33 +156,48 @@ pub async fn run_app_loop(
             frame_dirty = true;
         }
 
-        sync_runtime_state_to_app(
-            app,
-            &runtime,
-            &mut sessions_overview_rev_seen,
-            &mut host_sessions_rev_seen,
-        )
-        .await;
+        // ADR-0197 M1: drain every pending translator mutation into `App`.
+        // The applier is the sole `App` writer for daemon-originated state;
+        // this pass runs before any reconciliation or render.
+        while let Ok(mutation) = mutation_rx.try_recv() {
+            if apply::apply(app, &runtime, mutation) {
+                frame_dirty = true;
+            }
+        }
 
-        tick_toast_timers(app, &runtime).await;
+        sync_request_surfaces(app, &runtime);
+
+        tick_toast_timers(app);
 
         if app.step_input_drag_scroll() {
             frame_dirty = true;
         }
 
         let (displayed_transcript_changed, viewed_session_id) =
-            sync_transcripts_and_session(app, &runtime).await;
+            sync_transcripts_and_session(app, &runtime);
 
-        drain_outbox_signals(app, &runtime).await;
-        auto_dispatch_ready_round(app, &viewed_session_id);
-
-        if let Some(signal) = runtime.completion_signal.lock().await.take() {
-            app.apply_backend_completions(
-                signal.request_id,
-                signal.input,
-                signal.cursor,
-                signal.items,
+        let (open_sessions, open_tree, open_host) = consume_navigation_signals(app, &runtime);
+        if open_sessions {
+            crate::event_loop::actions::enter_panel(
+                app,
+                crate::surfaces::PanelId::Sessions,
+                &runtime,
+                &viewed_session_id,
             );
+        }
+        if open_tree {
+            crate::event_loop::actions::enter_panel(
+                app,
+                crate::surfaces::PanelId::Tree,
+                &runtime,
+                &viewed_session_id,
+            );
+        }
+        if open_host {
+            crate::event_loop::actions::enter_view(app, crate::surfaces::View::Dashboard, &runtime);
+        }
+
+        if consume_completion_signal(app) {
             frame_dirty = true;
         }
         app.refresh_backend_completion_request();
@@ -450,18 +379,21 @@ async fn process_one_event(
         }
     }
 
-    let foreground = app.ui.scene().foreground().copied();
-    let active_modal = match foreground {
+    let has_focused_target = app.focused_target.is_some();
+    let transcript_focused = app.transcript_focused;
+    let event_family = input::event_family(event, &app.ui, has_focused_target, transcript_focused);
+    let keyboard_path = app.ui.keyboard_path_for(event_family);
+    let active_modal = match keyboard_path.first().copied() {
         Some(crate::ui::UiKey::Modal(modal)) => modal,
         Some(crate::ui::UiKey::ProviderDelete) => Modal::Connections,
         _ => Modal::None,
     };
     let is_responding = app.viewed_chrome().responding;
     let completion_kind = app.completion_kind();
-    let active_sheet = match foreground {
-        Some(crate::ui::UiKey::Sheet(kind)) => Some(kind),
+    let active_sheet = keyboard_path.iter().find_map(|key| match key {
+        crate::ui::UiKey::Sheet(kind) => Some(*kind),
         _ => None,
-    };
+    });
     let suppress_completions =
         matches!(active_modal, Modal::Help | Modal::ViewSwitcher) || active_sheet.is_some();
     let completions = if suppress_completions {
@@ -478,10 +410,6 @@ async fn process_one_event(
     let has_trigger_text = app.completion_trigger_text_present();
     let permission_confirm_always = app.permission_confirm_always;
     let permission_show_details = app.permission_show_details;
-    let in_runner_view = app.in_runner_view();
-    let in_side_view = app.in_side_view;
-    let has_focused_target = app.focused_target.is_some();
-    let transcript_focused = app.transcript_focused;
     let in_history_recall = app.history_index.is_some();
     let history_searching = app.history_search;
     let model_searching = app.model_search;
@@ -517,7 +445,7 @@ async fn process_one_event(
         && crate::completion::resolved_slash_command_len(&app.input, &app.command_catalog)
             .is_some();
 
-    // `process_event` performs the hot-path text edits and caret motions
+    // `route_event` performs the hot-path text edits and caret motions
     // directly through mutable references. Remember the cheap structural
     // state so those transitions can re-arm caret following without hashing
     // or cloning a potentially very large draft on every keypress.
@@ -525,49 +453,56 @@ async fn process_one_event(
     let composer_owned_before = app.caret_owner() == crate::CaretOwner::Composer;
     let current_view = app.current_view();
 
-    let action = if let Some(dropdown_action) = probe_config_dropdown(app, event) {
-        dropdown_action
-    } else if let Some(delete_action) = probe_delete_overlay(app, event) {
-        delete_action
-    } else if let Some(relay) = probe_input_selection_relay(app, event) {
-        relay
+    let action = if let Some(component_action) = component_input::route(app, event, &keyboard_path)
+    {
+        component_action
     } else {
-        input::process_event(
+        input::route_event(
             event.clone(),
             &mut app.input,
             &mut app.cursor_position,
-            input::InputContext {
-                active_modal,
-                active_sheet,
-                pre_attach_active: app.pre_attach.is_some(),
+            input::Dispatch {
+                modal: active_modal,
+                sheet: active_sheet,
+                pre_attach: app.pre_attach.is_some(),
+                view: current_view,
+                key_overrides: app.key_overrides.clone(),
+                focused_target: has_focused_target,
+                transcript_focused,
+                scene_blocked: matches!(
+                    keyboard_path.first(),
+                    Some(crate::ui::UiKey::ConfigDropdown | crate::ui::UiKey::ProviderDelete)
+                ),
+            },
+            &crate::modal_keys::ModalKeys {
+                model_searching,
+                history_searching,
+                custom_provider_field,
+                editor_field,
+                config_focus: app.config_focus,
                 session_info_detail,
                 connection_info_detail,
+                host_prompting,
+            },
+            &crate::sheet::SheetKeys {
+                question_other_highlighted,
+                permission_confirm_always,
+                permission_show_details,
+                focused_target: has_focused_target,
+            },
+            &crate::session::ViewKeys {
                 is_responding,
                 composer_send_mode: app.composer_send_mode,
                 completion_kind,
-                suggestion_count,
-                has_exact_suggestion,
-                suggestion_index,
                 completion_dismissed,
                 has_trigger_text,
-                permission_confirm_always,
-                permission_show_details,
-                in_runner_view,
-                in_side_view,
-                has_focused_target,
-                transcript_focused,
+                suggestion_count,
+                suggestion_index,
+                has_exact_suggestion,
                 in_history_recall,
-                history_searching,
-                model_searching,
-                custom_provider_field,
-                editor_field,
-                question_other_highlighted,
-                host_prompting,
-
-                config_focus: app.config_focus,
-                current_view,
-                key_overrides: app.key_overrides.clone(),
                 surface_overrides: app.surface_overrides.clone(),
+                focused_target: has_focused_target,
+                transcript_focused,
             },
             &mut app.drag,
         )
@@ -590,7 +525,9 @@ async fn process_one_event(
         let mut msg =
             TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms());
         msg.cancel_pending_command();
-        runtime.messages.write().await.push(msg);
+        app.messages.push(msg);
+        app.layout_height_cache.clear();
+        app.transcript_changed_pending = true;
         app.record_input_history(entry, Vec::new(), Vec::new());
     }
 

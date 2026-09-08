@@ -23,8 +23,8 @@ pub use models_dev::{ModelsDevError, models_dev_models};
 pub use muta_llm_client::{
     AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ClientIdentity, Effort, Endpoint,
     GOOGLE_DEFAULT_BASE_URL, GoogleProvider, MUTA_USER_AGENT, OPENCODE_USER_AGENT,
-    OPENCODE_VERSION, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
-    ReasoningMode, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
+    OPENCODE_VERSION, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ReasoningMode,
+    ThinkingConfig, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
 pub use oauth::OAuthCredentialSource;
 pub use registry::{

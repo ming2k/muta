@@ -193,7 +193,8 @@ impl OutputCollector {
     }
 
     /// Apply head+tail byte caps and line count caps to prevent unbound memory growth.
-    pub fn apply_caps(mut self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {        let mut collection_truncated = self.truncated;
+    pub fn apply_caps(mut self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {
+        let mut collection_truncated = self.truncated;
         if self.stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
             self.stdout_buf = head_tail(&self.stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
             collection_truncated = true;

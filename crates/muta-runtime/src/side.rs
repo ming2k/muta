@@ -458,6 +458,37 @@ pub async fn target_agent(
         .map(|session| session.agent.clone())
 }
 
+/// Resolve a live master or aside turn target by its stable session id
+/// (ADR-0197 M4): the shared resolution behind `start_session_turn` and the
+/// driver's follow-up queue authority (busy checks need the *target's* own
+/// lifecycle, not the primary's).
+pub(crate) async fn resolve_turn_target(
+    side: &Arc<AsyncRwLock<SideRegistry>>,
+    master: &Arc<Agent>,
+    primary_session: &Arc<SessionStore>,
+    primary_lifecycle: &Arc<RoundLifecycle>,
+    target_session_id: &str,
+) -> Option<ResolvedTurnTarget> {
+    let primary_id = primary_session.id().await;
+    if primary_id == target_session_id {
+        return Some(ResolvedTurnTarget {
+            agent: master.clone(),
+            session: primary_session.clone(),
+            lifecycle: primary_lifecycle.clone(),
+            session_id: primary_id,
+        });
+    }
+    side.read()
+        .await
+        .get(target_session_id)
+        .map(|session| ResolvedTurnTarget {
+            agent: session.agent.clone(),
+            session: session.store.clone(),
+            lifecycle: session.lifecycle.clone(),
+            session_id: session.id.clone(),
+        })
+}
+
 /// Start a fresh round in one exact live session. Returns `false` when the
 /// target aside was closed after the message entered the frontend outbox.
 pub(crate) async fn start_session_turn(
@@ -473,29 +504,18 @@ pub(crate) async fn start_session_turn(
         tx,
         config,
     } = env;
-    let primary_id = primary_session.id().await;
-    let is_primary = primary_id == target_session_id;
-    let resolved = if is_primary {
-        Some(ResolvedTurnTarget {
-            agent: master.clone(),
-            session: primary_session.clone(),
-            lifecycle: primary_lifecycle.clone(),
-            session_id: primary_id.clone(),
-        })
-    } else {
-        side.read()
-            .await
-            .get(target_session_id)
-            .map(|session| ResolvedTurnTarget {
-                agent: session.agent.clone(),
-                session: session.store.clone(),
-                lifecycle: session.lifecycle.clone(),
-                session_id: session.id.clone(),
-            })
-    };
+    let resolved = resolve_turn_target(
+        side,
+        master,
+        primary_session,
+        primary_lifecycle,
+        target_session_id,
+    )
+    .await;
     let Some(target) = resolved else {
         return false;
     };
+    let primary_id = primary_session.id().await;
     if target.session_id != primary_id
         && let Some(s) = side.write().await.get_mut(&target.session_id)
     {
@@ -518,11 +538,11 @@ pub(crate) async fn start_session_turn(
     true
 }
 
-struct ResolvedTurnTarget {
-    agent: Arc<Agent>,
-    session: Arc<SessionStore>,
-    lifecycle: Arc<RoundLifecycle>,
-    session_id: String,
+pub(crate) struct ResolvedTurnTarget {
+    pub(crate) agent: Arc<Agent>,
+    pub(crate) session: Arc<SessionStore>,
+    pub(crate) lifecycle: Arc<RoundLifecycle>,
+    pub(crate) session_id: String,
 }
 
 async fn start_resolved_turn(

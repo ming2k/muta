@@ -4,6 +4,7 @@
 //! ([`draw_transcript`] / [`TranscriptProps`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
+pub use crate::chrome::draw_persistence_health_bar;
 pub use crate::chrome::{ActivityBarProps, draw_activity_bar};
 pub use crate::chrome::{
     ModelBarProps, QueueBarProps, QueueItemProps, draw_completion_menu, draw_model_bar,
@@ -178,6 +179,11 @@ pub struct TranscriptProps<'a> {
     /// slice renders a muted empty state so the bar is always present (the
     /// permanent home for queue affordances).
     pub queue_bar: QueueBarProps<'a>,
+    /// The daemon's persistence-writer degradation (ADR-0196 D4). While set
+    /// (and not `Healthy`), the footer stack reserves a retained one-row
+    /// banner between the transcript gap and the queue bar; `Healthy` /
+    /// `None` place nothing.
+    pub persistence_health: Option<&'a muta_contracts::monitor::PersistenceHealth>,
     /// When set, the view is zoomed into an runner task: a contextual page
     /// header is rendered and `messages` is the focused task's child stream.
     pub runner_bar: Option<RunnerBarInfo>,
@@ -579,6 +585,7 @@ pub fn draw_transcript(
         byte_cursor,
         chrome_hidden,
         queue_bar,
+        persistence_health,
         runner_bar,
         side_banner,
         page_hints,
@@ -744,6 +751,12 @@ pub fn draw_transcript(
     // surface while there is pending work.
     let queue_row_needed = !chrome_hidden && !in_runner && !queue_bar.items.is_empty();
     let queue_height: u16 = if queue_row_needed { QUEUE_BAR_ROWS } else { 0 };
+    // The durability-health banner (ADR-0196 D4) reserves a row only while
+    // the writer is actually degraded; a healthy writer costs nothing.
+    let persistence_health_row_needed = !chrome_hidden
+        && !in_runner
+        && persistence_health.is_some_and(|health| !health.is_healthy());
+    let persistence_health_height: u16 = if persistence_health_row_needed { 1 } else { 0 };
 
     // The input box grows with its content: the typed text wraps onto new
     // lines and the box expands to fit, up to roughly half the terminal so the
@@ -788,6 +801,10 @@ pub fn draw_transcript(
             FooterRow {
                 id: FooterRowId::TopGap,
                 height: FOOTER_TOP_GAP_ROWS,
+            },
+            FooterRow {
+                id: FooterRowId::PersistenceHealth,
+                height: persistence_health_height,
             },
             FooterRow {
                 id: FooterRowId::Queue,
@@ -965,6 +982,13 @@ pub fn draw_transcript(
     // `place` applies the shared `FOOTER_H_INSET` extent itself, so no
     // hand-derived `footer_x`/`footer_w` remains.
     let placed_footer = footer_stack::place(chunks[1], &footer_rows);
+
+    // The durability-health banner (ADR-0196 D4) leads the visible chrome:
+    // a degraded writer must be seen before anything else in the footer.
+    footer_stack::rect_of(&placed_footer, FooterRowId::PersistenceHealth)
+        .filter(|_| persistence_health_row_needed)
+        .zip(persistence_health)
+        .map(|(rect, state)| draw_persistence_health_bar(frame, rect, state, theme));
 
     // The persistent queue bar leads the footer stack below the top gap. It is a
     // stable one-row outbox summary so pending messages never have to be

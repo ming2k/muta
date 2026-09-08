@@ -15,9 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 
-use muta_contracts::{
-    BackgroundJobInfo, BackgroundJobOutcome, JobId, JobKind, JobSpec, JobState,
-};
+use muta_contracts::{BackgroundJobInfo, BackgroundJobOutcome, JobId, JobKind, JobSpec, JobState};
 
 const DEFAULT_RING_BUFFER_CAPACITY: usize = 500;
 
@@ -44,10 +42,15 @@ pub struct BackgroundJobManager {
 #[derive(Debug, Clone)]
 pub enum BackgroundJobEvent {
     Started(BackgroundJobInfo),
-    Progress { job_id: JobId, line: String },
+    Progress {
+        job_id: JobId,
+        line: String,
+    },
     /// A service task reported readiness (ADR-0190): readiness condition met,
     /// process alive. Wake-eligible.
-    Ready { job_id: JobId },
+    Ready {
+        job_id: JobId,
+    },
     Completed(BackgroundJobOutcome),
 }
 
@@ -456,7 +459,9 @@ impl BackgroundJobManager {
                 },
             );
         }
-        let _ = self.event_tx.send(BackgroundJobEvent::Started(info.clone()));
+        let _ = self
+            .event_tx
+            .send(BackgroundJobEvent::Started(info.clone()));
 
         let mgr = self.clone();
         let jid = job_id.clone();
@@ -500,9 +505,9 @@ impl BackgroundJobManager {
 
             // Readiness grace timer for AfterMs; armed lazily below.
             let mut grace: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = match readiness {
-                Readiness::AfterMs(ms) => {
-                    Some(Box::pin(tokio::time::sleep(Duration::from_millis(ms.max(1)))))
-                }
+                Readiness::AfterMs(ms) => Some(Box::pin(tokio::time::sleep(
+                    Duration::from_millis(ms.max(1)),
+                ))),
                 _ => None,
             };
 
@@ -562,7 +567,10 @@ impl BackgroundJobManager {
                     .code()
                     .unwrap_or(if status.success() { 0 } else { 1 });
                 if status.success() {
-                    JobState::Succeeded { duration_ms, exit_code: code }
+                    JobState::Succeeded {
+                        duration_ms,
+                        exit_code: code,
+                    }
                 } else {
                     JobState::Failed {
                         duration_ms,
@@ -637,7 +645,9 @@ impl BackgroundJobManager {
                 },
             );
         }
-        let _ = self.event_tx.send(BackgroundJobEvent::Started(info.clone()));
+        let _ = self
+            .event_tx
+            .send(BackgroundJobEvent::Started(info.clone()));
 
         let mgr = self.clone();
         let jid = job_id.clone();
@@ -675,7 +685,8 @@ impl BackgroundJobManager {
         Ok(info)
     }
 
-    fn mark_service_ready(&self, job_id: &JobId) {        let now_ms = SystemTime::now()
+    fn mark_service_ready(&self, job_id: &JobId) {
+        let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
@@ -766,7 +777,9 @@ impl BackgroundJobManager {
             }
         }
 
-        let _ = self.event_tx.send(BackgroundJobEvent::Started(info.clone()));
+        let _ = self
+            .event_tx
+            .send(BackgroundJobEvent::Started(info.clone()));
 
         let mgr = self.clone();
         let jid = job_id.clone();
@@ -784,7 +797,10 @@ impl BackgroundJobManager {
                         let summary = String::new();
                         let _ = summary;
                         let state = if code == 0 {
-                            JobState::Succeeded { duration_ms, exit_code: 0 }
+                            JobState::Succeeded {
+                                duration_ms,
+                                exit_code: 0,
+                            }
                         } else {
                             JobState::Failed {
                                 duration_ms,
@@ -811,7 +827,6 @@ impl BackgroundJobManager {
                     }
                 }
             }
-
         });
 
         Ok(info)
@@ -1450,13 +1465,7 @@ mod tests {
             .unwrap_or_default()
             .as_millis() as u64;
         let info = mgr
-            .spawn_timer(
-                None,
-                now + 200,
-                Some(200),
-                "tick".to_string(),
-                None,
-            )
+            .spawn_timer(None, now + 200, Some(200), "tick".to_string(), None)
             .expect("timer spawn");
 
         // Let one fire land, then cancel before a second.

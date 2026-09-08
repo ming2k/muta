@@ -1676,10 +1676,7 @@ async fn protocol_window_governs_when_declared() {
     match first_frame(port, None, Some(PROTOCOL_VERSION + 1)).await {
         Wire::Error { message, code } => {
             assert_eq!(code.as_deref(), Some("protocol_mismatch"));
-            assert!(
-                message.contains("muta stop"),
-                "names the fix: {message}"
-            );
+            assert!(message.contains("muta stop"), "names the fix: {message}");
             assert!(
                 message.contains(&format!("protocol {}", PROTOCOL_VERSION + 1)),
                 "names the client's protocol number: {message}"

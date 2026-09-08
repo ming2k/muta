@@ -513,17 +513,28 @@ fn up_arrow_in_browse_hands_off_to_history() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Up,
             KeyModifiers::NONE,
         )),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
+        Dispatch {
+            modal: crate::Modal::None,
+            focused_target: false,
+            ..Default::default()
+        },
+        &ModalKeys {
             session_info_detail: false,
             connection_info_detail: false,
+            ..Default::default()
+        },
+        &SheetKeys {
+            permission_confirm_always: false,
+            ..Default::default()
+        },
+        &ViewKeys {
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,
@@ -531,8 +542,6 @@ fn up_arrow_in_browse_hands_off_to_history() {
             suggestion_index: None,
             completion_dismissed: false,
             has_trigger_text: false,
-            permission_confirm_always: false,
-            has_focused_target: false,
             ..Default::default()
         },
         &mut drag,

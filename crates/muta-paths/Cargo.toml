@@ -1,0 +1,21 @@
+[package]
+name = "muta-paths"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+muta-platform = { path = "../muta-platform" }
+directories = "6.0"
+sha2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+test-path-override = []

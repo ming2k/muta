@@ -497,7 +497,7 @@ fn transcript_from_core_inner(
 /// Legacy messages do not persist round positions, and compaction may remove
 /// older visible rounds. Reconstruction therefore yields a relative `1..N`
 /// tail. The session counter identifies which real round `N` represents.
-pub(super) fn rebase_transcript_rounds(
+pub(crate) fn rebase_transcript_rounds(
     messages: &mut [TranscriptMessage],
     authoritative_round: u64,
 ) {
@@ -532,7 +532,7 @@ pub(super) fn rebase_transcript_rounds(
 /// the stream start); `None` means the start instant was already consumed
 /// or never recorded, in which case `0` is used so the trace still leaves
 /// the streaming state.
-pub(super) fn finalize_streaming_reasoning(
+pub(crate) fn finalize_streaming_reasoning(
     messages: &mut [TranscriptMessage],
     duration_ms: Option<u64>,
 ) {

@@ -12,7 +12,7 @@
 //! making its ownership boundary explicit.
 
 use crate::handlers_slash::SlashEnv;
-use crate::side::SideEnv;
+use crate::side::{SideEnv, resolve_turn_target};
 use muta_agent::catalog;
 use muta_agent::orchestration::{round_response, send_harness_state_for_session};
 use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
@@ -39,6 +39,116 @@ use crate::startup::SessionStart;
 /// as dormant; if the server move resumes, the fields can become private
 /// without changing the driver model.)
 #[allow(clippy::type_complexity)]
+/// The driver-owned follow-up queue authority (ADR-0197 M4).
+///
+/// One queue per hosted session driver, keyed by target session (the
+/// primary *and* live asides — each item carries its target's id, and the
+/// busy check is against the *target's* own round lifecycle). The frontend
+/// sends `AgentRequest::FollowUp` and renders the `QueueUpdated` snapshots;
+/// it never decides when an item ships.
+pub(crate) struct FollowUpQueue {
+    items: Vec<QueuedFollowUp>,
+    paused: std::collections::HashSet<String>,
+}
+
+pub(crate) struct QueuedFollowUp {
+    pub session_id: String,
+    pub message: muta_contracts::QueuedMessage,
+}
+
+impl FollowUpQueue {
+    pub(crate) fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            paused: std::collections::HashSet::new(),
+        }
+    }
+
+    pub(crate) fn is_paused(&self, session_id: &str) -> bool {
+        self.paused.contains(session_id)
+    }
+
+    pub(crate) fn set_paused(&mut self, session_id: &str, paused: bool) {
+        if paused {
+            self.paused.insert(session_id.to_string());
+        } else {
+            self.paused.remove(session_id);
+        }
+    }
+
+    pub(crate) fn enqueue(&mut self, session_id: &str, message: muta_contracts::QueuedMessage) {
+        self.items.push(QueuedFollowUp {
+            session_id: session_id.to_string(),
+            message,
+        });
+    }
+
+    pub(crate) fn remove(&mut self, session_id: &str, input_id: &str) {
+        self.items
+            .retain(|item| !(item.session_id == session_id && item.message.id == input_id));
+    }
+
+    pub(crate) fn clear(&mut self, session_id: &str) {
+        self.items.retain(|item| item.session_id != session_id);
+    }
+
+    /// Reorder one item within its session's queue by `delta` positions
+    /// (queue modal `K`/`J`), clamped at the session's slice boundaries.
+    /// Unknown ids are a no-op.
+    pub(crate) fn reorder(&mut self, session_id: &str, input_id: &str, delta: i32) {
+        let positions: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.session_id == session_id)
+            .map(|(position, _)| position)
+            .collect();
+        let Some(local) = positions
+            .iter()
+            .position(|&position| self.items[position].message.id == input_id)
+        else {
+            return;
+        };
+        let target_local =
+            (local as i64 + delta as i64).clamp(0, positions.len() as i64 - 1) as usize;
+        if target_local == local {
+            return;
+        }
+        let from = positions[local];
+        let to = positions[target_local];
+        let item = self.items.remove(from);
+        self.items.insert(to, item);
+    }
+
+    /// The authoritative snapshot for one session.
+    pub(crate) fn snapshot(&self, session_id: &str) -> (Vec<muta_contracts::QueuedMessage>, bool) {
+        let items = self
+            .items
+            .iter()
+            .filter(|item| item.session_id == session_id)
+            .map(|item| item.message.clone())
+            .collect();
+        (items, self.paused.contains(session_id))
+    }
+
+    /// Dequeue and return the first shippable item for `session_id`, if any.
+    pub(crate) fn dequeue_front(
+        &mut self,
+        session_id: &str,
+    ) -> Option<muta_contracts::QueuedMessage> {
+        let position = self
+            .items
+            .iter()
+            .position(|item| item.session_id == session_id)?;
+        let item = self.items.remove(position);
+        Some(item.message)
+    }
+
+    pub(crate) fn has_items_for(&self, session_id: &str) -> bool {
+        self.items.iter().any(|item| item.session_id == session_id)
+    }
+}
+
 pub struct SessionDriver {
     /// Inbound requests consumed by this driver.
     pub req_rx: mpsc::UnboundedReceiver<AgentRequest>,
@@ -322,11 +432,26 @@ impl SessionDriver {
         let mut pending_oauth_authorization: Option<
             crate::handlers_provider::PendingOAuthAuthorization,
         > = None;
+        // ADR-0197 M4: the driver owns the follow-up queue authority. The
+        // boundary watchers wake this loop when a target round ends; the
+        // ship pass dequeues the next shippable item.
+        let (followup_wake_tx, mut followup_wake_rx) = mpsc::channel::<String>(16);
+        let mut followup_queue = FollowUpQueue::new();
+        enum Incoming {
+            Request(AgentRequest),
+            Wake(String),
+        }
         loop {
-            let req = tokio::select! {
+            let incoming = tokio::select! {
                 res_opt = req_rx.recv() => {
                     let Some(req) = res_opt else { break; };
-                    req
+                    Incoming::Request(req)
+                }
+                wake_res = followup_wake_rx.recv() => {
+                    match wake_res {
+                        Some(target) => Incoming::Wake(target),
+                        None => break,
+                    }
                 }
                 discovery_res = async {
                     if let Some(ref mut task) = active_discovery_task {
@@ -388,6 +513,88 @@ impl SessionDriver {
                     }
                     continue;
                 }
+            };
+            let Incoming::Request(req) = incoming else {
+                let Incoming::Wake(wake_target) = incoming else {
+                    unreachable!("the else arm only fires for Wake");
+                };
+                // Round-boundary wake (ADR-0197 M4): a target round ended.
+                // A round the operator interrupted parks its queue — the
+                // user said stop; auto-firing more prompts after an Esc is
+                // never the intent. Ctrl+P / a fresh send re-arms it.
+                if let Some(target) =
+                    resolve_turn_target(&side, &agent, &session, &lifecycle, &wake_target).await
+                    && target.lifecycle.was_interrupted()
+                {
+                    followup_queue.set_paused(&wake_target, true);
+                    crate::handlers_chat::emit_queue_snapshot(
+                        &resp_tx,
+                        &followup_queue,
+                        &wake_target,
+                    );
+                }
+                // Ship the next queued item for any idle, un-paused target
+                // the queue knows about (in queue order).
+                let targets: Vec<String> = {
+                    let mut seen = Vec::new();
+                    // order-preserving distinct scan of the queue's targets
+                    for item in &followup_queue.items {
+                        if !seen.contains(&item.session_id) {
+                            seen.push(item.session_id.clone());
+                        }
+                    }
+                    seen
+                };
+                for target_id in targets {
+                    let Some(_item) = (followup_queue.has_items_for(&target_id)).then_some(())
+                    else {
+                        continue;
+                    };
+                    let Some(target) =
+                        resolve_turn_target(&side, &agent, &session, &lifecycle, &target_id).await
+                    else {
+                        // Target gone (aside closed): drop its items.
+                        followup_queue.clear(&target_id);
+                        crate::handlers_chat::emit_queue_snapshot(
+                            &resp_tx,
+                            &followup_queue,
+                            &target_id,
+                        );
+                        continue;
+                    };
+                    if target.lifecycle.is_running().await || followup_queue.is_paused(&target_id) {
+                        continue;
+                    }
+                    if let Some(message) = followup_queue.dequeue_front(&target_id) {
+                        crate::handlers_chat::start_queued_follow_up(
+                            SideEnv {
+                                side: &side,
+                                master: &agent,
+                                primary_session: &session,
+                                primary_lifecycle: &lifecycle,
+                                tx: &resp_tx,
+                                config: &config,
+                            },
+                            target_id.clone(),
+                            message,
+                            &mut followup_queue,
+                        )
+                        .await;
+                        // Watch this round's boundary so the *next* queued
+                        // item ships when it ends.
+                        if let Some(target) =
+                            resolve_turn_target(&side, &agent, &session, &lifecycle, &target_id)
+                                .await
+                        {
+                            crate::handlers_chat::spawn_boundary_watcher(
+                                target.lifecycle.clone(),
+                                followup_wake_tx.clone(),
+                                target_id.clone(),
+                            );
+                        }
+                    }
+                }
+                continue;
             };
             let pre_session_id = session.id().await;
             let pre_provider = agent.provider.provider_id();
@@ -599,6 +806,32 @@ impl SessionDriver {
                         &resp_tx,
                         &mut provider_usage,
                         provider_id,
+                        model,
+                    )
+                    .await;
+                }
+                AgentRequest::AddConnectionModel {
+                    connection_id,
+                    model,
+                } => {
+                    crate::handlers_provider::add_connection_model(
+                        &mut config,
+                        &resp_tx,
+                        &mut provider_usage,
+                        connection_id,
+                        model,
+                    )
+                    .await;
+                }
+                AgentRequest::RemoveConnectionModel {
+                    connection_id,
+                    model,
+                } => {
+                    crate::handlers_provider::remove_connection_model(
+                        &mut config,
+                        &resp_tx,
+                        &mut provider_usage,
+                        connection_id,
                         model,
                     )
                     .await;
@@ -975,8 +1208,81 @@ impl SessionDriver {
                             tx: &resp_tx,
                             config: &config,
                         },
+                        &mut followup_queue,
+                        &followup_wake_tx,
                         session_id,
                         message,
+                    )
+                    .await;
+                }
+                AgentRequest::QueueRemove {
+                    session_id,
+                    input_id,
+                } => {
+                    crate::handlers_chat::queue_remove(
+                        SideEnv {
+                            tx: &resp_tx,
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            config: &config,
+                        },
+                        &mut followup_queue,
+                        session_id,
+                        input_id,
+                    )
+                    .await;
+                }
+                AgentRequest::QueueClear { session_id } => {
+                    crate::handlers_chat::queue_clear(
+                        SideEnv {
+                            tx: &resp_tx,
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            config: &config,
+                        },
+                        &mut followup_queue,
+                        session_id,
+                    )
+                    .await;
+                }
+                AgentRequest::QueueReorder {
+                    session_id,
+                    input_id,
+                    delta,
+                } => {
+                    crate::handlers_chat::queue_reorder(
+                        SideEnv {
+                            tx: &resp_tx,
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            config: &config,
+                        },
+                        &mut followup_queue,
+                        session_id,
+                        input_id,
+                        delta,
+                    )
+                    .await;
+                }
+                AgentRequest::QueuePaused { session_id, paused } => {
+                    crate::handlers_chat::queue_paused(
+                        SideEnv {
+                            tx: &resp_tx,
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            config: &config,
+                        },
+                        &mut followup_queue,
+                        session_id,
+                        paused,
                     )
                     .await;
                 }
@@ -994,6 +1300,21 @@ impl SessionDriver {
                 }
                 AgentRequest::QueryBtwList => {
                     crate::side::publish_btw_list(&side, &resp_tx).await;
+                }
+                AgentRequest::QueryInputHistory => {
+                    crate::handlers_history::query_input_history(&resp_tx);
+                }
+                AgentRequest::RecordInputHistory { entries, dedup } => {
+                    crate::handlers_history::record_input_history(entries, dedup);
+                }
+                AgentRequest::DeleteInputHistoryEntry {
+                    text,
+                    created_at_ms,
+                } => {
+                    crate::handlers_history::delete_input_history_entry(&text, created_at_ms);
+                }
+                AgentRequest::QueryRouteSettings { provider_id, model } => {
+                    crate::handlers_history::query_route_settings(&provider_id, &model, &resp_tx);
                 }
                 AgentRequest::UpdateTuiLayout(layout) => {
                     let _ = resp_tx.send(AgentResponse::TuiLayoutUpdated(layout));
@@ -1625,5 +1946,145 @@ mod tests {
         assert_eq!(point.history_watermark, 3);
 
         let _ = std::fs::remove_dir_all(directory);
+    }
+}
+
+#[cfg(test)]
+mod followup_queue_tests {
+    //! The driver-owned follow-up queue authority (ADR-0197 M4).
+
+    use super::*;
+
+    fn message(id: &str, text: &str) -> muta_contracts::QueuedMessage {
+        muta_contracts::QueuedMessage {
+            id: id.to_string(),
+            text: text.to_string(),
+            display_text: None,
+            images: Vec::new(),
+            sent_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn enqueue_preserves_fifo_order_per_target() {
+        let mut queue = FollowUpQueue::new();
+        queue.enqueue("primary", message("a", "first"));
+        queue.enqueue("primary", message("b", "second"));
+        queue.enqueue("aside-1", message("c", "aside"));
+
+        let (primary_items, paused) = queue.snapshot("primary");
+        assert_eq!(primary_items.len(), 2);
+        assert_eq!(primary_items[0].id, "a");
+        assert_eq!(primary_items[1].id, "b");
+        assert!(!paused);
+
+        let (aside_items, _) = queue.snapshot("aside-1");
+        assert_eq!(aside_items.len(), 1);
+        assert_eq!(aside_items[0].id, "c");
+    }
+
+    #[test]
+    fn dequeue_front_is_fifo_and_target_scoped() {
+        let mut queue = FollowUpQueue::new();
+        queue.enqueue("primary", message("a", "1"));
+        queue.enqueue("primary", message("b", "2"));
+        queue.enqueue("aside-1", message("c", "aside"));
+
+        let first = queue.dequeue_front("primary").expect("must dequeue");
+        assert_eq!(first.id, "a");
+        assert!(queue.has_items_for("primary"));
+
+        let second = queue.dequeue_front("primary").expect("must dequeue");
+        assert_eq!(second.id, "b");
+        assert!(!queue.has_items_for("primary"));
+        // The aside's item is untouched.
+        assert!(queue.has_items_for("aside-1"));
+    }
+
+    #[test]
+    fn reorder_clamps_within_the_target_slice() {
+        let mut queue = FollowUpQueue::new();
+        queue.enqueue("primary", message("a", "1"));
+        queue.enqueue("primary", message("b", "2"));
+        queue.enqueue("primary", message("c", "3"));
+        queue.enqueue("aside-1", message("z", "aside"));
+
+        // Move `c` two toward the front: clamped to the slice head.
+        queue.reorder("primary", "c", -5);
+        let (items, _) = queue.snapshot("primary");
+        assert_eq!(items[0].id, "c");
+        assert_eq!(items[1].id, "a");
+        assert_eq!(items[2].id, "b");
+        // The aside slice is untouched.
+        let (aside, _) = queue.snapshot("aside-1");
+        assert_eq!(aside[0].id, "z");
+
+        // Move `c` back one.
+        queue.reorder("primary", "c", 1);
+        let (items, _) = queue.snapshot("primary");
+        assert_eq!(items[0].id, "a");
+
+        // Moving past the tail clamps.
+        queue.reorder("primary", "a", 7);
+        let (items, _) = queue.snapshot("primary");
+        assert_eq!(items.last().map(|m| m.id.as_str()), Some("a"));
+
+        // Unknown id: no-op.
+        queue.reorder("primary", "nope", -1);
+        let (items, _) = queue.snapshot("primary");
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn remove_and_clear_are_target_scoped_and_idempotent() {
+        let mut queue = FollowUpQueue::new();
+        queue.enqueue("primary", message("a", "1"));
+        queue.enqueue("aside-1", message("z", "aside"));
+
+        queue.remove("primary", "a");
+        assert!(!queue.has_items_for("primary"));
+        queue.remove("primary", "a"); // idempotent
+        assert!(queue.has_items_for("aside-1"));
+
+        queue.clear("aside-1");
+        assert!(!queue.has_items_for("aside-1"));
+    }
+
+    #[test]
+    fn pause_gates_only_the_target() {
+        let mut queue = FollowUpQueue::new();
+        queue.enqueue("primary", message("a", "1"));
+        queue.enqueue("aside-1", message("z", "aside"));
+
+        queue.set_paused("primary", true);
+        assert!(queue.is_paused("primary"));
+        assert!(!queue.is_paused("aside-1"));
+        queue.set_paused("primary", false);
+        assert!(!queue.is_paused("primary"));
+    }
+
+    /// The boundary contract (ADR-0197 M4): the round lifecycle's interrupt
+    /// parking must be observable at the round boundary, so the queue parks
+    /// after an interrupted round instead of auto-firing more prompts.
+    #[tokio::test]
+    async fn lifecycle_reports_interruption_at_the_boundary() {
+        let lifecycle = RoundLifecycle::new();
+        assert!(!lifecycle.was_interrupted());
+
+        let begin = lifecycle.begin().await;
+        assert!(!lifecycle.was_interrupted());
+
+        // The operator requests a stop mid-round…
+        lifecycle.record_interrupt(muta_contracts::RoundInterruptReason::User);
+        assert!(lifecycle.was_interrupted());
+
+        // …and the round unwinds to its boundary.
+        lifecycle.cancel_current().await;
+        assert!(lifecycle.finish(begin.generation).await);
+        assert!(lifecycle.was_interrupted(), "the queue must park");
+
+        // The next round clears it.
+        let _ = lifecycle.begin().await;
+        assert!(!lifecycle.was_interrupted());
     }
 }

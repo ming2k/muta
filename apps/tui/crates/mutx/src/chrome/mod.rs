@@ -7,6 +7,7 @@ pub mod activity_bar;
 pub mod common;
 pub mod completion_menu;
 pub mod model_bar;
+pub mod persistence_health;
 pub mod queue_bar;
 
 #[cfg(test)]
@@ -25,4 +26,5 @@ pub use model_bar::{
     CONTEXT_USAGE_CRIT_THRESHOLD, CONTEXT_USAGE_WARN_THRESHOLD, ModelBarProps, ModelBarRects,
     draw_model_bar, format_token_count,
 };
+pub use persistence_health::draw_persistence_health_bar;
 pub use queue_bar::{QueueBarProps, QueueItemProps, draw_queue_bar};

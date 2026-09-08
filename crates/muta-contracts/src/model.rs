@@ -269,6 +269,53 @@ impl CapabilityOverrides {
     }
 }
 
+/// One user-declared model on a preset connection (ADR-0198): a hidden or
+/// unstable upstream id the discovery intersection can never surface, pinned
+/// to one connection. Lives in `muta-contracts` (not persistence) so the wire
+/// request can carry it — persistence keys it per connection inside
+/// `Connection::extra_models` and owns only storage, mirroring how
+/// [`CapabilityOverrides`] rides [`crate::AgentRequest::EditProviderModel`].
+///
+/// The id is exact (case-sensitive, consistent with
+/// `muta_providers::registry::custom_baselines`); every capability field is
+/// optional — a declared field overlays the registry default via the ADR-0149
+/// resolution order (materialized as `RemoteModelMetadata` on the derived
+/// channel), an absent field falls through to it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(default)]
+pub struct DeclaredModel {
+    /// Exact model id sent on the wire and shown in the picker.
+    pub id: String,
+    /// Context window in tokens, when the user knows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    /// Maximum generated tokens, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Reasoning representation, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ReasoningSupport>,
+    /// Image-input support, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Native tool-call support, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+}
+
+impl DeclaredModel {
+    /// A bare declaration for `raw` with its id sanitized (trimmed,
+    /// whitespace runs → hyphens, control chars dropped); `None` when nothing
+    /// usable remains.
+    pub fn sanitized(raw: &str) -> Option<Self> {
+        let id = sanitize_model_id(raw);
+        (!id.is_empty()).then_some(Self {
+            id,
+            ..Self::default()
+        })
+    }
+}
+
 impl ModelCapabilities {
     /// Resolve effective capabilities for `model_id`, applying all explicitly
     /// advertised remote fields over the local baseline.

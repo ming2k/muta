@@ -394,7 +394,7 @@ async fn slash_dispatch_never_arms_activity_state() {
         "a command must not arm is_responding"
     );
     assert!(
-        runtime.phase.lock().await.is_none(),
+        app.phase.is_none(),
         "a command must not paint an optimistic activity label"
     );
     assert!(
@@ -402,7 +402,7 @@ async fn slash_dispatch_never_arms_activity_state() {
         "a command must not mark the session as running"
     );
     // The in-flight feedback is the pending command row, not the bar.
-    let messages = runtime.messages.read().await.clone();
+    let messages = app.messages.clone();
     assert!(
         messages
             .last()
@@ -430,11 +430,9 @@ fn toggle_queue_block_flips_state_and_blocks_dispatch() {
     assert!(!app.is_queue_blocked("session-a"));
     assert_eq!(app.pending_count("session-a"), 2);
 
-    // Toggle on.
-    assert!(
-        app.toggle_queue_block("session-a"),
-        "first toggle should block"
-    );
+    // Toggle on (the local flag is the optimistic projection of the
+    // daemon's `QueuePaused` verb — ADR-0197 M4).
+    app.set_queue_blocked("session-a", true);
     assert!(app.is_queue_blocked("session-a"));
 
     // The block is persistent and session-scoped: another session is
@@ -444,10 +442,7 @@ fn toggle_queue_block_flips_state_and_blocks_dispatch() {
     assert!(!app.is_queue_blocked("session-b"));
 
     // Toggle off.
-    assert!(
-        !app.toggle_queue_block("session-a"),
-        "second toggle should resume"
-    );
+    app.set_queue_blocked("session-a", false);
     assert!(!app.is_queue_blocked("session-a"));
 }
 

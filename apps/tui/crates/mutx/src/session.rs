@@ -17,7 +17,7 @@
 //!
 //! ## Layer contract
 //!
-//! The input router (`crate::input::process_event`) offers the key to this
+//! The input router (`crate::input::route_event`) offers the key to this
 //! resolver **only** while the chat surface owns the keyboard (no modal, view
 //! is Session / Runner / Side). A `Some(action)` means the chat surface
 //! consumed the key. A `None` falls through to the shared affordance library
@@ -26,8 +26,52 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::input::{InputAction, InputContext};
+use crate::input::InputAction;
 use crate::keymap::LiveHint;
+
+/// The view schemes' own sub-state (ADR-0197 M2): the completion/selection
+/// family plus the run-state and navigation facts the Session/Runner/Side
+/// resolvers arbitrate against. Built once per event by the caller; every
+/// read below is view-local, so nothing else leaks in.
+#[derive(Debug, Default, Clone)]
+pub struct ViewKeys {
+    pub is_responding: bool,
+    /// Target queue mode for the live composer while a round is running.
+    pub composer_send_mode: crate::app::ComposerSendMode,
+    /// Which completion menu (slash command vs `@path` mention) is active, or
+    /// `None` when no menu is shown. Drives Tab/↑/↓ cycling and the
+    /// slash-specific Enter auto-accept. Mirrors [`crate::CompletionKind`].
+    pub completion_kind: crate::CompletionKind,
+    /// Whether the completion menu is currently hidden behind the Esc/Enter
+    /// dismissal latch (`App::completion_dismissed`). Tab consults it to
+    /// re-open a dismissed menu: Esc closes, Tab reopens — the toggle's
+    /// other half.
+    pub completion_dismissed: bool,
+    /// Whether the composer still holds text a completion menu could anchor
+    /// to — a partial `/command` or an `@mention` under the caret. Together
+    /// with [`Self::completion_dismissed`] it decides whether Tab can bring
+    /// a dismissed popup back: re-opening makes sense only when the trigger
+    /// text survived.
+    pub has_trigger_text: bool,
+    pub suggestion_count: usize,
+    pub suggestion_index: Option<usize>,
+    pub has_exact_suggestion: bool,
+    /// Whether the inline ↑/↓ recall pointer sits on a history row
+    /// (`App::history_index.is_some()`). While true, Esc first cancels the
+    /// recall (restoring the stashed draft) before any other Esc arm fires —
+    /// the pointer is a transient navigation state and the universal
+    /// "get me back" chord must be able to exit it (ADR-0192).
+    pub in_history_recall: bool,
+    /// User remaps of the full-screen-view surface verbs (`session.*` dotted
+    /// keys, ADR-0172). The view resolvers consult it; the composer hint row
+    /// renders its effective bindings.
+    pub surface_overrides: crate::keymap::SurfaceOverrides,
+    /// Whether a transcript step/action target holds keyboard focus behind
+    /// the view scheme.
+    pub focused_target: bool,
+    /// Whether the transcript holds browse focus.
+    pub transcript_focused: bool,
+}
 
 /// Run states the composer hint row advertises. (HistorySearch is a modal and
 /// stays out of the chat scheme until that modal owns its own.)
@@ -100,12 +144,12 @@ pub(crate) fn live_chat_hints(
 /// remappable.
 pub(crate) fn resolve_chat_surface_key(
     key: crate::keymap::Key,
-    ctx: &InputContext,
+    keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     use crate::keymap::SurfaceVerb;
-    let ov = &ctx.surface_overrides;
+    let ov = &keys.surface_overrides;
     if ov.matches(key, SurfaceVerb::OpenHistory) {
         return Some(InputAction::OpenHistory);
     }
@@ -116,9 +160,9 @@ pub(crate) fn resolve_chat_surface_key(
         return Some(InputAction::HistoryNext);
     }
     if ov.matches(key, SurfaceVerb::ToggleSendMode)
-        && ctx.is_responding
-        && (ctx.completion_kind == crate::completion::CompletionKind::None
-            || ctx.completion_dismissed)
+        && keys.is_responding
+        && (keys.completion_kind == crate::completion::CompletionKind::None
+            || keys.completion_dismissed)
     {
         return Some(InputAction::ToggleSendMode);
     }
@@ -129,7 +173,7 @@ pub(crate) fn resolve_chat_surface_key(
         return Some(InputAction::FocusNextTarget);
     }
     if ov.matches(key, SurfaceVerb::ClearFocusedTarget)
-        && (ctx.has_focused_target || ctx.transcript_focused)
+        && (keys.focused_target || keys.transcript_focused)
     {
         return Some(InputAction::ClearFocusedTarget);
     }
@@ -141,7 +185,7 @@ pub(crate) fn resolve_chat_surface_key(
     if ov.is_remapped(SurfaceVerb::ScrollBottom) && ov.matches(key, SurfaceVerb::ScrollBottom) {
         return Some(InputAction::ScrollBottom);
     }
-    if ctx.has_focused_target || ctx.transcript_focused {
+    if keys.focused_target || keys.transcript_focused {
         if ov.matches(key, SurfaceVerb::ScrollTop) {
             return Some(InputAction::ScrollTop);
         }
@@ -152,12 +196,12 @@ pub(crate) fn resolve_chat_surface_key(
 
     match key.code {
         KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
-            resolve_enter(ctx, input, cursor_position)
+            resolve_enter(keys, input, cursor_position)
         }
-        KeyCode::Tab => resolve_tab(ctx),
-        KeyCode::Esc => resolve_esc(ctx),
-        KeyCode::Up => resolve_up(ctx, input, cursor_position),
-        KeyCode::Down => resolve_down(ctx, input, cursor_position),
+        KeyCode::Tab => resolve_tab(keys),
+        KeyCode::Esc => resolve_esc(keys),
+        KeyCode::Up => resolve_up(keys, input, cursor_position),
+        KeyCode::Down => resolve_down(keys, input, cursor_position),
         // Only unmodified (or Shift-capitalized) characters are owned as
         // text; every Control/Alt/Super chord is a shared command chord
         // (readline editing, paste, …) handled by the router.
@@ -167,12 +211,12 @@ pub(crate) fn resolve_chat_surface_key(
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
         {
-            if ctx.has_focused_target && (c == 'y' || c == 'c') {
+            if keys.focused_target && (c == 'y' || c == 'c') {
                 Some(InputAction::CopyFocusedTarget)
-            } else if ctx.has_focused_target || ctx.transcript_focused {
+            } else if keys.focused_target || keys.transcript_focused {
                 Some(InputAction::None)
             } else {
-                resolve_printable(ctx, c, input, cursor_position)
+                resolve_printable(keys, c, input, cursor_position)
             }
         }
         _ => None,
@@ -185,29 +229,29 @@ pub(crate) fn resolve_chat_surface_key(
 /// chat core for step-focus walking.
 pub(crate) fn resolve_runner_key(
     key: crate::keymap::Key,
-    ctx: &InputContext,
+    keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     use crate::keymap::SurfaceVerb;
-    let ov = &ctx.surface_overrides;
+    let ov = &keys.surface_overrides;
     // Sibling navigation rides the verb's effective chord only while no text
     // is composed and no step is focused (a focused step bounces the key to
     // the composer).
-    if ov.matches(key, SurfaceVerb::PrevSibling) && !ctx.has_focused_target && input.is_empty() {
+    if ov.matches(key, SurfaceVerb::PrevSibling) && !keys.focused_target && input.is_empty() {
         return Some(InputAction::PrevSibling);
     }
-    if ov.matches(key, SurfaceVerb::NextSibling) && !ctx.has_focused_target && input.is_empty() {
+    if ov.matches(key, SurfaceVerb::NextSibling) && !keys.focused_target && input.is_empty() {
         return Some(InputAction::NextSibling);
     }
     match key.code {
         // Runner zoom: Esc returns to the parent view, priority over focus
         // clearing — unless a completion popup is up, which is dismissed
         // first (mirrors the pre-ADR-0172 arm order).
-        KeyCode::Esc if ctx.completion_kind == crate::completion::CompletionKind::None => {
+        KeyCode::Esc if keys.completion_kind == crate::completion::CompletionKind::None => {
             Some(InputAction::ExitRunner)
         }
-        _ => resolve_chat_surface_key(key, ctx, input, cursor_position),
+        _ => resolve_chat_surface_key(key, keys, input, cursor_position),
     }
 }
 
@@ -216,17 +260,17 @@ pub(crate) fn resolve_runner_key(
 /// — an aside is a normal transcript + composer.
 pub(crate) fn resolve_side_key(
     key: crate::keymap::Key,
-    ctx: &InputContext,
+    keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     match key.code {
         // Esc in an aside returns to the primary transcript (ADR-0103),
         // unless a completion popup is up (dismissed first).
-        KeyCode::Esc if ctx.completion_kind == crate::completion::CompletionKind::None => {
+        KeyCode::Esc if keys.completion_kind == crate::completion::CompletionKind::None => {
             Some(InputAction::ExitSideView)
         }
-        _ => resolve_chat_surface_key(key, ctx, input, cursor_position),
+        _ => resolve_chat_surface_key(key, keys, input, cursor_position),
     }
 }
 
@@ -236,16 +280,16 @@ pub(crate) fn resolve_side_key(
 pub(crate) fn resolve_view_key(
     view: crate::surfaces::View,
     key: crate::keymap::Key,
-    ctx: &InputContext,
+    keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     match view {
         crate::surfaces::View::Session => {
-            resolve_chat_surface_key(key, ctx, input, cursor_position)
+            resolve_chat_surface_key(key, keys, input, cursor_position)
         }
-        crate::surfaces::View::Runner => resolve_runner_key(key, ctx, input, cursor_position),
-        crate::surfaces::View::Side => resolve_side_key(key, ctx, input, cursor_position),
+        crate::surfaces::View::Runner => resolve_runner_key(key, keys, input, cursor_position),
+        crate::surfaces::View::Side => resolve_side_key(key, keys, input, cursor_position),
         _ => None,
     }
 }
@@ -254,30 +298,30 @@ pub(crate) fn resolve_view_key(
 /// a focused step activates, a highlighted completion commits, a unique slash
 /// prefix auto-accepts, otherwise the draft is sent — or queued while running.
 fn resolve_enter(
-    ctx: &InputContext,
+    keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    if ctx.has_focused_target {
+    if keys.focused_target {
         return Some(InputAction::ActivateFocusedTarget);
     }
-    if ctx.transcript_focused {
+    if keys.transcript_focused {
         return Some(InputAction::None);
     }
     // Slash-only: Enter on a unique prefix auto-accepts the first suggestion
     // rather than sending `/go` as a (rejected) command. Path mentions skip
     // this so Enter still sends the message.
-    if ctx.completion_kind == crate::completion::CompletionKind::Slash
-        && ctx.suggestion_count > 0
-        && ctx.suggestion_index.is_none()
-        && !ctx.has_exact_suggestion
+    if keys.completion_kind == crate::completion::CompletionKind::Slash
+        && keys.suggestion_count > 0
+        && keys.suggestion_index.is_none()
+        && !keys.has_exact_suggestion
     {
         return Some(InputAction::CommitSuggestion("0".to_string()));
     }
     // An explicit highlight (via ↑/↓ or Tab) wins over the exact-match slash
     // fast path below.
-    if let Some(i) = ctx.suggestion_index
-        && ctx.completion_kind != crate::completion::CompletionKind::None
+    if let Some(i) = keys.suggestion_index
+        && keys.completion_kind != crate::completion::CompletionKind::None
     {
         return Some(InputAction::CommitSuggestion(i.to_string()));
     }
@@ -304,8 +348,8 @@ fn resolve_enter(
         };
         Some(action)
     } else if !text.is_empty() {
-        if ctx.is_responding {
-            match ctx.composer_send_mode {
+        if keys.is_responding {
+            match keys.composer_send_mode {
                 crate::app::ComposerSendMode::Steer => Some(InputAction::SteerImmediate(text)),
                 crate::app::ComposerSendMode::FollowUp => Some(InputAction::QueueFollowUp(text)),
             }
@@ -319,22 +363,22 @@ fn resolve_enter(
 
 /// Tab on the chat surface: commit a live completion, re-open a dismissed
 /// menu, or toggle between steer and follow-up queue mode while running.
-fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
-    if ctx.completion_kind != crate::completion::CompletionKind::None
-        && ctx.suggestion_count > 0
-        && !ctx.has_exact_suggestion
-        && !ctx.completion_dismissed
+fn resolve_tab(keys: &ViewKeys) -> Option<InputAction> {
+    if keys.completion_kind != crate::completion::CompletionKind::None
+        && keys.suggestion_count > 0
+        && !keys.has_exact_suggestion
+        && !keys.completion_dismissed
     {
-        let idx = ctx.suggestion_index.unwrap_or(0);
+        let idx = keys.suggestion_index.unwrap_or(0);
         Some(InputAction::CommitSuggestion(idx.to_string()))
-    } else if ctx.completion_kind != crate::completion::CompletionKind::None
-        && ctx.completion_dismissed
-        && ctx.has_trigger_text
-        && !ctx.is_responding
+    } else if keys.completion_kind != crate::completion::CompletionKind::None
+        && keys.completion_dismissed
+        && keys.has_trigger_text
+        && !keys.is_responding
     {
         Some(InputAction::ReopenCompletion)
-    } else if ctx.is_responding
-        && !ctx
+    } else if keys.is_responding
+        && !keys
             .surface_overrides
             .is_remapped(crate::keymap::SurfaceVerb::ToggleSendMode)
     {
@@ -350,19 +394,20 @@ fn resolve_tab(ctx: &InputContext) -> Option<InputAction> {
 /// that must be escapable), then clear step focus, then interrupt a running
 /// round. (Runner and Side own their own Esc exits in
 /// [`resolve_runner_key`] / [`resolve_side_key`].)
-fn resolve_esc(ctx: &InputContext) -> Option<InputAction> {
-    if ctx.completion_kind != crate::completion::CompletionKind::None && !ctx.completion_dismissed {
-        Some(InputAction::CloseCompletion)
-    } else if ctx.in_history_recall {
-        Some(InputAction::CancelHistoryRecall)
-    } else if ctx.has_focused_target || ctx.transcript_focused {
-        Some(InputAction::ClearFocusedTarget)
-    } else if ctx.completion_kind != crate::completion::CompletionKind::None
-        && ctx.suggestion_count > 0
-        && !ctx.completion_dismissed
+fn resolve_esc(keys: &ViewKeys) -> Option<InputAction> {
+    if keys.completion_kind != crate::completion::CompletionKind::None && !keys.completion_dismissed
     {
         Some(InputAction::CloseCompletion)
-    } else if ctx.is_responding {
+    } else if keys.in_history_recall {
+        Some(InputAction::CancelHistoryRecall)
+    } else if keys.focused_target || keys.transcript_focused {
+        Some(InputAction::ClearFocusedTarget)
+    } else if keys.completion_kind != crate::completion::CompletionKind::None
+        && keys.suggestion_count > 0
+        && !keys.completion_dismissed
+    {
+        Some(InputAction::CloseCompletion)
+    } else if keys.is_responding {
         Some(InputAction::Interrupt)
     } else {
         None
@@ -374,14 +419,14 @@ fn resolve_esc(ctx: &InputContext) -> Option<InputAction> {
 /// - When transcript browse focus is active, scroll the transcript up.
 /// - Otherwise, walk completion suggestions, move caret up through multi-line draft,
 ///   or at top line hand off to inline history recall.
-fn resolve_up(ctx: &InputContext, input: &str, cursor_position: &mut usize) -> Option<InputAction> {
-    if ctx.has_focused_target {
+fn resolve_up(keys: &ViewKeys, input: &str, cursor_position: &mut usize) -> Option<InputAction> {
+    if keys.focused_target {
         Some(InputAction::FocusPrevTarget)
-    } else if ctx.transcript_focused {
+    } else if keys.transcript_focused {
         Some(InputAction::ScrollUp)
-    } else if ctx.completion_kind != crate::completion::CompletionKind::None
-        && ctx.suggestion_count > 0
-        && !ctx.has_exact_suggestion
+    } else if keys.completion_kind != crate::completion::CompletionKind::None
+        && keys.suggestion_count > 0
+        && !keys.has_exact_suggestion
     {
         Some(InputAction::SuggestPrev)
     } else if crate::input::cursor_line_up(input, cursor_position) {
@@ -398,18 +443,14 @@ fn resolve_up(ctx: &InputContext, input: &str, cursor_position: &mut usize) -> O
 /// - When transcript browse focus is active, scroll the transcript down.
 /// - Otherwise, walk completion suggestions, move caret down through multi-line draft,
 ///   or at bottom line hand off to newer history recall / stashed draft.
-fn resolve_down(
-    ctx: &InputContext,
-    input: &str,
-    cursor_position: &mut usize,
-) -> Option<InputAction> {
-    if ctx.has_focused_target {
+fn resolve_down(keys: &ViewKeys, input: &str, cursor_position: &mut usize) -> Option<InputAction> {
+    if keys.focused_target {
         Some(InputAction::FocusNextTarget)
-    } else if ctx.transcript_focused {
+    } else if keys.transcript_focused {
         Some(InputAction::ScrollDown)
-    } else if ctx.completion_kind != crate::completion::CompletionKind::None
-        && ctx.suggestion_count > 0
-        && !ctx.has_exact_suggestion
+    } else if keys.completion_kind != crate::completion::CompletionKind::None
+        && keys.suggestion_count > 0
+        && !keys.has_exact_suggestion
     {
         Some(InputAction::SuggestNext)
     } else if crate::input::cursor_line_down(input, cursor_position) {
@@ -426,12 +467,12 @@ fn resolve_down(
 /// via `Esc` or a mouse click. Runner sibling navigation (`[`/`]`) is owned by the Runner
 /// view's resolver.
 fn resolve_printable(
-    ctx: &InputContext,
+    keys: &ViewKeys,
     _c: char,
     _input: &mut String,
     _cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    if ctx.has_focused_target || ctx.transcript_focused {
+    if keys.focused_target || keys.transcript_focused {
         return Some(InputAction::None);
     }
     None
@@ -440,7 +481,7 @@ fn resolve_printable(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::process_event;
+    use crate::input::route_event;
     use crate::surfaces::View;
     use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
 
@@ -457,39 +498,47 @@ mod tests {
         Side,
     }
 
-    /// A mode-appropriate chat-surface context for direct resolver tests.
-    fn ctx(mode: Mode, tune: impl FnOnce(&mut InputContext)) -> InputContext {
-        let mut c = InputContext::default();
-        match mode {
-            Mode::Runner => c.current_view = View::Runner,
-            Mode::Side => c.current_view = View::Side,
-            _ => c.current_view = View::Session,
-        }
+    /// A mode-appropriate chat-surface view-keys bundle for direct resolver
+    /// tests.
+    fn ctx(mode: Mode, tune: impl FnOnce(&mut ViewKeys)) -> ViewKeys {
+        let mut c = ViewKeys::default();
         match mode {
             Mode::Idle => {}
             Mode::Running => c.is_responding = true,
-            Mode::FocusedTarget => c.has_focused_target = true,
+            Mode::FocusedTarget => c.focused_target = true,
             Mode::Completion => {
                 c.completion_kind = crate::completion::CompletionKind::Slash;
                 c.suggestion_count = 3;
                 c.suggestion_index = Some(1);
             }
-            Mode::Runner => c.in_runner_view = true,
-            Mode::Side => c.in_side_view = true,
+            Mode::Runner | Mode::Side => {}
         }
         tune(&mut c);
         c
     }
 
-    /// Route a chord through the real `process_event` pipeline to confirm the
+    /// The view a Mode stands in (surface dispatch keys off the explicit
+    /// view, ADR-0172).
+    fn view_of(mode: Mode) -> View {
+        match mode {
+            Mode::Runner => View::Runner,
+            Mode::Side => View::Side,
+            _ => View::Session,
+        }
+    }
+
+    /// Route a chord through the real `route_event` pipeline to confirm the
     /// resolver is reached for the chat surface (ADR-0172 layer wiring).
     fn process(view: View, code: KeyCode, modifiers: KeyModifiers, mode: Mode) -> InputAction {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = crate::model::selection::SelectionDrag::default();
-        let mut context = ctx(mode, |_| {});
-        context.current_view = view;
-        process_event(
+        let keys = ctx(mode, |_| {});
+        let dispatch = crate::input::Dispatch {
+            view,
+            ..Default::default()
+        };
+        route_event(
             Event::Key(KeyEvent {
                 code,
                 modifiers,
@@ -498,7 +547,10 @@ mod tests {
             }),
             &mut input,
             &mut cursor,
-            context,
+            dispatch,
+            &crate::modal_keys::ModalKeys::default(),
+            &crate::sheet::SheetKeys::default(),
+            &keys,
             &mut drag,
         )
     }
@@ -526,7 +578,7 @@ mod tests {
             let c = ctx(*mode, |_| {});
             let mut input = String::from("hi");
             let mut cursor = input.chars().count();
-            let resolved = resolve_view_key(c.current_view, *key, &c, &mut input, &mut cursor);
+            let resolved = resolve_view_key(view_of(*mode), *key, &c, &mut input, &mut cursor);
             assert!(
                 resolved.is_some(),
                 "owned chord {key:?} did not resolve in {mode:?}"
@@ -921,7 +973,7 @@ mod tests {
             resolve_view_key(
                 View::Runner,
                 Key::ESC,
-                &ctx(Mode::Runner, |c| c.has_focused_target = true),
+                &ctx(Mode::Runner, |c| c.focused_target = true),
                 &mut String::new(),
                 &mut 0
             ),
@@ -948,7 +1000,7 @@ mod tests {
             resolve_view_key(
                 View::Runner,
                 bracket,
-                &ctx(Mode::Runner, |c| c.has_focused_target = true),
+                &ctx(Mode::Runner, |c| c.focused_target = true),
                 &mut String::new(),
                 &mut 0
             ),
@@ -1125,7 +1177,7 @@ mod tests {
         let mut input = String::from("draft");
         let mut cursor = 5;
         let mut drag = crate::model::selection::SelectionDrag::default();
-        let action = process_event(
+        let action = route_event(
             Event::Key(KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -1134,10 +1186,13 @@ mod tests {
             }),
             &mut input,
             &mut cursor,
-            InputContext {
-                current_view: View::Settings,
+            crate::input::Dispatch {
+                view: View::Settings,
                 ..Default::default()
             },
+            &crate::modal_keys::ModalKeys::default(),
+            &crate::sheet::SheetKeys::default(),
+            &crate::session::ViewKeys::default(),
             &mut drag,
         );
         assert_eq!(action, InputAction::None);

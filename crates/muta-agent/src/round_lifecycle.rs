@@ -49,6 +49,18 @@ pub struct RoundLifecycle {
     /// round task ([`Self::take_interrupt`]). `Mutex` (not `RwLock`) because
     /// [`Self::take_interrupt`] mutates.
     interrupt_reason: std::sync::Mutex<Option<ParkedInterrupt>>,
+    /// Round-boundary wake (ADR-0197 M4): notified whenever the session
+    /// transitions out of "a round is live" — a current round's `finish`, or
+    /// a supersede that ends the live round. Session drivers `select!` on
+    /// this to ship queued follow-ups at the round boundary; a watcher that
+    /// observes `is_running() == false` after the wake may rely on it.
+    finished: tokio::sync::Notify,
+    /// Whether an interrupt was requested during the current/most-recent
+    /// round (ADR-0197 M4): set by the stop sites, cleared by `begin`. The
+    /// follow-up queue authority reads it at the round boundary — a round
+    /// the user interrupted must not auto-fire more prompts; the queue
+    /// parks (paused) until the user re-arms it.
+    interrupted: std::sync::atomic::AtomicBool,
 }
 
 /// The result of [`RoundLifecycle::begin`].
@@ -99,6 +111,8 @@ impl RoundLifecycle {
     pub async fn begin(&self) -> RoundBegin {
         let token = CancellationToken::new();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.interrupted
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         *self
             .interrupt_reason
             .lock()
@@ -125,7 +139,23 @@ impl RoundLifecycle {
             return false;
         }
         slot.take();
+        drop(slot);
+        // Round-boundary wake: the driver's follow-up queue ships here.
+        self.finished.notify_waiters();
         true
+    }
+
+    /// The round-boundary wake signal (ADR-0197 M4). Fires whenever the
+    /// live round ends; a waiter re-checks [`Self::is_running`] to confirm
+    /// the idle transition (spurious wakes are possible and harmless).
+    pub fn finished(&self) -> &tokio::sync::Notify {
+        &self.finished
+    }
+
+    /// Whether an interrupt was requested during the current/most-recent
+    /// round (ADR-0197 M4). See the field docs.
+    pub fn was_interrupted(&self) -> bool {
+        self.interrupted.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Invalidate the current generation without installing a token. Session
@@ -133,6 +163,10 @@ impl RoundLifecycle {
     /// the in-flight round's generation-guarded cleanup events.
     pub fn supersede(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
+        // The live round just lost its validity — wake boundary watchers so
+        // they re-read `is_running` (a supersede usually means the next
+        // round is already starting; a spurious wake is harmless).
+        self.finished.notify_waiters();
     }
 
     /// Take and cancel the live token, if any; returns whether one was
@@ -156,6 +190,8 @@ impl RoundLifecycle {
     /// Last writer wins: a supersede that follows a plain interrupt re-labels
     /// the same unwind.
     pub fn record_interrupt(&self, reason: muta_contracts::RoundInterruptReason) {
+        self.interrupted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let parked = ParkedInterrupt {
             reason,
             at_ms: crate::orchestration::unix_epoch_ms(),
@@ -177,6 +213,8 @@ impl RoundLifecycle {
         reason: muta_contracts::RoundInterruptReason,
         at_ms: Option<u64>,
     ) {
+        self.interrupted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let parked = ParkedInterrupt {
             reason,
             at_ms: at_ms.unwrap_or_else(crate::orchestration::unix_epoch_ms),

@@ -406,10 +406,7 @@ mod tests {
     use super::*;
 
     fn sample_catalog() -> muta_contracts::CommandCatalog {
-        muta_runtime::startup::command_catalog(&[(
-            "/custom-check".into(),
-            "Custom health check".into(),
-        )])
+        muta_client::command_catalog(&[("/custom-check".into(), "Custom health check".into())])
     }
 
     #[test]

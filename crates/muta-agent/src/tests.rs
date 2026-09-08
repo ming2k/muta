@@ -778,9 +778,7 @@ async fn empty_assistant_response_is_retryable_not_terminal() {
             muta_contracts::ProviderError,
         > {
             Ok(Box::pin(stream::iter(vec![Ok(
-                ProviderStreamEvent::Completed(
-                    muta_contracts::ProviderCompletionMeta::default(),
-                ),
+                ProviderStreamEvent::Completed(muta_contracts::ProviderCompletionMeta::default()),
             )])))
         }
     }

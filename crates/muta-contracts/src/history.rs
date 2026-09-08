@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 ///   than failing to parse, and
 /// - the cross-process union merge can keep first-seen entries verbatim
 ///   without having to fabricate an origin.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 pub struct HistoryEntry {
     /// The user's literal prompt text, sent verbatim to the agent.
     pub text: String,

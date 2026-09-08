@@ -43,9 +43,11 @@ pub(super) async fn handle_selection_start(
         }
         Some(UiKey::QuestionOption(index)) => {
             if let Some(question) = app.question.take() {
-                app.question = Some(question.update(
-                    crate::question_model::QuestionAction::Select(index + 1),
-                ).0);
+                app.question = Some(
+                    question
+                        .update(crate::question_model::QuestionAction::Select(index + 1))
+                        .0,
+                );
                 app.question_modal_follow = true;
             }
         }
@@ -54,7 +56,10 @@ pub(super) async fn handle_selection_start(
             handle_permission_submit(app, runtime).await;
         }
         Some(UiKey::Sheet(crate::sheet::SheetKind::Permission)) => {
-            if let Some(cursor) = app.ui.document.cursor_at(x, y)
+            if let Some(cursor) = app
+                .ui
+                .document
+                .cursor_at(x, y)
                 .filter(|cursor| cursor.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
             {
                 app.drag.begin_range(&mut app.selection, cursor);
@@ -63,7 +68,10 @@ pub(super) async fn handle_selection_start(
         }
         Some(UiKey::Modal(_) | UiKey::OauthUrl | UiKey::OauthCode) => {
             let modal = app.active_modal();
-            if let Some(cursor) = app.ui.document.cursor_at(x, y)
+            if let Some(cursor) = app
+                .ui
+                .document
+                .cursor_at(x, y)
                 .filter(|cursor| cursor.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
             {
                 app.drag.begin_range(&mut app.selection, cursor);
@@ -82,24 +90,40 @@ pub(super) async fn handle_selection_start(
             app.completion_dismissed = true;
         }
         Some(UiKey::Queue) => {
-            super::enter_panel(app, crate::surfaces::PanelId::Queue, runtime, viewed_session_id);
+            super::enter_panel(
+                app,
+                crate::surfaces::PanelId::Queue,
+                runtime,
+                viewed_session_id,
+            );
         }
         Some(UiKey::Context | UiKey::Performance) => {
-            super::enter_panel(app, crate::surfaces::PanelId::Telemetry, runtime, viewed_session_id);
+            super::enter_panel(
+                app,
+                crate::surfaces::PanelId::Telemetry,
+                runtime,
+                viewed_session_id,
+            );
         }
         Some(UiKey::Connection) => {
             super::open_active_connection_detail(app, runtime, viewed_session_id);
         }
         Some(UiKey::Sticky) => {
             if let Some(mi) = app.sticky_step {
-                let mut messages = runtime.messages.write().await;
                 app.focused_target = app.focused_messages().get(mi).and_then(|message| {
-                    if message.is_reasoning() { Some(InteractiveTarget::reasoning(mi)) }
-                    else if message.is_tool_step() || message.is_runner_task() {
+                    if message.is_reasoning() {
+                        Some(InteractiveTarget::reasoning(mi))
+                    } else if message.is_tool_step() || message.is_runner_task() {
                         Some(InteractiveTarget::tool_step(mi))
-                    } else { None }
+                    } else {
+                        None
+                    }
                 });
+                let mut messages = std::mem::take(&mut app.messages);
                 app.toggle_step_pinned(&mut messages, mi);
+                app.messages = messages;
+                app.layout_height_cache.clear();
+                app.transcript_changed_pending = true;
             }
             app.selection = SelectionState::None;
             app.drag.cancel();
@@ -155,7 +179,7 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                 // task, otherwise toggle that step's disclosure.
                 let mi = message_idx;
                 app.focused_target = Some(kind.focus_target(mi));
-                let mut messages = runtime.messages.write().await;
+                let mut messages = std::mem::take(&mut app.messages);
                 match kind {
                     StepKind::ToolStep => {
                         let enter_id = resolve_focused_mut(&mut messages, &app.focus_stack, mi)
@@ -167,11 +191,13 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                                 }
                             });
                         if let Some(id) = enter_id {
-                            drop(messages);
+                            app.messages = messages;
                             app.enter_runner(id);
                         } else {
                             app.toggle_step_pinned(&mut messages, mi);
-                            drop(messages);
+                            app.messages = messages;
+                            app.layout_height_cache.clear();
+                            app.transcript_changed_pending = true;
                         }
                     }
                     StepKind::Reasoning
@@ -179,7 +205,9 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                     | StepKind::CommandResult
                     | StepKind::Notice => {
                         app.toggle_step_pinned(&mut messages, mi);
-                        drop(messages);
+                        app.messages = messages;
+                        app.layout_height_cache.clear();
+                        app.transcript_changed_pending = true;
                     }
                 }
                 app.selection = SelectionState::None;
@@ -217,15 +245,16 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                 app.focused_target = None;
                 app.drag.cancel();
                 let url_for_open = url.clone();
-                let messages_for_err = runtime.messages.clone();
+                let mutations = runtime.mutations.clone();
                 tokio::task::spawn_blocking(move || {
                     if let Err(err) = crate::browser::open_browser(&url_for_open) {
-                        let msgs = messages_for_err;
-                        tokio::spawn(async move {
-                            msgs.write().await.push(TranscriptMessage::notice(
-                                NoticeSeverity::Warning,
-                                format!("Failed to open link {url_for_open}: {err}"),
-                            ));
+                        let notice = TranscriptMessage::notice(
+                            NoticeSeverity::Warning,
+                            format!("Failed to open link {url_for_open}: {err}"),
+                        );
+                        mutations.blocking_send(crate::event_loop::AppMutation::Transcript {
+                            buffer: crate::event_loop::Buffer::Primary,
+                            edit: crate::event_loop::TranscriptEdit::Append { message: notice },
                         });
                     }
                 });
@@ -264,7 +293,7 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
 }
 
 /// Loop stage (input dispatch): the `RightClick` arm of the action match.
-pub(super) async fn handle_right_click(app: &mut App, runtime: &UiRuntime, x: u16, y: u16) {
+pub(super) async fn handle_right_click(app: &mut App, _runtime: &UiRuntime, x: u16, y: u16) {
     // Right-click on a tool-step summary toggles its inline
     // disclosure (same as left-click / Enter). For
     // permission-denied steps the inline body surfaces the
@@ -275,9 +304,11 @@ pub(super) async fn handle_right_click(app: &mut App, runtime: &UiRuntime, x: u1
     } = interaction::classify_click(&app.ui.document, x, y)
     {
         app.focused_target = Some(InteractiveTarget::tool_step(message_idx));
-        let mut messages = runtime.messages.write().await;
+        let mut messages = std::mem::take(&mut app.messages);
         app.toggle_step_pinned(&mut messages, message_idx);
-        drop(messages);
+        app.messages = messages;
+        app.layout_height_cache.clear();
+        app.transcript_changed_pending = true;
     }
     app.selection = SelectionState::None;
     app.drag.cancel();
@@ -313,7 +344,7 @@ pub(super) fn handle_selection_end(app: &mut App) {
     // position is defined to be the drag's head, the point where the mouse
     // button was released. Record that position now, so the first direction
     // key after the drag relays from the release point instead of the stale
-    // pre-drag caret (the event loop's `probe_input_selection_relay` resolves
+    // pre-drag caret (the composer's scene-routed selection handler resolves
     // it when the selection is next touched).
     if let SelectionState::Range { head, .. } = app.selection
         && head.message_idx == crate::render::INPUT_MSG_IDX
@@ -350,20 +381,17 @@ pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
 }
 
 /// Loop stage (input dispatch): the `Hover` arm of the action match.
-pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: u16) {
+pub(super) async fn handle_hover(app: &mut App, _runtime: &UiRuntime, x: u16, y: u16) {
     // Every step summary (tool step, runner task, reasoning
     // trace) carries the same hover affordance. When the pointer
     // rests on one — either the inline summary or the sticky
     // pinned variant — record its message index so the next draw
     // lights it up to the intermediate hover tone; otherwise
     // clear it.
-    if app.ui.target(x, y) == Some(crate::ui::UiKey::Sticky)
-    {
+    if app.ui.target(x, y) == Some(crate::ui::UiKey::Sticky) {
         if let Some(mi) = app.sticky_step {
-            let is_step = runtime
+            let is_step = app
                 .messages
-                .read()
-                .await
                 .get(mi)
                 .map(|m| m.is_reasoning() || m.is_tool_step() || m.is_runner_task())
                 .unwrap_or(false);

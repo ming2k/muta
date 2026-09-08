@@ -11,7 +11,7 @@ use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSp
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
 /// joined the plan alongside the flagship (native multimodal, 1M context,
 /// ~1/3 the credit burn), so it is offered ahead of the older flagships.
-pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
+pub use muta_contracts::provider_presets::ZAI_CODE_MODELS;
 
 // ZAI Code (CN) — Zhipu BigModel / Z.AI coding-plan platform
 // (open.bigmodel.cn/api/coding/paas/v4). A coding-agent membership endpoint

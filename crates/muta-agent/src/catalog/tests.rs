@@ -98,6 +98,90 @@ fn discovered_model_list_prefers_the_cache() {
 }
 
 #[test]
+fn declared_extra_models_union_after_the_derived_set() {
+    let mut deepseek = instance("ds-personal", Some("deepseek"));
+    deepseek.extra_models = vec![muta_persistence::connections::DeclaredModel {
+        id: "deepseek-v4-pro-preview-0912".into(),
+        context_window: Some(500_000),
+        ..Default::default()
+    }];
+    // Snapshot floor (no cache): extras append after the preset ids.
+    let models = route_models(&deepseek, &DiscoveryCache::default());
+    assert_eq!(
+        models.first().map(String::as_str),
+        Some("deepseek-v4-flash")
+    );
+    assert!(models.contains(&"deepseek-v4-pro-preview-0912".to_string()));
+
+    // A discovery refresh that omits the hidden id can never evict it —
+    // the union happens after discovery, per connection (ADR-0198).
+    let mut cache = DiscoveryCache::default();
+    cache.connection_models.insert(
+        "ds-personal".to_string(),
+        vec!["deepseek-v4-flash".to_string()],
+    );
+    assert_eq!(
+        route_models(&deepseek, &cache),
+        vec![
+            "deepseek-v4-flash".to_string(),
+            "deepseek-v4-pro-preview-0912".to_string()
+        ]
+    );
+
+    // Scoping: a second deepseek connection without extras derives nothing —
+    // its snapshot floor is untouched and no extra id appears.
+    let other = instance("ds-other", Some("deepseek"));
+    assert_eq!(route_models(&other, &cache), DEEPSEEK_BUILTIN_MODELS);
+    assert!(!route_models(&other, &cache).contains(&"deepseek-v4-pro-preview-0912".to_string()));
+
+    // A declared id the discovery list already carries is deduped, not doubled.
+    let mut cache_hit = DiscoveryCache::default();
+    cache_hit.connection_models.insert(
+        "ds-personal".to_string(),
+        vec![
+            "deepseek-v4-flash".to_string(),
+            "deepseek-v4-pro-preview-0912".to_string(),
+        ],
+    );
+    assert_eq!(route_models(&deepseek, &cache_hit).len(), 2);
+}
+
+#[test]
+fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
+    let mut deepseek = instance("ds-personal", Some("deepseek"));
+    deepseek.extra_models = vec![muta_persistence::connections::DeclaredModel {
+        id: "deepseek-v4-pro-preview-0912".into(),
+        context_window: Some(500_000),
+        vision: Some(true),
+        ..Default::default()
+    }];
+    let channel = derive_channel(
+        &deepseek,
+        "deepseek-v4-pro-preview-0912",
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
+    // Routing falls through to the preset's derived route (DeepSeek Responses).
+    match &channel.transport {
+        Transport::OpenAiResponses {
+            base_url, dialect, ..
+        } => {
+            assert_eq!(base_url, "https://api.deepseek.com/v1/responses");
+            assert_eq!(*dialect, OpenAiResponsesDialect::DeepSeek);
+        }
+        other => panic!("expected Responses transport, got {other:?}"),
+    }
+    // Declared capability facts overlay the registry default for an
+    // unregistered id (ADR-0149: user declaration is the remote layer).
+    let capabilities = channel.capabilities();
+    assert_eq!(capabilities.context_window, 500_000);
+    assert!(capabilities.vision);
+    // Undeclared fields fall through (no max_output_tokens declared).
+    assert_eq!(capabilities.max_output_tokens, None);
+}
+
+#[test]
 fn custom_instance_serves_its_declared_models() {
     let mut custom = instance("relay", None);
     custom.models = vec!["a".to_string(), "b".to_string()];
@@ -877,7 +961,10 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
     assert_eq!(usage.recency_of("deleted-connection"), 0);
     assert!(usage.model_recency("my-custom", "model-a") > 0);
     assert_eq!(usage.model_recency("my-custom", "model-deleted"), 0);
-    assert_eq!(usage.model_recency("deleted-connection", "model-deleted"), 0);
+    assert_eq!(
+        usage.model_recency("deleted-connection", "model-deleted"),
+        0
+    );
     assert_eq!(usage.last_model_for("my-custom"), None);
     assert_eq!(usage.last_model_for("deleted-connection"), None);
 }
@@ -911,16 +998,38 @@ fn model_recency_isolation_across_same_preset_connections() {
     usage.record_model("conn-1", "shared-model");
 
     let snapshot = super::build_picker_state(&config, &usage);
-    let row1 = snapshot.rows.iter().find(|r| r.id == "conn-1").expect("row1");
-    let row2 = snapshot.rows.iter().find(|r| r.id == "conn-2").expect("row2");
+    let row1 = snapshot
+        .rows
+        .iter()
+        .find(|r| r.id == "conn-1")
+        .expect("row1");
+    let row2 = snapshot
+        .rows
+        .iter()
+        .find(|r| r.id == "conn-2")
+        .expect("row2");
 
-    let model1 = row1.model_info.iter().find(|m| m.model == "shared-model").expect("conn-1 shared-model");
-    let model2 = row2.model_info.iter().find(|m| m.model == "shared-model").expect("conn-2 shared-model");
+    let model1 = row1
+        .model_info
+        .iter()
+        .find(|m| m.model == "shared-model")
+        .expect("conn-1 shared-model");
+    let model2 = row2
+        .model_info
+        .iter()
+        .find(|m| m.model == "shared-model")
+        .expect("conn-2 shared-model");
 
     // conn-1 has last_used_ms recorded
-    assert!(model1.last_used_ms.is_some(), "conn-1 shared-model must have recency");
+    assert!(
+        model1.last_used_ms.is_some(),
+        "conn-1 shared-model must have recency"
+    );
     // conn-2 must NOT have last_used_ms set!
-    assert_eq!(model2.last_used_ms, None, "conn-2 shared-model must NOT inherit conn-1 recency");
+    assert_eq!(
+        model2.last_used_ms, None,
+        "conn-2 shared-model must NOT inherit conn-1 recency"
+    );
 }
 
 #[tokio::test]

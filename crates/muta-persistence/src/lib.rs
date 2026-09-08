@@ -29,10 +29,13 @@ pub mod config_check;
 pub mod connection_usage;
 pub mod connections;
 pub mod db;
-pub mod fsutil;
+// Application filesystem infrastructure now lives in `muta-paths`; these
+// re-exports keep the daemon-side crates' stable import paths.
+pub use muta_paths::fsutil;
+pub use muta_paths::lock;
+pub use muta_paths::paths;
+
 pub mod instances;
-pub mod lock;
-pub mod paths;
 pub mod provider_usage;
 pub mod route_settings;
 pub mod session;

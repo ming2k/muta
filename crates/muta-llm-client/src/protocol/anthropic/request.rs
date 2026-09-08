@@ -19,7 +19,7 @@
 //!   and the two newest messages) so the stable prefix is cached at 0.1× input
 //!   cost. See `stamp_cache_control` and friends.
 
-use muta_contracts::{Message, Role, ReasoningSupport};
+use muta_contracts::{Message, ReasoningSupport, Role};
 use serde_json::{Value, json};
 
 use super::thinking::ThinkingConfig;

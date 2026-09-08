@@ -9,13 +9,13 @@ use muta_contracts::{PermissionRequest, UserQuestionRequest};
 use crate::components::options::{ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled};
 use crate::design::MODAL_INNER_H_PADDING;
 use crate::model::layout::{PermissionActionHit, QuestionOptionHit};
-use crate::ui::ComponentTree;
 use crate::primitives::{
     FooterHint, contrast_fg, keyvocab, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
 };
 use crate::render::Theme;
 use crate::text_layout::wrap_text;
+use crate::ui::ComponentTree;
 use unicode_width::UnicodeWidthStr;
 
 // The permission sheet renders inline, replacing the composer (input box)
@@ -159,7 +159,10 @@ pub fn draw_question_modal(
         slot_bottom.saturating_sub(sheet_top).max(1),
     );
     let f = modal_frame(frame, area, theme, true, true);
-    hit_map.mount(crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question), area);
+    hit_map.mount(
+        crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question),
+        area,
+    );
     // Degrade gracefully rather than silently: if even the enlarged sheet
     // still cannot show a single option row (an extreme — tiny terminal, or
     // a resize race that collapsed the slot), the anchored layout would
@@ -589,7 +592,10 @@ fn draw_question_modal_fallback(
     let x = full.x + full.width.saturating_sub(w) / 2;
     let y = full.y + full.height.saturating_sub(panel_h) / 2;
     let area = Rect::new(x, y, w, panel_h);
-    hit_map.mount(crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question), area);
+    hit_map.mount(
+        crate::ui::UiKey::Sheet(crate::sheet::SheetKind::Question),
+        area,
+    );
 
     frame.render_widget(Clear, area);
     frame.render_widget(panel_block(theme, theme.brand(), theme.panel()), area);
@@ -1104,7 +1110,7 @@ mod tests {
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
         let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
-            hit_map.begin(frame.area(), crate::Modal::None);
+            hit_map.begin(frame.area());
             let mut scroll = 0;
             draw_question_modal(
                 frame,
@@ -1145,7 +1151,7 @@ mod tests {
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
         let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
-            hit_map.begin(frame.area(), crate::Modal::None);
+            hit_map.begin(frame.area());
             let rect = Rect::new(0, 16, 80, 8);
             let _ = draw_permission_sheet(
                 frame,
@@ -1192,7 +1198,7 @@ mod tests {
             let mut terminal = mutx_engine::TestTerminal::new(80, 24);
             let mut hit_map = ComponentTree::new();
             terminal.draw(|frame| {
-            hit_map.begin(frame.area(), crate::Modal::None);
+                hit_map.begin(frame.area());
                 let rect = Rect::new(0, 16, 80, 8);
                 let _ = draw_permission_sheet(
                     frame,
@@ -1222,7 +1228,12 @@ mod tests {
         );
     }
 
-    fn find_question_hit(map: &ComponentTree, width: u16, height: u16, option_index: usize) -> bool {
+    fn find_question_hit(
+        map: &ComponentTree,
+        width: u16,
+        height: u16,
+        option_index: usize,
+    ) -> bool {
         (0..height).any(|y| {
             (0..width).any(|x| {
                 map.question_option_at(x, y)
@@ -1288,7 +1299,7 @@ mod tests {
         let mut terminal = mutx_engine::TestTerminal::new(30, 24);
         let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
-            hit_map.begin(frame.area(), crate::Modal::None);
+            hit_map.begin(frame.area());
             let rect = Rect::new(0, 16, 30, 8);
             let _ = draw_permission_sheet(
                 frame,
@@ -1334,7 +1345,7 @@ mod tests {
         let mut terminal = mutx_engine::TestTerminal::new(14, 24);
         let mut hit_map = ComponentTree::new();
         terminal.draw(|frame| {
-            hit_map.begin(frame.area(), crate::Modal::None);
+            hit_map.begin(frame.area());
             let rect = Rect::new(0, 16, 14, 8);
             let _ = draw_permission_sheet(
                 frame,

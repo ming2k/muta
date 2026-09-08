@@ -9,7 +9,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// Entitlement-neutral seed for the ChatGPT Subscription backend. Live Codex
 /// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
 /// signed-in account; the static seed never guesses plan-specific access.
-pub const CHATGPT_BUILTIN_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+pub use muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see

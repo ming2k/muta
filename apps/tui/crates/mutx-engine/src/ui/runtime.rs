@@ -8,10 +8,21 @@ use super::scene::{Component, NodeId, NodeLayout, PointerPolicy, Scene, UiError}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Lifecycle<K> {
-    Mounted { key: K, id: NodeId },
-    Unmounted { key: K, id: NodeId },
-    FocusChanged { previous: Option<NodeId>, current: Option<NodeId> },
-    CaptureReleased { id: NodeId },
+    Mounted {
+        key: K,
+        id: NodeId,
+    },
+    Unmounted {
+        key: K,
+        id: NodeId,
+    },
+    FocusChanged {
+        previous: Option<NodeId>,
+        current: Option<NodeId>,
+    },
+    CaptureReleased {
+        id: NodeId,
+    },
 }
 
 /// Owns mounted instances and frame transactions. Scene declarations carry no
@@ -54,7 +65,10 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
     /// Replaces an uncommitted measurement pass. It cannot unmount instances
     /// or alter the interaction snapshot that the user is currently seeing.
     pub fn begin(&mut self, viewport: Rect) {
-        self.pending = Some(Scene { viewport, ..Scene::default() });
+        self.pending = Some(Scene {
+            viewport,
+            ..Scene::default()
+        });
     }
 
     pub fn mount(&mut self, component: Component<K>) -> Result<NodeLayout, UiError> {
@@ -63,7 +77,10 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
         let id = if let Some(id) = self.presented.id(&component.key) {
             id
         } else {
-            self.next_id = self.next_id.checked_add(1).ok_or(UiError::IdentityExhausted)?;
+            self.next_id = self
+                .next_id
+                .checked_add(1)
+                .ok_or(UiError::IdentityExhausted)?;
             NodeId(self.next_id)
         };
         pending.push(id, component)
@@ -162,9 +179,15 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
         let Some(damage) = damage.into_iter().reduce(|a, b| {
             let x = a.x.min(b.x);
             let y = a.y.min(b.y);
-            Rect::new(x, y, a.right().max(b.right()).saturating_sub(x),
-                a.bottom().max(b.bottom()).saturating_sub(y))
-        }) else { return Ok(()) };
+            Rect::new(
+                x,
+                y,
+                a.right().max(b.right()).saturating_sub(x),
+                a.bottom().max(b.bottom()).saturating_sub(y),
+            )
+        }) else {
+            return Ok(());
+        };
         for (key, layout) in self.pending()?.paint_order() {
             let clip = damage.intersection(layout.clip);
             if clip.area() > 0 {
@@ -183,18 +206,25 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
         for node in self.presented.nodes.iter().rev() {
             if next.id(&node.component.key) != Some(node.id) {
                 self.state.remove(&node.id);
-                events.push(Lifecycle::Unmounted { key: node.component.key.clone(), id: node.id });
+                events.push(Lifecycle::Unmounted {
+                    key: node.component.key.clone(),
+                    id: node.id,
+                });
             }
         }
         for node in &next.nodes {
             if self.presented.id(&node.component.key) != Some(node.id) {
-                events.push(Lifecycle::Mounted { key: node.component.key.clone(), id: node.id });
+                events.push(Lifecycle::Mounted {
+                    key: node.component.key.clone(),
+                    id: node.id,
+                });
             }
         }
         self.presented = next;
         self.invalidated.clear();
         let previous = self.focused;
-        self.focus_history.retain(|&id| self.presented.key(id).is_some());
+        self.focus_history
+            .retain(|&id| self.presented.key(id).is_some());
         if self.focused.is_some_and(|id| !self.focus_eligible(id)) {
             if let Some(id) = self.focused.filter(|id| self.presented.key(*id).is_some()) {
                 self.focus_history.push(id);
@@ -202,15 +232,29 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
             self.focused = None;
         }
         if self.focused.is_none() {
-            self.focused = self.focus_history.iter().rev().copied().find(|&id| self.focus_eligible(id))
-                .or_else(|| self.presented.foreground().and_then(|key| self.presented.id(key)))
-                .or_else(|| self.presented.order.iter().find_map(|&index| {
-                    let node = &self.presented.nodes[index];
-                    self.focus_eligible(node.id).then_some(node.id)
-                }));
+            self.focused = self
+                .focus_history
+                .iter()
+                .rev()
+                .copied()
+                .find(|&id| self.focus_eligible(id))
+                .or_else(|| {
+                    self.presented
+                        .foreground()
+                        .and_then(|key| self.presented.id(key))
+                })
+                .or_else(|| {
+                    self.presented.order.iter().find_map(|&index| {
+                        let node = &self.presented.nodes[index];
+                        self.focus_eligible(node.id).then_some(node.id)
+                    })
+                });
         }
         if previous != self.focused {
-            events.push(Lifecycle::FocusChanged { previous, current: self.focused });
+            events.push(Lifecycle::FocusChanged {
+                previous,
+                current: self.focused,
+            });
         }
         if let Some(id) = self.capture
             && !self.capture_eligible(id)
@@ -252,30 +296,49 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
     }
 
     pub fn pointer_target(&self, x: u16, y: u16) -> Option<&K> {
-        self.capture.and_then(|id| self.presented.key(id)).or_else(|| self.presented.hit_test(x, y))
+        self.capture
+            .and_then(|id| self.presented.key(id))
+            .or_else(|| self.presented.hit_test(x, y))
     }
 
     pub fn state<T: Any + Send + Default>(&mut self, id: NodeId) -> Result<&mut T, UiError> {
         if self.presented.key(id).is_none() {
             return Err(UiError::MissingNode);
         }
-        self.state.entry(id).or_insert_with(|| Box::<T>::default())
-            .downcast_mut::<T>().ok_or(UiError::MissingNode)
+        self.state
+            .entry(id)
+            .or_insert_with(|| Box::<T>::default())
+            .downcast_mut::<T>()
+            .ok_or(UiError::MissingNode)
     }
 
     fn focus_eligible(&self, id: NodeId) -> bool {
         self.presented.key(id).is_some_and(|key| {
             self.presented.component(key).is_some_and(|c| c.focusable)
-                && self.presented.layout(key).is_some_and(|layout| layout.clip.area() > 0)
-                && self.presented.focus_barrier().is_none_or(|scope| self.presented.is_descendant(key, scope))
+                && self
+                    .presented
+                    .layout(key)
+                    .is_some_and(|layout| layout.clip.area() > 0)
+                && self
+                    .presented
+                    .focus_barrier()
+                    .is_none_or(|scope| self.presented.is_descendant(key, scope))
         })
     }
 
     fn capture_eligible(&self, id: NodeId) -> bool {
         self.presented.key(id).is_some_and(|key| {
-            self.presented.component(key).is_some_and(|c| c.pointer != PointerPolicy::Transparent)
-                && self.presented.layout(key).is_some_and(|layout| layout.clip.area() > 0)
-                && self.presented.pointer_barrier().is_none_or(|scope| self.presented.is_descendant(key, scope))
+            self.presented
+                .component(key)
+                .is_some_and(|c| c.pointer != PointerPolicy::Transparent)
+                && self
+                    .presented
+                    .layout(key)
+                    .is_some_and(|layout| layout.clip.area() > 0)
+                && self
+                    .presented
+                    .pointer_barrier()
+                    .is_none_or(|scope| self.presented.is_descendant(key, scope))
         })
     }
 }

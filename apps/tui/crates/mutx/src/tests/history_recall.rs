@@ -852,11 +852,11 @@ async fn record_input_history_skips_slash_commands_by_default() {
 }
 
 /// `App`'s test constructor keeps disk persistence off, so exercising the
-/// record path must never touch the *real* database under
-/// `$XDG_DATA_HOME` (regression: `record_input_history` used to merge
-/// synthetic `prompt N` rows straight into the user's file). The write
-/// happens on a `spawn_blocking` thread, so poll briefly for a stray write
-/// to land.
+/// record path must never dispatch persistence intents to the daemon
+/// (regression: `record_input_history` used to merge synthetic `prompt N`
+/// rows straight into the user's database file). The frontend has no
+/// database access at all now (ADR-0197) — the guarantee is that no
+/// persistence intent leaves the App when persistence is disabled.
 #[tokio::test]
 async fn test_app_does_not_touch_disk_history() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -864,27 +864,30 @@ async fn test_app_does_not_touch_disk_history() {
         !app.input_history_persist,
         "test-constructed App must default to no disk persistence"
     );
-    let db_path = muta_persistence::paths::get().db_file();
-    let before_count = muta_persistence::db::DatabaseEngine::open(&db_path, None)
-        .and_then(|e| e.load_input_history(10_000))
-        .map(|entries| entries.len())
-        .unwrap_or(0);
+    // Retain the request receiver so dispatched intents are observable.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.tx = tx;
 
     app.current_session_id = "session-a".to_string();
     for i in 0..5 {
         app.record_input_history(format!("prompt {i}"), Vec::new(), Vec::new());
     }
 
-    // Give any (buggy) spawned writer a moment, then assert the real history
-    // count is unchanged.
+    // Give any (buggy) dispatch a moment, then assert no persistence intent
+    // was sent to the daemon.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let after_count = muta_persistence::db::DatabaseEngine::open(&db_path, None)
-        .and_then(|e| e.load_input_history(10_000))
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    assert_eq!(
-        before_count, after_count,
-        "the real sqlite database input_history changed while running with persistence disabled"
+    let persistence_intents: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter(|req| {
+            matches!(
+                req,
+                muta_contracts::AgentRequest::RecordInputHistory { .. }
+                    | muta_contracts::AgentRequest::DeleteInputHistoryEntry { .. }
+            )
+        })
+        .collect();
+    assert!(
+        persistence_intents.is_empty(),
+        "persistence intents dispatched while persistence is disabled: {persistence_intents:?}"
     );
 }
 
@@ -1199,11 +1202,17 @@ fn test_shift_delete_and_bare_delete_dispatch() {
     use crate::modal_keys::resolve_modal_key;
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    let c = crate::input::InputContext::default();
+    let c = crate::modal_keys::ModalKeys::default();
 
     // Shift+Delete in HistorySearch resolves to HistoryDeleteSelected
     let shift_del = Key::SHIFT_DELETE;
-    let action = resolve_modal_key(crate::Modal::HistorySearch, shift_del, &c);
+    let action = resolve_modal_key(
+        crate::Modal::HistorySearch,
+        shift_del,
+        &c,
+        &mut String::new(),
+        &mut 0,
+    );
     assert_eq!(
         action,
         Some(crate::input::InputAction::HistoryDeleteSelected)
@@ -1214,7 +1223,13 @@ fn test_shift_delete_and_bare_delete_dispatch() {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Delete,
     };
-    let action = resolve_modal_key(crate::Modal::HistorySearch, bare_del, &c);
+    let action = resolve_modal_key(
+        crate::Modal::HistorySearch,
+        bare_del,
+        &c,
+        &mut String::new(),
+        &mut 0,
+    );
     assert_eq!(action, None);
 }
 

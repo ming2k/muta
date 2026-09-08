@@ -75,6 +75,8 @@ pub mod channel_auth;
 pub mod client_identity;
 pub mod connection_auth;
 pub mod connection_detail;
+pub mod provider_auth;
+pub mod provider_presets;
 pub mod provider_state;
 pub use client_identity::{
     ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile, ClientProfileSpec,
@@ -180,10 +182,9 @@ pub use events::{
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
     ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RetryResolution, RoundEvent,
     RoundInterrupt, RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot,
-    SessionDetail,
-    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest,
-    ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
-    WebSearchConfigUpdate, WebSearchConfigView,
+    SessionDetail, SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply,
+    StdinRequest, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
+    UserQuestionRequest, WebSearchConfigUpdate, WebSearchConfigView,
 };
 pub use provider_state::{
     CONTINUATION_ARTIFACT_KEY, ContextRelation, ContextRevision, ContinuationCursor,

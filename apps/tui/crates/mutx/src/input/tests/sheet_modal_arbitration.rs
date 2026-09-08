@@ -8,12 +8,12 @@
 use super::*;
 use crate::sheet::SheetKind;
 
-/// Build an InputContext with a modal and a sheet mounted at once — the
+/// Build a Dispatch with a modal and a sheet mounted at once — the
 /// "opened a picker while a permission is pending" state.
-fn overlaid(modal: crate::Modal, sheet: SheetKind) -> InputContext {
-    InputContext {
-        active_modal: modal,
-        active_sheet: Some(sheet),
+fn overlaid(modal: crate::Modal, sheet: SheetKind) -> Dispatch {
+    Dispatch {
+        modal,
+        sheet: Some(sheet),
         ..Default::default()
     }
 }
@@ -22,15 +22,18 @@ fn key(code: KeyCode) -> crossterm::event::KeyEvent {
     crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn route(context: InputContext, code: KeyCode) -> InputAction {
+fn route(dispatch: Dispatch, code: KeyCode) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(key(code)),
         &mut input,
         &mut cursor,
-        context,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -198,16 +201,20 @@ fn injection_sheet_input_suspends_over_a_text_modal() {
     // The injection sheet borrows the composer line — but over the
     // ModelEditor (which borrows it for its API-key field) printable keys
     // edit the modal's field, not double-land on the sheet's draft.
-    let mut context = overlaid(crate::Modal::ModelEditor, SheetKind::InputInjection);
-    context.editor_field = Some(0);
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(key(KeyCode::Char('x'))),
         &mut input,
         &mut cursor,
-        context,
+        overlaid(crate::Modal::ModelEditor, SheetKind::InputInjection),
+        &ModalKeys {
+            editor_field: Some(0),
+            ..Default::default()
+        },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('x'));

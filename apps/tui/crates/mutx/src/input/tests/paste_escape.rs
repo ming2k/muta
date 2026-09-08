@@ -7,7 +7,7 @@ fn esc_closes_slash_completion_menu() {
     let mut input = "/mc".to_string();
     let mut cursor = 3;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Esc,
             modifiers: KeyModifiers::NONE,
@@ -16,8 +16,13 @@ fn esc_closes_slash_completion_menu() {
         }),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
+        Dispatch {
+            modal: crate::Modal::None,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
             ..Default::default()
@@ -33,7 +38,7 @@ fn esc_closes_path_completion_menu() {
     let mut input = "@src".to_string();
     let mut cursor = 4;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Esc,
             modifiers: KeyModifiers::NONE,
@@ -42,8 +47,13 @@ fn esc_closes_path_completion_menu() {
         }),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
+        Dispatch {
+            modal: crate::Modal::None,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind: crate::CompletionKind::Path,
             suggestion_count: 3,
             suggestion_index: Some(1),
@@ -59,7 +69,7 @@ fn esc_falls_through_when_no_completion_is_open() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Esc,
             modifiers: KeyModifiers::NONE,
@@ -68,7 +78,10 @@ fn esc_falls_through_when_no_completion_is_open() {
         }),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -79,7 +92,7 @@ fn escape_returns_from_always_confirmation() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Esc,
             modifiers: KeyModifiers::NONE,
@@ -88,10 +101,17 @@ fn escape_returns_from_always_confirmation() {
         }),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_sheet: Some(crate::sheet::SheetKind::Permission),
-            is_responding: true,
+        Dispatch {
+            sheet: Some(crate::sheet::SheetKind::Permission),
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys {
             permission_confirm_always: true,
+            ..Default::default()
+        },
+        &ViewKeys {
+            is_responding: true,
             ..Default::default()
         },
         &mut drag,
@@ -104,14 +124,17 @@ fn esc_in_models_browse_closes_the_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Models,
+        Dispatch {
+            modal: crate::Modal::Models,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -122,14 +145,17 @@ fn esc_in_connections_browse_closes_the_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Connections,
+        Dispatch {
+            modal: crate::Modal::Connections,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -170,18 +196,20 @@ fn escape_in_btw_modal_closes_the_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
         )),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::Btw,
-            in_side_view: true,
+        Dispatch {
+            modal: crate::Modal::Btw,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -251,18 +279,21 @@ fn bracketed_paste_routes_in_free_text_modals() {
         "bracketed paste should be dropped in Help"
     );
 
-    let config_context = InputContext {
-        active_modal: crate::Modal::Config,
+    let config_context = Dispatch {
+        modal: crate::Modal::Config,
         ..Default::default()
     };
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = crate::model::selection::SelectionDrag::default();
-    let action = crate::input::process_event(
+    let action = crate::input::route_event(
         crossterm::event::Event::Paste(payload.to_string()),
         &mut input,
         &mut cursor,
         config_context,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(

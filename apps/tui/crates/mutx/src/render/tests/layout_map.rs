@@ -41,6 +41,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,

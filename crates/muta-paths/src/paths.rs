@@ -139,7 +139,7 @@ impl Dirs {
     /// shared, screenshotted for support, or version-controlled, while
     /// `config.toml` keeps the provider *definitions* (id/name/transport/
     /// base_url/model). Resolution precedence — env var > credentials.toml >
-    /// config inline — lives in [`crate::config::Config::load`].
+    /// config inline — lives in the config layer.
     /// `$XDG_CONFIG_HOME/muta/credentials.toml`.
     pub fn credentials_file(&self) -> PathBuf {
         self.config_dir.join("credentials.toml")
@@ -154,7 +154,7 @@ impl Dirs {
     /// Connections (`$XDG_STATE_HOME/muta/connections.toml`). The
     /// program-managed "who I connect to" records — deliberately NOT in the
     /// user-edited `config.toml`, which holds behavior only. See
-    /// [`crate::connections`].
+    /// the connections store.
     pub fn connections_file(&self) -> PathBuf {
         self.state_dir.join("connections.toml")
     }

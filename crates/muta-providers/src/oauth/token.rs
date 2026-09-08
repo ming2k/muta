@@ -6,9 +6,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 
-use crate::oauth::config::{ClientAuthMethod, OAuthConfig, PkceMode, TokenRequestFormat};
 use crate::oauth::pkce::PkceCodes;
 use muta_contracts::SecretString;
+use muta_contracts::provider_auth::{ClientAuthMethod, OAuthConfig, PkceMode, TokenRequestFormat};
 
 /// Refresh the access token ahead of expiry so long-running calls don't hit a 401.
 pub const ACCESS_TOKEN_REFRESH_SKEW_MS: i64 = 120_000;
@@ -689,7 +689,7 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth::config::{CHATGPT, XAI};
+    use muta_contracts::provider_auth::{CHATGPT, XAI};
 
     #[test]
     fn xai_authorize_url_carries_plan_generic_and_pkce() {

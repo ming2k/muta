@@ -16,7 +16,7 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::{
     AnthropicMessagesDialect, ClientProfile, ConnectionAuth, Effort, GoogleGenerateContentDialect,
-    OpenAiChatDialect, OpenAiResponsesDialect, SecretString, ReasoningMode, WireProtocol,
+    OpenAiChatDialect, OpenAiResponsesDialect, ReasoningMode, SecretString, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::{Connection, Connections};
@@ -64,9 +64,11 @@ pub fn derive_entry(
 /// The model ids a connection serves, in picker order. Preset connections are
 /// derived from the preset (live-discovered lists when the preset supports
 /// discovery, else the compiled-in snapshot); pure-custom connections serve the
-/// declared `models`.
+/// declared `models`. User-declared `extra_models` (ADR-0198) union in after
+/// the derived set — deduped against it, declaration order preserved — so a
+/// discovery refresh that omits a declared id can never evict it.
 pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<String> {
-    if let Some(pid) = connection.preset_id.as_deref() {
+    let mut models = if let Some(pid) = connection.preset_id.as_deref() {
         let Some(spec) = provider_preset_spec(pid) else {
             return Vec::new();
         };
@@ -76,12 +78,22 @@ pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<Stri
             if let Some(discovered) = cache.connection_models.get(&connection.id)
                 && !discovered.is_empty()
             {
-                return discovered.clone();
+                discovered.clone()
+            } else {
+                spec.models.iter().map(|m| (*m).to_string()).collect()
             }
+        } else {
+            spec.models.iter().map(|m| (*m).to_string()).collect()
         }
-        return spec.models.iter().map(|m| (*m).to_string()).collect();
+    } else {
+        connection.models.clone()
+    };
+    for id in connection.extra_model_ids() {
+        if !models.contains(&id) {
+            models.push(id);
+        }
     }
-    connection.models.clone()
+    models
 }
 
 /// Resolve one model's route: transport/endpoint/user-agent plus the resolved
@@ -93,7 +105,26 @@ pub fn derive_channel(
     routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Channel {
-    let remote = cache.remote_metadata_for(&connection.id, model).cloned();
+    // Declared extras (ADR-0198) layer their capability facts over whatever
+    // discovery already knows for the id — the user's declaration wins on the
+    // fields it sets, discovery facts survive on the ones it leaves unset.
+    // Anything still absent falls through to the registry baseline inside
+    // `ModelCapabilities::for_channel` (ADR-0149).
+    let remote = match connection.extra_model(model) {
+        Some(declared) => {
+            let mut remote = cache
+                .remote_metadata_for(&connection.id, model)
+                .cloned()
+                .unwrap_or_default();
+            remote.context_window = declared.context_window.or(remote.context_window);
+            remote.max_output_tokens = declared.max_output_tokens.or(remote.max_output_tokens);
+            remote.thinking = declared.thinking.or(remote.thinking);
+            remote.vision = declared.vision.or(remote.vision);
+            remote.tool_call = declared.tool_call.or(remote.tool_call);
+            Some(remote)
+        }
+        None => cache.remote_metadata_for(&connection.id, model).cloned(),
+    };
     let route_settings = routes.settings_for(&connection.id, model);
     let prompt_cache = connection
         .preset_id

@@ -79,11 +79,13 @@ pub(super) async fn handle_send_chat(
                         .with_insert_id(id.clone())
                         .queued();
                     if !app.in_side_view {
-                        runtime.messages.write().await.push(entry);
+                        app.messages.push(entry);
                     } else {
-                        runtime.side_messages.write().await.push(entry);
+                        app.side_messages.push(entry);
                     }
-                    let _ = app.tx.send(AgentRequest::Steer {
+                    app.layout_height_cache.clear();
+                    app.transcript_changed_pending = true;
+                    app.send_intent(AgentRequest::Steer {
                         session_id: viewed_session_id.to_string(),
                         message: muta_contracts::QueuedMessage {
                             id,
@@ -95,12 +97,20 @@ pub(super) async fn handle_send_chat(
                     });
                 }
                 crate::app::ComposerSendMode::FollowUp => {
+                    // ADR-0197 M4: one verb, daemon decides. The frontend
+                    // sends `FollowUp` unconditionally — an idle target
+                    // starts immediately, a running one enqueues in the
+                    // driver's queue. The optimistic queue-bar entry rides
+                    // the `QueueUpdated` snapshot / `FollowUpQueued` ack.
                     let id = uuid::Uuid::new_v4().to_string();
                     let queued_at_ms = now_epoch_ms();
+                    let expanded = composer_attachments::expand_paste_chips(&text, &text_pastes);
+                    let expanded =
+                        composer_attachments::strip_orphan_image_chips(&expanded, images.len());
                     app.pending_dispatch.push_back(crate::app::QueuedDispatch {
                         id: id.clone(),
                         session_id: viewed_session_id.to_string(),
-                        state: crate::app::QueuedDispatchState::Waiting,
+                        state: crate::app::QueuedDispatchState::Dispatching,
                         text: text.clone(),
                         queued_at_ms,
                         images: images.clone(),
@@ -110,6 +120,16 @@ pub(super) async fn handle_send_chat(
                     app.clear_history_draft();
                     app.follow_bottom = true;
                     app.pin_summary_line = None;
+                    app.send_intent(AgentRequest::FollowUp {
+                        session_id: viewed_session_id.to_string(),
+                        message: muta_contracts::QueuedMessage {
+                            id,
+                            text: expanded,
+                            display_text: Some(text),
+                            images,
+                            sent_at_ms: Some(queued_at_ms),
+                        },
+                    });
                 }
             }
             app.composer_send_mode = crate::app::ComposerSendMode::Steer;
@@ -128,26 +148,27 @@ pub(super) async fn handle_send_chat(
             let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
             if !app.in_side_view {
                 runtime.is_responding.store(true, Ordering::SeqCst);
-                *runtime.phase.lock().await = Some(crate::phase::Phase::Queued);
+                app.phase = Some(crate::phase::Phase::Queued);
             }
-            app.idle_sessions.remove(viewed_session_id);
             app.running_sessions.insert(viewed_session_id.to_string());
             let sent_at_ms = now_epoch_ms();
             let sent = TranscriptMessage::new(Role::User, text.clone())
                 .with_sent_at_ms(sent_at_ms)
                 .sending();
             if !app.in_side_view {
-                runtime.messages.write().await.push(sent);
+                app.messages.push(sent);
             } else {
-                runtime.side_messages.write().await.push(sent);
+                app.side_messages.push(sent);
             }
+            app.layout_height_cache.clear();
+            app.transcript_changed_pending = true;
             app.record_input_history(text.clone(), images.clone(), text_pastes.clone());
             // The draft's content has been sent — it is now a
             // history row, not the unsent slot.
             app.clear_history_draft();
             app.follow_bottom = true;
             app.pin_summary_line = None;
-            let _ = app.tx.send(AgentRequest::Prompt {
+            app.send_intent(AgentRequest::Prompt {
                 text: expanded,
                 images,
                 sent_at_ms: Some(sent_at_ms),
@@ -158,7 +179,7 @@ pub(super) async fn handle_send_chat(
         // task, otherwise toggle that step's expansion.
         if start.message_idx == end.message_idx {
             let mi = start.message_idx;
-            let mut messages = runtime.messages.write().await;
+            let mut messages = std::mem::take(&mut app.messages);
             // An runner task navigates into its view instead
             // of expanding.
             let enter_id =
@@ -170,11 +191,13 @@ pub(super) async fn handle_send_chat(
                     }
                 });
             if let Some(id) = enter_id {
-                drop(messages);
+                app.messages = messages;
                 app.enter_runner(id);
             } else {
                 let toggled = app.toggle_step_pinned(&mut messages, mi);
-                drop(messages);
+                app.messages = messages;
+                app.layout_height_cache.clear();
+                app.transcript_changed_pending = true;
                 if toggled {
                     app.selection = SelectionState::None;
                 }
@@ -188,7 +211,7 @@ pub(super) async fn handle_send_chat(
 /// (ADR-0110).
 pub(crate) async fn handle_send_slash(
     app: &mut App,
-    runtime: &UiRuntime,
+    _runtime: &UiRuntime,
     _session: &crate::SessionSource,
     cmd: String,
 ) -> ActionFlow {
@@ -222,18 +245,16 @@ pub(crate) async fn handle_send_slash(
             .next()
             .unwrap_or(cmd_args.trim());
         let short_id = crate::session::short_session_id(target);
-        app.switching_session = Some(short_id.clone());
-        *runtime.switching_session.lock().await = Some(short_id);
+        app.switching_session = Some(short_id);
         app.messages.clear();
+        app.layout_height_cache.clear();
+        app.transcript_changed_pending = true;
         app.scroll = 0;
     }
-    runtime
-        .messages
-        .write()
-        .await
+    app.messages
         .push(TranscriptMessage::pending_command(cmd_name, cmd_args).with_sent_at_ms(sent_at_ms));
     app.record_input_history(cmd.clone(), Vec::new(), Vec::new());
-    let _ = app.tx.send(AgentRequest::SlashCommand(cmd));
+    app.send_intent(AgentRequest::SlashCommand(cmd));
     ActionFlow::Handled
 }
 
@@ -349,7 +370,7 @@ pub(crate) fn handle_ctrl_c(
                 // `/dashboard` opened in-session: the same
                 // client-declared session end as the
                 // conversation's double Ctrl+C (ADR-0112).
-                let _ = app.tx.send(AgentRequest::EndSession);
+                app.send_intent(AgentRequest::EndSession);
                 return ActionFlow::Exit;
             }
         } else {
@@ -375,7 +396,7 @@ pub(crate) fn handle_ctrl_c(
         // preserved (it belongs to the aside's next turn, not to a
         // quit intent).
         app.exit_side_view();
-        let _ = app.tx.send(AgentRequest::ExitSideView);
+        app.send_intent(AgentRequest::ExitSideView);
     } else if !app.input.is_empty() {
         // Ctrl+C clears the composer text.
         // Clearing text consumes this shortcut and does NOT arm
@@ -399,7 +420,7 @@ pub(crate) fn handle_ctrl_c(
         // Double Ctrl+C inside the conversation is a quit intent — same
         // client-declared session end as `/exit` (ADR-0112), unlike the
         // detach-flavoured exits (host switch, startup overlays).
-        let _ = app.tx.send(AgentRequest::EndSession);
+        app.send_intent(AgentRequest::EndSession);
         tracing::info!(reason = "ctrl_c_double_press", "app exiting");
         return ActionFlow::Exit;
     } else {
@@ -432,7 +453,6 @@ pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) -> bool {
     if let Some(ref sid) = target_session_id {
         app.block_queue(sid);
         app.running_sessions.remove(sid);
-        app.idle_sessions.insert(sid.clone());
     }
     app.clear_responding();
     // Immediately mark any in-flight prompt in `app.messages` as cancelled
@@ -445,10 +465,10 @@ pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) -> bool {
     }
     if side {
         if let Some(side_id) = target_session_id {
-            let _ = app.tx.send(AgentRequest::InterruptSide { side_id });
+            app.send_intent(AgentRequest::InterruptSide { side_id });
         }
     } else {
-        let _ = app.tx.send(AgentRequest::Interrupt);
+        app.send_intent(AgentRequest::Interrupt);
     }
     true
 }
@@ -464,13 +484,12 @@ pub(crate) async fn handle_esc_interrupt_with_runtime(
         return;
     }
     runtime.is_responding.store(false, Ordering::SeqCst);
-    *runtime.phase.lock().await = None;
-    let target_buf = if side {
-        &runtime.side_messages
+    app.phase = None;
+    let msgs = if side {
+        &mut app.side_messages
     } else {
-        &runtime.messages
+        &mut app.messages
     };
-    let mut msgs = target_buf.write().await;
     if let Some(m) = msgs.iter_mut().rev().find(|m| {
         m.role == Role::User
             && (m.is_sending() || (m.delivery == DeliveryStatus::Delivered && m.round.is_none()))

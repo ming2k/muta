@@ -306,7 +306,9 @@ impl Tool for ExecuteCommandTool {
                 };
                 let label = format!(
                     "scheduled: {}",
-                    args.label.as_deref().unwrap_or(args.command.split_whitespace().next().unwrap_or(""))
+                    args.label
+                        .as_deref()
+                        .unwrap_or(args.command.split_whitespace().next().unwrap_or(""))
                 );
                 let info = service
                     .spawn_timer(&label, fire_at_ms, interval, args.command.clone())

@@ -10,7 +10,7 @@
 //! Keyboard model: two buttons ([`ProviderDeleteChoice::Cancel`] default,
 //! [`ProviderDeleteChoice::Delete`]) driven by ←/→/Tab/↑/↓; Enter activates
 //! the focused button; Esc / Ctrl+C cancel. All of that is handled in the
-//! event loop's `probe_delete_overlay` — this module only paints the result.
+//! scene-routed component handler — this module only paints the result.
 
 use mutx_engine::{
     Alignment, Block as RtBlock, Clear, Color, Constraint, Direction, Frame, Layout, Line,

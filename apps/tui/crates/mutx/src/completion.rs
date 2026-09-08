@@ -233,11 +233,8 @@ impl App {
         // Tier 1: Synchronous zero-latency matching for slash and harness commands (ADR-0162)
         if self.input.starts_with('/') {
             let cursor_byte = char_to_byte(&self.input, cursor).unwrap_or(self.input.len());
-            let items = muta_runtime::input_completion::complete_slash_items(
-                &self.command_catalog,
-                &self.input,
-                cursor_byte,
-            );
+            let items =
+                muta_client::complete_slash_items(&self.command_catalog, &self.input, cursor_byte);
             return items
                 .iter()
                 .filter_map(|item| Completion::from_backend(&self.input, item))
@@ -255,7 +252,7 @@ impl App {
         } else {
             #[cfg(test)]
             {
-                muta_runtime::input_completion::complete_for_frontend_test(
+                muta_client::complete_for_frontend_test(
                     self.command_catalog.clone(),
                     self.cwd.clone(),
                     &self.input,
@@ -296,13 +293,11 @@ impl App {
         // Only bump generation request ID and send request if dynamic path completion is needed.
         if self.active_mention_range().is_some() {
             self.completion_request_id = self.completion_request_id.wrapping_add(1);
-            let _ = self
-                .tx
-                .send(muta_contracts::AgentRequest::CompleteComposer {
-                    request_id: self.completion_request_id,
-                    text: state.0,
-                    cursor,
-                });
+            self.send_intent(muta_contracts::AgentRequest::CompleteComposer {
+                request_id: self.completion_request_id,
+                text: state.0,
+                cursor,
+            });
         }
     }
 

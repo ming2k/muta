@@ -375,8 +375,16 @@ mod tests {
         assert_eq!(ep.effective_session_id(), "ses_wire_affinity_999");
 
         let headers = ep.session_affinity_headers(None);
-        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-session" && v == "ses_wire_affinity_999"));
-        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-request" && v.starts_with("req_")));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "x-opencode-session" && v == "ses_wire_affinity_999")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "x-opencode-request" && v.starts_with("req_"))
+        );
     }
 
     #[test]
@@ -396,7 +404,11 @@ mod tests {
         assert_eq!(sid1, sid2);
 
         let headers = ep.session_affinity_headers(None);
-        assert!(headers.iter().any(|(k, v)| *k == "x-opencode-session" && v == &sid1));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "x-opencode-session" && v == &sid1)
+        );
     }
 
     #[test]
@@ -411,7 +423,15 @@ mod tests {
         .with_session_id("ses_affinity456");
 
         let headers = ep.session_affinity_headers(None);
-        assert!(headers.iter().any(|(k, v)| *k == "x-session-affinity" && v == "ses_affinity456"));
-        assert!(headers.iter().any(|(k, v)| *k == "X-Session-Id" && v == "ses_affinity456"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "x-session-affinity" && v == "ses_affinity456")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| *k == "X-Session-Id" && v == "ses_affinity456")
+        );
     }
 }

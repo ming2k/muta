@@ -1,10 +1,18 @@
+use muta_client::{self as client, AttachAction, Handshake};
 use muta_contracts::{
     AgentRequest, AgentResponse, PermissionDecision, PermissionRequest, RoundEvent,
     UserQuestionRequest,
 };
-use muta_runtime::client::{self, AttachAction, Handshake};
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+
+fn send_intent(
+    tx: &tokio::sync::mpsc::UnboundedSender<AgentRequest>,
+    request: AgentRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tx.send(request)
+        .map_err(|error| format!("daemon link lost before intent delivery: {error}").into())
+}
 
 pub async fn run_headless(
     prompt: String,
@@ -54,7 +62,7 @@ pub async fn run_headless(
     // posture gate settles questions by labeled policy instead of letting
     // this client fabricate answers below (the old `options.first()` bug).
     {
-        use muta_runtime::client::set_posture;
+        use muta_client::set_posture;
         set_posture(if io::stderr().is_terminal() {
             muta_contracts::human_request::HumanChannelPosture::Interactive
         } else {
@@ -109,12 +117,14 @@ pub async fn run_headless(
     }
 
     // Dispatch the prompt
-    tx.send(AgentRequest::Prompt {
-        text: prompt,
-        images: Vec::new(),
-        sent_at_ms: None,
-    })
-    .map_err(|e| format!("could not send prompt request: {e}"))?;
+    send_intent(
+        &tx,
+        AgentRequest::Prompt {
+            text: prompt,
+            images: Vec::new(),
+            sent_at_ms: None,
+        },
+    )?;
 
     let is_tty = io::stderr().is_terminal();
     let mut accumulated_text = String::new();
@@ -368,11 +378,14 @@ async fn handle_permission_request(
     is_tty: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if unattended {
-        let _ = tx.send(AgentRequest::PermissionReply {
-            request_id: req.id,
-            decision: PermissionDecision::Once,
-            parent_call_id: None,
-        });
+        send_intent(
+            tx,
+            AgentRequest::PermissionReply {
+                request_id: req.id,
+                decision: PermissionDecision::Once,
+                parent_call_id: None,
+            },
+        )?;
         return Ok(());
     }
 
@@ -381,11 +394,14 @@ async fn handle_permission_request(
             "mutx: authority is missing for tool '{}' in non-interactive mode; rejecting. Configure workspace authority or a narrow persistent permission first.",
             req.tool
         );
-        let _ = tx.send(AgentRequest::PermissionReply {
-            request_id: req.id,
-            decision: PermissionDecision::Reject,
-            parent_call_id: None,
-        });
+        send_intent(
+            tx,
+            AgentRequest::PermissionReply {
+                request_id: req.id,
+                decision: PermissionDecision::Reject,
+                parent_call_id: None,
+            },
+        )?;
         return Ok(());
     }
 
@@ -407,11 +423,14 @@ async fn handle_permission_request(
         _ => PermissionDecision::Reject,
     };
 
-    let _ = tx.send(AgentRequest::PermissionReply {
-        request_id: req.id,
-        decision,
-        parent_call_id: None,
-    });
+    send_intent(
+        tx,
+        AgentRequest::PermissionReply {
+            request_id: req.id,
+            decision,
+            parent_call_id: None,
+        },
+    )?;
     Ok(())
 }
 
@@ -436,11 +455,14 @@ async fn handle_user_question_request(
              terminal, or configure `[master] ask_user_fallback` for \
              autonomous answering."
         );
-        let _ = tx.send(AgentRequest::UserQuestionReply {
-            request_id: req.id.clone(),
-            answers: Vec::new(),
-            parent_call_id: None,
-        });
+        send_intent(
+            tx,
+            AgentRequest::UserQuestionReply {
+                request_id: req.id.clone(),
+                answers: Vec::new(),
+                parent_call_id: None,
+            },
+        )?;
         return Ok(());
     }
 
@@ -470,10 +492,13 @@ async fn handle_user_question_request(
         all_answers.push(vec![choice.to_string()]);
     }
 
-    let _ = tx.send(AgentRequest::UserQuestionReply {
-        request_id: req.id,
-        answers: all_answers,
-        parent_call_id: None,
-    });
+    send_intent(
+        tx,
+        AgentRequest::UserQuestionReply {
+            request_id: req.id,
+            answers: all_answers,
+            parent_call_id: None,
+        },
+    )?;
     Ok(())
 }

@@ -92,6 +92,13 @@ impl<K> Component<K> {
         self
     }
 
+    /// Claims the declared event families without trapping pointer input.
+    /// Components the claim does not cover stay reachable below this one.
+    pub fn scope(mut self, claims: u64) -> Self {
+        self.input = InputPolicy::Scope(claims);
+        self
+    }
+
     pub fn layer(mut self, layer: i32) -> Self {
         self.layer = layer;
         self
@@ -174,7 +181,10 @@ impl<K: Clone + Eq + Hash> Scene<K> {
     }
 
     pub fn key(&self, id: NodeId) -> Option<&K> {
-        self.nodes.iter().find(|node| node.id == id).map(|node| &node.component.key)
+        self.nodes
+            .iter()
+            .find(|node| node.id == id)
+            .map(|node| &node.component.key)
     }
 
     pub fn layout(&self, key: &K) -> Option<NodeLayout> {
@@ -248,7 +258,9 @@ impl<K: Clone + Eq + Hash> Scene<K> {
             if key == ancestor {
                 return true;
             }
-            cursor = self.node(key).and_then(|node| node.component.parent.as_ref());
+            cursor = self
+                .node(key)
+                .and_then(|node| node.component.parent.as_ref());
         }
         false
     }
@@ -261,9 +273,10 @@ impl<K: Clone + Eq + Hash> Scene<K> {
 
     pub fn keyboard_path_for(&self, focused: Option<NodeId>, family: u64) -> Vec<&K> {
         let barrier = self.foreground_for(family);
-        let target = focused.and_then(|id| self.key(id)).filter(|key| {
-            barrier.is_none_or(|scope| self.is_descendant(key, scope))
-        }).or(barrier);
+        let target = focused
+            .and_then(|id| self.key(id))
+            .filter(|key| barrier.is_none_or(|scope| self.is_descendant(key, scope)))
+            .or(barrier);
         let mut path = Vec::new();
         let mut cursor = target;
         while let Some(key) = cursor {
@@ -271,7 +284,10 @@ impl<K: Clone + Eq + Hash> Scene<K> {
             if node.component.input != InputPolicy::None {
                 path.push(key);
             }
-            if matches!(node.component.input, InputPolicy::Modal | InputPolicy::Scope(_)) {
+            if matches!(
+                node.component.input,
+                InputPolicy::Modal | InputPolicy::Scope(_)
+            ) {
                 break;
             }
             cursor = node.component.parent.as_ref();
@@ -298,13 +314,20 @@ impl<K: Clone + Eq + Hash> Scene<K> {
         self.keys.get(key).and_then(|&index| self.nodes.get(index))
     }
 
-    pub(super) fn push(&mut self, id: NodeId, component: Component<K>) -> Result<NodeLayout, UiError> {
+    pub(super) fn push(
+        &mut self,
+        id: NodeId,
+        component: Component<K>,
+    ) -> Result<NodeLayout, UiError> {
         if self.keys.contains_key(&component.key) {
             return Err(UiError::DuplicateKey);
         }
         let parent = match component.parent.as_ref() {
             Some(key) => self.layout(key).ok_or(UiError::MissingParent)?,
-            None => NodeLayout { bounds: self.viewport, clip: self.viewport },
+            None => NodeLayout {
+                bounds: self.viewport,
+                clip: self.viewport,
+            },
         };
         let (bounds, clip) = match component.layout {
             LayoutBox::Fill => (parent.bounds, parent.clip),
@@ -314,9 +337,126 @@ impl<K: Clone + Eq + Hash> Scene<K> {
         let layout = NodeLayout { bounds, clip };
         let index = self.nodes.len();
         self.keys.insert(component.key.clone(), index);
-        self.nodes.push(Node { id, component, layout });
+        self.nodes.push(Node {
+            id,
+            component,
+            layout,
+        });
         self.order.push(index);
-        self.order.sort_by_key(|&i| (self.nodes[i].component.layer, i));
+        self.order
+            .sort_by_key(|&i| (self.nodes[i].component.layer, i));
         Ok(layout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::UiRuntime;
+    use super::*;
+
+    const FAMILY_SHEET: u64 = 1 << 0;
+    const FAMILY_TRANSCRIPT: u64 = 1 << 1;
+    const FAMILY_COMPOSER: u64 = 1 << 2;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum Key {
+        Transcript,
+        Sheet,
+        Modal,
+        Composer,
+    }
+
+    fn build_scene(components: &[Component<Key>]) -> Scene<Key> {
+        let mut runtime: UiRuntime<Key> = UiRuntime::default();
+        runtime.begin(Rect::new(0, 0, 80, 24));
+        for component in components {
+            runtime.mount(component.clone()).unwrap();
+        }
+        runtime.commit().unwrap();
+        runtime.presented().clone()
+    }
+
+    fn component(key: Key, layer: i32, input: InputPolicy) -> Component<Key> {
+        let mut component = Component::new(key, None, LayoutBox::Fill).layer(layer);
+        component.input = input;
+        component
+    }
+
+    #[test]
+    fn modal_is_foreground_for_every_family() {
+        let scene = build_scene(&[
+            component(Key::Transcript, 1, InputPolicy::Bubble),
+            component(Key::Modal, 30, InputPolicy::Modal),
+        ]);
+        for family in [u64::MAX, FAMILY_TRANSCRIPT, FAMILY_COMPOSER, 0] {
+            assert_eq!(scene.foreground_for(family), Some(&Key::Modal));
+        }
+    }
+
+    #[test]
+    fn scope_is_foreground_only_for_claimed_families() {
+        let scene = build_scene(&[
+            component(Key::Transcript, 1, InputPolicy::Scope(FAMILY_TRANSCRIPT)),
+            component(Key::Sheet, 10, InputPolicy::Scope(FAMILY_SHEET)),
+        ]);
+        assert_eq!(scene.foreground_for(FAMILY_SHEET), Some(&Key::Sheet));
+        assert_eq!(
+            scene.foreground_for(FAMILY_TRANSCRIPT),
+            Some(&Key::Transcript)
+        );
+        assert_eq!(scene.foreground_for(FAMILY_COMPOSER), None);
+    }
+
+    #[test]
+    fn unclaimed_family_falls_through_to_lower_scope() {
+        let scene = build_scene(&[
+            component(Key::Composer, 3, InputPolicy::Scope(FAMILY_COMPOSER)),
+            component(
+                Key::Sheet,
+                10,
+                InputPolicy::Scope(FAMILY_SHEET | FAMILY_COMPOSER),
+            ),
+        ]);
+        assert_eq!(scene.foreground_for(FAMILY_SHEET), Some(&Key::Sheet));
+        assert_eq!(scene.foreground_for(FAMILY_COMPOSER), Some(&Key::Sheet));
+        // The sheet does not claim the transcript family: a lower scope keeps it.
+        let scene = build_scene(&[
+            component(Key::Transcript, 1, InputPolicy::Scope(FAMILY_TRANSCRIPT)),
+            component(Key::Sheet, 10, InputPolicy::Scope(FAMILY_SHEET)),
+        ]);
+        assert_eq!(
+            scene.foreground_for(FAMILY_TRANSCRIPT),
+            Some(&Key::Transcript)
+        );
+    }
+
+    #[test]
+    fn keyboard_path_terminates_at_the_family_barrier() {
+        let scene = build_scene(&[
+            component(Key::Transcript, 1, InputPolicy::Scope(FAMILY_TRANSCRIPT)),
+            component(Key::Sheet, 10, InputPolicy::Scope(FAMILY_SHEET)),
+        ]);
+        let focused = scene.id(&Key::Transcript);
+        assert_eq!(
+            scene.keyboard_path_for(focused, FAMILY_SHEET),
+            vec![&Key::Sheet]
+        );
+        assert_eq!(
+            scene.keyboard_path_for(focused, FAMILY_TRANSCRIPT),
+            vec![&Key::Transcript]
+        );
+    }
+
+    #[test]
+    fn focused_unclaimed_scope_yields_to_the_family_owner_below() {
+        let scene = build_scene(&[
+            component(Key::Transcript, 1, InputPolicy::Scope(FAMILY_TRANSCRIPT)),
+            component(Key::Sheet, 10, InputPolicy::Scope(FAMILY_SHEET)),
+        ]);
+        let focused = scene.id(&Key::Sheet);
+        assert_eq!(
+            scene.keyboard_path_for(focused, FAMILY_TRANSCRIPT),
+            vec![&Key::Transcript]
+        );
     }
 }

@@ -2,6 +2,40 @@
 
 use super::*;
 
+/// Retry a `save_session` across the supervisor's respawn window
+/// (ADR-0196 D3). Only [`PersistenceError::WriterDown`] is retried — it is
+/// the one transient variant (the actor is being respawned); engine
+/// rejections and encode failures are deterministic and surface immediately.
+/// Five attempts over ~3.1 s covers the supervisor's `Recovering` budget.
+async fn save_retrying(
+    writer: &crate::db::PersistenceHandle,
+    data: crate::session::SessionData,
+    full: bool,
+    usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
+) -> Result<(), crate::db::PersistenceError> {
+    const MAX_ATTEMPTS: u32 = 5;
+    const BASE_DELAY: Duration = Duration::from_millis(100);
+
+    let mut delay = BASE_DELAY;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // The save is idempotent by watermark (ADR-0187), so re-sending a
+        // possibly-delivered delta is safe — that license is what makes the
+        // retry honest.
+        match writer
+            .save_session(data.clone(), full, usage_upserts.clone())
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(crate::db::PersistenceError::WriterDown) if attempt < MAX_ATTEMPTS => {
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("retry loop returns on the last attempt")
+}
+
 impl SessionStore {
     /// Open a per-project store pinned to a **fresh** session file.
     ///
@@ -342,6 +376,12 @@ impl SessionStore {
     /// Persist a transcript delta plus the usage-record upserts a commit
     /// produced (ADR-0187): the usage ledger is key-addressed, so only the
     /// changed attempts are written.
+    ///
+    /// The delta save is idempotent by watermark (a replayed save escalates
+    /// by generation, ADR-0187), so a `WriterDown` failure is retried across
+    /// the supervisor's respawn window before the round is failed
+    /// (ADR-0196 D3). Engine-level rejections are not retried — they are
+    /// deterministic.
     pub(crate) async fn persist_with_usage(
         &self,
         _path: PathBuf,
@@ -350,19 +390,20 @@ impl SessionStore {
     ) -> Result<(), String> {
         let _persist_gate = self.persist_gate.lock().await;
         data.checksum = Some(compute_checksum(&data)?);
-        self.writer
-            .save_session(data, false, usage_upserts)
+        save_retrying(&self.writer, data, false, usage_upserts)
             .await
             .map_err(|e| format!("session persist task failed: {e}"))
     }
 
     /// Persist a full rewrite (rare: wholesale working-state replacement).
+    ///
+    /// A full rewrite is idempotent (it replaces every projection row), so
+    /// the same `WriterDown` retry policy applies (ADR-0196 D3).
     pub(crate) async fn persist_full_rewrite(&self, data: SessionData) -> Result<(), String> {
         let _persist_gate = self.persist_gate.lock().await;
         let mut data = data;
         data.checksum = Some(compute_checksum(&data)?);
-        self.writer
-            .save_session(data, true, Vec::new())
+        save_retrying(&self.writer, data, true, Vec::new())
             .await
             .map_err(|e| format!("session persist task failed: {e}"))
     }

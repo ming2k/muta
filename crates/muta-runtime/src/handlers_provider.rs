@@ -332,6 +332,7 @@ pub(crate) async fn add(
         } else {
             declared_models
         },
+        extra_models: Vec::new(),
     };
     connections.connections.push(connection);
     let conn_save_err = connections.save().err().map(|e| e.to_string());
@@ -508,6 +509,80 @@ pub async fn remove_model(
         connection.models.remove(pos);
         if connections.save().is_err() {
             tracing::warn!("remove_model: could not persist connection");
+        }
+    }
+    catalog::prune_stale_models(config, provider_usage);
+    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+        config,
+        provider_usage,
+    )));
+}
+
+/// `AgentRequest::AddConnectionModel` — declare one extra model on a **preset**
+/// connection (ADR-0198): a hidden or unstable upstream id the discovery
+/// intersection can never surface, pinned to this one connection. Validated
+/// (connection exists, is preset-derived, id non-blank and not an exact
+/// duplicate of a declaration), persisted to the connection record, and a
+/// fresh picker snapshot pushed. The union with the derived route set happens
+/// at derive time, so a later discovery refresh can never evict the id.
+/// Case-variant ids are allowed — model ids are exact (case-sensitive) on the
+/// wire, consistent with `registry::custom_baselines`.
+pub(crate) async fn add_connection_model(
+    config: &mut Config,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    connection_id: String,
+    model: muta_contracts::model::DeclaredModel,
+) {
+    let mut connections = Connections::load();
+    let valid = match connections.get_mut(&connection_id) {
+        Some(connection) if connection.preset_id.is_some() => {
+            !connection.extra_models.iter().any(|m| m.id == model.id)
+        }
+        _ => false,
+    };
+    if !valid {
+        tracing::warn!(
+            connection_id = %connection_id,
+            model = %model.id,
+            "add_connection_model: unknown connection, non-preset connection, or duplicate id"
+        );
+        return;
+    }
+    if let Some(connection) = connections.get_mut(&connection_id) {
+        connection.extra_models.push(model);
+    }
+    if connections.save().is_err() {
+        tracing::warn!("add_connection_model: could not persist connection");
+        return;
+    }
+    catalog::prune_stale_models(config, provider_usage);
+    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+        config,
+        provider_usage,
+    )));
+}
+
+/// `AgentRequest::RemoveConnectionModel` — drop one declared extra model from
+/// a preset connection (ADR-0198), persist, and push a fresh picker snapshot.
+/// Only declared extras are removable (derived preset/discovered models are
+/// not); unknown ids are a no-op. Unlike pure-custom `remove_model` there is
+/// no "last model" floor: a preset connection always has its derived set to
+/// fall back on.
+pub(crate) async fn remove_connection_model(
+    config: &mut Config,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    connection_id: String,
+    model: String,
+) {
+    let mut connections = Connections::load();
+    if let Some(connection) = connections.get_mut(&connection_id)
+        && let Some(pos) = connection.extra_models.iter().position(|m| m.id == model)
+    {
+        connection.extra_models.remove(pos);
+        if connections.save().is_err() {
+            tracing::warn!("remove_connection_model: could not persist connection");
         }
     }
     catalog::prune_stale_models(config, provider_usage);

@@ -1188,7 +1188,8 @@ async fn opencode_go_wire_request_carries_session_and_client_headers() {
         prompt_cache_preference: Default::default(),
     };
 
-    let provider = build_provider_for_channel(&channel, "opencode-go", Some("ses_wire_affinity_999"));
+    let provider =
+        build_provider_for_channel(&channel, "opencode-go", Some("ses_wire_affinity_999"));
     let msg = provider
         .chat(vec![Message::new(Role::User, "hello")].into())
         .await
@@ -1234,7 +1235,8 @@ async fn opencode_go_anthropic_wire_request_carries_session_headers() {
         prompt_cache_preference: Default::default(),
     };
 
-    let provider = build_provider_for_channel(&channel, "opencode-go", Some("ses_anthropic_wire_777"));
+    let provider =
+        build_provider_for_channel(&channel, "opencode-go", Some("ses_anthropic_wire_777"));
     let msg = provider
         .chat(vec![Message::new(Role::User, "hello")].into())
         .await

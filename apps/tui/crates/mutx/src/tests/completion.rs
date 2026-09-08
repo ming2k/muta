@@ -88,7 +88,7 @@ fn resolved_slash_len_covers_only_the_command_token_not_args() {
 #[test]
 fn resolved_slash_len_matches_custom_command() {
     let customs = vec![("/deploy".to_string(), "Deploy the app".to_string())];
-    let catalog = muta_runtime::startup::command_catalog(&customs);
+    let catalog = muta_client::command_catalog(&customs);
     assert_eq!(
         resolved_slash_command_len("/deploy prod", &catalog),
         Some(7)

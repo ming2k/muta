@@ -157,6 +157,10 @@ pub struct SessionRegistry {
     daemon_tasks: Arc<crate::background_jobs::BackgroundJobManager>,
     /// The live daemon-task rows folded for snapshots (id → row).
     daemon_task_rows: Arc<std::sync::Mutex<HashMap<String, muta_contracts::MonitoredTask>>>,
+    /// Latest durability-health state (ADR-0196 D4): folded from the
+    /// persistence supervisor's transitions for monitor snapshots and
+    /// published as `PersistenceHealth` diffs. `None` = never degraded.
+    persistence_health: Arc<std::sync::Mutex<Option<muta_contracts::monitor::PersistenceHealth>>>,
 }
 
 /// How long a never-persisted (empty) hosted session may sit idle before the
@@ -203,6 +207,7 @@ impl SessionRegistry {
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
             daemon_tasks: Arc::new(crate::background_jobs::BackgroundJobManager::new()),
             daemon_task_rows: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            persistence_health: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -244,7 +249,29 @@ impl SessionRegistry {
     /// Stop a daemon-level task (the human-side control the TUI panel will
     /// drive).
     pub fn stop_daemon_task(&self, task_id: &str) -> Result<(), String> {
-        self.daemon_tasks.kill_job(&muta_contracts::JobId::from(task_id))
+        self.daemon_tasks
+            .kill_job(&muta_contracts::JobId::from(task_id))
+    }
+
+    /// Subscribe the durability-health tap (ADR-0196 D4): the persistence
+    /// supervisor's transitions are folded into the snapshot cache and
+    /// published as `MonitorEvent::PersistenceHealth` diffs, so every
+    /// frontend (and `muta status`) sees degradation, not just the log.
+    pub fn start_persistence_health_monitor(self: &Arc<Self>) {
+        let registry = Arc::downgrade(self);
+        let mut rx = muta_persistence::db::get_persistence_handle().subscribe_health();
+        tokio::spawn(async move {
+            loop {
+                if rx.changed().await.is_err() {
+                    break; // supervisor gone: nothing left to report
+                }
+                let wire = rx.borrow().clone().to_wire();
+                if let Some(r) = registry.upgrade() {
+                    *r.persistence_health.lock().unwrap() = Some(wire.clone());
+                    r.publish_host_event(MonitorEvent::PersistenceHealth(wire));
+                }
+            }
+        });
     }
 
     /// Fold one fabric event into the snapshot cache and publish the diff.
@@ -265,10 +292,7 @@ impl SessionRegistry {
                             r.publish_host_event(MonitorEvent::TaskUpdated(task.clone()));
                         }
                     }
-                    Ok(crate::background_jobs::BackgroundJobEvent::Progress {
-                        job_id,
-                        line,
-                    }) => {
+                    Ok(crate::background_jobs::BackgroundJobEvent::Progress { job_id, line }) => {
                         let changed = {
                             let mut guard = rows.lock().unwrap();
                             if let Some(row) = guard.get_mut(&job_id.0) {
@@ -332,7 +356,11 @@ impl SessionRegistry {
             let (label, spec) = match &info.spec {
                 muta_contracts::JobSpec::Process { command, label, .. } => (
                     label.clone().unwrap_or_else(|| {
-                        command.split_whitespace().next().unwrap_or("task").to_string()
+                        command
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("task")
+                            .to_string()
                     }),
                     command.clone(),
                 ),
@@ -341,12 +369,7 @@ impl SessionRegistry {
                     prompt.clone(),
                 ),
             };
-            let log_path = info
-                .id
-                .0
-                .is_empty()
-                .then(|| None)
-                .flatten();
+            let log_path = info.id.0.is_empty().then(|| None).flatten();
             muta_contracts::MonitoredTask {
                 id: info.id.0.clone(),
                 label,
@@ -1341,6 +1364,7 @@ impl SessionRegistry {
             daemon_started_at: meta.started_at,
             sessions,
             tasks,
+            persistence_health: self.persistence_health.lock().unwrap().clone(),
         }
     }
 

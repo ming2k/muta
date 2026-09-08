@@ -7,10 +7,9 @@ license.workspace = true
 
 [dependencies]
 muta-contracts = { path = "../../../../crates/muta-contracts" }
-muta-persistence = { path = "../../../../crates/muta-persistence" }
+muta-paths = { path = "../../../../crates/muta-paths" }
 muta-platform = { path = "../../../../crates/muta-platform" }
-muta-providers = { path = "../../../../crates/muta-providers" }
-muta-runtime = { path = "../../../../crates/muta-runtime" }
+muta-client = { path = "../../../../crates/muta-client" }
 mutx-engine = { path = "../mutx-engine" }
 async-trait = { workspace = true }
 crossterm = { workspace = true }

@@ -5,7 +5,7 @@
 //!
 //! The dispatch is fire-and-forget with a *reply receipt*: the verb ships
 //! on a spawned one-shot control connection and its outcome lands in the
-//! console transcript (via [`UiRuntime::host_console_signal`]) rather than
+//! console transcript (via `AppMutation::HostConsole`) rather than
 //! a toast — the cockpit log is the feedback surface.
 
 use std::sync::Arc;
@@ -53,13 +53,11 @@ fn log_dispatch(app: &mut App, raw: &str, targets: Vec<usize>, action: &'static 
 }
 
 /// The control request a console verb maps to.
-fn verb_request(verb: ConsoleVerb, id: String) -> muta_runtime::serve::ControlRequest {
+fn verb_request(verb: ConsoleVerb, id: String) -> muta_client::ControlRequest {
     match verb {
-        ConsoleVerb::Kill => muta_runtime::serve::ControlRequest::KillSession { session_id: id },
-        ConsoleVerb::Interrupt => muta_runtime::serve::ControlRequest::Interrupt { session_id: id },
-        ConsoleVerb::Suspend => {
-            muta_runtime::serve::ControlRequest::SuspendSession { session_id: id }
-        }
+        ConsoleVerb::Kill => muta_client::ControlRequest::KillSession { session_id: id },
+        ConsoleVerb::Interrupt => muta_client::ControlRequest::Interrupt { session_id: id },
+        ConsoleVerb::Suspend => muta_client::ControlRequest::SuspendSession { session_id: id },
     }
 }
 
@@ -76,7 +74,7 @@ fn verb_receipt(verb: ConsoleVerb) -> &'static str {
 /// `target` is the `#N` the receipt names (the daemon gets the id).
 fn spawn_control_verb(runtime: &UiRuntime, verb: ConsoleVerb, target: Option<usize>, id: String) {
     let request = verb_request(verb, id);
-    let signal = runtime.host_console_signal.clone();
+    let mutations = runtime.mutations.clone();
     let dirty = (runtime.dirty.clone(), runtime.dirty_notify.clone());
     tokio::spawn(async move {
         let outcome = discover_and_control(request).await;
@@ -92,17 +90,17 @@ fn spawn_control_verb(runtime: &UiRuntime, verb: ConsoleVerb, target: Option<usi
                 text: e,
             },
         };
-        signal.lock().await.push_back(line);
+        mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
         wake(&dirty);
     });
 }
 
 /// Discover the daemon and issue one control verb. `Err` carries either the
 /// discovery failure or the daemon's rejection, both receipt-ready.
-async fn discover_and_control(request: muta_runtime::serve::ControlRequest) -> Result<(), String> {
+async fn discover_and_control(request: muta_client::ControlRequest) -> Result<(), String> {
     let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    match muta_runtime::client::discover(&project_root) {
-        Some(info) => muta_runtime::client::control(&info, request).await,
+    match muta_client::discover(&project_root) {
+        Some(info) => muta_client::control(&info, request).await,
         None => {
             tracing::warn!("dashboard control: no daemon discovered");
             Err("no daemon is running".to_string())
@@ -167,12 +165,12 @@ pub(super) fn suspend_selected(app: &mut App, runtime: &UiRuntime) {
 /// submit. `raw` is the line the dispatch receipt echoes.
 async fn dispatch_create(app: &mut App, runtime: &UiRuntime, raw: &str, text: Option<String>) {
     log_dispatch(app, raw, Vec::new(), "new session");
-    let signal = runtime.host_console_signal.clone();
+    let mutations = runtime.mutations.clone();
     let dirty = (runtime.dirty.clone(), runtime.dirty_notify.clone());
     let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let project = project_root.display().to_string();
     tokio::spawn(async move {
-        let outcome = discover_and_control(muta_runtime::serve::ControlRequest::CreateSession {
+        let outcome = discover_and_control(muta_client::ControlRequest::CreateSession {
             project,
             prompt: text,
             init_options: None,
@@ -190,7 +188,7 @@ async fn dispatch_create(app: &mut App, runtime: &UiRuntime, raw: &str, text: Op
                 text: e,
             },
         };
-        signal.lock().await.push_back(line);
+        mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
         wake(&dirty);
     });
 }
@@ -296,29 +294,29 @@ pub(super) async fn dispatch_console_command(
                 resolved.iter().map(|(n, _)| *n).collect(),
                 "prompt",
             );
-            let sends: Vec<(usize, muta_runtime::serve::ControlRequest)> = resolved
+            let sends: Vec<(usize, muta_client::ControlRequest)> = resolved
                 .into_iter()
                 .map(|(n, id)| {
                     (
                         n,
-                        muta_runtime::serve::ControlRequest::SendPrompt {
+                        muta_client::ControlRequest::SendPrompt {
                             session_id: id,
                             text: text.clone(),
                         },
                     )
                 })
                 .collect();
-            let signal = runtime.host_console_signal.clone();
+            let mutations = runtime.mutations.clone();
             let dirty = (runtime.dirty.clone(), runtime.dirty_notify.clone());
             tokio::spawn(async move {
                 let project_root =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let Some(info) = muta_runtime::client::discover(&project_root) else {
+                let Some(info) = muta_client::discover(&project_root) else {
                     tracing::warn!("dashboard control: no daemon discovered");
                     return;
                 };
                 for (n, request) in sends {
-                    let line = match muta_runtime::client::control(&info, request).await {
+                    let line = match muta_client::control(&info, request).await {
                         Ok(()) => ConsoleLine::Receipt {
                             ok: true,
                             target: Some(n),
@@ -330,7 +328,7 @@ pub(super) async fn dispatch_console_command(
                             text: e,
                         },
                     };
-                    signal.lock().await.push_back(line);
+                    mutations.send(crate::event_loop::AppMutation::HostConsole(line)).await;
                 }
                 wake(&dirty);
             });

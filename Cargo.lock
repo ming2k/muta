@@ -1547,6 +1547,7 @@ dependencies = [
  "mockito",
  "muta-contracts",
  "muta-llm-client",
+ "muta-paths",
  "muta-persistence",
  "muta-platform",
  "muta-providers",
@@ -1564,6 +1565,15 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "muta-client"
+version = "0.41.2"
+dependencies = [
+ "muta-contracts",
+ "muta-runtime",
+ "tokio",
 ]
 
 [[package]]
@@ -1631,6 +1641,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "muta-paths"
+version = "0.41.2"
+dependencies = [
+ "directories",
+ "muta-platform",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "muta-persistence"
 version = "0.41.2"
 dependencies = [
@@ -1642,7 +1666,7 @@ dependencies = [
  "inventory",
  "libc",
  "muta-contracts",
- "muta-persistence",
+ "muta-paths",
  "muta-platform",
  "rusqlite",
  "serde",
@@ -1710,6 +1734,7 @@ dependencies = [
  "muta-contracts",
  "muta-mcp",
  "muta-models-dev",
+ "muta-paths",
  "muta-persistence",
  "muta-platform",
  "muta-providers",
@@ -1771,11 +1796,10 @@ dependencies = [
  "crossterm",
  "dirs",
  "insta",
+ "muta-client",
  "muta-contracts",
- "muta-persistence",
+ "muta-paths",
  "muta-platform",
- "muta-providers",
- "muta-runtime",
  "mutx-engine",
  "serde",
  "serde_json",

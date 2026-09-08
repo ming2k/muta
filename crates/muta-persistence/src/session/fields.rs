@@ -165,7 +165,8 @@ impl SessionStore {
         anchor: Option<u64>,
         expected_anchor: Option<u64>,
     ) -> Result<bool, String> {
-        self.store_digest(digest, anchor, Some(expected_anchor)).await
+        self.store_digest(digest, anchor, Some(expected_anchor))
+            .await
     }
 
     /// Shared persistence core: compute-and-persist under one state lock, with

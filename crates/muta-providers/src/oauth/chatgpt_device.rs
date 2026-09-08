@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use muta_contracts::SecretString;
 
-use crate::oauth::config::OAuthConfig;
 use crate::oauth::token::TokenResponse;
+use muta_contracts::provider_auth::OAuthConfig;
 
 /// Response from the `deviceauth/usercode` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,7 +183,7 @@ async fn sleep_ms(ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth::config::CHATGPT;
+    use muta_contracts::provider_auth::CHATGPT;
 
     #[test]
     fn interval_ms_defaults_and_parses() {

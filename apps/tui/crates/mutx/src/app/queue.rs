@@ -51,23 +51,6 @@ impl App {
         self.queue_blocked_sessions.contains(session_id)
     }
 
-    /// Toggle the user block on the viewed session's outbox. Mirrors `Ctrl+P` /
-    /// the queue modal's block control. Returns the new state so the caller
-    /// can reflect it in the render snapshot.
-    pub fn toggle_queue_block(&mut self, session_id: &str) -> bool {
-        if !self.queue_blocked_sessions.insert(session_id.to_string()) {
-            // Already present → remove it (toggle off).
-            self.queue_blocked_sessions.remove(session_id);
-            if self.idle_sessions.contains(session_id) {
-                self.naturally_completed_sessions
-                    .insert(session_id.to_string());
-            }
-            false
-        } else {
-            true
-        }
-    }
-
     /// Force the block on, regardless of its current state. Used when the
     /// queue modal opens so items can be managed safely (delete / reorder /
     /// re-edit) without one auto-draining mid-edit.
@@ -87,6 +70,25 @@ impl App {
     /// Remove the viewed session's outbox item at display index `idx`. Used by
     /// the queue modal's `D` delete. Returns the removed dispatch (mostly for
     /// tests).
+    /// The id of the queue-modal-highlighted item (ADR-0197 M4: queue verbs
+    /// address the daemon queue by id).
+    pub fn queued_at(&self, session_id: &str, idx: usize) -> Option<&QueuedDispatch> {
+        self.pending_dispatch
+            .iter()
+            .filter(|item| item.session_id == session_id)
+            .nth(idx)
+    }
+
+    /// Set (not toggle) the local pause projection; the daemon verb is
+    /// authoritative (ADR-0197 M4).
+    pub fn set_queue_blocked(&mut self, session_id: &str, blocked: bool) {
+        if blocked {
+            self.queue_blocked_sessions.insert(session_id.to_string());
+        } else {
+            self.queue_blocked_sessions.remove(session_id);
+        }
+    }
+
     pub fn remove_queued_at(&mut self, session_id: &str, idx: usize) -> Option<QueuedDispatch> {
         let position = self
             .pending_dispatch

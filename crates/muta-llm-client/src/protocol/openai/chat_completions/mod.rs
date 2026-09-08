@@ -582,7 +582,10 @@ mod tests {
 
         let auth = muta_contracts::ResolvedAuth::new("test-token");
         let body = serde_json::json!({"model": "glm-5.2"});
-        let req = provider.build_request_for_auth(&body, &auth).build().unwrap();
+        let req = provider
+            .build_request_for_auth(&body, &auth)
+            .build()
+            .unwrap();
 
         let headers = req.headers();
         assert_eq!(

@@ -597,6 +597,7 @@ fn render_transcript_frame(
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,

@@ -1,46 +1,32 @@
-//! Per-frame runtime state synchronization (hydrating App from UiRuntime).
-
-use std::sync::atomic::Ordering;
+//! App-owned reconciliation passes (ADR-0197 M1).
+//!
+//! The old per-frame mirror (`sync_runtime_state_to_app` hydrating `App`
+//! from ~45 shared cells) is gone: the response translator produces
+//! `AppMutation`s and `apply` (the sole `App` writer) lands them directly.
+//! What remains here is the reconciliation that is genuinely a *loop-side
+//! state machine* — mounting/dismissing sheets in reaction to request
+//! queues, projecting viewed-session data, and the scroll-relevant
+//! transcript-change bookkeeping — all reading and writing `App` alone.
 
 use muta_contracts::Role;
 
-use crate::App;
-use crate::event_loop::runtime::{OauthAddSignal, OutboxSignal, UiRuntime, now_epoch_ms};
-use crate::event_loop::transcript::{
-    apply_height_invalidation, apply_transcript_patch_with_cursor, displayed_transcript_did_change,
-};
-use crate::modal::Modal;
+use crate::app::App;
+use crate::event_loop::runtime::{UiRuntime, now_epoch_ms};
 use crate::model::document::{TranscriptMessage, UserMessageOrigin};
 
-/// Mirror shared runtime state into `App` each frame.
-pub(crate) async fn sync_runtime_state_to_app(
-    app: &mut App,
-    runtime: &UiRuntime,
-    sessions_overview_rev_seen: &mut u64,
-    host_sessions_rev_seen: &mut u64,
-) {
-    app.current_provider = runtime.current_provider.lock().await.clone();
-    app.current_model = runtime.current_model.lock().await.clone();
-    let harness = runtime.harness.lock().await.clone();
-    app.loop_status = harness.loop_status;
-    app.unattended = harness.unattended;
-    app.confined = harness.confined;
-    app.harness_retry_pending = harness.retry_pending;
-    app.provider_retry = runtime.provider_retry.lock().await.clone();
-    app.phase = runtime.phase.lock().await.clone();
-    app.round_count = *runtime.round_count.lock().await;
-    app.current_turn = *runtime.current_turn.lock().await;
-    app.round_started_at = *runtime.round_started_at.lock().await;
-    {
-        let pending = runtime.pending_permission.lock().await;
-        app.pending_permission = pending.front().cloned();
-        app.pending_permission_depth = pending.len();
-    }
-    app.key_status = runtime.key_status.lock().await.clone();
-    app.websearch_config = runtime.websearch_config.lock().await.clone();
-    app.provider_picker = runtime.provider_picker.lock().await.clone();
+/// The per-frame reconciliation over App-owned request queues and sheets.
+pub(crate) fn sync_request_surfaces(app: &mut App, runtime: &UiRuntime) {
+    // Publish the add-flow fact to the translator (loop → translator): the
+    // OAuth add-flow surfaces the URL in the modal; the translator suppresses
+    // the duplicate transcript notice while it is in flight.
+    runtime
+        .awaiting_oauth_add
+        .store(app.awaiting_oauth_add, std::sync::atomic::Ordering::SeqCst);
 
     let request_sheet_open = app.active_sheet().is_some();
+
+    // Project the mounted front of the permission queue.
+    app.pending_permission = app.pending_permissions.front().cloned();
 
     if app.pending_permission.is_some() && !request_sheet_open {
         app.push_sheet_surface(crate::sheet::Permission);
@@ -58,18 +44,17 @@ pub(crate) async fn sync_runtime_state_to_app(
         app.permission_max_scroll = 0;
         app.permission_show_details = false;
     }
+    app.pending_permission_depth = app.pending_permissions.len();
 
     // Question modal sync
     {
-        let pending = runtime.pending_question.lock().await;
-        let front = pending.front().cloned();
+        let front = app.pending_questions.front().cloned();
         // ADR-0175 §7: the badge reports items queued *behind* the one
         // already mounted on the sheet — not counting the mounted one
         // itself. The permission sheet's predicate is `> 1` for the
         // same reason; the question sheet's renderer uses `> 0`, so the
         // depth must subtract the front item here.
-        app.pending_question_depth = pending.len().saturating_sub(1);
-        drop(pending);
+        app.pending_question_depth = app.pending_questions.len().saturating_sub(1);
         let model_matches_front = match (&app.question, &front) {
             (Some(m), Some(req)) => m.request().id == req.id,
             (None, None) => true,
@@ -97,68 +82,9 @@ pub(crate) async fn sync_runtime_state_to_app(
         }
     }
 
-    // ADR-0175: PreAttach interstitial sync. Two flows:
-    //
-    // 1. **Mount.** The listener task published a fresh quarantined
-    //    snapshot through `pre_attach_signal`. Drain the cell and
-    //    build a `PreAttachState` from it. Mounting is suppressed
-    //    when the per-run `trust_gate_dismissed` latch is set (the
-    //    operator dismissed earlier in this run) or when `pre_attach`
-    //    is already mounted — the listener only republishes on
-    //    snapshot change, so a duplicate publication is a no-op.
-    //
-    // 2. **Unmount.** When the snapshot transitions to `Trusted`
-    //    (the operator chose "Trust all" → daemon persisted via
-    //    `/trust` → republished `HarnessState`), clear `pre_attach`
-    //    so the chat surface mounts on the next frame. The harness
-    //    snapshot lives on `UiRuntime::harness` and was already
-    //    mirrored into `app` higher in this function via
-    //    `runtime.harness`; reading it through the runtime cell
-    //    avoids racing the listener.
-    {
-        let mut signal = runtime.pre_attach_signal.lock().await;
-        if let Some(pub_) = signal.take() {
-            let dismissed = runtime.trust_gate_dismissed.load(Ordering::SeqCst);
-            if !dismissed
-                && let Some(state) = crate::PreAttachState::from_snapshot(&pub_.snapshot)
-                && app.pre_attach.is_none()
-            {
-                tracing::info!("mutx: mounting PreAttach interstitial");
-                app.pre_attach = Some(state);
-                // PreAttach claims the keyboard; reset the
-                // composer/sheet state the way an ordinary
-                // sheet mount does, so nothing downstream
-                // assumes it owns input.
-                app.modal_index = 0;
-                app.park_transcript_focus_for_sheet();
-            }
-        }
-        drop(signal);
-
-        // Unmount when the snapshot turns trusted or the workspace        // is no longer quarantined. The harness snapshot on
-        // `UiRuntime::harness` is the freshest one the listener has
-        // observed; reading it through the runtime cell avoids racing
-        // the listener's own `harness_clone` update.
-        if app.pre_attach.is_some() {
-            let harness = runtime.harness.lock().await;
-            let trusted = harness.workspace_security.aggregate()
-                == muta_contracts::WorkspaceTrustState::Trusted
-                || harness.workspace_security.aggregate()
-                    == muta_contracts::WorkspaceTrustState::Absent;
-            if trusted {
-                tracing::info!("mutx: clearing PreAttach interstitial (workspace trusted)");
-                app.pre_attach = None;
-                // The latch is set so a subsequent periodic republish
-                // of a still-quarantined snapshot (race with the
-                // `/trust` reload) does not re-mount within this run.
-                runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
-            }
-        }
-    }
-
     // Input-injection modal sync
     {
-        let front = runtime.pending_input.lock().await.front().cloned();
+        let front = app.pending_inputs.front().cloned();
         let matches_front = match (&app.pending_input, &front) {
             (Some(cur), Some(req)) => cur.id == req.id,
             (None, None) => true,
@@ -185,128 +111,15 @@ pub(crate) async fn sync_runtime_state_to_app(
             app.park_transcript_focus_for_sheet();
         }
     }
-
-    // Sessions overview revision check
-    {
-        let rev = runtime.sessions_overview_rev.load(Ordering::Acquire);
-        if rev != *sessions_overview_rev_seen {
-            app.sessions_overview = runtime.sessions_overview.lock().await.clone();
-            app.sessions_loading = false;
-            *sessions_overview_rev_seen = rev;
-        }
-    }
-
-    let can_apply_backend_navigation = app.can_accept_navigation_signal();
-    let view_session_id = app.current_session_id.clone();
-    if can_apply_backend_navigation && runtime.open_sessions.swap(false, Ordering::SeqCst) {
-        crate::event_loop::actions::enter_panel(
-            app,
-            crate::surfaces::PanelId::Sessions,
-            runtime,
-            &view_session_id,
-        );
-    }
-    if can_apply_backend_navigation && runtime.open_tree.swap(false, Ordering::SeqCst) {
-        crate::event_loop::actions::enter_panel(
-            app,
-            crate::surfaces::PanelId::Tree,
-            runtime,
-            &view_session_id,
-        );
-    }
-
-    // Host sessions revision check
-    {
-        let rev = runtime.host_sessions_rev.load(Ordering::Acquire);
-        if rev != *host_sessions_rev_seen {
-            app.host_sessions = runtime.host_sessions.lock().await.clone();
-            *host_sessions_rev_seen = rev;
-        }
-    }
-
-    // Console logs
-    {
-        let mut queue = runtime.host_console_signal.lock().await;
-        while let Some(line) = queue.pop_front() {
-            app.host_console_log.push(line);
-        }
-    }
-
-    if can_apply_backend_navigation && runtime.open_host.swap(false, Ordering::SeqCst) {
-        crate::event_loop::actions::enter_view(app, crate::surfaces::View::Dashboard, runtime);
-    }
-
-    if let Some(detail) = runtime.session_detail.lock().await.take() {
-        let same_id = app.session_detail.as_ref().map(|s| &s.id) == Some(&detail.id);
-        app.session_detail = Some(detail);
-        if !same_id {
-            app.session_info_scroll = 0;
-        }
-    }
-    if let Some(snapshot) = runtime.session_context.lock().await.take() {
-        app.session_context = Some(snapshot);
-    }
-    if let Some(detail) = runtime.connection_detail.lock().await.take() {
-        let same_id = app.connection_detail.as_ref().map(|c| &c.id) == Some(&detail.id);
-        app.connection_detail = Some(detail);
-        if !same_id {
-            app.connection_info_scroll = 0;
-        }
-    }
-    if let Some(report) = runtime.token_report.lock().await.take() {
-        app.token_report = Some(report);
-    }
-    if let Some(report) = runtime.usage_stats.lock().await.take() {
-        app.usage_stats = Some(report);
-    }
-
-    if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
-        match sig {
-            OauthAddSignal::Pending {
-                url,
-                user_code,
-                message,
-            } => {
-                if app.awaiting_oauth_add {
-                    app.oauth_pending_url = url;
-                    app.oauth_pending_user_code = user_code;
-                    app.oauth_pending_message = message;
-                    app.oauth_pending_error = None;
-                    app.replace_transient_surface(Modal::OauthPending);
-                }
-            }
-            OauthAddSignal::Done => {
-                if app.awaiting_oauth_add {
-                    app.open_oauth_instance_name_editor();
-                }
-            }
-            OauthAddSignal::Failed { message } => {
-                if app.awaiting_oauth_add {
-                    app.oauth_pending_error = Some(message);
-                    app.replace_transient_surface(Modal::OauthPending);
-                }
-            }
-        }
-    }
-
-    runtime
-        .awaiting_oauth_add
-        .store(app.awaiting_oauth_add, Ordering::SeqCst);
 }
 
-pub(crate) async fn tick_toast_timers(app: &mut App, runtime: &UiRuntime) {
+pub(crate) fn tick_toast_timers(app: &mut App) {
     if let Some(until) = app.copy_toast_until
         && std::time::Instant::now() >= until
     {
         app.copy_toast_until = None;
     }
 
-    if let Some(signal) = runtime.notice_toast_signal.lock().await.take() {
-        app.notice_toast_message = signal.text;
-        app.notice_toast_severity = signal.severity;
-        app.notice_toast_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
-    }
     if let Some(until) = app.notice_toast_until
         && std::time::Instant::now() >= until
     {
@@ -354,72 +167,24 @@ fn user_prompt_tail(messages: &[TranscriptMessage]) -> Vec<(String, bool, u64)> 
         .collect()
 }
 
-pub(crate) async fn sync_transcripts_and_session(
-    app: &mut App,
-    runtime: &UiRuntime,
-) -> (bool, String) {
-    let messages_version = runtime.messages.version();
-    let transcript_changed = messages_version != app.messages_version;
-    if transcript_changed {
-        let patch = runtime.messages.take_transcript_patch();
-        if !apply_transcript_patch_with_cursor(&mut app.messages, patch, &mut app.stream_cursor) {
-            app.messages = runtime.messages.read().await.clone();
-            app.stream_cursor = None;
-        }
-        app.messages_version = messages_version;
-        apply_height_invalidation(
-            &mut app.layout_height_cache,
-            runtime.messages.take_height_invalidation(),
+/// The per-frame session/view reconciliation (ADR-0197 M1): project the
+/// viewed session's state, publish the routing fact to the translator, and
+/// run the history backfill. Returns whether the *displayed* transcript
+/// changed shape (bottom-follow staging) and the viewed session id.
+pub(crate) fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -> (bool, String) {
+    let side_view_transitioned = std::mem::take(&mut app.view_transitioned);
+    let transcript_changed = std::mem::take(&mut app.transcript_changed_pending);
+    let side_transcript_changed = std::mem::take(&mut app.side_transcript_changed_pending);
+
+    let displayed_transcript_changed =
+        crate::event_loop::transcript::displayed_transcript_did_change(
+            app.in_side_view,
+            transcript_changed,
+            side_transcript_changed,
+            side_view_transitioned,
         );
-    }
 
-    let side_messages_version = runtime.side_messages.version();
-    let side_transcript_changed = side_messages_version != app.side_messages_version;
-    if side_transcript_changed {
-        let patch = runtime.side_messages.take_transcript_patch();
-        if !apply_transcript_patch_with_cursor(
-            &mut app.side_messages,
-            patch,
-            &mut app.side_stream_cursor,
-        ) {
-            app.side_messages = runtime.side_messages.read().await.clone();
-            app.side_stream_cursor = None;
-        }
-        app.side_messages_version = side_messages_version;
-        apply_height_invalidation(
-            &mut app.layout_height_cache,
-            runtime.side_messages.take_height_invalidation(),
-        );
-    }
-
-    app.parent_status = *runtime.parent_status.lock().await;
-    app.btw_list = runtime.btw_list.lock().await.clone();
-    app.session_chrome = runtime
-        .session_chrome
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
-
-    let side_view_transitioned = match runtime.side_view_signal.lock().await.take() {
-        Some(crate::event_loop::runtime::SideViewSignal::Opened { side_id, .. }) => {
-            app.enter_side_view(side_id);
-            true
-        }
-        Some(crate::event_loop::runtime::SideViewSignal::Closed) => {
-            app.exit_side_view();
-            true
-        }
-        None => false,
-    };
-
-    let displayed_transcript_changed = displayed_transcript_did_change(
-        app.in_side_view,
-        transcript_changed,
-        side_transcript_changed,
-        side_view_transitioned,
-    );
-
-    let primary_session_id = runtime.live_session_id.lock().await.clone();
+    let primary_session_id = app.live_session_id.clone();
     let viewed_session_id = if app.in_side_view {
         app.side_session_id
             .as_deref()
@@ -433,9 +198,6 @@ pub(crate) async fn sync_transcripts_and_session(
         app.current_session_id = viewed_session_id.clone();
         app.on_viewed_session_changed();
         app.switching_session = None;
-        *runtime.switching_session.lock().await = None;
-    } else {
-        app.switching_session = runtime.switching_session.lock().await.clone();
     }
 
     let backfill_from = app.session_history_backfill_cursor;
@@ -454,80 +216,47 @@ pub(crate) async fn sync_transcripts_and_session(
         app.backfill_session_history(&tail, now_epoch_ms());
     }
 
-    {
-        let mut cell = runtime.viewed_session_id.lock().await;
-        *cell = Some(viewed_session_id.clone());
-    }
+    // Publish the routing fact to the translator (loop → translator).
+    *runtime.viewed_session_id.blocking_lock() = Some(viewed_session_id.clone());
 
     let workspace = crate::chrome::tilde_home(&app.cwd);
     if app.current_workspace != workspace {
         app.current_workspace = workspace;
     }
 
-    app.context_tokens = runtime
-        .context_tokens
-        .lock()
-        .await
+    app.context_tokens = app
+        .context_tokens_by_session
         .get(&viewed_session_id)
         .copied();
 
     (displayed_transcript_changed, viewed_session_id)
 }
 
-pub(crate) async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
-    while let Some(signal) = runtime.outbox_signals.lock().await.pop_front() {
-        match signal {
-            OutboxSignal::FollowUpStarted {
-                session_id,
-                input_id,
-            } => {
-                app.remove_dispatch(&session_id, &input_id);
-            }
-            OutboxSignal::Unavailable {
-                session_id,
-                input_id,
-            } => {
-                let held = app
-                    .messages
-                    .iter()
-                    .chain(app.side_messages.iter())
-                    .rev()
-                    .find(|m| {
-                        m.insert_id.as_deref() == Some(input_id.as_str()) && m.role == Role::User
-                    })
-                    .map(|m| (m.raw.clone(), Vec::new(), Vec::new()));
-                app.requeue_dispatch(&session_id, &input_id, held);
-            }
-            OutboxSignal::SteerAdmitted {
-                session_id,
-                input_id,
-            } => {
-                app.remove_dispatch(&session_id, &input_id);
-            }
-            OutboxSignal::RoundCompleted { session_id } => {
-                app.naturally_completed_sessions.insert(session_id);
-            }
-            OutboxSignal::RoundInterrupted { session_id } => {
-                app.naturally_completed_sessions.remove(&session_id);
-                app.block_queue(&session_id);
-                for item in app.pending_dispatch.iter_mut() {
-                    if item.session_id == session_id
-                        && item.state == crate::app::QueuedDispatchState::Dispatching
-                    {
-                        item.state = crate::app::QueuedDispatchState::Waiting;
-                    }
-                }
-            }
-            OutboxSignal::HarnessState { session_id, idle } => {
-                if idle {
-                    app.running_sessions.remove(&session_id);
-                    app.idle_sessions.insert(session_id);
-                } else {
-                    app.idle_sessions.remove(&session_id);
-                    app.naturally_completed_sessions.remove(&session_id);
-                    app.running_sessions.insert(session_id);
-                }
-            }
-        }
+/// Consume the one-shot backend navigation signals the applier latched
+/// (ADR-0197 M1: formerly `AtomicBool` swaps on shared cells).
+pub(crate) fn consume_navigation_signals(app: &mut App, runtime: &UiRuntime) -> (bool, bool, bool) {
+    let can_apply_backend_navigation = app.can_accept_navigation_signal();
+    let open_sessions =
+        can_apply_backend_navigation && std::mem::take(&mut app.open_sessions_signal);
+    let open_tree = can_apply_backend_navigation && std::mem::take(&mut app.open_tree_signal);
+    let open_host = can_apply_backend_navigation && std::mem::take(&mut app.open_host_signal);
+    if !can_apply_backend_navigation {
+        // Drop the signals anyway: a navigation the surface cannot accept
+        // right now must not silently queue behind the next frame forever.
+        app.open_sessions_signal = false;
+        app.open_tree_signal = false;
+        app.open_host_signal = false;
+    }
+    let _ = runtime;
+    (open_sessions, open_tree, open_host)
+}
+
+/// Consume the backend completion round-trip the applier latched.
+pub(crate) fn consume_completion_signal(app: &mut App) -> bool {
+    if let Some(signal) = app.backend_completion_signal.take() {
+        app.apply_backend_completions(signal.request_id, signal.input, signal.cursor, signal.items);
+        true
+    } else {
+        false
     }
 }

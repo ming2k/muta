@@ -35,19 +35,18 @@ pub mod config;
 mod event_loop;
 pub mod input;
 pub mod interaction;
-pub mod ui;
 pub mod keymap;
 pub mod paths;
 pub mod phase;
 mod pre_attach;
 pub mod question_model;
+pub mod ui;
 pub(crate) use pre_attach::{PreAttachDecision, PreAttachSignal, PreAttachState};
 mod step_interaction;
 pub mod syntax;
 mod terminal;
 mod transcript;
 pub mod trust_gate;
-mod versioned;
 
 // View layer (merged from the former `mutx-view` crate)
 
@@ -103,19 +102,18 @@ pub(crate) mod surfaces;
 #[cfg(test)]
 mod snapshot_tests;
 
-pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, SelectionEdge};
+pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, SelectionEdge};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{Modal, Recess, TelemetryTab};
 pub(crate) use providers::{CustomField, PROVIDER_PRESETS, preset_label_for};
 
 use muta_contracts::{
-    AgentRequest, AgentResponse, HarnessSnapshot, LoopStatus, Message, ParentStatus,
-    PermissionRequest, ProviderPickerSnapshot, Role, RoundEvent, SessionContextSnapshot,
-    SessionOverview, UserQuestionRequest,
+    AgentRequest, AgentResponse, LoopStatus, Message, ParentStatus, ProviderPickerSnapshot, Role,
+    RoundEvent,
 };
 use mutx_engine::{Backend, Terminal};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     error::Error,
     io,
     sync::Arc,
@@ -124,8 +122,8 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::model::document::{
-    CommandPhase, DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage,
-    UserMessageOrigin, notice_severity_from_core,
+    DeliveryStatus, MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin,
+    notice_severity_from_core,
 };
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::render::Theme;
@@ -351,1925 +349,1329 @@ pub async fn run_tui(
         transcript_retry_resolutions_from_records(initial_retry_resolutions),
     );
     rebase_transcript_rounds(&mut restored, initial_round_count);
-    let messages = Arc::new(versioned::Versioned::new(restored));
-    let messages_clone = messages.clone();
-    // Stage 3 redraw signal: the listener flips this on every handled response
-    // so the event loop knows shared state changed and a frame is due. Starts
-    // `true` so the very first frame always renders.
+    // ADR-0197 M1: the response translator and the monitor client own **no**
+    // application state. They consume wire frames and produce typed
+    // `AppMutation`s onto a bounded channel; the event loop — the sole
+    // `App` writer — drains and applies them each iteration (see
+    // `event_loop::apply`). There are no shared state cells and no
+    // per-frame mirroring; the few cross-task facts that flow the other
+    // way live on `UiRuntime` (see its module docs).
+    let (mutation_tx, mutation_rx) = tokio::sync::mpsc::channel::<event_loop::AppMutation>(1024);
+    let mutations = event_loop::mutations::MutationSink::new(mutation_tx);
+
+    // Stage 3 redraw signal + Stage 4 wakeup: translators flip/notify so the
+    // loop's `select!` wakes immediately on a response; high-frequency
+    // stream deltas deliberately rely on the loop's 10fps heartbeat to
+    // coalesce into a smooth stream.
     let dirty = Arc::new(AtomicBool::new(true));
     let dirty_clone = dirty.clone();
-    // Stage 4 wakeup: the listener notifies this so the loop's `select!` wakes
-    // immediately on a response instead of waiting out a poll interval.
     let dirty_notify = Arc::new(tokio::sync::Notify::new());
     let dirty_notify_clone = dirty_notify.clone();
     let should_quit = Arc::new(AtomicBool::new(false));
-    let should_quit_clone = should_quit.clone();
 
-    let current_provider = Arc::new(Mutex::new(initial_provider.clone()));
-    let current_model = Arc::new(Mutex::new(initial_model.clone()));
-    let cp_clone = current_provider.clone();
-    let cm_clone = current_model.clone();
-    // Session-scoped AI context snapshot. The listener updates it only from
-    // harness projection/API events; the rendered transcript is never used.
-    let context_tokens = Arc::new(Mutex::new(HashMap::<
-        String,
-        muta_contracts::ContextTokenSnapshot,
-    >::new()));
-    let context_tokens_clone = context_tokens.clone();
-
+    // Loop → translator coordination facts (see `event_loop::runtime`).
     let is_responding = Arc::new(AtomicBool::new(false));
     let ir_clone = is_responding.clone();
-    let harness = Arc::new(Mutex::new(HarnessSnapshot {
-        loop_status: LoopStatus::Idle,
-        round_counter: initial_round_count,
-        unattended: false,
-        confined: true,
-        workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
-        retry_pending: false,
-    }));
-    let harness_clone = harness.clone();
-    let round_count: Arc<Mutex<u64>> = Arc::new(Mutex::new(initial_round_count));
-    let round_count_clone = round_count.clone();
-    // Current ReAct turn within the active round. Reset to 0 at each round
-    // boundary and bumped from `RoundEvent::TurnStarted`. The Activity
-    // modal renders it as `turn M` alongside the round number.
-    let current_turn: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
-    let current_turn_clone = current_turn.clone();
-    // Wall-clock instant the current round started. Stamped on a "running"
-    // HarnessState so the activity bar can render a live `<elapsed>` segment.
-    let round_started_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
-    let round_started_at_clone = round_started_at.clone();
-    // Typed activity-bar phase: the single fold of wire `Activity` labels.
-    // `None` = idle (bar hidden). Transport setbacks live in
-    // `provider_retry`, never here — see `crate::phase`.
-    let phase: Arc<Mutex<Option<Phase>>> = Arc::new(Mutex::new(None));
-    let activity_clone = phase.clone();
-    let provider_retry: Arc<Mutex<Option<ProviderRetryState>>> = Arc::new(Mutex::new(None));
-    let provider_retry_clone = provider_retry.clone();
-    let pending_permission = Arc::new(Mutex::new(VecDeque::<PermissionRequest>::new()));
-    let pending_permission_clone = pending_permission.clone();
-    let pending_question = Arc::new(Mutex::new(VecDeque::<UserQuestionRequest>::new()));
-    let pending_question_clone = pending_question.clone();
-    // ADR-0175: the listener publishes a freshly-arrived quarantined
-    // snapshot to this cell so the per-frame sync can mount the
-    // PreAttach interstitial surface before the chat mounts. Drained
-    // back to `None` by the sync once consumed.
-    let pre_attach_signal = Arc::new(Mutex::new(None::<crate::PreAttachSignal>));
-    let pre_attach_signal_clone = pre_attach_signal.clone();
-    // Trust gate: whether the gate already got its answer this attach.
-    // The daemon republishes `HarnessState` periodically; without this
-    // latch a dismissed gate (Esc = keep quarantined) would re-open on the
-    // next snapshot and nag in a loop. Cleared only by a fresh run/attach,
-    // so a *new* workspace contact still gates exactly once.
     let trust_gate_dismissed = Arc::new(AtomicBool::new(false));
     let trust_gate_dismissed_clone = trust_gate_dismissed.clone();
-    let pending_input = Arc::new(Mutex::new(VecDeque::<muta_contracts::InputRequest>::new()));
-    let pending_input_clone = pending_input.clone();
-    // Full-duplex (ADR-0029): side-tables recording which runner (by parent
-    // tool-call id) surfaced a given permission / ask_user request, so the
-    // modal's reply can be tagged with `parent_call_id` for down-routing.
-    let runner_permission_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-    let subtask_permission_parent_clone = runner_permission_parent.clone();
-    let runner_question_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-    let subtask_question_parent_clone = runner_question_parent.clone();
-    let key_status = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
-    let key_status_clone = key_status.clone();
-    // Effective `[websearch]` config (presence-only view), fetched when the
-    // Settings view opens and refreshed on every update ack. The event loop
-    // mirrors it into `App::websearch_config` each frame.
-    let websearch_config = Arc::new(Mutex::new(
-        Option::<muta_contracts::WebSearchConfigView>::None,
-    ));
-    let websearch_config_clone = websearch_config.clone();
-    let provider_picker = Arc::new(Mutex::new(ProviderPickerSnapshot::default()));
-    let provider_picker_clone = provider_picker.clone();
-    let sessions_overview = Arc::new(Mutex::new(Vec::<SessionOverview>::new()));
-    let sessions_overview_clone = sessions_overview.clone();
-    let sessions_overview_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let sessions_overview_rev_clone = sessions_overview_rev.clone();
-    let switching_session = Arc::new(Mutex::new(None::<String>));
-    let switching_session_clone = switching_session.clone();
-    let session_detail = Arc::new(tokio::sync::Mutex::new(
-        None::<muta_contracts::SessionDetail>,
-    ));
-    let session_detail_clone = session_detail.clone();
-    let connection_detail = Arc::new(tokio::sync::Mutex::new(
-        None::<muta_contracts::ConnectionDetail>,
-    ));
-    let connection_detail_clone = connection_detail.clone();
-    let session_tree = Arc::new(tokio::sync::Mutex::new(None::<muta_contracts::SessionTree>));
-    let session_tree_clone = session_tree.clone();
-    // Token-source report fetched on demand from the harness when the
-    // context-usage modal opens in attach mode (the ledger is daemon-side
-    // there). Mirrors the `session_detail` on-demand pattern.
-    let token_report = Arc::new(tokio::sync::Mutex::new(
-        None::<muta_contracts::TokenSourceReport>,
-    ));
-    let token_report_clone = token_report.clone();
-    // Cross-session usage statistics (ADR-0122), fetched on demand when the
-    // `/usage` overlay opens. Same on-demand pattern.
-    let usage_stats = Arc::new(tokio::sync::Mutex::new(
-        None::<muta_contracts::usage_stats::UsageStatsReport>,
-    ));
-    let usage_stats_clone = usage_stats.clone();
-    // The **live primary session id**. The handshake-time `SessionSource` is
-    // frozen for the process lifetime, but the harness repoints its shared
-    // store on `/new`, `/session open`, `/resume`, and `/fork` — so anything
-    // session-scoped that must follow a mid-run switch (the ↑/↓ prompt
-    // history's origin tag above all) reads this cell instead. The listener
-    // updates it from `ConversationCleared` / `ConversationReplaced` and the
-    // event loop mirrors it into `App::current_session_id` each frame.
-    let live_session_id = Arc::new(Mutex::new(session.session_id().await));
-    let live_session_id_clone = live_session_id.clone();
-    let open_sessions = Arc::new(AtomicBool::new(false));
-    let open_sessions_clone = open_sessions.clone();
-    let open_tree = Arc::new(AtomicBool::new(false));
-    let open_tree_clone = open_tree.clone();
-    // `/host` daemon control panel (ADR-0096): a live monitor snapshot the TUI
-    // maintains client-side (separate from the session attach stream).
-    let host_sessions = Arc::new(Mutex::new(Vec::<muta_contracts::MonitoredSession>::new()));
-    let host_sessions_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    // `mutx dashboard` seeds the open flag so the event loop's very first
-    // frame raises the dashboard over the carrier session (the same
-    // one-shot signal `AgentResponse::OpenHostPanel` sets for `/dashboard`).
-    let open_host = Arc::new(AtomicBool::new(
-        startup_overlay == StartupOverlay::Dashboard,
-    ));
-    let open_host_clone = open_host.clone();
-    let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
-    let oauth_add_signal_clone = oauth_add_signal.clone();
-    // Mirror of `App::awaiting_oauth_add` so the response listener can tell the
-    // add-flow (URL shown in the modal) from a reconnect (URL shown in the
-    // transcript) and avoid duplicating the OAuth URL into the transcript.
     let awaiting_oauth_add = Arc::new(AtomicBool::new(false));
     let awaiting_oauth_add_clone = awaiting_oauth_add.clone();
-    // Latest session-context snapshot for the Tools / Mcp / Skills /
-    // Permissions managers (model / tools / permissions / skills / mcp).
-    // Refreshed whenever a manager opens (the event loop sends
-    // `QuerySessionContext`) and after any mutation the harness applies
-    // (revoke / toggle). `None` until the first response lands.
-    let session_context = Arc::new(Mutex::new(None::<SessionContextSnapshot>));
-    let session_context_clone = session_context.clone();
-    // Global tool-step density (true = Comfortable: new tool steps spawn
-    // expanded). Shared with the response listener so steps created mid-turn
-    // respect the user's last Ctrl+T choice (ADR-0001 Step 8).
-    let tool_density = Arc::new(AtomicBool::new(false));
-    let tool_density_clone = tool_density.clone();
-    // TUI display config shared with the response listener so live tool steps
-    // and reasoning traces honor the per-step-kind default expand state.
-    let tui_config_clone = tui_config.clone();
-    // `/btw` aside shared state (ADR-0017, ADR-0103). The aside transcript
-    // buffer, the parent-status mirror, the asides list, and the one-shot
-    // view-transition signal all cross the listener → loop boundary here.
-    let side_messages = Arc::new(versioned::Versioned::new(Vec::<TranscriptMessage>::new()));
-    let side_messages_clone = side_messages.clone();
-    let parent_status = Arc::new(Mutex::new(ParentStatus::Idle));
-    let parent_status_clone = parent_status.clone();
-    let side_view_signal = Arc::new(Mutex::new(None::<event_loop::SideViewSignal>));
-    let side_view_signal_clone = side_view_signal.clone();
-    // The asides list (ADR-0103 §5). Navigation is local; a reply only
-    // replaces rows and never re-opens a hidden view.
-    let btw_list = Arc::new(Mutex::new(Vec::<muta_contracts::BtwAsideSummary>::new()));
-    let btw_list_clone = btw_list.clone();
-    // View-scoped chrome (ADR-0103 fix): per-session activity / responding /
-    // round / turn, maintained by the listener for the primary *and* every
-    // live aside. The loop mirrors this into `App::session_chrome` each
-    // frame; a view renders only its own session's entry, so an aside view
-    // shows its own activity bar instead of inheriting the primary's.
-    let session_chrome = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
-        String,
-        crate::app::SessionChrome,
-    >::new()));
-    let session_chrome_clone = session_chrome.clone();
-    /// Per-event chrome bookkeeping for one session's stream. Writes the
-    /// session's own `SessionChrome` entry (bookkeeping for every session),
-    /// and additionally updates the *displayed* legacy fields only when the
-    /// event belongs to the primary (`!routes_to_side`) — preserving the
-    /// existing isolation of the main view from aside rounds while giving
-    /// the aside view its own state to render once focused.
-    struct ChromeUpdate {
-        session_id: String,
-        map: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::app::SessionChrome>>>,
-    }
-    impl ChromeUpdate {
-        fn edit(&mut self, f: impl FnOnce(&mut crate::app::SessionChrome)) {
-            if let Ok(mut map) = self.map.lock() {
-                f(map.entry(self.session_id.clone()).or_default());
-            }
-        }
-    }
-    // Which session the frontend is currently viewing (primary id, or the
-    // focused aside's id), written by the event loop each frame and read by
-    // the listener to scope on-demand queries (e.g. `TokenUsageReport`).
     let viewed_session_id = Arc::new(Mutex::new(None::<String>));
     let viewed_session_id_clone = viewed_session_id.clone();
-    // Toast-surfaced notices (command acknowledgments such as `/delegate on`)
-    // are forwarded by the listener and drained by the loop into a transient
-    // bubble, never entering the transcript.
-    let notice_toast_signal = Arc::new(Mutex::new(None::<event_loop::NoticeToastSignal>));
-    let notice_toast_signal_clone = notice_toast_signal.clone();
-    let outbox_signals = Arc::new(Mutex::new(VecDeque::<event_loop::OutboxSignal>::new()));
-    let outbox_signals_clone = outbox_signals.clone();
-    let completion_signal = Arc::new(Mutex::new(None::<event_loop::CompletionSignal>));
-    let completion_signal_clone = completion_signal.clone();
-    // Dashboard console receipts (ADR-0097 §3): one-shot control tasks push
-    // here, the loop drains into `App::host_console_log`.
-    let host_console_signal = Arc::new(Mutex::new(VecDeque::<crate::overlays::ConsoleLine>::new()));
+    // TUI display config the translators need for transcript projection
+    // (reasoning disclosure at message creation; per-step-kind defaults).
+    // Process config, not application state.
+    let tui_config_clone = tui_config.clone();
+    // The live primary session id at attach time: seeds both the `App` field
+    // and the translator's local mirror.
+    let live_session_init = session.session_id().await;
+    let live_session_for_translator = live_session_init.clone();
+    let initial_provider_for_translator = initial_provider.clone();
+    let initial_model_for_translator = initial_model.clone();
 
-    // Spawn the daemon monitor client (ADR-0096): maintains the live session
-    // snapshot the `/host` control panel renders. Best-effort — no daemon is
-    // a normal state and the panel simply shows an empty list.
+    // Spawn the daemon monitor client (ADR-0096): a *translator* over the
+    // monitor stream. It owns the session-row snapshot (its own domain) and
+    // publishes whole snapshots to `App` via mutations — no cells, no
+    // rev counters.
     {
-        let host_sessions = host_sessions.clone();
-        let host_sessions_rev = host_sessions_rev.clone();
+        let mutations = mutations.clone();
         let dirty = dirty_clone.clone();
         let dirty_notify = dirty_notify_clone.clone();
         tokio::spawn(async move {
             let project_root =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let Some(info) = muta_runtime::client::discover(&project_root) else {
+            let Some(info) = muta_client::discover(&project_root) else {
                 return;
             };
             let action = muta_contracts::MonitorAction {
                 watch: true,
                 include_idle: true,
             };
-            let Ok(mut rx) = muta_runtime::client::monitor_stream(&info, action).await else {
+            let Ok(mut rx) = muta_client::monitor_stream(&info, action).await else {
                 return;
             };
+            let mut rows: Vec<muta_contracts::MonitoredSession> = Vec::new();
             while let Some(event) = rx.recv().await {
-                {
-                    let mut rows = host_sessions.lock().await;
-                    match event {
-                        muta_contracts::MonitorEvent::Snapshot(snap) => {
-                            *rows = snap.sessions;
-                        }
-                        muta_contracts::MonitorEvent::SessionAdded(row)
-                        | muta_contracts::MonitorEvent::SessionUpdated(row) => {
-                            muta_runtime::client::upsert_session_row(&mut rows, row);
-                        }
-                        muta_contracts::MonitorEvent::SessionRemoved { session_id } => {
-                            rows.retain(|r| r.id != session_id);
-                        }
-                        // Daemon-level task diffs (ADR-0190): the dashboard's
-                        // task section lives in the rows map keyed by task id
-                        // via the same rev-counter refresh — folded in Phase 2.
-                        muta_contracts::MonitorEvent::TaskUpdated(_) => {}
-                        muta_contracts::MonitorEvent::TaskRemoved { .. } => {}
-                        // The daemon began its graceful shutdown (ADR-0101):
-                        // no row change; the stream closes right after. The
-                        // next daemon interaction re-discovers or re-spawns.
-                        muta_contracts::MonitorEvent::DaemonDraining => {}
+                match event {
+                    muta_contracts::MonitorEvent::Snapshot(snap) => {
+                        rows = snap.sessions;
+                        mutations.send(event_loop::AppMutation::PersistenceHealth(
+                            snap.persistence_health,
+                        )).await;
                     }
+                    muta_contracts::MonitorEvent::SessionAdded(row)
+                    | muta_contracts::MonitorEvent::SessionUpdated(row) => {
+                        muta_client::upsert_session_row(&mut rows, row);
+                    }
+                    muta_contracts::MonitorEvent::SessionRemoved { session_id } => {
+                        rows.retain(|r| r.id != session_id);
+                    }
+                    // Daemon-level task diffs (ADR-0190): the dashboard's
+                    // task section is folded in a later phase.
+                    muta_contracts::MonitorEvent::TaskUpdated(_) => {}
+                    muta_contracts::MonitorEvent::TaskRemoved { .. } => {}
+                    // Durability-health transitions (ADR-0196 D4): a degraded
+                    // state retains the visible banner; Healthy clears it.
+                    muta_contracts::MonitorEvent::PersistenceHealth(health) => {
+                        mutations.send(event_loop::AppMutation::PersistenceHealth(
+                            (!health.is_healthy()).then_some(health),
+                        )).await;
+                    }
+                    // The daemon began its graceful shutdown (ADR-0101): the
+                    // stream closes right after; the next daemon interaction
+                    // re-discovers or re-spawns.
+                    muta_contracts::MonitorEvent::DaemonDraining => {}
                 }
-                host_sessions_rev.fetch_add(1, std::sync::atomic::Ordering::Release);
+                mutations.send(event_loop::AppMutation::HostSessions(rows.clone())).await;
                 dirty.store(true, Ordering::SeqCst);
                 dirty_notify.notify_one();
             }
         });
     }
 
-    // Spawn response listener
-    tokio::spawn(async move {
-        let mut reasoning_start: Option<std::time::Instant> = None;
-        // Listener-local side routing keys (ADR-0017, widened by ADR-0103):
-        // every live aside's `session_id`, learned from `SideViewOpened` and
-        // `BtwList`. Kept here (not in `UiRuntime`) because only the listener
-        // routes per-turn events; the loop reads the already-routed
-        // `side_messages` buffer. A *set* (not the single old id) so a
-        // background aside keeps streaming into the side buffer after the
-        // user detaches from its view.
-        let mut listener_side_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        // Per-session `(round, turn)` position. The primary and `/btw` side
-        // sessions can stream concurrently, so a single global counter cannot
-        // reliably stamp transcript components for semantic spacing.
-        let mut positions_by_session = HashMap::<String, (u64, u64)>::new();
-        // A session switch replaces the transcript before its authoritative
-        // idle HarnessState arrives. Rebase the reconstructed tail exactly
-        // once when that snapshot supplies the persisted round counter.
-        let mut needs_round_rebase = false;
-        while let Some(resp) = rx.recv().await {
-            // Stage 3/4: any handled response can change shared state the loop
-            // renders from, so signal a redraw. High-frequency stream deltas
-            // deliberately do not wake the loop one-by-one: while responding,
-            // its 10fps heartbeat coalesces them into a smooth stream without
-            // repeatedly cloning and laying out a long transcript.
-            dirty_clone.store(true, Ordering::Release);
-            // A side conversation can receive stream deltas while the primary
-            // activity indicator is idle. In that case there is no 10fps
-            // heartbeat to flush the dirty bit, so retain the immediate wake.
-            let defer_stream_wakeup =
-                is_coalescible_stream_update(&resp) && ir_clone.load(Ordering::SeqCst);
-            if !defer_stream_wakeup {
-                dirty_notify_clone.notify_one();
+    // Spawn the response listener: a **translator** (ADR-0197 M1). It owns
+    // only its own routing/bookkeeping locals and mirrors of the values it
+    // itself receives; every application-state change is a mutation.
+    {
+        let mutations = mutations.clone();
+        tokio::spawn(async move {
+            // Listener-local side routing keys (ADR-0017, widened by ADR-0103):
+            // every live aside's `session_id`, learned from `SideViewOpened` and
+            // `BtwList`. A *set* (not a single id) so a background aside keeps
+            // streaming into the side buffer after the user detaches from its
+            // view.
+            let mut listener_side_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            // Per-session `(round, turn)` position. The primary and `/btw` side
+            // sessions can stream concurrently, so a single global counter
+            // cannot reliably stamp transcript components for semantic spacing.
+            let mut positions_by_session = HashMap::<String, (u64, u64)>::new();
+            // A session switch replaces the transcript before its authoritative
+            // idle HarnessState arrives. Rebase the reconstructed tail exactly
+            // once when that snapshot supplies the persisted round counter.
+            let mut needs_round_rebase = false;
+            // Translator-owned mirrors of the values it itself receives (sent to
+            // `App` via mutations): attribution, the provider-picker snapshot
+            // (effort derivation), and the harness snapshot (idle gating). No
+            // shared cells are read for these.
+            let mut current_provider = initial_provider_for_translator.clone();
+            let mut current_model = initial_model_for_translator.clone();
+            let mut picker = ProviderPickerSnapshot::default();
+            let mut harness = muta_contracts::HarnessSnapshot {
+                loop_status: LoopStatus::Idle,
+                round_counter: initial_round_count,
+                unattended: false,
+                confined: true,
+                workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
+                retry_pending: false,
+            };
+            let mut retry: Option<crate::app::ProviderRetryState> = None;
+            let mut reasoning_start: Option<std::time::Instant> = None;
+            // The live primary session id: the translator updates it on
+            // `/new` / `/session open` / `/resume` / `/fork` and scopes
+            // session-addressed replies (the tree snapshot) against it.
+            let mut live_session = live_session_for_translator.clone();
+
+            // Attribution + effort derivation from translator-owned mirrors
+            // (formerly `event_loop::attribution` / `picker_effort` over
+            // shared cells).
+            macro_rules! attribution {
+                () => {
+                    (current_provider.clone(), current_model.clone())
+                };
             }
-            match resp {
-                // ADR-0017 + ADR-0103: per-turn events arrive tagged with the
-                // session they belong to. The listener routes each event to
-                // the side buffer when its `session_id` belongs to a live
-                // aside — *whether or not that aside is the focused view*
-                // (background asides keep streaming into their buffer), and
-                // to the primary transcript otherwise. Permission and
-                // user-question requests stay global so their modals surface
-                // regardless of which view is focused.
-                AgentResponse::Round { session_id, event } => {
-                    let routes_to_side = listener_side_ids.contains(session_id.as_str());
-                    // Select the transcript buffer for this event (ADR-0017):
-                    // the side buffer when the event's `session_id` belongs to
-                    // a live aside, the primary buffer otherwise. Global
-                    // responding/activity/harness state below is gated on
-                    // `!routes_to_side` so a concurrent aside round never
-                    // clobbers the primary view's chrome; the aside view reads
-                    // its own buffer + the parent-status banner instead.
-                    // Permission and user-question requests stay global
-                    // regardless of origin so their modals always surface.
-                    //
-                    // Chrome bookkeeping (view-scoped state): every session —
-                    // primary *and* asides — mirrors its own activity /
-                    // responding / round / turn into `App::session_chrome`
-                    // via `chrome_updater`. The primary's entry also feeds the
-                    // legacy display fields (gated exactly like today), while
-                    // an aside's entry is pure bookkeeping until its view is
-                    // focused — at which point `enter_side_view` swaps it in.
-                    let chrome_session_id = session_id.clone();
-                    let mut chrome_updater = ChromeUpdate {
-                        session_id: chrome_session_id,
-                        map: session_chrome_clone.clone(),
-                    };
-                    let buf = if routes_to_side {
-                        &side_messages_clone
-                    } else {
-                        &messages_clone
-                    };
-                    match event {
-                        RoundEvent::ContextTokens(snapshot) => {
-                            context_tokens_clone
-                                .lock()
-                                .await
-                                .insert(session_id.clone(), snapshot);
+            macro_rules! picker_effort {
+                () => {
+                    picker
+                        .rows
+                        .iter()
+                        .find(|row| row.id == current_provider)
+                        .and_then(|row| row.model_info.iter().find(|m| m.model == current_model))
+                        .and_then(|m| {
+                            let show = match m.protocol.as_str() {
+                                "anthropic" => m.thinking == Some(true),
+                                _ => m.effort.is_some(),
+                            };
+                            show.then(|| m.effort.clone()).flatten()
+                        })
+                };
+            }
+            macro_rules! now_ms {
+                () => {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0)
+                };
+            }
+
+            while let Some(resp) = rx.recv().await {
+                // Any handled response can change state the loop renders from,
+                // so signal a redraw. High-frequency stream deltas deliberately
+                // do not wake the loop one-by-one: while responding, its 10fps
+                // heartbeat coalesces them into a smooth stream.
+                dirty_clone.store(true, Ordering::Release);
+                // A side conversation can receive stream deltas while the
+                // primary activity indicator is idle — no heartbeat then, so
+                // retain the immediate wake.
+                let defer_stream_wakeup =
+                    is_coalescible_stream_update(&resp) && ir_clone.load(Ordering::SeqCst);
+                if !defer_stream_wakeup {
+                    dirty_notify_clone.notify_one();
+                }
+                use event_loop::mutations::AppMutation as M;
+                use event_loop::mutations::TranscriptEdit as E;
+                match resp {
+                    // ADR-0017 + ADR-0103: per-turn events arrive tagged with the
+                    // session they belong to. The translator routes each event to
+                    // the side buffer when its `session_id` belongs to a live
+                    // aside — *whether or not that aside is the focused view* —
+                    // and to the primary transcript otherwise. Permission and
+                    // user-question requests stay global so their modals surface
+                    // regardless of which view is focused.
+                    AgentResponse::Round { session_id, event } => {
+                        let routes_to_side = listener_side_ids.contains(session_id.as_str());
+                        let buffer = if routes_to_side {
+                            event_loop::mutations::Buffer::Side
+                        } else {
+                            event_loop::mutations::Buffer::Primary
+                        };
+                        macro_rules! transcript {
+                            ($edit:expr) => {
+                                mutations.send(M::Transcript {
+                                    buffer,
+                                    edit: $edit,
+                                }).await;
+                            };
                         }
-                        RoundEvent::TurnPerformance(performance) => {
-                            chrome_updater.edit(|chrome| {
-                                chrome.last_turn_performance = Some(performance);
-                            });
+                        macro_rules! chrome {
+                            ($edit:expr) => {
+                                mutations.send(M::ChromeEdit {
+                                    session_id: session_id.clone(),
+                                    edit: $edit,
+                                }).await;
+                            };
                         }
-                        RoundEvent::SteerUnavailable { input_id } => {
-                            // The round closed before a steer could be admitted.
-                            // The entry flips to `HeldNextRound`: the turn ended
-                            // (naturally or interrupted), so this message now
-                            // waits to ship as the *next* round's prompt / follow-up.
-                            {
-                                let mut msgs = buf.write().await;
-                                if let Some(entry) = msgs
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
-                                {
-                                    entry.hold_pending_round();
-                                }
+                        match event {
+                            RoundEvent::ContextTokens(snapshot) => {
+                                mutations.send(M::ContextTokens {
+                                    session_id: session_id.clone(),
+                                    snapshot,
+                                }).await;
                             }
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::Unavailable {
+                            RoundEvent::TurnPerformance(performance) => {
+                                chrome!(event_loop::mutations::ChromeEdit::TurnPerformance(
+                                    performance,
+                                ));
+                            }
+                            RoundEvent::SteerUnavailable { input_id } => {
+                                // The round closed before a steer could be
+                                // admitted: the entry flips to `HeldNextRound`
+                                // and the dispatch re-queues.
+                                transcript!(E::HoldInserted {
+                                    insert_id: input_id.clone(),
+                                });
+                                mutations.send(M::DispatchRequeued {
                                     session_id,
                                     input_id,
-                                },
-                            );
-                        }
-                        RoundEvent::SteerAdmitted(input) => {
-                            let input_id = input.id.clone();
-                            let visible = input
-                                .display_text
-                                .clone()
-                                .unwrap_or_else(|| input.text.clone());
-                            {
-                                let mut msgs = buf.write().await;
-                                // Find the newest staged entry with this
-                                // correlation id and settle it in place.
-                                let settled = msgs
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
-                                    .map(|m| {
-                                        m.delivery =
-                                            crate::model::document::DeliveryStatus::Delivered;
-                                        m.origin = UserMessageOrigin::Steer;
-                                        if m.sent_at_ms.is_none() {
-                                            m.sent_at_ms = input.sent_at_ms;
-                                        }
-                                        true
-                                    })
-                                    .unwrap_or(false);
-                                if !settled {
-                                    let mut message = TranscriptMessage::new(Role::User, visible);
-                                    message.sent_at_ms = input.sent_at_ms;
-                                    message.origin = UserMessageOrigin::Steer;
-                                    msgs.push(message);
-                                }
+                                }).await;
                             }
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::SteerAdmitted {
+                            RoundEvent::SteerAdmitted(input) => {
+                                let input_id = input.id.clone();
+                                let visible = input
+                                    .display_text
+                                    .clone()
+                                    .unwrap_or_else(|| input.text.clone());
+                                let mut fallback = TranscriptMessage::new(Role::User, visible);
+                                fallback.insert_id = Some(input_id.clone());
+                                fallback.sent_at_ms = input.sent_at_ms;
+                                fallback.origin = UserMessageOrigin::Steer;
+                                transcript!(E::SettleInserted {
+                                    insert_id: input_id.clone(),
+                                    origin: UserMessageOrigin::Steer,
+                                    sent_at_ms: input.sent_at_ms,
+                                    fallback: Some(fallback),
+                                });
+                                mutations.send(M::DispatchRemoved {
                                     session_id,
                                     input_id,
-                                },
-                            );
-                        }
-                        RoundEvent::SteerCancelled { .. } => {}
-                        RoundEvent::SteerCancelFailed { .. } => {}
-                        RoundEvent::FollowUpStarted(input) => {
-                            let input_id = input.id.clone();
-                            let visible = input
-                                .display_text
-                                .clone()
-                                .unwrap_or_else(|| input.text.clone());
-                            {
-                                let mut msgs = buf.write().await;
-                                let settled = msgs
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
-                                    .map(|m| {
-                                        m.delivery =
-                                            crate::model::document::DeliveryStatus::Delivered;
-                                        m.origin = UserMessageOrigin::FollowUp;
-                                        true
-                                    })
-                                    .unwrap_or(false);
-                                if !settled {
-                                    let mut message = TranscriptMessage::new(Role::User, visible);
-                                    message.insert_id = Some(input_id.clone());
-                                    message.sent_at_ms = input.sent_at_ms;
-                                    message.origin = UserMessageOrigin::FollowUp;
-                                    msgs.push(message);
-                                }
+                                }).await;
                             }
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::FollowUpStarted {
+                            RoundEvent::SteerCancelled { .. } => {}
+                            RoundEvent::SteerCancelFailed { .. } => {}
+                            RoundEvent::FollowUpQueued { input_id } => {
+                                // The daemon admitted the follow-up into its
+                                // queue: the optimistic entry settles back to
+                                // Waiting (the queue bar keeps showing it).
+                                mutations.send(M::DispatchQueued {
+                                    session_id: session_id.clone(),
+                                    input_id,
+                                }).await;
+                            }
+                            RoundEvent::QueueUpdated { items, paused } => {
+                                // The authoritative queue snapshot (ADR-0197
+                                // M4): full-replace projection.
+                                mutations.send(M::QueueSnapshot {
+                                    session_id: session_id.clone(),
+                                    items,
+                                    paused,
+                                }).await;
+                            }
+                            RoundEvent::FollowUpStarted(input) => {
+                                let input_id = input.id.clone();
+                                let visible = input
+                                    .display_text
+                                    .clone()
+                                    .unwrap_or_else(|| input.text.clone());
+                                let mut fallback = TranscriptMessage::new(Role::User, visible);
+                                fallback.insert_id = Some(input_id.clone());
+                                fallback.sent_at_ms = input.sent_at_ms;
+                                fallback.origin = UserMessageOrigin::FollowUp;
+                                transcript!(E::SettleInserted {
+                                    insert_id: input_id.clone(),
+                                    origin: UserMessageOrigin::FollowUp,
+                                    sent_at_ms: input.sent_at_ms,
+                                    fallback: Some(fallback),
+                                });
+                                mutations.send(M::DispatchRemoved {
                                     session_id,
                                     input_id,
-                                },
-                            );
-                        }
-                        RoundEvent::RoundCompleted(summary) => {
-                            // The web header chip still consumes this summary;
-                            // the TUI's Context Usage modal now derives its
-                            // rates from the token ledger instead.
-                            let _ = summary;
-                            *provider_retry_clone.lock().await = None;
-                            {
-                                let mut msgs = buf.write().await;
-                                msgs.retain(|m| !m.is_provider_retry());
+                                }).await;
                             }
-                            outbox_signals_clone
-                                .lock()
-                                .await
-                                .push_back(event_loop::OutboxSignal::RoundCompleted { session_id });
-                        }
-                        RoundEvent::RoundInterrupted(record) => {
-                            // C11: the durable twin of the live stop. Append
-                            // the projection row (a warning notice) with the
-                            // record's own timestamp so the trailing ` · HH:MM`
-                            // shows when the stop happened. The reason label
-                            // rides in the notice body; the transcript merge
-                            // on resume renders the same row at its seam.
-                            *provider_retry_clone.lock().await = None;
-                            chrome_updater.edit(|c| {
-                                c.phase = None;
-                                c.responding = false;
-                                c.current_turn = 0;
-                                c.round_started_at = None;
-                            });
-                            if !routes_to_side {
-                                *activity_clone.lock().await = None;
-                                ir_clone.store(false, Ordering::SeqCst);
+                            RoundEvent::RoundCompleted(_summary) => {
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                transcript!(E::RetainNotRetry);
                             }
-                            let at_ms = record.at_ms;
-                            let mut msgs = buf.write().await;
-                            msgs.retain(|m| !m.is_provider_retry());
-                            if let Some(user_msg) = msgs.iter_mut().rev().find(|m| {
-                                m.role == Role::User
-                                    && (m.is_sending()
-                                        || (record.round.is_some() && m.round == record.round)
-                                        || (record.round.is_none() && m.round.is_none()))
-                            }) {
-                                user_msg.cancel_prompt();
+                            RoundEvent::RoundInterrupted(record) => {
+                                // C11: the durable twin of the live stop.
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                chrome!(event_loop::mutations::ChromeEdit::RoundEnded);
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(None)).await;
+                                    mutations.send(M::SetResponding(false)).await;
+                                }
+                                transcript!(E::Interrupted { record });
                             }
-                            msgs.push(
-                                TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms),
-                            );
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::RoundInterrupted { session_id },
-                            );
-                        }
-                        RoundEvent::Notice(notice) => {
-                            // Provider retry has a dedicated, self-refreshing
-                            // transcript disclosure driven by RetryScheduled.
-                            // Do not also degrade its toast into an appended
-                            // inline notice on every failed attempt.
-                            if notice.kind == muta_contracts::NoticeKind::ProviderRetry {
-                                // Skip the inline append; RetryScheduled owns
-                                // the retry disclosure.
-                            } else if notice.surface == muta_contracts::NoticeSurface::Toast {
-                                // Toast-surfaced notices (command
-                                // acknowledgments such as `/delegate on`) are
-                                // forwarded as a transient bubble instead of
-                                // being appended to the transcript. They carry
-                                // no conversational content, so polluting the
-                                // scrollback with them would only muddy the
-                                // model's output. The loop drains this signal
-                                // and shows a top-right toast.
-                                *notice_toast_signal_clone.lock().await =
-                                    Some(event_loop::NoticeToastSignal {
+                            RoundEvent::Notice(notice) => {
+                                // Provider retry has a dedicated, self-refreshing
+                                // transcript disclosure driven by RetryScheduled.
+                                // Toast-surfaced notices (command acknowledgments)
+                                // ride the toast surface; everything else appends.
+                                if notice.kind == muta_contracts::NoticeKind::ProviderRetry {
+                                    // RetryScheduled owns the retry disclosure.
+                                } else if notice.surface == muta_contracts::NoticeSurface::Toast {
+                                    mutations.send(M::NoticeToast {
                                         severity: notice_severity_from_core(notice.severity),
                                         text: notice.render_text(),
-                                    });
-                            } else {
-                                let mut msgs = buf.write().await;
-                                push_core_notice(&mut msgs, &notice);
-                            }
-                        }
-                        RoundEvent::Text(t) => {
-                            let (provider, model) =
-                                event_loop::attribution(&cp_clone, &cm_clone).await;
-                            let effort = event_loop::picker_effort(
-                                &provider_picker_clone,
-                                &cp_clone,
-                                &cm_clone,
-                            )
-                            .await;
-                            *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
-                            let mut message = TranscriptMessage::new(Role::Assistant, t)
-                                .with_attribution(provider, model)
-                                .with_effort(effort)
-                                .with_sent_at_ms(crate::event_loop::now_epoch_ms());
-                            if let Some((round, turn)) =
-                                positions_by_session.get(&session_id).copied()
-                            {
-                                message.round = Some(round);
-                                message.turn = Some(turn);
-                            }
-                            msgs.push(message);
-                            if !routes_to_side {
-                                // `Text` is *content*, not a lifecycle signal
-                                // (ADR-0091). Clearing the optimistic activity
-                                // surface here was what let a toast-only slash
-                                // reply leave the bar stuck on "queued" after
-                                // ADR-0088 migrated the mode toggle from `Text` to
-                                // `Notice`. Only collapse the surface when the
-                                // harness is actually idle: a slash reply
-                                // delivered mid-round must not tear down the
-                                // running round's bar, and the round's terminal
-                                // `HarnessState(Idle)` (or the driver's
-                                // post-dispatch reconcile) is what retires the
-                                // surface when the harness truly goes idle.
-                                if harness_clone.lock().await.loop_status.is_idle() {
-                                    ir_clone.store(false, Ordering::SeqCst);
-                                    *activity_clone.lock().await = None;
+                                    }).await;
+                                } else {
+                                    let message = TranscriptMessage::notice_from_core(&notice)
+                                        .with_sent_at_ms(now_ms!());
+                                    transcript!(E::Append { message });
                                 }
                             }
-                        }
-                        RoundEvent::CommandResult { name, args, result } => {
-                            *switching_session_clone.lock().await = None;
-                            // A typed slash-command result (ADR-0091): settle
-                            // the pending command component in place — one
-                            // row owns both the input and the output
-                            // (ADR-0108). Content-bearing like `Text` — same
-                            // idle-only activity-surface handling.
-                            *provider_retry_clone.lock().await = None;
-                            let invocation = if args.is_empty() {
-                                format!("/{}", name)
-                            } else {
-                                format!("/{} {}", name, args)
-                            };
-                            {
-                                let mut msgs = buf.write().await;
-                                // Prefer the newest *pending* row with this
-                                // invocation: two identical commands run in
-                                // quick succession each settle their own row
-                                // (FIFO), instead of the second reply
-                                // bouncing off the first's completed row.
-                                let settled = msgs
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|message| {
-                                        message.is_command_result()
-                                            && message.raw == invocation.trim()
-                                            && message.command_result_phase()
-                                                == Some(CommandPhase::Pending)
-                                    })
-                                    .map(|message| message.settle_command_result(result.clone()))
-                                    .unwrap_or(false);
-                                if !settled {
-                                    // No pending row matched (the transcript
-                                    // was rebuilt, or the command predates
-                                    // this view): the reply still renders as
-                                    // a complete command component.
-                                    let mut message = TranscriptMessage::command_result(
-                                        name.clone(),
-                                        args.clone(),
-                                        Some(result.clone()),
-                                    )
-                                    .with_sent_at_ms(crate::event_loop::now_epoch_ms());
-                                    if let Some((round, turn)) =
-                                        positions_by_session.get(&session_id).copied()
-                                    {
-                                        message.round = Some(round);
-                                        message.turn = Some(turn);
+                            RoundEvent::Text(t) => {
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                let (provider, model) = attribution!();
+                                let effort = picker_effort!();
+                                let mut message = TranscriptMessage::new(Role::Assistant, t)
+                                    .with_attribution(provider, model)
+                                    .with_effort(effort)
+                                    .with_sent_at_ms(now_ms!());
+                                if let Some((round, turn)) =
+                                    positions_by_session.get(&session_id).copied()
+                                {
+                                    message.round = Some(round);
+                                    message.turn = Some(turn);
+                                }
+                                transcript!(E::Append { message });
+                                if !routes_to_side && harness.loop_status.is_idle() {
+                                    mutations.send(M::SetResponding(false)).await;
+                                    mutations.send(M::SetPhase(None)).await;
+                                }
+                            }
+                            RoundEvent::CommandResult { name, args, result } => {
+                                mutations.send(M::ClearSwitchingSession).await;
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                let invocation = if args.is_empty() {
+                                    format!("/{}", name)
+                                } else {
+                                    format!("/{} {}", name, args)
+                                };
+                                let mut fallback = TranscriptMessage::command_result(
+                                    name.clone(),
+                                    args.clone(),
+                                    Some(result.clone()),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                if let Some((round, turn)) =
+                                    positions_by_session.get(&session_id).copied()
+                                {
+                                    fallback.round = Some(round);
+                                    fallback.turn = Some(turn);
+                                }
+                                transcript!(E::SettleCommandResult {
+                                    invocation,
+                                    result,
+                                    fallback: Some(fallback),
+                                });
+                                if !routes_to_side && harness.loop_status.is_idle() {
+                                    mutations.send(M::SetResponding(false)).await;
+                                    mutations.send(M::SetPhase(None)).await;
+                                }
+                            }
+                            RoundEvent::RetryResolved(_resolution) => {
+                                // ADR-0194: the retry loop recovered; ephemeral
+                                // state retires, no permanent notice row.
+                                transcript!(E::RetainNotRetry);
+                            }
+                            RoundEvent::Activity(status) => {
+                                // View-scoped chrome: record this session's own
+                                // phase regardless of focus. Stale in-flight
+                                // activity events must not revive the bar if the
+                                // harness is already idle (e.g. after interrupt).
+                                if !harness.loop_status.is_idle() {
+                                    let folded = Phase::classify(&status);
+                                    chrome!(event_loop::mutations::ChromeEdit::ActivityFolded(
+                                        folded.clone(),
+                                    ));
+                                    if !routes_to_side {
+                                        mutations.send(M::SetPhase(Some(folded))).await;
+                                        mutations.send(M::SetResponding(true)).await;
                                     }
-                                    msgs.push(message);
                                 }
                             }
-                            if !routes_to_side && harness_clone.lock().await.loop_status.is_idle() {
-                                ir_clone.store(false, Ordering::SeqCst);
-                                *activity_clone.lock().await = None;
-                            }
-                        }
-                        RoundEvent::RetryResolved(_resolution) => {
-                            // ADR-0194: The retry loop recovered from transient faults.
-                            // Ephemeral in-flight state is retired; never synthesize a
-                            // permanent transcript notice row for successful recovery.
-                            let mut msgs = buf.write().await;
-                            msgs.retain(|m| !m.is_provider_retry());
-                        }
-                        RoundEvent::Activity(status) => {
-                            // View-scoped chrome: record this session's own
-                            // phase regardless of which view is focused; only
-                            // the primary also drives the displayed global
-                            // activity state.
-                            //
-                            // Stale in-flight activity events must not revive the bar
-                            // if the session harness is already idle (e.g. after interrupt).
-                            if !harness_clone.lock().await.loop_status.is_idle() {
-                                let folded = Phase::classify(&status);
-                                chrome_updater.edit(|c| {
-                                    c.phase = Some(folded.clone());
-                                    c.responding = true;
+                            RoundEvent::TurnStarted { round, turn } => {
+                                let turn = turn as u64 + 1;
+                                positions_by_session.insert(session_id.clone(), (round, turn));
+                                transcript!(E::StampTurnPrompt { round });
+                                if !routes_to_side {
+                                    mutations.send(M::SetRoundCount(round)).await;
+                                    // 1-indexed for display: turn 0 is the first
+                                    // model request, shown as `turn 1`.
+                                    mutations.send(M::SetCurrentTurn(turn)).await;
+                                }
+                                chrome!(event_loop::mutations::ChromeEdit::TurnStarted {
+                                    round,
+                                    turn,
                                 });
                                 if !routes_to_side {
-                                    *activity_clone.lock().await = Some(folded);
-                                    ir_clone.store(true, Ordering::SeqCst);
+                                    mutations.send(M::SetPhase(Some(Phase::AwaitingModel))).await;
                                 }
                             }
-                        }
-                        RoundEvent::TurnStarted { round, turn } => {
-                            let turn = turn as u64 + 1;
-                            positions_by_session.insert(session_id.clone(), (round, turn));
-                            {
-                                // The composer cannot know the authoritative
-                                // round until admission. Stamp its latest
-                                // unpositioned driving prompt at this event.
-                                let mut msgs = buf.write().await;
-                                if let Some(prompt) = msgs.iter_mut().rev().find(|message| {
-                                    message.role == Role::User
-                                        && (message.origin == UserMessageOrigin::Chat
-                                            || message.origin == UserMessageOrigin::FollowUp)
-                                        && (message.round.is_none() || message.is_sending())
-                                }) {
-                                    prompt.round = Some(round);
-                                    prompt.settle_delivered();
+                            RoundEvent::StreamStart => {
+                                // A stream lifecycle event is not visible
+                                // transcript content; the first visible delta
+                                // lazily creates its own typed component. A
+                                // successful stream does retire any transient
+                                // provider-retry disclosure.
+                                transcript!(E::BeginStream);
+                                chrome!(event_loop::mutations::ChromeEdit::StreamStarted);
+                                if !routes_to_side {
+                                    mutations.send(M::SetResponding(true)).await;
+                                    mutations.send(M::SetPhase(Some(Phase::Answering))).await;
                                 }
                             }
-                            if !routes_to_side {
-                                *round_count_clone.lock().await = round;
-                                // 1-indexed for display: turn 0 is the first
-                                // model request, shown as `turn 1`.
-                                *current_turn_clone.lock().await = turn;
-                            }
-                            // View-scoped chrome: per-session structural
-                            // counters (Activity modal's `round N · turn M`).
-                            chrome_updater.edit(|c| {
-                                c.round_count = round;
-                                c.current_turn = turn;
-                                // A new model-request cycle is the strongest
-                                // fact about what is in flight — stronger than
-                                // any folded label. Stamp AwaitingModel even if
-                                // the `waiting for model` label never arrives.
-                                c.phase = Some(Phase::AwaitingModel);
-                            });
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::AwaitingModel);
-                            }
-                        }
-                        RoundEvent::StreamStart => {
-                            // A stream lifecycle event is not visible transcript content.
-                            // Do not create an empty assistant placeholder here: reasoning-
-                            // only streams (notably hidden-chain GPT models) may never emit
-                            // visible text, and a zero-height message would still create a
-                            // semantic layout boundary. The first visible delta lazily creates
-                            // its own typed component instead. A successful stream does retire
-                            // any transient provider-retry disclosure, independently of whether
-                            // the model's first payload is visible.
-                            {
-                                let mut msgs = buf.write().await;
-                                begin_stream(&mut msgs);
-                            }
-                            // View-scoped chrome: a stream means this session
-                            // is mid-round (elapsed timer origin).
-                            chrome_updater.edit(|c| {
-                                c.responding = true;
-                                if c.round_started_at.is_none() {
-                                    c.round_started_at = Some(std::time::Instant::now());
+                            RoundEvent::StreamDelta(delta) => {
+                                // Visible-text deltas outrank the reasoning phase.
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::Answering))).await;
                                 }
-                                // First byte proves the request left; upgrade
-                                // out of AwaitingModel unless a more specific
-                                // stream phase already won the slot.
-                                if !matches!(c.phase, Some(Phase::Reasoning | Phase::Answering)) {
-                                    c.phase = Some(Phase::Answering);
-                                }
-                            });
-                            if !routes_to_side {
-                                ir_clone.store(true, Ordering::SeqCst);
-                                *activity_clone.lock().await = Some(Phase::Answering);
-                            }
-                        }
-                        RoundEvent::StreamDelta(delta) => {
-                            // Visible-text deltas outrank the reasoning phase:
-                            // the model is writing the answer now.
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::Answering);
-                            }
-                            chrome_updater.edit(|c| c.phase = Some(Phase::Answering));
-                            let position = positions_by_session.get(&session_id).copied();
-                            let round = position.map(|(round, _)| round);
-                            let turn = position.map(|(_, turn)| turn);
-                            let mut msgs = buf.write_streaming().await;
-                            if let Some(id) =
-                                append_stream_text_delta(&mut msgs, round, turn, &delta)
-                            {
-                                msgs.invalidate_message_height(id);
-                                msgs.record_text_delta(id, delta);
-                            } else {
-                                // This is the first visible text in the ReAct turn.
-                                // Create the transcript item from real content,
-                                // never from a transport-level start signal — but
-                                // keep it on the streaming patch path (a targeted
-                                // append): the frozen history's heights are
-                                // untouched by a tail append.
-                                let (provider, model) =
-                                    event_loop::attribution(&cp_clone, &cm_clone).await;
-                                let effort = event_loop::picker_effort(
-                                    &provider_picker_clone,
-                                    &cp_clone,
-                                    &cm_clone,
-                                )
-                                .await;
-                                *provider_retry_clone.lock().await = None;
-                                let pre_append_tail = msgs.last().map(|tail| tail.id);
-                                let mut message = TranscriptMessage::new(Role::Assistant, delta)
-                                    .with_attribution(provider, model)
-                                    .with_effort(effort);
-                                if let Some((round, turn)) = position {
-                                    message.round = Some(round);
-                                    message.turn = Some(turn);
-                                }
-                                msgs.invalidate_message_height(message.id);
-                                msgs.record_append_message(pre_append_tail, message.clone());
-                                msgs.push(message);
-                            }
-                        }
-                        RoundEvent::StreamEnd(final_content) => {
-                            if !routes_to_side {
-                                ir_clone.store(true, Ordering::SeqCst);
-                                *activity_clone.lock().await = Some(Phase::Finalizing);
-                            }
-                            let position = positions_by_session.get(&session_id).copied();
-                            let round = position.map(|(round, _)| round);
-                            let turn = position.map(|(_, turn)| turn);
-                            *provider_retry_clone.lock().await = None;
-                            // Targeted finalize (no full snapshot): the final
-                            // text replaces the streaming entry in place and
-                            // evicts only that entry's cached height.
-                            let mut msgs = buf.write_streaming().await;
-                            // Identity-addressed (ADR-0114): a command entry
-                            // dispatched during the stream can sit between the
-                            // assistant-text entry and the transcript tail;
-                            // resolve by position, not by "is last".
-                            if let Some(message) = msgs.iter_mut().rfind(|message| {
-                                message.role == Role::Assistant
-                                    && matches!(&message.kind, MessageKind::Text)
-                                    && message.round == round
-                                    && message.turn == turn
-                            }) {
-                                message.raw = final_content;
-                                message.reparse();
-                                let finalized = message.clone();
-                                let id = message.id;
-                                msgs.invalidate_message_height(id);
-                                msgs.record_replace_message(id, finalized);
-                            } else if !final_content.is_empty() {
-                                // Defensive fallback for providers that deliver only a final
-                                // payload without any preceding text delta.
-                                let (provider, model) =
-                                    event_loop::attribution(&cp_clone, &cm_clone).await;
-                                let effort = event_loop::picker_effort(
-                                    &provider_picker_clone,
-                                    &cp_clone,
-                                    &cm_clone,
-                                )
-                                .await;
-                                let mut message =
-                                    TranscriptMessage::new(Role::Assistant, final_content)
+                                chrome!(event_loop::mutations::ChromeEdit::PhaseOnly(Some(
+                                    Phase::Answering,
+                                )));
+                                let position = positions_by_session.get(&session_id).copied();
+                                let round = position.map(|(round, _)| round);
+                                let turn = position.map(|(_, turn)| turn);
+                                let (provider, model) = attribution!();
+                                let effort = picker_effort!();
+                                let mut created =
+                                    TranscriptMessage::new(Role::Assistant, delta.clone())
                                         .with_attribution(provider, model)
                                         .with_effort(effort);
-                                if let Some((round, turn)) = position {
-                                    message.round = Some(round);
-                                    message.turn = Some(turn);
+                                if let Some((r, t)) = position {
+                                    created.round = Some(r);
+                                    created.turn = Some(t);
                                 }
-                                let pre_append_tail = msgs.last().map(|tail| tail.id);
-                                msgs.record_append_message(pre_append_tail, message.clone());
-                                msgs.push(message);
+                                transcript!(E::StreamTextDelta {
+                                    round,
+                                    turn,
+                                    delta,
+                                    created: Some(created),
+                                    clear_retry: false,
+                                });
                             }
-                        }
-                        RoundEvent::StreamDiscard => {
-                            let position = positions_by_session.get(&session_id).copied();
-                            let round = position.map(|(round, _)| round);
-                            let turn = position.map(|(_, turn)| turn);
-                            *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
-                            // With lazy stream-item creation, a hidden reasoning stream may
-                            // have no visible message to discard. Never pop an assistant item
-                            // from an earlier round merely because it happens to be last.
-                            if msgs.last().is_some_and(|message| {
-                                message.role == Role::Assistant
-                                    && message.round == round
-                                    && message.turn == turn
-                            }) {
-                                msgs.pop();
-                            }
-                        }
-                        RoundEvent::UnsentInput { .. } => {
-                            // Retraction is removed: transcript entries only grow and update in-place.
-                            // The prompt remains in the transcript and is marked Cancelled.
-                            *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
-                            if let Some(user_msg) =
-                                msgs.iter_mut().rev().find(|m| m.role == Role::User)
-                            {
-                                user_msg.cancel_prompt();
-                            }
-                            if !routes_to_side {
-                                ir_clone.store(false, Ordering::SeqCst);
-                                *activity_clone.lock().await = None;
-                            }
-                        }
-                        RoundEvent::StreamReasoningDelta(delta) => {
-                            // Phase fact before anything else: the reasoning
-                            // stream is alive. Hidden-chain models also land
-                            // here (their summary deltas still prove thinking).
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::Reasoning);
-                            }
-                            chrome_updater.edit(|c| c.phase = Some(Phase::Reasoning));
-                            // surface only a reasoning summary, never their full
-                            // chain. Disclosing even that summary as a
-                            // `MessageKind::Reasoning` message would leave a
-                            // phantom entry that layout counts (`is_reasoning()`)
-                            // and selection math still see. Gate at message
-                            // creation — the canonical point — so such models
-                            // never produce a thinking message at all. The raw
-                            // summary text is intentionally dropped: it is not a
-                            // disclosed chain, and persisting it would resurrect
-                            // the phantom on restore (see `transcript.rs`).
-                            let hidden_chain = {
-                                let model_id = cm_clone.lock().await.clone();
-                                // `model_by_id` (not `resolve`) so unrecognized
-                                // ids default to disclosed — `resolve` falls
-                                // back to `ReasoningSupport::None` (chain not
-                                // disclosed), which would drop reasoning deltas
-                                // for local/user-defined models that reason.
-                                // Only known `ReasoningSummary` models are gated.
-                                !muta_contracts::model_by_id(&model_id)
-                                    .map(|m| m.thinking.chain_disclosed())
-                                    .unwrap_or(true)
-                            };
-                            if hidden_chain {
-                                continue;
-                            }
-                            // Reasoning traces do not have a `HeightCache`
-                            // entry, so their high-frequency deltas can retain
-                            // the ordinary text-message entries unchanged.
-                            let mut msgs = buf.write_streaming().await;
-                            let position = positions_by_session.get(&session_id).copied();
-                            let round = position.map(|(round, _)| round);
-                            let turn = position.map(|(_, turn)| turn);
-                            // Identity-addressed append (ADR-0114): resolve the
-                            // streaming Thinking entry for *this* (round, turn)
-                            // by scanning backwards, not by "is last". A command
-                            // entry (`/delegate`, shell passthrough) or a local
-                            // notice can be appended between reasoning deltas —
-                            // under `last_mut()` addressing the next delta would
-                            // fork the trace into a second Thinking entry. The
-                            // scan stops at the last Thinking message of this
-                            // position; older positions cannot match.
-                            let changed = append_reasoning_delta(&mut msgs, round, turn, &delta);
-                            if changed.is_none() {
-                                // The first disclosed reasoning delta creates the visible
-                                // reasoning component directly. `StreamStart` intentionally
-                                // creates no transcript placeholder, so hidden-chain models
-                                // cannot leave phantom spacing behind. Targeted append —
-                                // the settled history's cached heights survive.
-                                let (provider, model) =
-                                    event_loop::attribution(&cp_clone, &cm_clone).await;
-                                let effort = event_loop::picker_effort(
-                                    &provider_picker_clone,
-                                    &cp_clone,
-                                    &cm_clone,
-                                )
-                                .await;
-                                let mut thinking = TranscriptMessage::reasoning(delta.clone())
+                            RoundEvent::StreamEnd(final_content) => {
+                                if !routes_to_side {
+                                    mutations.send(M::SetResponding(true)).await;
+                                    mutations.send(M::SetPhase(Some(Phase::Finalizing))).await;
+                                }
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                let position = positions_by_session.get(&session_id).copied();
+                                let round = position.map(|(round, _)| round);
+                                let turn = position.map(|(_, turn)| turn);
+                                // Identity-addressed (ADR-0114): the applier
+                                // resolves the streaming entry by position. The
+                                // fallback (providers that deliver only a final
+                                // payload) is built only for non-empty content.
+                                let created = if !final_content.is_empty() {
+                                    let (provider, model) = attribution!();
+                                    let effort = picker_effort!();
+                                    let mut message = TranscriptMessage::new(
+                                        Role::Assistant,
+                                        final_content.clone(),
+                                    )
                                     .with_attribution(provider, model)
                                     .with_effort(effort);
-                                if let Some((round, turn)) = position {
-                                    thinking.round = Some(round);
-                                    thinking.turn = Some(turn);
+                                    if let Some((r, t)) = position {
+                                        message.round = Some(r);
+                                        message.turn = Some(t);
+                                    }
+                                    Some(message)
+                                } else {
+                                    None
+                                };
+                                transcript!(E::StreamTextFinalize {
+                                    round,
+                                    turn,
+                                    content: final_content,
+                                    created,
+                                });
+                            }
+                            RoundEvent::StreamDiscard => {
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                let position = positions_by_session.get(&session_id).copied();
+                                transcript!(E::StreamDiscard {
+                                    round: position.map(|(round, _)| round),
+                                    turn: position.map(|(_, turn)| turn),
+                                });
+                            }
+                            RoundEvent::UnsentInput { .. } => {
+                                // Retraction is removed: entries only grow and
+                                // update in place; the prompt is marked Cancelled.
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                transcript!(E::CancelLastUserPrompt);
+                                if !routes_to_side {
+                                    mutations.send(M::SetResponding(false)).await;
+                                    mutations.send(M::SetPhase(None)).await;
                                 }
-                                // A reasoning trace's default disclosure honors the
-                                // `[tui.default_expanded] thinking` config (collapsed by
-                                // default). On completion the transition leaves it as-is
-                                // (no auto-collapse), so the user keeps what they were
-                                // reading.
-                                thinking.set_reasoning_expanded(
-                                    config::reasoning_default_expanded(&tui_config_clone),
-                                );
-                                let pre_append_tail = msgs.last().map(|tail| tail.id);
-                                msgs.record_append_message(pre_append_tail, thinking.clone());
-                                msgs.push(thinking);
+                            }
+                            RoundEvent::StreamReasoningDelta(delta) => {
+                                // Phase fact before anything else: the reasoning
+                                // stream is alive. Hidden-chain models also land
+                                // here (their summary deltas still prove thinking).
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::Reasoning))).await;
+                                }
+                                chrome!(event_loop::mutations::ChromeEdit::PhaseOnly(Some(
+                                    Phase::Reasoning,
+                                )));
+                                // Surface only a reasoning summary, never their
+                                // full chain: gate at message creation. Unrecognized
+                                // ids default to disclosed — only known
+                                // `ReasoningSummary` models are gated.
+                                let hidden_chain = !muta_contracts::model_by_id(&current_model)
+                                    .map(|m| m.thinking.chain_disclosed())
+                                    .unwrap_or(true);
+                                if hidden_chain {
+                                    continue;
+                                }
+                                let position = positions_by_session.get(&session_id).copied();
+                                let round = position.map(|(round, _)| round);
+                                let turn = position.map(|(_, turn)| turn);
+                                let (provider, model) = attribution!();
+                                let effort = picker_effort!();
+                                let mut created = TranscriptMessage::reasoning(delta.clone())
+                                    .with_attribution(provider, model)
+                                    .with_effort(effort);
+                                if let Some((r, t)) = position {
+                                    created.round = Some(r);
+                                    created.turn = Some(t);
+                                }
+                                // Disclosure default is applied by the applier
+                                // (`App::reasoning_default_expanded`).
+                                transcript!(E::ReasoningDelta {
+                                    round,
+                                    turn,
+                                    delta,
+                                    created: Some(created),
+                                });
                                 reasoning_start = Some(std::time::Instant::now());
                             }
-                            if let Some(id) = changed {
-                                msgs.record_reasoning_delta(id, delta);
+                            RoundEvent::StreamReasoningEnd(content) => {
+                                let duration_ms = reasoning_start
+                                    .take()
+                                    .map(|started| started.elapsed().as_millis() as u64);
+                                let position = positions_by_session.get(&session_id).copied();
+                                transcript!(E::ReasoningFinalize {
+                                    round: position.map(|(round, _)| round),
+                                    turn: position.map(|(_, turn)| turn),
+                                    content,
+                                    duration_ms,
+                                });
                             }
-                        }
-                        RoundEvent::StreamReasoningEnd(content) => {
-                            let duration_ms = reasoning_start
-                                .take()
-                                .map(|started| started.elapsed().as_millis() as u64);
-                            let position = positions_by_session.get(&session_id).copied();
-                            let round = position.map(|(round, _)| round);
-                            let turn = position.map(|(_, turn)| turn);
-                            // Targeted finalize (no full snapshot): a
-                            // streaming write resolves the trace by position
-                            // (ADR-0114), swaps in the finalized clone, and
-                            // drops only that message's height entry. A
-                            // finished trace gains a cached height (its
-                            // summary stops moving), which is exactly why
-                            // the entry must be evicted once.
-                            let mut msgs = buf.write_streaming().await;
-                            // The round closes with `AssistantEnd` *before* `ReasoningEnd`
-                            // (see golden_reasoning_precedes_text_in_the_same_turn), so by
-                            // the time this arrives the assistant's text message is usually
-                            // the literal last message. Resolve by position (ADR-0114) —
-                            // scanning backward for the most recent *streaming* Thinking
-                            // entry of this (round, turn) — so an entry appended after the
-                            // trace (command row, notice) cannot steal or orphan the
-                            // finalize, and the spinner never runs forever.
-                            let target = msgs.iter_mut().rfind(|message| {
-                                message.is_reasoning_streaming()
-                                    && message.round == round
-                                    && message.turn == turn
-                            });
-                            if let Some(last) = target {
-                                last.raw = content.clone();
-                                last.reparse();
-                                if let MessageKind::Reasoning {
-                                    content: current,
-                                    duration_ms: d,
-                                    ..
-                                } = &mut last.kind
-                                {
-                                    *current = content;
-                                    if d.is_none() {
-                                        *d = Some(duration_ms.unwrap_or(0));
-                                    }
+                            RoundEvent::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::Tool(
+                                        event_loop::tool_verb_for(&name),
+                                    )))).await;
                                 }
-                                let finalized = last.clone();
-                                let id = last.id;
-                                msgs.invalidate_message_height(id);
-                                msgs.record_replace_message(id, finalized);
+                                let (provider, model) = attribution!();
+                                let effort = picker_effort!();
+                                retry = None;
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                let position = positions_by_session.get(&session_id).copied();
+                                let sent_at_ms = now_ms!();
+                                let mut message = TranscriptMessage::tool_step(id, name, arguments)
+                                    .with_attribution(provider, model)
+                                    .with_effort(effort)
+                                    .with_sent_at_ms(sent_at_ms);
+                                if let Some((round, turn)) = position {
+                                    message = message.with_round(round).with_turn(turn);
+                                }
+                                transcript!(E::ToolStart { message });
+                                if !routes_to_side {
+                                    mutations.send(M::SetResponding(true)).await;
+                                }
                             }
-                        }
-                        RoundEvent::ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        } => {
-                            if !routes_to_side {
-                                *activity_clone.lock().await =
-                                    Some(Phase::Tool(event_loop::tool_verb_for(&name)));
-                            }
-                            let (provider, model) =
-                                event_loop::attribution(&cp_clone, &cm_clone).await;
-                            let effort = event_loop::picker_effort(
-                                &provider_picker_clone,
-                                &cp_clone,
-                                &cm_clone,
-                            )
-                            .await;
-                            // Stamp the current ReAct turn so this step
-                            // joins its compact sibling tool batch;
-                            // `TurnStarted` has already populated the session
-                            // position map.
-                            let position = positions_by_session.get(&session_id).copied();
-                            let sent_at_ms = event_loop::now_epoch_ms();
-                            *provider_retry_clone.lock().await = None;
-                            // Targeted append (no full snapshot): a new
-                            // running tool step has no height-cache entry and
-                            // cannot disturb any settled message's height,
-                            // so the streaming patch path carries it and the
-                            // frozen history keeps its cached heights.
-                            let mut msgs = buf.write_streaming().await;
-                            let pre_append_tail = msgs.last().map(|tail| tail.id);
-                            // A tool step starts collapsed: there's no result to show
-                            // yet. The lifecycle-aware default (see `step_interaction`)
-                            // expands it on completion — Ok follows per-tool density,
-                            // Failed/Denied force-expand to surface the error.
-                            let mut message = TranscriptMessage::tool_step(id, name, arguments)
-                                .with_attribution(provider, model)
-                                .with_effort(effort)
-                                .with_sent_at_ms(sent_at_ms);
-                            if let Some((round, turn)) = position {
-                                message = message.with_round(round).with_turn(turn);
-                            }
-                            msgs.record_append_message(pre_append_tail, message.clone());
-                            msgs.push(message);
-                            if !routes_to_side {
-                                ir_clone.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        RoundEvent::ToolResult {
-                            id,
-                            name,
-                            output,
-                            structured,
-                            duration_ms,
-                        } => {
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::Reasoning);
-                            }
-                            let (provider, model) =
-                                event_loop::attribution(&cp_clone, &cm_clone).await;
-                            let density = tool_density_clone.load(Ordering::SeqCst);
-                            // Targeted finalize (no full snapshot): finishing
-                            // a running step swaps in the finished clone and
-                            // evicts exactly that message's height entry (a
-                            // finished step gains a cached height, and the
-                            // lifecycle default may expand it — both reasons
-                            // the old entry, if any, is stale).
-                            let mut msgs = buf.write_streaming().await;
-                            let mut finished = false;
-                            let mut finalized_step: Option<(u64, TranscriptMessage)> = None;
-                            for existing in msgs.iter_mut() {
-                                if existing.finish_tool_step(
+                            RoundEvent::ToolResult {
+                                id,
+                                name,
+                                output,
+                                structured,
+                                duration_ms,
+                            } => {
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::Reasoning))).await;
+                                }
+                                let (provider, model) = attribution!();
+                                let position = positions_by_session.get(&session_id).copied();
+                                // The fallback (no matching in-flight call, e.g. a
+                                // turn restored from history) is fully finished by
+                                // the translator; the applier applies the
+                                // lifecycle-aware default disclosure.
+                                let mut fallback =
+                                    TranscriptMessage::tool_step(id.clone(), name.clone(), "{}")
+                                        .with_attribution(provider, model);
+                                if let Some((round, turn)) = position {
+                                    fallback.round = Some(round);
+                                    fallback.turn = Some(turn);
+                                }
+                                fallback.finish_tool_step(
                                     &id,
                                     output.clone(),
                                     structured.clone(),
                                     duration_ms,
-                                ) {
-                                    // Apply the lifecycle-aware default disclosure: Ok
-                                    // follows per-tool density, Failed/Denied force-
-                                    // expand to surface the error. Respects any user
-                                    // pin via the system setter.
-                                    if let Some(status) = existing.tool_step_status() {
-                                        let default = step_interaction::default_tool_expanded(
-                                            status,
-                                            &name,
-                                            &tui_config_clone,
-                                            density,
-                                        );
-                                        existing.set_tool_step_expanded(default);
-                                    }
-                                    finished = true;
-                                    finalized_step = Some((existing.id, existing.clone()));
-                                    break;
-                                }
-                            }
-                            if !finished {
-                                // No matching in-flight call (e.g. turn restored from
-                                // history): synthesize a finished step with its default
-                                // disclosure applied directly.
-                                let effort = event_loop::picker_effort(
-                                    &provider_picker_clone,
-                                    &cp_clone,
-                                    &cm_clone,
-                                )
-                                .await;
-                                let mut message =
-                                    TranscriptMessage::tool_step(id.clone(), name.clone(), "{}")
-                                        .with_attribution(provider, model)
-                                        .with_effort(effort);
-                                if let Some((round, turn)) =
-                                    positions_by_session.get(&session_id).copied()
-                                {
-                                    message.round = Some(round);
-                                    message.turn = Some(turn);
-                                }
-                                message.finish_tool_step(&id, output, structured, duration_ms);
-                                if let Some(status) = message.tool_step_status() {
-                                    let default = step_interaction::default_tool_expanded(
-                                        status,
-                                        &name,
-                                        &tui_config_clone,
-                                        density,
-                                    );
-                                    message.set_tool_step_expanded(default);
-                                }
-                                let pre_append_tail = msgs.last().map(|tail| tail.id);
-                                msgs.record_append_message(pre_append_tail, message.clone());
-                                msgs.push(message);
-                            }
-                            if let Some((id, message)) = finalized_step {
-                                msgs.invalidate_message_height(id);
-                                msgs.record_replace_message(id, message);
-                            }
-                        }
-                        RoundEvent::ToolCancelled { id, .. } => {
-                            // Convergence: an in-flight call was aborted by an
-                            // interrupt. Flip its step (and any nested runner
-                            // children) to Cancelled so it never stays "running".
-                            let mut msgs = buf.write().await;
-                            let mut cancelled = false;
-                            for message in msgs.iter_mut() {
-                                if message.cancel_tool_step(&id) {
-                                    // Cancelled reads as inert → collapse (respecting
-                                    // any user pin via the system setter).
-                                    message.set_tool_step_expanded(false);
-                                    cancelled = true;
-                                    break;
-                                }
-                            }
-                            if !cancelled {
-                                // The ToolCall event may have been dropped with the
-                                // aborted turn; synthesize a minimal cancelled step so
-                                // the user still sees the call was abandoned.
-                                let mut message =
-                                    TranscriptMessage::tool_step(id.clone(), "tool", "{}");
-                                if let Some((round, turn)) =
-                                    positions_by_session.get(&session_id).copied()
-                                {
-                                    message.round = Some(round);
-                                    message.turn = Some(turn);
-                                }
-                                message.cancel_tool_step(&id);
-                                message.set_tool_step_expanded(false);
-                                msgs.push(message);
-                            }
-                        }
-                        RoundEvent::ToolStream { id, stream } => {
-                            // Live partial output from a running tool (e.g. bash
-                            // stdout). Accumulate into the running step so it updates
-                            // in place instead of freezing on a spinner.
-                            // Running tool steps are not height-cached, so do not
-                            // evict the cached plain-text history for every stdout
-                            // line.
-                            let mut msgs = buf.write_streaming().await;
-                            let applied = msgs
-                                .iter_mut()
-                                .any(|message| message.push_tool_stream(&id, &stream));
-                            if applied {
-                                msgs.record_tool_stream(id, stream);
-                            } else {
-                                // Unknown id: drop silently — the matching ToolCall may
-                                // have been dropped with an aborted turn.
-                            }
-                        }
-                        RoundEvent::EnvoyCompat {
-                            parent_call_id,
-                            event,
-                        } => {
-                            // Full-duplex (ADR-0029): an runner's permission broker
-                            // or `ask_user` request bubbles up nested under this
-                            // `parent_call_id`. Surface it in the SAME modal the
-                            // top-level path uses (so the user answers it inline) and
-                            // record the parent so the reply gets tagged for
-                            // down-routing into the child. Falls through to the nested
-                            // transcript rendering below for the ordinary
-                            // stream/tool-call events.
-                            match &event {
-                                muta_contracts::RunnerEvent::PermissionRequest(req) => {
-                                    subtask_permission_parent_clone
-                                        .lock()
-                                        .await
-                                        .insert(req.id.clone(), parent_call_id.clone());
-                                    pending_permission_clone.lock().await.push_back(req.clone());
-                                    if !routes_to_side {
-                                        *activity_clone.lock().await = Some(Phase::AwaitingUser);
-                                        ir_clone.store(true, Ordering::SeqCst);
-                                    }
-                                }
-                                muta_contracts::RunnerEvent::UserQuestionRequest(req) => {
-                                    subtask_question_parent_clone
-                                        .lock()
-                                        .await
-                                        .insert(req.id.clone(), parent_call_id.clone());
-                                    pending_question_clone.lock().await.push_back(req.clone());
-                                    if !routes_to_side {
-                                        *activity_clone.lock().await = Some(Phase::AwaitingUser);
-                                        ir_clone.store(true, Ordering::SeqCst);
-                                    }
-                                }
-                                _ => {}
-                            }
-                            // Nested assistant and reasoning deltas mutate a
-                            // child of the enclosing tool step. Like top-level
-                            // tool streams, they have no standalone
-                            // height-cache entry.
-                            let mut msgs = if matches!(
-                                &event,
-                                muta_contracts::RunnerEvent::StreamDelta(_)
-                                    | muta_contracts::RunnerEvent::StreamReasoningDelta(_)
-                            ) {
-                                buf.write_streaming().await
-                            } else {
-                                buf.write().await
-                            };
-                            let applied = msgs
-                                .iter_mut()
-                                .find(|m| m.is_tool_step() && matches!(&m.kind, crate::model::document::MessageKind::ToolStep { id, .. } if id == &parent_call_id))
-                                .is_some_and(|message| message.push_runner_event(&event));
-                            if applied
-                                && matches!(
-                                    &event,
-                                    muta_contracts::RunnerEvent::StreamDelta(_)
-                                        | muta_contracts::RunnerEvent::StreamReasoningDelta(_)
-                                )
-                            {
-                                msgs.record_runner_event(parent_call_id, event);
-                            }
-                        }
-                        RoundEvent::PermissionRequest(request) => {
-                            // A single model response can carry several write tool
-                            // calls, each emitting its own request before blocking on
-                            // its reply. Queue them FIFO so none is lost; the UI shows
-                            // one sheet at a time and hands off as each is resolved.
-                            // Stays global regardless of session so the modal always
-                            // surfaces (ADR-0017: the side runs delegated, so in
-                            // practice only the primary ever reaches here).
-                            pending_permission_clone.lock().await.push_back(request);
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
-                                ir_clone.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        RoundEvent::UserQuestionRequest(request) => {
-                            pending_question_clone.lock().await.push_back(request);
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
-                                ir_clone.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        RoundEvent::StdinRequest(request) => {
-                            pending_input_clone.lock().await.push_back(request);
-                            if !routes_to_side {
-                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
-                                ir_clone.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        RoundEvent::Compacted {
-                            archived_messages,
-                            window_tokens_before,
-                            window_tokens_after,
-                        } => {
-                            let mut msgs = buf.write().await;
-                            push_local_notice(
-                                &mut msgs,
-                                NoticeSeverity::Info,
-                                format!(
-                                    "Compacted {} messages: {} -> {} tokens.",
-                                    archived_messages, window_tokens_before, window_tokens_after
-                                ),
-                            );
-                        }
-                        RoundEvent::HarnessState(snapshot) => {
-                            let running = !snapshot.loop_status.is_idle();
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::HarnessState {
-                                    session_id: session_id.clone(),
-                                    idle: !running,
-                                },
-                            );
-                            // View-scoped chrome: the authoritative
-                            // running/idle transition for this session —
-                            // start the timer on running, retire the
-                            // activity surface on idle. Recorded for every
-                            // session (asides included) so a background
-                            // aside's finish is visible the moment its view
-                            // is (re)focused. `can_retry` mirrors the
-                            // session's durable `/retry` resume point
-                            // (ADR-0128): offered exactly while a stopped
-                            // round is parked, never for one that completed.
-                            {
-                                let round_counter = snapshot.round_counter;
-                                let retry_pending = snapshot.retry_pending;
-                                chrome_updater.edit(|c| {
-                                    c.round_count = round_counter;
-                                    c.responding = running;
-                                    c.can_retry = retry_pending && !running;
-                                    if running {
-                                        c.current_turn = 0;
-                                        if c.round_started_at.is_none() {
-                                            c.round_started_at = Some(std::time::Instant::now());
-                                        }
-                                        // Round start before any wire phase fact:
-                                        // hold the generic slot; the first phase
-                                        // event overwrites it within the tick.
-                                        if c.phase.is_none() {
-                                            c.phase = Some(Phase::Preparing);
-                                        }
-                                    } else {
-                                        c.phase = None;
-                                        c.current_turn = 0;
-                                        c.round_started_at = None;
-                                    }
+                                );
+                                transcript!(E::ToolResult {
+                                    id,
+                                    name,
+                                    output,
+                                    structured,
+                                    duration_ms,
+                                    fallback: Some(fallback),
                                 });
                             }
-                            if !routes_to_side {
-                                let round_counter = snapshot.round_counter;
-                                if !running && needs_round_rebase {
-                                    rebase_transcript_rounds(
-                                        &mut messages_clone.write().await,
-                                        round_counter,
-                                    );
-                                    needs_round_rebase = false;
+                            RoundEvent::ToolCancelled { id, .. } => {
+                                // An in-flight call was aborted: flip it (and any
+                                // nested runner children) to Cancelled.
+                                let position = positions_by_session.get(&session_id).copied();
+                                let mut fallback =
+                                    TranscriptMessage::tool_step(id.clone(), "tool", "{}");
+                                if let Some((round, turn)) = position {
+                                    fallback.round = Some(round);
+                                    fallback.turn = Some(turn);
                                 }
-                                *round_count_clone.lock().await = round_counter;
-                                *harness_clone.lock().await = snapshot;
-                                // ADR-0175: Trust gate moved out of the
-                                // `pending_question` queue and into the
-                                // PreAttach interstitial. Publish the
-                                // freshly-arrived snapshot to the
-                                // `pre_attach_signal` cell whenever it
-                                // demands a first-contact trust decision
-                                // (aggregate == Quarantined) and the
-                                // per-run latch has not already cleared
-                                // the gate. The per-frame sync consumes
-                                // the signal, mounts PreAttach before
-                                // chat, and drains the cell. Choosing to
-                                // stop nagging within one run is still
-                                // owned by `trust_gate_dismissed` so the
-                                // periodic republish cannot re-mount.
-                                //
-                                // Snapshot transitions `Quarantined →
-                                // Trusted` (after the user picked "Trust
-                                // all" and the daemon republished) are
-                                // observed by the per-frame sync, which
-                                // is the one place that clears
-                                // `App::pre_attach`.
-                                {
-                                    let security =
-                                        harness_clone.lock().await.workspace_security.clone();
-                                    let gate_needed = !trust_gate_dismissed_clone
-                                        .load(Ordering::SeqCst)
-                                        && crate::trust_gate::gate_request(&security).is_some();
-                                    if gate_needed {
-                                        let mut slot = pre_attach_signal_clone.lock().await;
-                                        // Only overwrite when the snapshot
-                                        // differs from the currently-pending
-                                        // signal so a no-op republish does
-                                        // not reset the loop's drain cursor.
-                                        let replace = match &*slot {
-                                            None => true,
-                                            Some(prev) => prev.snapshot != security,
-                                        };
-                                        if replace {
-                                            *slot =
-                                                Some(crate::PreAttachSignal { snapshot: security });
+                                fallback.cancel_tool_step(&id);
+                                fallback.set_tool_step_expanded(false);
+                                transcript!(E::ToolCancel {
+                                    id,
+                                    fallback: Some(fallback)
+                                });
+                            }
+                            RoundEvent::ToolStream { id, stream } => {
+                                transcript!(E::ToolStream { id, stream });
+                            }
+                            RoundEvent::EnvoyCompat {
+                                parent_call_id,
+                                event,
+                            } => {
+                                // Full-duplex (ADR-0029): a runner's permission
+                                // broker or `ask_user` request bubbles up nested
+                                // under this `parent_call_id`; the reply is tagged
+                                // for down-routing into the child.
+                                match &event {
+                                    muta_contracts::RunnerEvent::PermissionRequest(req) => {
+                                        mutations.send(M::QueuePermission {
+                                            request: req.clone(),
+                                            parent_call_id: Some(parent_call_id.clone()),
+                                        }).await;
+                                        if !routes_to_side {
+                                            mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                            mutations.send(M::SetResponding(true)).await;
                                         }
                                     }
-                                }
-                                if running {
-                                    // A new round resets the turn counter; it stays 0
-                                    // until the first `TurnStarted` of the round lands.
-                                    *current_turn_clone.lock().await = 0;
-                                    // Stamp the round timer so the activity bar can render a
-                                    // live `<elapsed>` segment.
-                                    *round_started_at_clone.lock().await =
-                                        Some(std::time::Instant::now());
-                                }
-                                ir_clone.store(running, Ordering::SeqCst);
-                                if !running {
-                                    // The dispatch cycle is complete: any
-                                    // command component still Pending will
-                                    // never receive its reply on this pass
-                                    // (modal/picker/side-view commands emit
-                                    // no `RoundEvent::CommandResult`). Mark
-                                    // it Cancelled so the row stops promising
-                                    // an output (ADR-0108) — the invocation
-                                    // stays readable, and the ledger still
-                                    // holds the authoritative record.
-                                    for message in messages_clone.write().await.iter_mut() {
-                                        message.cancel_pending_command();
+                                    muta_contracts::RunnerEvent::UserQuestionRequest(req) => {
+                                        mutations.send(M::QueueQuestion {
+                                            request: req.clone(),
+                                            parent_call_id: Some(parent_call_id.clone()),
+                                        }).await;
+                                        if !routes_to_side {
+                                            mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                            mutations.send(M::SetResponding(true)).await;
+                                        }
                                     }
-                                    // Round end clears the master phase; the bar
-                                    // hides on the next frame. The transport
-                                    // channel (`provider_retry`) is retired by
-                                    // its own events, not here.
-                                    *activity_clone.lock().await = None;
-                                    *current_turn_clone.lock().await = 0;
-                                    *round_started_at_clone.lock().await = None;
+                                    _ => {}
+                                }
+                                transcript!(E::RunnerEvent {
+                                    parent_call_id,
+                                    event,
+                                });
+                            }
+                            RoundEvent::PermissionRequest(request) => {
+                                // Stays global regardless of session so the modal
+                                // always surfaces (ADR-0017).
+                                mutations.send(M::QueuePermission {
+                                    request,
+                                    parent_call_id: None,
+                                }).await;
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                    mutations.send(M::SetResponding(true)).await;
                                 }
                             }
-                            // A harness state change is always a round boundary
-                            // (idle at the end of a round, "running"/"loop N/M" at the
-                            // start of a new one). If the previous round ended mid-
-                            // reasoning — e.g. the user interrupted, the provider
-                            // errored, or a fresh turn superseded a still-streaming
-                            // one — `StreamReasoningEnd` never arrives, so the
-                            // in-flight Thinking message keeps `duration_ms: None`.
-                            // That is exactly the state the renderer uses to decide
-                            // the reasoning marker is "running" and should keep
-                            // breathing its spinner, which would flash forever after
-                            // an interrupt. Freeze any such orphaned trace by
-                            // stamping its elapsed time (or 0 if the start instant
-                            // was already consumed) so the spinner stops.
-                            let duration_ms = reasoning_start
-                                .take()
-                                .map(|started| started.elapsed().as_millis() as u64);
-                            if !running {
-                                *provider_retry_clone.lock().await = None;
+                            RoundEvent::UserQuestionRequest(request) => {
+                                mutations.send(M::QueueQuestion {
+                                    request,
+                                    parent_call_id: None,
+                                }).await;
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                    mutations.send(M::SetResponding(true)).await;
+                                }
                             }
-                            let mut msgs = buf.write().await;
-                            finalize_streaming_reasoning(&mut msgs, duration_ms);
-                        }
-                        RoundEvent::TodosUpdated(_) => {}
-                        RoundEvent::UnattendedChanged(enabled) => {
-                            if !routes_to_side {
-                                harness_clone.lock().await.unattended = enabled;
+                            RoundEvent::StdinRequest(request) => {
+                                mutations.send(M::QueueInput(request)).await;
+                                if !routes_to_side {
+                                    mutations.send(M::SetPhase(Some(Phase::AwaitingUser))).await;
+                                    mutations.send(M::SetResponding(true)).await;
+                                }
                             }
-                        }
-                        RoundEvent::ConfinementChanged(confined) => {
-                            if !routes_to_side {
-                                harness_clone.lock().await.confined = confined;
+                            RoundEvent::Compacted {
+                                archived_messages,
+                                window_tokens_before,
+                                window_tokens_after,
+                            } => {
+                                let message = TranscriptMessage::notice(
+                                    NoticeSeverity::Info,
+                                    format!(
+                                        "Compacted {} messages: {} -> {} tokens.",
+                                        archived_messages,
+                                        window_tokens_before,
+                                        window_tokens_after
+                                    ),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                transcript!(E::Append { message });
                             }
-                        }
-                        RoundEvent::RetryScheduled {
-                            attempt,
-                            max_attempts,
-                            delay_ms,
-                            message,
-                        } => {
-                            let delay = std::time::Duration::from_millis(delay_ms);
-                            let retry_at = std::time::Instant::now() + delay;
-                            *provider_retry_clone.lock().await = Some(ProviderRetryState {
+                            RoundEvent::HarnessState(snapshot) => {
+                                let running = !snapshot.loop_status.is_idle();
+                                // View-scoped chrome: the authoritative
+                                // running/idle transition for this session.
+                                chrome!(event_loop::mutations::ChromeEdit::RoundLifecycle {
+                                    round_count: snapshot.round_counter,
+                                    running,
+                                    can_retry: snapshot.retry_pending && !running,
+                                });
+                                if !routes_to_side {
+                                    // ADR-0175: publish a quarantined snapshot to
+                                    // the PreAttach mount when the per-run gate
+                                    // has not already answered. The applier
+                                    // deduplicates (it mounts only when the
+                                    // interstitial is absent).
+                                    {
+                                        harness.workspace_security =
+                                            snapshot.workspace_security.clone();
+                                        let gate_needed = !trust_gate_dismissed_clone
+                                            .load(Ordering::SeqCst)
+                                            && crate::trust_gate::gate_request(
+                                                &harness.workspace_security,
+                                            )
+                                            .is_some();
+                                        if gate_needed {
+                                            mutations.send(M::PreAttach(crate::PreAttachSignal {
+                                                snapshot: harness.workspace_security.clone(),
+                                            })).await;
+                                        }
+                                    }
+                                    if running {
+                                        // A new round resets the turn counter and
+                                        // stamps the elapsed-timer origin.
+                                        mutations.send(M::SetCurrentTurn(0)).await;
+                                        mutations.send(M::SetRoundStartedAt(Some(
+                                            std::time::Instant::now(),
+                                        ))).await;
+                                    }
+                                    mutations.send(M::SetResponding(running)).await;
+                                    if !running {
+                                        // The dispatch cycle is complete: any
+                                        // command component still Pending will
+                                        // never receive its reply on this pass
+                                        // (ADR-0108) — mark Cancelled.
+                                        mutations.send(M::Transcript {
+                                            buffer: event_loop::mutations::Buffer::Primary,
+                                            edit: E::CancelPendingCommands,
+                                        }).await;
+                                        mutations.send(M::SetPhase(None)).await;
+                                        mutations.send(M::SetCurrentTurn(0)).await;
+                                        mutations.send(M::SetRoundStartedAt(None)).await;
+                                    }
+                                    if !running && needs_round_rebase {
+                                        // A session switch replaced the transcript
+                                        // before its authoritative idle snapshot
+                                        // arrived: rebase the reconstructed tail
+                                        // exactly once, now that the persisted
+                                        // round counter is known.
+                                        mutations.send(M::Transcript {
+                                            buffer: event_loop::mutations::Buffer::Primary,
+                                            edit: E::RebaseRounds {
+                                                round_counter: snapshot.round_counter,
+                                            },
+                                        }).await;
+                                        needs_round_rebase = false;
+                                    }
+                                    mutations.send(M::Harness(snapshot.clone())).await;
+                                }
+                                // A harness state change is always a round
+                                // boundary. If the previous round ended
+                                // mid-reasoning, `StreamReasoningEnd` never
+                                // arrives; freeze the orphaned trace so the
+                                // spinner stops.
+                                let duration_ms = reasoning_start
+                                    .take()
+                                    .map(|started| started.elapsed().as_millis() as u64);
+                                if !running {
+                                    retry = None;
+                                    mutations.send(M::SetProviderRetry(None)).await;
+                                }
+                                transcript!(E::FinalizeOrphanedReasoning { duration_ms });
+                            }
+                            RoundEvent::TodosUpdated(_) => {}
+                            RoundEvent::UnattendedChanged(enabled) => {
+                                if !routes_to_side {
+                                    harness.unattended = enabled;
+                                    mutations.send(M::HarnessUnattended(enabled)).await;
+                                }
+                            }
+                            RoundEvent::ConfinementChanged(confined) => {
+                                if !routes_to_side {
+                                    harness.confined = confined;
+                                    mutations.send(M::HarnessConfined(confined)).await;
+                                }
+                            }
+                            RoundEvent::RetryScheduled {
                                 attempt,
                                 max_attempts,
-                                retry_at,
-                                failure: message.clone(),
-                            });
-                            if !routes_to_side {
-                                // Transport setback, not a workflow phase: the
-                                // master label stays on what is actually being
-                                // retried (the model request); the countdown
-                                // rides the dedicated clause channel
-                                // (`provider_retry`).
-                                *activity_clone.lock().await = Some(Phase::AwaitingModel);
-                                ir_clone.store(true, Ordering::SeqCst);
-                            }
-                            {
-                                let mut msgs = buf.write().await;
-                                if let Some(last) =
-                                    msgs.last_mut().filter(|m| m.is_provider_retry())
+                                delay_ms,
+                                message,
+                            } => {
+                                let delay = std::time::Duration::from_millis(delay_ms);
+                                let retry_at = std::time::Instant::now() + delay;
+                                let state = crate::app::ProviderRetryState {
+                                    attempt,
+                                    max_attempts,
+                                    retry_at,
+                                    failure: message.clone(),
+                                };
+                                retry = Some(state.clone());
+                                mutations.send(M::SetProviderRetry(Some(state))).await;
+                                if !routes_to_side {
+                                    // Transport setback, not a workflow phase: the
+                                    // countdown rides the dedicated clause channel.
+                                    mutations.send(M::SetPhase(Some(Phase::AwaitingModel))).await;
+                                    mutations.send(M::SetResponding(true)).await;
+                                }
+                                let mut fallback = TranscriptMessage::provider_retry(
+                                    attempt,
+                                    max_attempts,
+                                    retry_at,
+                                    message,
+                                );
+                                if let Some((round, turn)) =
+                                    positions_by_session.get(&session_id).copied()
                                 {
-                                    last.update_provider_retry(
-                                        attempt,
-                                        max_attempts,
-                                        retry_at,
-                                        message,
-                                    );
-                                } else {
-                                    let mut msg = TranscriptMessage::provider_retry(
-                                        attempt,
-                                        max_attempts,
-                                        retry_at,
-                                        message,
-                                    );
-                                    if let Some((round, turn)) =
-                                        positions_by_session.get(&session_id).copied()
-                                    {
-                                        msg.round = Some(round);
-                                        msg.turn = Some(turn);
-                                    }
-                                    msg = msg.with_sent_at_ms(event_loop::now_epoch_ms());
-                                    msgs.push(msg);
+                                    fallback.round = Some(round);
+                                    fallback.turn = Some(turn);
                                 }
-                            }
-                        }
-                        RoundEvent::Error(e) => {
-                            let last_retry = provider_retry_clone.lock().await.take();
-                            let mut msgs = buf.write().await;
-                            msgs.retain(|m| !m.is_provider_retry());
-                            // A terminal round error may still carry the raw
-                            // retryable-envelope encoding (e.g. a 429 that
-                            // exhausted its retry budget): strip it so the
-                            // user sees the message, never the wire framing.
-                            let raw_msg = e;
-                            let message = if let Some(retry) = last_retry
-                                && retry.attempt > 1
-                            {
-                                if raw_msg.starts_with("Failed after")
-                                    || raw_msg.starts_with("Exhausted")
-                                {
-                                    raw_msg
-                                } else {
-                                    format!(
-                                        "Exhausted {} retry attempts — {}",
-                                        retry.attempt, raw_msg
-                                    )
-                                }
-                            } else {
-                                raw_msg
-                            };
-                            push_local_notice(&mut msgs, NoticeSeverity::Error, message);
-                            if !routes_to_side {
-                                ir_clone.store(false, Ordering::SeqCst);
-                                *activity_clone.lock().await = None;
-                            }
-                            chrome_updater.edit(|c| {
-                                c.phase = None;
-                                c.responding = false;
-                                c.current_turn = 0;
-                                c.round_started_at = None;
-                            });
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::HarnessState {
-                                    session_id: session_id.clone(),
-                                    idle: true,
-                                },
-                            );
-                        }
-                        RoundEvent::BackgroundJobStarted(info) => {
-                            let mut msgs = buf.write().await;
-                            let label = match &info.spec {
-                                muta_contracts::JobSpec::Process { command, label, .. } => {
-                                    label.as_deref().unwrap_or(command)
-                                }
-                                muta_contracts::JobSpec::Timer { label, prompt, .. } => {
-                                    label.as_deref().unwrap_or_else(|| prompt.as_str())
-                                }
-                            };
-                            let msg = format!("Background job started: {label} ({})", info.id.0);
-                            push_local_notice(&mut msgs, NoticeSeverity::Info, msg);
-                        }
-                        RoundEvent::BackgroundJobProgress { .. } => {}
-                        RoundEvent::BackgroundJobReady { job_id } => {
-                            // ADR-0190: a service task reported readiness.
-                            let mut msgs = buf.write().await;
-                            push_local_notice(
-                                &mut msgs,
-                                NoticeSeverity::Info,
-                                format!("Background service ready: {}", job_id.0),
-                            );
-                        }
-                        RoundEvent::BackgroundJobCompleted(outcome) => {
-                            let mut msgs = buf.write().await;
-                            let (label, is_success) = match &outcome.state {
-                                muta_contracts::JobState::Succeeded { duration_ms, .. } => (
-                                    format!(
-                                        "Background job `{}` completed ({}s)",
-                                        outcome.job_id.0,
-                                        duration_ms / 1000
-                                    ),
-                                    true,
-                                ),
-                                muta_contracts::JobState::Failed {
-                                    duration_ms,
-                                    exit_code,
-                                    ..
-                                } => (
-                                    format!(
-                                        "Background job `{}` failed (exit {exit_code}, {}s)",
-                                        outcome.job_id.0,
-                                        duration_ms / 1000
-                                    ),
-                                    false,
-                                ),
-                                muta_contracts::JobState::Killed { duration_ms } => (
-                                    format!(
-                                        "Background job `{}` terminated ({}s)",
-                                        outcome.job_id.0,
-                                        duration_ms / 1000
-                                    ),
-                                    false,
-                                ),
-                                muta_contracts::JobState::TimedOut { duration_ms } => (
-                                    format!(
-                                        "Background job `{}` timed out ({}s)",
-                                        outcome.job_id.0,
-                                        duration_ms / 1000
-                                    ),
-                                    false,
-                                ),
-                                _ => (
-                                    format!("Background job `{}` completed", outcome.job_id.0),
-                                    true,
-                                ),
-                            };
-                            let severity = if is_success {
-                                NoticeSeverity::Info
-                            } else {
-                                NoticeSeverity::Warning
-                            };
-                            push_local_notice(&mut msgs, severity, label);
-                        }
-                    } // end inner `match event`
-                }
-                AgentResponse::ParentStatus(status) => {
-                    // ADR-0017: primary-session status for the `/btw` side
-                    // banner. Mirrored into `App::parent_status` each frame.
-                    *parent_status_clone.lock().await = status;
-                }
-                AgentResponse::SideViewOpened {
-                    side_id,
-                    messages,
-                    commands,
-                    round_interrupts,
-                    ..
-                } => {
-                    // ADR-0017 + ADR-0103 §6: enter the aside view. Record the
-                    // routing key so subsequent per-turn events stream into the
-                    // side buffer, then back-fill that buffer from the event's
-                    // transcript payload (the aside's full persisted history,
-                    // inherited parent context included) so the viewed pixels
-                    // match the model's actual context window — instead of the
-                    // old behaviour of seeding an empty buffer.
-                    listener_side_ids.insert(side_id.clone());
-                    let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
-                    rebuilt =
-                        merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
-                    rebuilt = merge_round_interrupt_rows(
-                        rebuilt,
-                        transcript_interrupts_from_records(round_interrupts),
-                    );
-                    *side_messages_clone.write().await = rebuilt;
-                    *side_view_signal_clone.lock().await =
-                        Some(event_loop::SideViewSignal::Opened { side_id });
-                }
-                AgentResponse::SideViewClosed => {
-                    // ADR-0103: leave the aside view. The routing keys are
-                    // NOT dropped — the asides keep running in the background
-                    // and their events must keep streaming into the side
-                    // buffer — only the view flips. Which ids stay is
-                    // governed by `BtwList`: the next list refresh prunes ids
-                    // whose asides closed (pristine discard / explicit close).
-                    *side_view_signal_clone.lock().await = Some(event_loop::SideViewSignal::Closed);
-                }
-                AgentResponse::BtwList(rows) => {
-                    // ADR-0103 §5: the asides list. Mirrored into the loop's
-                    // `App::btw_list` each frame. The list is also the
-                    // routing-truth source: ids absent from it no longer have
-                    // a live aside, so their events stop routing to the side
-                    // buffer.
-                    listener_side_ids.retain(|id| rows.iter().any(|row| &row.id == id));
-                    for row in rows.iter() {
-                        listener_side_ids.insert(row.id.clone());
-                    }
-                    *btw_list_clone.lock().await = rows;
-                }
-                AgentResponse::PermissionsCleared => {
-                    pending_permission_clone.lock().await.clear();
-                    *activity_clone.lock().await = None;
-                }
-                AgentResponse::ProviderKeys(status) => {
-                    *key_status_clone.lock().await = status.into_iter().collect();
-                }
-                AgentResponse::ProviderPicker(snapshot) => {
-                    *provider_picker_clone.lock().await = snapshot;
-                }
-                AgentResponse::ConversationCleared { session_id } => {
-                    messages_clone.write().await.clear();
-                    *round_count_clone.lock().await = 0;
-                    needs_round_rebase = false;
-                    context_tokens_clone.lock().await.clear();
-                    // `/new` minted a fresh session and switched to it. The
-                    // same contract as `ConversationReplaced` below: track the
-                    // post-switch id so session-scoped client state follows.
-                    *live_session_id_clone.lock().await = session_id.clone();
-                    *token_report_clone.lock().await = None;
-                    *session_tree_clone.lock().await = None;
-                }
-                AgentResponse::ConversationReplaced {
-                    session_id,
-                    messages,
-                    commands,
-                    round_interrupts,
-                    retry_resolutions,
-                } => {
-                    *switching_session_clone.lock().await = None;
-                    let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
-                    rebuilt =
-                        merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
-                    rebuilt = merge_round_interrupt_rows(
-                        rebuilt,
-                        transcript_interrupts_from_records(round_interrupts),
-                    );
-                    rebuilt = merge_round_interrupt_rows(
-                        rebuilt,
-                        transcript_retry_resolutions_from_records(retry_resolutions),
-                    );
-                    *messages_clone.write().await = rebuilt;
-                    needs_round_rebase = true;
-                    // The model-window revision changed; do not reuse an API
-                    // anchor from the previous session/projection.
-                    context_tokens_clone.lock().await.clear();
-                    // Attached mode: the viewed primary session just switched
-                    // (`/session open|new|fork`). Track the new id so
-                    // session-scoped client state (the ↑/↓ prompt history
-                    // origin, `TokenUsageReport` routing) follows, and drop
-                    // the previous session's cached report.
-                    *live_session_id_clone.lock().await = session_id.clone();
-                    *token_report_clone.lock().await = None;
-                    *session_tree_clone.lock().await = None;
-                }
-                AgentResponse::SessionsOverview(sessions) => {
-                    *sessions_overview_clone.lock().await = sessions;
-                    // Bump the revision so the loop's per-iteration mirror can
-                    // skip the deep clone when the overview is unchanged.
-                    sessions_overview_rev_clone.fetch_add(1, std::sync::atomic::Ordering::Release);
-                }
-                AgentResponse::OpenSessionsPanel => {
-                    open_sessions_clone.store(true, Ordering::SeqCst);
-                }
-                AgentResponse::SessionTreeSnapshot { session_id, tree } => {
-                    // A tree query is session-scoped. Reject a response that
-                    // raced a primary-session switch; the switch arms its own
-                    // refresh when the Tree view is next shown.
-                    let live = live_session_id_clone.lock().await.clone();
-                    if live == session_id {
-                        *session_tree_clone.lock().await = Some(tree);
-                    }
-                }
-                AgentResponse::OpenTreePanel => {
-                    open_tree_clone.store(true, Ordering::SeqCst);
-                }
-                AgentResponse::OpenHostPanel => {
-                    open_host_clone.store(true, Ordering::SeqCst);
-                }
-                AgentResponse::SessionDetail(detail) => {
-                    *session_detail_clone.lock().await = Some(detail);
-                }
-                AgentResponse::ConnectionDetail(detail) => {
-                    *connection_detail_clone.lock().await = Some(detail);
-                }
-                AgentResponse::TokenUsageReport { session_id, report } => {
-                    // Install the daemon-side report only when it still
-                    // belongs to the session the frontend is viewing — a
-                    // reply that raced a session switch would otherwise
-                    // populate the modal with the previous session's rows.
-                    let viewed = viewed_session_id_clone.lock().await.clone();
-                    if viewed.as_deref() == Some(session_id.as_str()) {
-                        *token_report_clone.lock().await = Some(report);
-                    }
-                }
-                AgentResponse::UsageStatsReport { report } => {
-                    // Session-independent by design (ADR-0122): no
-                    // viewed-session guard, the durable store aggregates
-                    // across every session.
-                    *usage_stats_clone.lock().await = Some(report);
-                }
-                AgentResponse::ComposerCompletions {
-                    request_id,
-                    text,
-                    cursor,
-                    items,
-                } => {
-                    *completion_signal_clone.lock().await = Some(event_loop::CompletionSignal {
-                        request_id,
-                        input: text,
-                        cursor,
-                        items,
-                    });
-                }
-                AgentResponse::SessionContext(snapshot) => {
-                    *session_context_clone.lock().await = Some(snapshot);
-                }
-                AgentResponse::Exit => {
-                    should_quit_clone.store(true, Ordering::SeqCst);
-                }
-                AgentResponse::ProviderSwitched { provider, model } => {
-                    // A provider/model switch refreshes the hint bar (the
-                    // long-lived "still in effect" indicator) but is NOT
-                    // appended to the transcript as an inline notice: the
-                    // acknowledgment is a command ack (ADR-0088), surfaced as a
-                    // transient toast the harness emits alongside this event
-                    // for genuine user-initiated switches. Attach/startup
-                    // synthetic replays of this event only re-hydrate the hint
-                    // bar — no toast, no transcript row.
-                    *cp_clone.lock().await = provider;
-                    *cm_clone.lock().await = model;
-                }
-                AgentResponse::ConnectStatus(status) => {
-                    let mut msgs = messages_clone.write().await;
-                    match status {
-                        muta_contracts::ConnectStatus::Pending {
-                            url,
-                            user_code,
-                            message,
-                            ..
-                        } => {
-                            if !url.is_empty() {
-                                let url_for_open = url.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    if let Err(err) = crate::browser::open_browser(&url_for_open) {
-                                        tracing::warn!("Failed to open browser: {err}");
-                                    }
+                                let fallback = fallback.with_sent_at_ms(now_ms!());
+                                transcript!(E::UpsertRetry {
+                                    attempt,
+                                    max_attempts,
+                                    retry_at,
+                                    failure: fallback.raw.clone(),
+                                    fallback,
                                 });
                             }
-                            *oauth_add_signal_clone.lock().await =
-                                Some(event_loop::OauthAddSignal::Pending {
+                            RoundEvent::Error(e) => {
+                                let last_retry = retry.take();
+                                mutations.send(M::SetProviderRetry(None)).await;
+                                transcript!(E::RetainNotRetry);
+                                // A terminal round error may still carry the raw
+                                // retryable-envelope encoding: strip it so the
+                                // user sees the message, never the wire framing.
+                                let message = if let Some(retry_state) = last_retry
+                                    && retry_state.attempt > 1
+                                {
+                                    if e.starts_with("Failed after") || e.starts_with("Exhausted") {
+                                        e
+                                    } else {
+                                        format!(
+                                            "Exhausted {} retry attempts — {}",
+                                            retry_state.attempt, e
+                                        )
+                                    }
+                                } else {
+                                    e
+                                };
+                                let notice =
+                                    TranscriptMessage::notice(NoticeSeverity::Error, message)
+                                        .with_sent_at_ms(now_ms!());
+                                transcript!(E::Append { message: notice });
+                                if !routes_to_side {
+                                    mutations.send(M::SetResponding(false)).await;
+                                    mutations.send(M::SetPhase(None)).await;
+                                }
+                                chrome!(event_loop::mutations::ChromeEdit::RoundEnded);
+                            }
+                            RoundEvent::BackgroundJobStarted(info) => {
+                                let label = match &info.spec {
+                                    muta_contracts::JobSpec::Process { command, label, .. } => {
+                                        label.as_deref().unwrap_or(command)
+                                    }
+                                    muta_contracts::JobSpec::Timer { label, prompt, .. } => {
+                                        label.as_deref().unwrap_or_else(|| prompt.as_str())
+                                    }
+                                };
+                                let message = TranscriptMessage::notice(
+                                    NoticeSeverity::Info,
+                                    format!("Background job started: {label} ({})", info.id.0),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                transcript!(E::Append { message });
+                            }
+                            RoundEvent::BackgroundJobProgress { .. } => {}
+                            RoundEvent::BackgroundJobReady { job_id } => {
+                                // ADR-0190: a service task reported readiness.
+                                let message = TranscriptMessage::notice(
+                                    NoticeSeverity::Info,
+                                    format!("Background service ready: {}", job_id.0),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                transcript!(E::Append { message });
+                            }
+                            RoundEvent::BackgroundJobCompleted(outcome) => {
+                                let (label, is_success) = match &outcome.state {
+                                    muta_contracts::JobState::Succeeded { duration_ms, .. } => (
+                                        format!(
+                                            "Background job `{}` completed ({}s)",
+                                            outcome.job_id.0,
+                                            duration_ms / 1000
+                                        ),
+                                        true,
+                                    ),
+                                    muta_contracts::JobState::Failed {
+                                        duration_ms,
+                                        exit_code,
+                                        ..
+                                    } => (
+                                        format!(
+                                            "Background job `{}` failed (exit {exit_code}, {}s)",
+                                            outcome.job_id.0,
+                                            duration_ms / 1000
+                                        ),
+                                        false,
+                                    ),
+                                    muta_contracts::JobState::Killed { duration_ms } => (
+                                        format!(
+                                            "Background job `{}` terminated ({}s)",
+                                            outcome.job_id.0,
+                                            duration_ms / 1000
+                                        ),
+                                        false,
+                                    ),
+                                    muta_contracts::JobState::TimedOut { duration_ms } => (
+                                        format!(
+                                            "Background job `{}` timed out ({}s)",
+                                            outcome.job_id.0,
+                                            duration_ms / 1000
+                                        ),
+                                        false,
+                                    ),
+                                    _ => (
+                                        format!("Background job `{}` completed", outcome.job_id.0),
+                                        true,
+                                    ),
+                                };
+                                let severity = if is_success {
+                                    NoticeSeverity::Info
+                                } else {
+                                    NoticeSeverity::Warning
+                                };
+                                let message = TranscriptMessage::notice(severity, label)
+                                    .with_sent_at_ms(now_ms!());
+                                transcript!(E::Append { message });
+                            }
+                        } // end inner `match event`
+                    }
+                    AgentResponse::ParentStatus(status) => {
+                        // ADR-0017: primary-session status for the `/btw` side banner.
+                        mutations.send(M::ParentStatus(status)).await;
+                    }
+                    AgentResponse::SideViewOpened {
+                        side_id,
+                        messages,
+                        commands,
+                        round_interrupts,
+                        ..
+                    } => {
+                        // ADR-0017 + ADR-0103 §6: enter the aside view; back-fill
+                        // the side buffer from the event's transcript payload.
+                        listener_side_ids.insert(side_id.clone());
+                        let mut rebuilt =
+                            transcript_messages_from_core(messages, &tui_config_clone);
+                        rebuilt =
+                            merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
+                        rebuilt = merge_round_interrupt_rows(
+                            rebuilt,
+                            transcript_interrupts_from_records(round_interrupts),
+                        );
+                        mutations.send(M::Transcript {
+                            buffer: event_loop::mutations::Buffer::Side,
+                            edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
+                                messages: rebuilt,
+                            },
+                        }).await;
+                        mutations.send(M::SideView(event_loop::SideViewSignal::Opened { side_id })).await;
+                    }
+                    AgentResponse::SideViewClosed => {
+                        // ADR-0103: leave the aside view. The routing keys are
+                        // NOT dropped — background asides keep streaming; only
+                        // the view flips.
+                        mutations.send(M::SideView(event_loop::SideViewSignal::Closed)).await;
+                    }
+                    AgentResponse::BtwList(rows) => {
+                        // ADR-0103 §5: the asides list is also the routing-truth
+                        // source: ids absent from it stop routing to the side buffer.
+                        listener_side_ids.retain(|id| rows.iter().any(|row| &row.id == id));
+                        for row in rows.iter() {
+                            listener_side_ids.insert(row.id.clone());
+                        }
+                        mutations.send(M::BtwList(rows)).await;
+                    }
+                    AgentResponse::InputHistory(rows) => {
+                        mutations.send(M::InputHistory(rows)).await;
+                    }
+                    AgentResponse::RouteSettings {
+                        provider_id,
+                        model,
+                        overrides,
+                    } => {
+                        mutations.send(M::RouteSettings {
+                            provider_id,
+                            model,
+                            overrides,
+                        }).await;
+                    }
+                    AgentResponse::PermissionsCleared => {
+                        mutations.send(M::ClearPermissions).await;
+                        mutations.send(M::SetPhase(None)).await;
+                    }
+                    AgentResponse::ProviderKeys(status) => {
+                        mutations.send(M::KeyStatus(status.into_iter().collect())).await;
+                    }
+                    AgentResponse::ProviderPicker(snapshot) => {
+                        picker = snapshot.clone();
+                        mutations.send(M::ProviderPicker(snapshot)).await;
+                    }
+                    AgentResponse::ConversationCleared { session_id } => {
+                        mutations.send(M::Transcript {
+                            buffer: event_loop::mutations::Buffer::Primary,
+                            edit: event_loop::mutations::TranscriptEdit::Clear,
+                        }).await;
+                        mutations.send(M::SetRoundCount(0)).await;
+                        needs_round_rebase = false;
+                        mutations.send(M::ClearContextTokens).await;
+                        // `/new` minted a fresh session and switched to it: track
+                        // the post-switch id so session-scoped client state follows.
+                        mutations.send(M::LiveSession(session_id.clone())).await;
+                        live_session = session_id.clone();
+                        mutations.send(M::TokenReport(None)).await;
+                        mutations.send(M::SessionTree(muta_contracts::SessionTree::default())).await;
+                    }
+                    AgentResponse::ConversationReplaced {
+                        session_id,
+                        messages,
+                        commands,
+                        round_interrupts,
+                        retry_resolutions,
+                    } => {
+                        mutations.send(M::ClearSwitchingSession).await;
+                        let mut rebuilt =
+                            transcript_messages_from_core(messages, &tui_config_clone);
+                        rebuilt =
+                            merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
+                        rebuilt = merge_round_interrupt_rows(
+                            rebuilt,
+                            transcript_interrupts_from_records(round_interrupts),
+                        );
+                        rebuilt = merge_round_interrupt_rows(
+                            rebuilt,
+                            transcript_retry_resolutions_from_records(retry_resolutions),
+                        );
+                        mutations.send(M::Transcript {
+                            buffer: event_loop::mutations::Buffer::Primary,
+                            edit: event_loop::mutations::TranscriptEdit::ReplaceAll {
+                                messages: rebuilt,
+                            },
+                        }).await;
+                        needs_round_rebase = true;
+                        // The model-window revision changed; do not reuse an API
+                        // anchor from the previous session/projection.
+                        mutations.send(M::ClearContextTokens).await;
+                        // Track the new id so session-scoped client state follows,
+                        // and drop the previous session's cached report.
+                        mutations.send(M::LiveSession(session_id.clone())).await;
+                        live_session = session_id;
+                        mutations.send(M::TokenReport(None)).await;
+                        mutations.send(M::SessionTree(muta_contracts::SessionTree::default())).await;
+                    }
+                    AgentResponse::SessionsOverview(sessions) => {
+                        mutations.send(M::SessionsOverview(sessions)).await;
+                    }
+                    AgentResponse::OpenSessionsPanel => {
+                        mutations.send(M::OpenSessionsPanel).await;
+                    }
+                    AgentResponse::SessionTreeSnapshot { session_id, tree } => {
+                        // A tree query is session-scoped: reject a reply that
+                        // raced a primary-session switch.
+                        if live_session == session_id {
+                            mutations.send(M::SessionTree(tree)).await;
+                        }
+                    }
+                    AgentResponse::OpenTreePanel => {
+                        mutations.send(M::OpenTreePanel).await;
+                    }
+                    AgentResponse::OpenHostPanel => {
+                        mutations.send(M::OpenHostPanel).await;
+                    }
+                    AgentResponse::SessionDetail(detail) => {
+                        mutations.send(M::SessionDetail(detail)).await;
+                    }
+                    AgentResponse::ConnectionDetail(detail) => {
+                        mutations.send(M::ConnectionDetail(detail)).await;
+                    }
+                    AgentResponse::TokenUsageReport { session_id, report } => {
+                        // Install the report only when it still belongs to the
+                        // session the frontend is viewing — a reply that raced a
+                        // session switch would populate the modal with the
+                        // previous session's rows.
+                        let viewed = viewed_session_id_clone.lock().await.clone();
+                        if viewed.as_deref() == Some(session_id.as_str()) {
+                            mutations.send(M::TokenReport(Some(report))).await;
+                        }
+                    }
+                    AgentResponse::UsageStatsReport { report } => {
+                        // Session-independent by design (ADR-0122).
+                        mutations.send(M::UsageStats(report)).await;
+                    }
+                    AgentResponse::ComposerCompletions {
+                        request_id,
+                        text,
+                        cursor,
+                        items,
+                    } => {
+                        mutations.send(M::CompletionSignal(
+                            event_loop::mutations::CompletionSignal {
+                                request_id,
+                                input: text,
+                                cursor,
+                                items,
+                            },
+                        )).await;
+                    }
+                    AgentResponse::SessionContext(snapshot) => {
+                        mutations.send(M::SessionContext(snapshot)).await;
+                    }
+                    AgentResponse::Exit => {
+                        mutations.send(M::Quit).await;
+                    }
+                    AgentResponse::ProviderSwitched { provider, model } => {
+                        // Refreshes the hint bar; NOT appended to the transcript
+                        // (the acknowledgment is a command ack, ADR-0088).
+                        current_provider = provider.clone();
+                        current_model = model.clone();
+                        mutations.send(M::ProviderSwitched { provider, model }).await;
+                    }
+                    AgentResponse::ConnectStatus(status) => {
+                        match status {
+                            muta_contracts::ConnectStatus::Pending {
+                                url,
+                                user_code,
+                                message,
+                                ..
+                            } => {
+                                if !url.is_empty() {
+                                    let url_for_open = url.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        if let Err(err) =
+                                            crate::browser::open_browser(&url_for_open)
+                                        {
+                                            tracing::warn!("Failed to open browser: {err}");
+                                        }
+                                    });
+                                }
+                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Pending {
                                     url: url.clone(),
                                     user_code: user_code.clone(),
                                     message: message.clone(),
-                                });
-                            // The add-flow surfaces the URL/code in the
-                            // OauthPending modal, so suppress the transcript
-                            // notice there to avoid duplicating the link. Only
-                            // the reconnect flow (no modal) gets the notice.
-                            let in_add_flow = awaiting_oauth_add_clone.load(Ordering::SeqCst);
-                            if !in_add_flow {
-                                let body = if user_code.is_empty() {
-                                    format!(
-                                        "{message}\n  Open: {url}\n  Waiting for authorization…"
-                                    )
-                                } else {
-                                    format!(
-                                        "{message}\n  Open: {url}\n  Code: {user_code}\n  Waiting for authorization…"
-                                    )
-                                };
-                                push_local_notice(&mut msgs, NoticeSeverity::Info, body);
+                                })).await;
+                                // The add-flow surfaces the URL/code in the
+                                // OauthPending modal, so suppress the transcript
+                                // notice there. Only the reconnect flow gets it.
+                                let in_add_flow = awaiting_oauth_add_clone.load(Ordering::SeqCst);
+                                if !in_add_flow {
+                                    let body = if user_code.is_empty() {
+                                        format!(
+                                            "{message}\n  Open: {url}\n  Waiting for authorization…"
+                                        )
+                                    } else {
+                                        format!(
+                                            "{message}\n  Open: {url}\n  Code: {user_code}\n  Waiting for authorization…"
+                                        )
+                                    };
+                                    let notice =
+                                        TranscriptMessage::notice(NoticeSeverity::Info, body)
+                                            .with_sent_at_ms(now_ms!());
+                                    mutations.send(M::Transcript {
+                                        buffer: event_loop::mutations::Buffer::Primary,
+                                        edit: event_loop::mutations::TranscriptEdit::Append {
+                                            message: notice,
+                                        },
+                                    }).await;
+                                }
                             }
-                        }
-                        muta_contracts::ConnectStatus::Done { provider } => {
-                            *oauth_add_signal_clone.lock().await =
-                                Some(event_loop::OauthAddSignal::Done);
-                            push_local_notice(
-                                &mut msgs,
-                                NoticeSeverity::Info,
-                                format!("{provider} authorized."),
-                            );
-                        }
-                        muta_contracts::ConnectStatus::DiscoveryWarning { provider, message } => {
-                            // Login succeeded but live model discovery failed, so
-                            // the model list may still be the seed subset. Tell
-                            // the user why rather than letting a stale list read
-                            // as "the account only has these models".
-                            push_local_notice(
-                                &mut msgs,
+                            muta_contracts::ConnectStatus::Done { provider } => {
+                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Done)).await;
+                                let notice = TranscriptMessage::notice(
+                                    NoticeSeverity::Info,
+                                    format!("{provider} authorized."),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                mutations.send(M::Transcript {
+                                    buffer: event_loop::mutations::Buffer::Primary,
+                                    edit: event_loop::mutations::TranscriptEdit::Append {
+                                        message: notice,
+                                    },
+                                }).await;
+                            }
+                            muta_contracts::ConnectStatus::DiscoveryWarning {
+                                provider,
+                                message,
+                            } => {
+                                let notice = TranscriptMessage::notice(
                                 NoticeSeverity::Warning,
                                 format!(
                                     "{provider}: could not refresh the model list ({message}). Showing the previous list."
                                 ),
-                            );
-                        }
-                        muta_contracts::ConnectStatus::Failed { provider, message } => {
-                            *oauth_add_signal_clone.lock().await =
-                                Some(event_loop::OauthAddSignal::Failed {
+                            )
+                            .with_sent_at_ms(now_ms!());
+                                mutations.send(M::Transcript {
+                                    buffer: event_loop::mutations::Buffer::Primary,
+                                    edit: event_loop::mutations::TranscriptEdit::Append {
+                                        message: notice,
+                                    },
+                                }).await;
+                            }
+                            muta_contracts::ConnectStatus::Failed { provider, message } => {
+                                mutations.send(M::Oauth(crate::app::OauthAddSignal::Failed {
                                     message: message.clone(),
-                                });
-                            push_local_notice(
-                                &mut msgs,
-                                NoticeSeverity::Error,
-                                format!("{provider} connect failed: {message}"),
-                            );
+                                })).await;
+                                let notice = TranscriptMessage::notice(
+                                    NoticeSeverity::Error,
+                                    format!("{provider} connect failed: {message}"),
+                                )
+                                .with_sent_at_ms(now_ms!());
+                                mutations.send(M::Transcript {
+                                    buffer: event_loop::mutations::Buffer::Primary,
+                                    edit: event_loop::mutations::TranscriptEdit::Append {
+                                        message: notice,
+                                    },
+                                }).await;
+                            }
                         }
                     }
-                }
-                AgentResponse::Error(msg) => {
-                    *switching_session_clone.lock().await = None;
-                    let mut msgs = messages_clone.write().await;
-                    push_local_notice(&mut msgs, NoticeSeverity::Error, msg);
-                }
-                AgentResponse::TuiLayoutUpdated(_value) => {
-                    // Persisted transcript layout confirmed by the harness.
-                    // The apply path already set `app.transcript_layout`
-                    // optimistically (via `Strategy::from_config`, the same
-                    // interpreter the harness-side value round-trips through),
-                    // so no re-seed is needed on success. A save failure is
-                    // surfaced separately as `AgentResponse::Error`. Kept as
-                    // an explicit arm (rather than a `_ =>` catch-all) so a
-                    // future normalization step can hook in here.
-                }
-                AgentResponse::TuiColorSchemeUpdated { .. } => {
-                    // Appearance changes are applied optimistically in the TUI
-                    // so every frame switches at once. Save failures arrive as
-                    // `AgentResponse::Error`; this success response is kept
-                    // explicit for protocol exhaustiveness.
-                }
-                AgentResponse::WebSearchConfigSnapshot(snapshot) => {
-                    *websearch_config_clone.lock().await = Some(snapshot);
-                }
-                AgentResponse::WebSearchConfigUpdated(snapshot) => {
-                    // Authoritative post-update ack: the pane re-renders from
-                    // persisted state, discarding any optimistic local edit.
-                    *websearch_config_clone.lock().await = Some(snapshot);
-                }
-                AgentResponse::CopyToClipboard { text } => {
-                    let _ = crate::clipboard::copy(&text).await;
+                    AgentResponse::Error(msg) => {
+                        mutations.send(M::ClearSwitchingSession).await;
+                        let notice = TranscriptMessage::notice(NoticeSeverity::Error, msg)
+                            .with_sent_at_ms(now_ms!());
+                        mutations.send(M::Transcript {
+                            buffer: event_loop::mutations::Buffer::Primary,
+                            edit: event_loop::mutations::TranscriptEdit::Append { message: notice },
+                        }).await;
+                    }
+                    AgentResponse::TuiLayoutUpdated(_value) => {
+                        // The apply path already set `app.transcript_layout`
+                        // optimistically; a save failure surfaces as `Error`.
+                    }
+                    AgentResponse::TuiColorSchemeUpdated { .. } => {
+                        // Applied optimistically; save failures arrive as `Error`.
+                    }
+                    AgentResponse::WebSearchConfigSnapshot(snapshot) => {
+                        mutations.send(M::WebSearchConfig(Some(snapshot))).await;
+                    }
+                    AgentResponse::WebSearchConfigUpdated(snapshot) => {
+                        // Authoritative post-update ack: re-render from persisted
+                        // state, discarding any optimistic local edit.
+                        mutations.send(M::WebSearchConfig(Some(snapshot))).await;
+                    }
+                    AgentResponse::CopyToClipboard { text } => {
+                        let _ = crate::clipboard::copy(&text).await;
+                    }
                 }
             }
-        }
-    });
-
-    let messages_for_loop = messages.clone();
+        });
+    }
 
     let mut app = App {
         panels: crate::surfaces::PanelRegistry::new(),
@@ -2288,12 +1690,8 @@ pub async fn run_tui(
         command_palette_scroll: 0,
         recent_commands: Vec::new(),
         input: String::new(),
-        messages: Vec::new(),
-        messages_version: 0,
-        stream_cursor: None,
+        messages: restored,
         side_messages: Vec::new(),
-        side_messages_version: 0,
-        side_stream_cursor: None,
         layout_height_cache: Default::default(),
         in_side_view: false,
         side_session_id: None,
@@ -2329,6 +1727,24 @@ pub async fn run_tui(
         focus_stack: Vec::new(),
         tx: tx.clone(),
         should_quit,
+        live_session_id: live_session_init.clone(),
+        pending_permissions: std::collections::VecDeque::new(),
+        pending_questions: std::collections::VecDeque::new(),
+        pending_inputs: std::collections::VecDeque::new(),
+        runner_permission_parent: HashMap::new(),
+        runner_question_parent: HashMap::new(),
+        workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
+        context_tokens_by_session: HashMap::new(),
+        open_sessions_signal: false,
+        open_tree_signal: false,
+        open_host_signal: matches!(startup_overlay, StartupOverlay::Dashboard),
+        view_transitioned: false,
+        transcript_changed_pending: false,
+        side_transcript_changed_pending: false,
+        tool_density: false,
+        reasoning_default_expanded: crate::config::reasoning_default_expanded(&tui_config),
+        backend_completion_signal: None,
+        tui_config: (*tui_config).clone(),
         suggestion_index: None,
         completion_dismissed: false,
         command_catalog,
@@ -2380,6 +1796,8 @@ pub async fn run_tui(
         harness_retry_pending: false,
         phase: None,
         provider_retry: None,
+        persistence_health: None,
+        link_down: false,
         unattended: false,
         confined: true,
         round_count: 0,
@@ -2456,8 +1874,6 @@ pub async fn run_tui(
         pending_dispatch: std::collections::VecDeque::new(),
         composer_send_mode: crate::app::ComposerSendMode::default(),
         queue_blocked_sessions: std::collections::HashSet::new(),
-        naturally_completed_sessions: std::collections::HashSet::new(),
-        idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
@@ -2543,65 +1959,26 @@ pub async fn run_tui(
         app.panels.open(crate::surfaces::PanelId::Sessions);
     }
     if matches!(startup_overlay, StartupOverlay::Settings { .. }) {
-        let _ = tx.send(AgentRequest::QueryWebSearchConfig);
+        app.send_intent(AgentRequest::QueryWebSearchConfig);
     }
+    // Hydrate the prompt history from the daemon (the SSOT for the shared
+    // SQLite store — the TUI never opens the database itself, ADR-0197).
+    app.send_intent(AgentRequest::QueryInputHistory);
 
     // Run app
     let res = event_loop::run_app_loop(
         &mut terminal,
         &mut app,
         event_loop::UiRuntime {
-            current_provider,
-            current_model,
-            context_tokens,
-            harness,
-            phase,
-            provider_retry,
-            pending_permission,
-            pending_question,
-            pending_input,
-            pre_attach_signal,
-            is_responding,
-            trust_gate_dismissed,
             dirty,
             dirty_notify,
-            completion_signal,
-            runner_permission_parent,
-            runner_question_parent,
-            messages: messages_for_loop,
-            side_messages,
-            parent_status,
-            side_view_signal,
-            btw_list,
-            session_chrome,
-            host_console_signal,
-            viewed_session_id,
-            live_session_id,
-            key_status,
-            provider_picker,
-            sessions_overview,
-            sessions_overview_rev,
-            switching_session,
-            session_detail,
-            connection_detail,
-            session_tree,
-            token_report,
-            usage_stats,
-            websearch_config,
-            open_sessions,
-            open_tree,
-            host_sessions,
-            host_sessions_rev,
-            open_host,
-            oauth_add_signal,
+            is_responding,
             awaiting_oauth_add,
-            session_context,
-            round_count,
-            current_turn,
-            round_started_at,
-            notice_toast_signal,
-            outbox_signals,
+            trust_gate_dismissed,
+            viewed_session_id,
+            mutations,
         },
+        mutation_rx,
         session,
     )
     .await;
@@ -2636,17 +2013,10 @@ pub async fn start_tui(
     run_tui(tx, rx, config).await
 }
 
-fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contracts::AgentNotice) {
-    let _surface = notice.surface;
-    messages.push(
-        TranscriptMessage::notice_from_core(notice).with_sent_at_ms(event_loop::now_epoch_ms()),
-    );
-}
-
 /// Apply the visible transcript effect of a stream-start signal. Retires any
 /// transient provider-retry notice entry when streaming commences, and settles
 /// any in-flight sending prompt to delivered.
-fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
+pub(crate) fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
     messages.retain(|m| !m.is_provider_retry());
     if let Some(m) = messages
         .iter_mut()
@@ -2670,7 +2040,7 @@ fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
 /// notices can be appended between reasoning deltas — under `last_mut()`
 /// addressing the next delta would fork the trace into a second Thinking
 /// entry (the "two Thinking blocks" bug).
-fn append_reasoning_delta(
+pub(crate) fn append_reasoning_delta(
     messages: &mut [TranscriptMessage],
     round: Option<u64>,
     turn: Option<u64>,
@@ -2695,7 +2065,7 @@ fn append_reasoning_delta(
 /// by scanning backwards for the entry matching `(round, turn)`, **not** by
 /// "is the last message". Command entries and local notices appended between
 /// text deltas must not fork the stream into a second entry.
-fn append_stream_text_delta(
+pub(crate) fn append_stream_text_delta(
     messages: &mut [TranscriptMessage],
     round: Option<u64>,
     turn: Option<u64>,
@@ -2709,20 +2079,6 @@ fn append_stream_text_delta(
     })?;
     message.push_stream(delta);
     Some(message.id)
-}
-
-fn push_local_notice(
-    messages: &mut Vec<TranscriptMessage>,
-    severity: NoticeSeverity,
-    text: impl Into<String>,
-) {
-    // Timestamped like the command rows (`sent_at_ms` → trailing ` · HH:MM`)
-    // so a locally synthesized notice reads as the same kind of transcript
-    // entry, with an anchor for "when did this happen" after further output
-    // has scrolled it up.
-    messages.push(
-        TranscriptMessage::notice(severity, text).with_sent_at_ms(event_loop::now_epoch_ms()),
-    );
 }
 
 #[cfg(test)]
@@ -2825,7 +2181,7 @@ mod streaming_appends_tests {
 /// clamped to the empty-state bounding box. Best-effort: a missing or unreadable
 /// file returns `None`, leaving the built-in wordmark in place.
 fn load_user_logo() -> Option<Vec<String>> {
-    let path = muta_persistence::paths::get().logo_file();
+    let path = muta_paths::paths::get().logo_file();
     let raw = std::fs::read_to_string(&path).ok()?;
     // Re-use the renderer's parser so the clamp stays defined in one place.
     // The parser already strips CRLF/trailing blanks and truncates to the box.

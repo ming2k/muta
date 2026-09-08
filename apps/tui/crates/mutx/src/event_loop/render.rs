@@ -7,8 +7,8 @@ use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ConfirmChoice;
 use crate::render;
-use crate::{App, Modal, ProviderDeleteChoice, Recess};
 use crate::ui::UiKey;
+use crate::{App, Modal, ProviderDeleteChoice, Recess};
 
 use super::actions::effective_reasoning_effort;
 use super::transcript::display_status;
@@ -25,9 +25,23 @@ pub(crate) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     app.ui = ui;
 }
 
-fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_id: &str,
-    mut ui: &mut crate::ui::ComponentTree) {
-    ui.begin(f.area(), app.active_modal());
+fn compose_frame(
+    app: &mut App,
+    f: &mut mutx_engine::Frame<'_>,
+    viewed_session_id: &str,
+    mut ui: &mut crate::ui::ComponentTree,
+) {
+    ui.begin(f.area());
+    // Modality is scene-owned (ADR-0197 §D2): a modal owns keys because the
+    // mounted component declares `Modal` policy, not because an app flag says
+    // so. The mount here pre-registers the modal at viewport size; the modal
+    // renderer places it at its drawn rect further down.
+    if app.active_modal() != Modal::None {
+        ui.mount(UiKey::Modal(app.active_modal()), f.area());
+    }
+    if app.config_dropdown.is_some() {
+        ui.mount(UiKey::ConfigDropdown, f.area());
+    }
     let mut layout_map = LayoutMap::new();
 
     // ADR-0175: PreAttach interstitial takes over the terminal before
@@ -113,6 +127,12 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
         .then_some(crate::phase::Phase::AwaitingUser);
     let status = if let Some(ref target) = app.switching_session {
         format!("loading session {target}…")
+    } else if app.link_down {
+        // Dead-link chrome state (ADR-0197 D6): the daemon link is gone, so
+        // user intents cannot be delivered. The live-status bar is the
+        // visible anchor; it stays until the process exits, because nothing
+        // can acknowledge recovery.
+        "daemon link lost".to_string()
     } else {
         display_status(
             app.loop_status,
@@ -293,61 +313,67 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
         .collect();
     let queue_modal_items: Vec<render::QueueItemProps> = queue_items.clone();
 
-    let transcript_render = ui.paint(f, UiKey::Root, |f| render::draw_transcript(
-        f,
-        &mut layout_map,
-        render::TranscriptProps {
-            messages: view_messages,
-            scroll: app.scroll,
-            selection: &app.selection,
-            cell_selection: app.drag.cell_info.as_ref(),
-            activity: &status,
-            backoff_clause: backoff_clause.as_deref(),
-            key_overrides: app.key_overrides.clone(),
-            // A pending permission request forces the activity bar on (and
-            // tints it warning) so it stays the visible anchor above the
-            // permission sheet even if the loop has gone idle.
-            awaiting_permission: app.pending_permission.is_some(),
-            // ~100ms per phase keeps one breathing cycle near 1.2s
-            // (SPINNER_PHASES steps); `breathing_color` wraps modulo.
-            spinner_phase: (app.spinner_epoch.elapsed().as_millis() / 100) as usize,
-            input: &masked_input,
-            byte_cursor: masked_byte_cursor,
-            chrome_hidden,
-            queue_bar: render::QueueBarProps {
-                items: &queue_items,
-                paused: app.pending_count(viewed_session_id) > 0
-                    && app.idle_sessions.contains(viewed_session_id)
-                    && !app.naturally_completed_sessions.contains(viewed_session_id),
-                blocked: app.pending_count(viewed_session_id) > 0
-                    && app.is_queue_blocked(viewed_session_id),
+    let transcript_render = ui.paint(f, UiKey::Root, |f| {
+        render::draw_transcript(
+            f,
+            &mut layout_map,
+            render::TranscriptProps {
+                messages: view_messages,
+                scroll: app.scroll,
+                selection: &app.selection,
+                cell_selection: app.drag.cell_info.as_ref(),
+                activity: &status,
+                backoff_clause: backoff_clause.as_deref(),
+                key_overrides: app.key_overrides.clone(),
+                // A pending permission request forces the activity bar on (and
+                // tints it warning) so it stays the visible anchor above the
+                // permission sheet even if the loop has gone idle.
+                awaiting_permission: app.pending_permission.is_some(),
+                // ~100ms per phase keeps one breathing cycle near 1.2s
+                // (SPINNER_PHASES steps); `breathing_color` wraps modulo.
+                spinner_phase: (app.spinner_epoch.elapsed().as_millis() / 100) as usize,
+                input: &masked_input,
+                byte_cursor: masked_byte_cursor,
+                chrome_hidden,
+                queue_bar: render::QueueBarProps {
+                    items: &queue_items,
+                    // "Paused" = items waiting on the daemon's round boundary
+                    // (ADR-0197 M4: the daemon decides when they ship).
+                    paused: app.pending_dispatch.iter().any(|item| {
+                        item.session_id == viewed_session_id
+                            && item.state == crate::app::QueuedDispatchState::Waiting
+                    }),
+                    blocked: app.pending_count(viewed_session_id) > 0
+                        && app.is_queue_blocked(viewed_session_id),
+                },
+                persistence_health: app.persistence_health.as_ref(),
+                runner_bar,
+                side_banner,
+                page_hints: Some(page_hints),
+                session_head: Some(render::SessionHead {
+                    session_id: viewed_session_id,
+                    workspace: &app.current_workspace,
+                    unattended: app.unattended,
+                    confined: app.confined,
+                    switching_target: app.switching_session.as_deref(),
+                }),
+                // View-scoped: the elapsed-timer origin belongs to the viewed
+                // session's round (an aside view times the aside's round, not
+                // the primary's).
+                round_started_at: viewed_chrome.round_started_at,
+                hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
+                focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
+                logo: app.logo.as_deref(),
+                guidance,
+                carousel_index: crate::empty_state::carousel_page_for(
+                    app.carousel_epoch.elapsed().as_millis(),
+                ),
+                theme: &app.theme,
+                layout: app.transcript_layout,
+                height_cache: Some(&mut height_cache),
             },
-            runner_bar,
-            side_banner,
-            page_hints: Some(page_hints),
-            session_head: Some(render::SessionHead {
-                session_id: viewed_session_id,
-                workspace: &app.current_workspace,
-                unattended: app.unattended,
-                confined: app.confined,
-                switching_target: app.switching_session.as_deref(),
-            }),
-            // View-scoped: the elapsed-timer origin belongs to the viewed
-            // session's round (an aside view times the aside's round, not
-            // the primary's).
-            round_started_at: viewed_chrome.round_started_at,
-            hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
-            focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
-            logo: app.logo.as_deref(),
-            guidance,
-            carousel_index: crate::empty_state::carousel_page_for(
-                app.carousel_epoch.elapsed().as_millis(),
-            ),
-            theme: &app.theme,
-            layout: app.transcript_layout,
-            height_cache: Some(&mut height_cache),
-        },
-    ));
+        )
+    });
     let input_rect = transcript_render.input_rect;
     let hint_rect = transcript_render.hint_rect;
     let content_lines = transcript_render.content_lines;
@@ -356,6 +382,7 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
     for (key, rect) in &transcript_render.footer.rows {
         let key = match key {
             render::FooterRowId::TopGap => continue,
+            render::FooterRowId::PersistenceHealth => continue,
             render::FooterRowId::Queue => UiKey::Queue,
             render::FooterRowId::Activity => UiKey::Activity,
             render::FooterRowId::Composer => UiKey::Composer,
@@ -408,32 +435,36 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
         let _ = can_retry; // retry affordance now renders on the composer keys row
-        let model_bar_rects = ui.paint(f, UiKey::ModelBar, |f| render::draw_model_bar(
-            f,
-            hint_rect,
-            render::ModelBarProps {
-                current_model: &app.current_model,
-                model_available,
-                provider_name: hint_instance,
-                reasoning_effort: hint_reasoning,
-                context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
-                context_window: app.active_model_context_window(),
-                last_turn_tps: viewed_chrome
-                    .last_turn_performance
-                    .and_then(|sample| sample.preferred_tps()),
-                ignition_elapsed_ms: app
-                    .effort_ignition_epoch
-                    .map(|epoch| epoch.elapsed().as_millis()),
-            },
-            &app.theme,
-            &app.key_overrides,
-        ));
+        let model_bar_rects = ui.paint(f, UiKey::ModelBar, |f| {
+            render::draw_model_bar(
+                f,
+                hint_rect,
+                render::ModelBarProps {
+                    current_model: &app.current_model,
+                    model_available,
+                    provider_name: hint_instance,
+                    reasoning_effort: hint_reasoning,
+                    context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
+                    context_window: app.active_model_context_window(),
+                    last_turn_tps: viewed_chrome
+                        .last_turn_performance
+                        .and_then(|sample| sample.preferred_tps()),
+                    ignition_elapsed_ms: app
+                        .effort_ignition_epoch
+                        .map(|epoch| epoch.elapsed().as_millis()),
+                },
+                &app.theme,
+                &app.key_overrides,
+            )
+        });
         for (key, rect) in [
             (UiKey::Performance, model_bar_rects.performance),
             (UiKey::Context, model_bar_rects.context),
             (UiKey::Connection, model_bar_rects.connection),
         ] {
-            if let Some(rect) = rect { ui.mount(key, rect); }
+            if let Some(rect) = rect {
+                ui.mount(key, rect);
+            }
         }
     }
 
@@ -703,7 +734,10 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
             }
             Some(crate::sheet::SheetKind::InputInjection) => {
                 if let Some(ref req) = app.pending_input {
-                    ui.mount(UiKey::Sheet(crate::sheet::SheetKind::InputInjection), input_rect);
+                    ui.mount(
+                        UiKey::Sheet(crate::sheet::SheetKind::InputInjection),
+                        input_rect,
+                    );
                     render::draw_input_injection(
                         f,
                         req,
@@ -788,7 +822,9 @@ fn compose_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed_session_i
     // panel so the panel overpaints its own crisp area on top of the
     // recessed background.
     ui.mount(UiKey::Backdrop, f.area());
-    ui.paint(f, UiKey::Backdrop, |f| render::recess_backdrop(f, recess, &app.theme));
+    ui.paint(f, UiKey::Backdrop, |f| {
+        render::recess_backdrop(f, recess, &app.theme)
+    });
 
     let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
 

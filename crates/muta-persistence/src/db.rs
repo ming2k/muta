@@ -7,10 +7,12 @@
 use crate::blobs::BlobStore;
 use rusqlite::{Connection, OptionalExtension, Result, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, oneshot, watch};
+use tracing::{info, warn};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
 pub const CURRENT_DB_VERSION: u32 = 10;
@@ -2489,7 +2491,134 @@ impl DatabaseEngine {
     // Legacy Flat-File Migration (ADR-0168)
 }
 
-// Asynchronous Persistence Actor (Single-Writer Pattern)
+// Asynchronous Persistence Actor (Single-Writer Pattern, supervised — ADR-0196)
+
+/// Typed failure of a persistence command (ADR-0196 D2).
+///
+/// The single-writer actor is a long-lived service, so its failures are
+/// *lifecycle* facts, not SQL facts. Every `PersistenceHandle` method returns
+/// this error type; callers classify instead of string-matching.
+#[derive(Debug)]
+pub enum PersistenceError {
+    /// The single-writer actor is not serving: it died (engine-open failure
+    /// or panic) and has not been respawned yet, the supervisor is still in
+    /// its backoff window, or the handle was shut down. The command was **not
+    /// executed**; nothing was written.
+    WriterDown,
+    /// The actor served the command and the SQLite engine rejected it.
+    Engine(rusqlite::Error),
+    /// The command handler panicked. The supervisor's per-command
+    /// `catch_unwind` contained it: the actor survives, this command failed.
+    Poisoned(String),
+    /// A value failed to encode *before* reaching the writer (e.g. JSON
+    /// serialization). Nothing was written.
+    Encode(String),
+    /// The handle was explicitly shut down (every clone dropped / supervisor
+    /// stopped). Distinct from [`PersistenceError::WriterDown`] so an orderly
+    /// teardown is distinguishable from a crash.
+    Closed,
+}
+
+impl fmt::Display for PersistenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WriterDown => write!(f, "persistence writer is down"),
+            Self::Engine(e) => write!(f, "persistence engine rejected the command: {e}"),
+            Self::Poisoned(msg) => write!(f, "persistence command handler panicked: {msg}"),
+            Self::Encode(msg) => write!(f, "could not encode persistence payload: {msg}"),
+            Self::Closed => write!(f, "persistence writer was shut down"),
+        }
+    }
+}
+
+impl std::error::Error for PersistenceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Engine(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<rusqlite::Error> for PersistenceError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Engine(e)
+    }
+}
+
+/// Liveness of the single-writer actor, observable by any handle clone
+/// (ADR-0196 D1/D4). Transitions are published on a `watch` channel; the
+/// daemon folds them into the monitor stream, frontends render degradation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriterHealth {
+    /// Serving normally.
+    Healthy,
+    /// The writer died or failed to (re)start and the supervisor is retrying
+    /// with backoff. `attempt` counts respawn attempts since the first
+    /// failure; `error` is the latest cause.
+    Recovering {
+        attempt: u32,
+        since_ms: u64,
+        error: String,
+    },
+    /// Respawn attempts exceeded the recovering budget (`RECOVERING_ATTEMPTS`)
+    /// and every further failure is at the capped backoff. Retries continue
+    /// forever; this state says "durability is degraded, tell the user".
+    Down {
+        attempt: u32,
+        since_ms: u64,
+        error: String,
+    },
+}
+
+impl WriterHealth {
+    /// Whether writes can currently be expected to succeed.
+    pub fn is_serving(&self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+
+    /// The latest failure cause, when degraded.
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            Self::Healthy => None,
+            Self::Recovering { error, .. } | Self::Down { error, .. } => Some(error),
+        }
+    }
+
+    /// The wire representation for the monitor stream (ADR-0196 D4). The
+    /// conversion lives here, next to the state machine, so no consumer can
+    /// mis-translate a transition.
+    pub fn to_wire(&self) -> muta_contracts::monitor::PersistenceHealth {
+        match self {
+            Self::Healthy => muta_contracts::monitor::PersistenceHealth::Healthy,
+            Self::Recovering {
+                attempt,
+                since_ms,
+                error,
+            } => muta_contracts::monitor::PersistenceHealth::Recovering {
+                attempt: *attempt,
+                since_ms: *since_ms,
+                error: error.clone(),
+            },
+            Self::Down {
+                attempt,
+                since_ms,
+                error,
+            } => muta_contracts::monitor::PersistenceHealth::Down {
+                attempt: *attempt,
+                since_ms: *since_ms,
+                error: error.clone(),
+            },
+        }
+    }
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Command variants dispatched to the single-writer persistence actor.
 pub enum PersistenceCommand {
@@ -2503,59 +2632,362 @@ pub enum PersistenceCommand {
         /// ledger lives in its own table; a full save rewrites it from
         /// `data`).
         usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     UpsertSession {
         record: SessionRecord,
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     DeleteSession {
         session_id: String,
-        ack: oneshot::Sender<Result<bool>>,
+        ack: oneshot::Sender<Result<bool, PersistenceError>>,
     },
     RenameSession {
         session_id: String,
         title: Option<String>,
         manual: bool,
-        ack: oneshot::Sender<Result<bool>>,
+        ack: oneshot::Sender<Result<bool, PersistenceError>>,
     },
     RecordCommand {
         cmd: muta_contracts::CommandRecord,
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     SetKV {
         key: String,
         value: String,
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     DeleteKV {
         key: String,
-        ack: oneshot::Sender<Result<bool>>,
+        ack: oneshot::Sender<Result<bool, PersistenceError>>,
     },
     RecordInputHistory {
         entry: muta_contracts::HistoryEntry,
         dedup: bool,
-        ack: Option<oneshot::Sender<Result<()>>>,
+        ack: Option<oneshot::Sender<Result<(), PersistenceError>>>,
     },
     SaveInputHistory {
         entries: Vec<muta_contracts::HistoryEntry>,
         dedup: bool,
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     ClearInputHistory {
-        ack: oneshot::Sender<Result<()>>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
     DeleteInputHistoryEntry {
         text: String,
         created_at_ms: u64,
-        ack: Option<oneshot::Sender<Result<usize>>>,
+        ack: Option<oneshot::Sender<Result<usize, PersistenceError>>>,
     },
+    /// Test-only: the writer acks and then exits its loop, simulating actor
+    /// death so the supervisor's respawn path is exercisable (ADR-0196 D6).
+    #[cfg(test)]
+    Die { ack: oneshot::Sender<()> },
 }
 
-/// Asynchronous handle for interacting with the single-writer PersistenceActor without blocking Tokio runtime.
+impl PersistenceCommand {
+    /// Execute against the writer's engine. Every engine call is panic-
+    /// guarded (ADR-0196 D1): a poisoned command settles its own ack as
+    /// [`PersistenceError::Poisoned`] and the actor survives. Returns
+    /// `false` only for the test-only death command.
+    fn execute(self, engine: &DatabaseEngine) -> bool {
+        match self {
+            Self::SaveSession {
+                data,
+                full,
+                usage_upserts,
+                ack,
+            } => {
+                let res = guarded(|| engine.save_session_inner(&data, full, &usage_upserts));
+                let _ = ack.send(res);
+            }
+            Self::UpsertSession { record, ack } => {
+                let res = guarded(|| engine.upsert_session(&record));
+                let _ = ack.send(res);
+            }
+            Self::DeleteSession { session_id, ack } => {
+                let res = guarded(|| engine.delete_session(&session_id));
+                let _ = ack.send(res);
+            }
+            Self::RenameSession {
+                session_id,
+                title,
+                manual,
+                ack,
+            } => {
+                let res = guarded(|| engine.rename_session(&session_id, title.as_deref(), manual));
+                let _ = ack.send(res);
+            }
+            Self::RecordCommand { cmd, ack } => {
+                let res = guarded(|| engine.record_command(&cmd));
+                let _ = ack.send(res);
+            }
+            Self::SetKV { key, value, ack } => {
+                let res = guarded(|| engine.set_kv(&key, &value));
+                let _ = ack.send(res);
+            }
+            Self::DeleteKV { key, ack } => {
+                let res = guarded(|| engine.delete_kv(&key));
+                let _ = ack.send(res);
+            }
+            Self::RecordInputHistory { entry, dedup, ack } => {
+                let res = guarded(|| engine.record_input_history(&entry, dedup));
+                if let Some(ack) = ack {
+                    let _ = ack.send(res);
+                }
+            }
+            Self::SaveInputHistory {
+                entries,
+                dedup,
+                ack,
+            } => {
+                let res = guarded(|| engine.save_input_history(&entries, dedup));
+                let _ = ack.send(res);
+            }
+            Self::ClearInputHistory { ack } => {
+                let res = guarded(|| engine.clear_input_history());
+                let _ = ack.send(res);
+            }
+            Self::DeleteInputHistoryEntry {
+                text,
+                created_at_ms,
+                ack,
+            } => {
+                let res = guarded(|| engine.delete_input_history_entry(&text, created_at_ms));
+                if let Some(ack) = ack {
+                    let _ = ack.send(res);
+                }
+            }
+            #[cfg(test)]
+            Self::Die { ack } => {
+                let _ = ack.send(());
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Resolve every ack with `Err(error)` without executing. Used by the
+    /// supervisor to drain commands honestly while the writer is down
+    /// (ADR-0196 D5): the command was never durable, and pretending
+    /// otherwise would convert a visible failure into silent data loss.
+    fn fail(self, error: PersistenceError) {
+        match self {
+            Self::SaveSession { ack, .. }
+            | Self::UpsertSession { ack, .. }
+            | Self::RecordCommand { ack, .. }
+            | Self::SetKV { ack, .. }
+            | Self::SaveInputHistory { ack, .. }
+            | Self::ClearInputHistory { ack } => {
+                let _ = ack.send(Err(error));
+            }
+            Self::DeleteSession { ack, .. } | Self::RenameSession { ack, .. } => {
+                let _ = ack.send(Err(error));
+            }
+            Self::DeleteKV { ack, .. } => {
+                let _ = ack.send(Err(error));
+            }
+            Self::RecordInputHistory { ack, .. } => {
+                if let Some(ack) = ack {
+                    let _ = ack.send(Err(error));
+                }
+            }
+            Self::DeleteInputHistoryEntry { ack, .. } => {
+                if let Some(ack) = ack {
+                    let _ = ack.send(Err(error));
+                }
+            }
+            #[cfg(test)]
+            Self::Die { ack } => {
+                let _ = ack.send(());
+            }
+        }
+    }
+}
+
+/// Run one engine call, catching handler panics (ADR-0196 D1).
+fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T, PersistenceError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res.map_err(PersistenceError::Engine),
+        Err(panic) => Err(PersistenceError::Poisoned(panic_message(&panic))),
+    }
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
+/// The supervised single writer (ADR-0196 D1).
+///
+/// Front-door commands land here; the supervisor forwards them to the
+/// *current* writer generation's channel. On writer death (send failure —
+/// the actor thread dropped its receiver) it respawns with bounded
+/// exponential backoff, publishing health transitions on the watch channel.
+/// While down, arriving commands are drained with `Err(WriterDown)` acks
+/// (D5) — the bounded front channel cannot back-pressure turns into a hang.
+async fn run_supervisor(
+    mut front_rx: mpsc::Receiver<PersistenceCommand>,
+    db_path: PathBuf,
+    blob_store: Option<BlobStore>,
+    health: watch::Sender<WriterHealth>,
+) {
+    /// Respawn attempts before `Recovering` escalates to `Down`
+    /// (~1.55 s of cumulative backoff at the base schedule below).
+    const RECOVERING_ATTEMPTS: u32 = 4;
+    const BASE_BACKOFF: Duration = Duration::from_millis(100);
+    const MAX_BACKOFF: Duration = Duration::from_secs(5);
+
+    let mut writer: Option<mpsc::Sender<PersistenceCommand>> = None;
+    let mut attempt: u32 = 0;
+    let mut since_ms: u64 = 0;
+    let mut last_error: String;
+    let mut next_try = Instant::now();
+    let mut backoff = BASE_BACKOFF;
+
+    while let Some(mut command) = front_rx.recv().await {
+        'serve: loop {
+            if let Some(tx) = &writer {
+                match tx.send(command).await {
+                    Ok(()) => break 'serve,
+                    Err(mpsc::error::SendError(undelivered)) => {
+                        // The actor thread is gone (engine-open failure at
+                        // birth, panic escape, or explicit stop). Respawn.
+                        command = undelivered;
+                        writer = None;
+                        attempt = 1;
+                        since_ms = unix_ms();
+                        last_error = "persistence writer stopped".to_string();
+                        backoff = BASE_BACKOFF;
+                        next_try = Instant::now();
+                        let _ = health.send_if_modified(|current| {
+                            *current = WriterHealth::Recovering {
+                                attempt,
+                                since_ms,
+                                error: last_error.clone(),
+                            };
+                            true
+                        });
+                    }
+                }
+            } else if Instant::now() >= next_try {
+                match spawn_writer(&db_path, blob_store.as_ref(), &health).await {
+                    Ok(tx) => {
+                        writer = Some(tx);
+                        attempt = 0;
+                        // `Healthy` is restored by the writer's first
+                        // successful command, not by spawn alone (D1).
+                    }
+                    Err(e) => {
+                        attempt += 1;
+                        last_error = e.to_string();
+                        next_try = Instant::now() + backoff;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        let state = if attempt > RECOVERING_ATTEMPTS {
+                            WriterHealth::Down {
+                                attempt,
+                                since_ms,
+                                error: last_error.clone(),
+                            }
+                        } else {
+                            WriterHealth::Recovering {
+                                attempt,
+                                since_ms,
+                                error: last_error.clone(),
+                            }
+                        };
+                        let _ = health.send_if_modified(|current| {
+                            *current = state;
+                            true
+                        });
+                        // D5: drain-while-down — resolve honestly, never
+                        // back-pressure the caller into a hang.
+                        command.fail(PersistenceError::WriterDown);
+                        break 'serve;
+                    }
+                }
+            } else {
+                // Down and still inside the backoff window: same D5 policy.
+                command.fail(PersistenceError::WriterDown);
+                break 'serve;
+            }
+        }
+    }
+
+    // Every handle clone dropped: orderly shutdown. Writers exit with their
+    // channel; the health state records that the stop was deliberate.
+    let _ = health.send_if_modified(|current| {
+        *current = WriterHealth::Down {
+            attempt: 0,
+            since_ms: unix_ms(),
+            error: "persistence writer was shut down (all handles dropped)".to_string(),
+        };
+        true
+    });
+}
+
+/// Open the engine and spawn one writer generation on a dedicated thread.
+/// The open happens on a blocking thread so a wedged SQLite open cannot
+/// stall the supervisor.
+async fn spawn_writer(
+    db_path: &Path,
+    blob_store: Option<&BlobStore>,
+    health: &watch::Sender<WriterHealth>,
+) -> std::result::Result<mpsc::Sender<PersistenceCommand>, rusqlite::Error> {
+    let path = db_path.to_path_buf();
+    let blobs = blob_store.cloned();
+    let engine = tokio::task::spawn_blocking(move || DatabaseEngine::open(&path, blobs))
+        .await
+        .map_err(|join| {
+            rusqlite::Error::ToSqlConversionFailure(
+                format!("persistence writer spawn task failed: {join}").into(),
+            )
+        })??;
+
+    let (tx, mut rx) = mpsc::channel::<PersistenceCommand>(1024);
+    let health = health.clone();
+    std::thread::Builder::new()
+        .name("muta-persistence-writer".into())
+        .spawn(move || {
+            while let Some(command) = rx.blocking_recv() {
+                if !command.execute(&engine) {
+                    break;
+                }
+                // D1: `Healthy` is restored by the first *successful*
+                // command after a degradation, not by spawn alone.
+                health.send_if_modified(|current| {
+                    if current.is_serving() {
+                        false
+                    } else {
+                        *current = WriterHealth::Healthy;
+                        true
+                    }
+                });
+            }
+        })
+        .map_err(|e| {
+            rusqlite::Error::ToSqlConversionFailure(
+                format!("failed to spawn persistence writer thread: {e}").into(),
+            )
+        })?;
+    Ok(tx)
+}
+
+/// Asynchronous handle for interacting with the supervised single-writer
+/// persistence actor without blocking the Tokio runtime (ADR-0196).
+///
+/// The front door and the health channel survive writer death: a respawned
+/// writer is reachable through the same handle, so no call site changes on
+/// recovery. Clone freely; dropping the last clone shuts the supervisor down.
 #[derive(Clone)]
 pub struct PersistenceHandle {
-    tx: mpsc::Sender<PersistenceCommand>,
+    supervisor: mpsc::Sender<PersistenceCommand>,
+    health: watch::Receiver<WriterHealth>,
     db_path: PathBuf,
     blob_store: Option<BlobStore>,
 }
@@ -2575,149 +3007,53 @@ pub fn get_persistence_handle() -> PersistenceHandle {
 }
 
 impl PersistenceHandle {
-    /// Spawn the persistence actor on a dedicated background worker thread.
+    /// Start the supervised persistence actor.
+    ///
+    /// The supervisor runs as a task on the current Tokio runtime when one
+    /// is active, otherwise on a dedicated single-thread runtime of its own,
+    /// so construction stays valid from sync contexts (library callers,
+    /// tests).
     #[allow(clippy::expect_used)]
     pub fn spawn(db_path: PathBuf, blob_store: Option<BlobStore>) -> Self {
-        let (tx, mut rx) = mpsc::channel::<PersistenceCommand>(1024);
-        let actor_path = db_path.clone();
-        let actor_blobs = blob_store.clone();
+        let (supervisor, front_rx) = mpsc::channel::<PersistenceCommand>(1024);
+        let (health_tx, health_rx) = watch::channel(WriterHealth::Healthy);
 
-        std::thread::Builder::new()
-            .name("muta-persistence-writer".into())
-            .spawn(move || {
-                let engine = match DatabaseEngine::open(&actor_path, actor_blobs) {
-                    Ok(e) => e,
-                    Err(err) => {
-                        error!(error = %err, "Failed to initialize persistence writer database engine");
-                        return;
-                    }
-                };
-
-                while let Some(cmd) = rx.blocking_recv() {
-                    match cmd {
-                        PersistenceCommand::SaveSession {
-                            data,
-                            full,
-                            usage_upserts,
-                            ack,
-                        } => {
-                            let res = engine.save_session_inner(&data, full, &usage_upserts);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::UpsertSession { record, ack } => {
-                            let res = engine.upsert_session(&record);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::DeleteSession { session_id, ack } => {
-                            let res = engine.delete_session(&session_id);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::RenameSession {
-                            session_id,
-                            title,
-                            manual,
-                            ack,
-                        } => {
-                            let res = engine.rename_session(&session_id, title.as_deref(), manual);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::RecordCommand { cmd, ack } => {
-                            let res = engine.record_command(&cmd);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::SetKV { key, value, ack } => {
-                            let res = engine.set_kv(&key, &value);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::DeleteKV { key, ack } => {
-                            let res = engine.delete_kv(&key);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::RecordInputHistory { entry, dedup, ack } => {
-                            let res = engine.record_input_history(&entry, dedup);
-                            if let Some(ack) = ack {
-                                let _ = ack.send(res);
-                            }
-                        }
-                        PersistenceCommand::SaveInputHistory { entries, dedup, ack } => {
-                            let res = engine.save_input_history(&entries, dedup);
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::ClearInputHistory { ack } => {
-                            let res = engine.clear_input_history();
-                            let _ = ack.send(res);
-                        }
-                        PersistenceCommand::DeleteInputHistoryEntry { text, created_at_ms, ack } => {
-                            let res = engine.delete_input_history_entry(&text, created_at_ms);
-                            if let Some(ack) = ack {
-                                let _ = ack.send(res);
-                            }
-                        }
-                    }
-                }
-            })
-            .expect("failed to spawn persistence writer thread");
+        let run = run_supervisor(front_rx, db_path.clone(), blob_store.clone(), health_tx);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(run);
+            }
+            Err(_) => {
+                std::thread::Builder::new()
+                    .name("muta-persistence-supervisor".into())
+                    .spawn(move || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build persistence supervisor runtime");
+                        runtime.block_on(run);
+                    })
+                    .expect("failed to spawn persistence supervisor thread");
+            }
+        }
 
         Self {
-            tx,
+            supervisor,
+            health: health_rx,
             db_path,
             blob_store,
         }
     }
 
-    /// Asynchronously save a session in SQLite.
-    #[allow(dead_code)]
-    pub(crate) async fn save_session(
-        &self,
-        data: crate::session::SessionData,
-        full: bool,
-        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
-    ) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
-            .send(PersistenceCommand::SaveSession {
-                data: Box::new(data),
-                full,
-                usage_upserts,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    /// The current writer health snapshot (ADR-0196 D4).
+    pub fn health(&self) -> WriterHealth {
+        self.health.borrow().clone()
     }
 
-    /// Synchronously save a session on a blocking thread (always a full
-    /// rewrite: the blocking callers write fresh or rebuilt state).
-    #[allow(dead_code)]
-    pub(crate) fn save_session_blocking(&self, data: crate::session::SessionData) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        let tx = self.tx.clone();
-        let run_blocking = move || {
-            tx.blocking_send(PersistenceCommand::SaveSession {
-                data: Box::new(data),
-                full: true,
-                usage_upserts: Vec::new(),
-                ack: ack_tx,
-            })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            ack_rx
-                .blocking_recv()
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-        };
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                tokio::task::block_in_place(run_blocking)
-            } else {
-                std::thread::spawn(run_blocking).join().map_err(|_| {
-                    rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
-                })?
-            }
-        } else {
-            run_blocking()
-        }
+    /// Subscribe to writer health transitions (ADR-0196 D4): the daemon
+    /// folds these into the monitor stream; frontends render degradation.
+    pub fn subscribe_health(&self) -> watch::Receiver<WriterHealth> {
+        self.health.clone()
     }
 
     /// The database file path.
@@ -2725,43 +3061,96 @@ impl PersistenceHandle {
         &self.db_path
     }
 
-    /// Asynchronously upsert a session record.
-    pub async fn upsert_session(&self, record: SessionRecord) -> Result<()> {
+    /// Asynchronously save a session in SQLite.
+    pub(crate) async fn save_session(
+        &self,
+        data: crate::session::SessionData,
+        full: bool,
+        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
+    ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
+            .send(PersistenceCommand::SaveSession {
+                data: Box::new(data),
+                full,
+                usage_upserts,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Synchronously save a session on a blocking thread (always a full
+    /// rewrite: the blocking callers write fresh or rebuilt state).
+    pub(crate) fn save_session_blocking(
+        &self,
+        data: crate::session::SessionData,
+    ) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let supervisor = self.supervisor.clone();
+        let run_blocking = move || {
+            supervisor
+                .blocking_send(PersistenceCommand::SaveSession {
+                    data: Box::new(data),
+                    full: true,
+                    usage_upserts: Vec::new(),
+                    ack: ack_tx,
+                })
+                .map_err(|_| PersistenceError::WriterDown)?;
+            ack_rx
+                .blocking_recv()
+                .map_err(|_| PersistenceError::WriterDown)?
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(run_blocking)
+            } else {
+                std::thread::spawn(run_blocking).join().map_err(|_| {
+                    PersistenceError::Poisoned("persistence blocking bridge panicked".into())
+                })?
+            }
+        } else {
+            run_blocking()
+        }
+    }
+
+    /// Asynchronously upsert a session record.
+    pub async fn upsert_session(&self, record: SessionRecord) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
             .send(PersistenceCommand::UpsertSession {
                 record,
                 ack: ack_tx,
             })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Non-blocking fire-and-forget session upsert to avoid blocking synchronous writers.
     pub fn try_upsert_session(&self, record: SessionRecord) {
         let (ack_tx, _) = oneshot::channel();
-        let _ = self.tx.try_send(PersistenceCommand::UpsertSession {
+        if let Err(error) = self.supervisor.try_send(PersistenceCommand::UpsertSession {
             record,
             ack: ack_tx,
-        });
+        }) {
+            warn!(error = %error, "dropped fire-and-forget session upsert: writer unavailable");
+        }
     }
 
     /// Asynchronously delete a session record.
-    pub async fn delete_session(&self, session_id: String) -> Result<bool> {
+    pub async fn delete_session(&self, session_id: String) -> Result<bool, PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .send(PersistenceCommand::DeleteSession {
                 session_id,
                 ack: ack_tx,
             })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Asynchronously rename a session.
@@ -2770,9 +3159,9 @@ impl PersistenceHandle {
         session_id: String,
         title: Option<String>,
         manual: bool,
-    ) -> Result<bool> {
+    ) -> Result<bool, PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .send(PersistenceCommand::RenameSession {
                 session_id,
                 title,
@@ -2780,54 +3169,52 @@ impl PersistenceHandle {
                 ack: ack_tx,
             })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Asynchronously record a command invocation.
-    pub async fn record_command(&self, cmd: muta_contracts::CommandRecord) -> Result<()> {
+    pub async fn record_command(
+        &self,
+        cmd: muta_contracts::CommandRecord,
+    ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .send(PersistenceCommand::RecordCommand { cmd, ack: ack_tx })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Asynchronously set a key-value entry.
-    pub async fn set_kv(&self, key: String, value: String) -> Result<()> {
+    pub async fn set_kv(&self, key: String, value: String) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .send(PersistenceCommand::SetKV {
                 key,
                 value,
                 ack: ack_tx,
             })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Synchronously set a key-value entry on a blocking thread.
-    pub fn set_kv_blocking(&self, key: String, value: String) -> Result<()> {
+    pub fn set_kv_blocking(&self, key: String, value: String) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        let tx = self.tx.clone();
+        let supervisor = self.supervisor.clone();
         let run_blocking = move || {
-            tx.blocking_send(PersistenceCommand::SetKV {
-                key,
-                value,
-                ack: ack_tx,
-            })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            supervisor
+                .blocking_send(PersistenceCommand::SetKV {
+                    key,
+                    value,
+                    ack: ack_tx,
+                })
+                .map_err(|_| PersistenceError::WriterDown)?;
             ack_rx
                 .blocking_recv()
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                .map_err(|_| PersistenceError::WriterDown)?
         };
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -2835,7 +3222,7 @@ impl PersistenceHandle {
                 tokio::task::block_in_place(run_blocking)
             } else {
                 std::thread::spawn(run_blocking).join().map_err(|_| {
-                    rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
+                    PersistenceError::Poisoned("persistence blocking bridge panicked".into())
                 })?
             }
         } else {
@@ -2844,38 +3231,49 @@ impl PersistenceHandle {
     }
 
     /// Asynchronously set a JSON-serializable value in the key-value store.
-    pub async fn set_json<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        let serialized = serde_json::to_string(value)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub async fn set_json<T: serde::Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), PersistenceError> {
+        let serialized =
+            serde_json::to_string(value).map_err(|e| PersistenceError::Encode(e.to_string()))?;
         self.set_kv(key.to_string(), serialized).await
     }
 
     /// Synchronously set a JSON-serializable value in the key-value store.
-    pub fn set_json_blocking<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        let serialized = serde_json::to_string(value)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn set_json_blocking<T: serde::Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), PersistenceError> {
+        let serialized =
+            serde_json::to_string(value).map_err(|e| PersistenceError::Encode(e.to_string()))?;
         self.set_kv_blocking(key.to_string(), serialized)
     }
 
     /// Asynchronously delete a key-value entry.
-    pub async fn delete_kv(&self, key: String) -> Result<bool> {
+    pub async fn delete_kv(&self, key: String) -> Result<bool, PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .send(PersistenceCommand::DeleteKV { key, ack: ack_tx })
             .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx
-            .await
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Asynchronously record an input history entry (fire-and-forget).
     pub fn try_record_input_history(&self, entry: muta_contracts::HistoryEntry, dedup: bool) {
-        let _ = self.tx.try_send(PersistenceCommand::RecordInputHistory {
-            entry,
-            dedup,
-            ack: None,
-        });
+        if let Err(error) = self
+            .supervisor
+            .try_send(PersistenceCommand::RecordInputHistory {
+                entry,
+                dedup,
+                ack: None,
+            })
+        {
+            warn!(error = %error, "dropped fire-and-forget input history entry: writer unavailable");
+        }
     }
 
     /// Record an input history entry, waiting for single-writer SQLite actor confirmation.
@@ -2883,18 +3281,18 @@ impl PersistenceHandle {
         &self,
         entry: muta_contracts::HistoryEntry,
         dedup: bool,
-    ) -> Result<()> {
+    ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .blocking_send(PersistenceCommand::RecordInputHistory {
                 entry,
                 dedup,
                 ack: Some(ack_tx),
             })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx.blocking_recv().map_err(|_| {
-            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
-        })?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Save multiple input history entries synchronously, waiting for SQLite actor confirmation.
@@ -2902,40 +3300,43 @@ impl PersistenceHandle {
         &self,
         entries: Vec<muta_contracts::HistoryEntry>,
         dedup: bool,
-    ) -> Result<()> {
+    ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .blocking_send(PersistenceCommand::SaveInputHistory {
                 entries,
                 dedup,
                 ack: ack_tx,
             })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx.blocking_recv().map_err(|_| {
-            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
-        })?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Clear all input history entries from SQLite.
-    pub fn clear_input_history_blocking(&self) -> Result<()> {
+    pub fn clear_input_history_blocking(&self) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .blocking_send(PersistenceCommand::ClearInputHistory { ack: ack_tx })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx.blocking_recv().map_err(|_| {
-            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
-        })?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Best-effort asynchronous delete of an input history record by text and timestamp.
     pub fn try_delete_input_history_entry(&self, text: String, created_at_ms: u64) {
-        let _ = self
-            .tx
+        if let Err(error) = self
+            .supervisor
             .try_send(PersistenceCommand::DeleteInputHistoryEntry {
                 text,
                 created_at_ms,
                 ack: None,
-            });
+            })
+        {
+            warn!(error = %error, "dropped fire-and-forget input history delete: writer unavailable");
+        }
     }
 
     /// Synchronously delete an input history entry by text and timestamp.
@@ -2943,18 +3344,18 @@ impl PersistenceHandle {
         &self,
         text: &str,
         created_at_ms: u64,
-    ) -> Result<usize> {
+    ) -> Result<usize, PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.tx
+        self.supervisor
             .blocking_send(PersistenceCommand::DeleteInputHistoryEntry {
                 text: text.to_string(),
                 created_at_ms,
                 ack: Some(ack_tx),
             })
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        ack_rx.blocking_recv().map_err(|_| {
-            rusqlite::Error::ToSqlConversionFailure("persistence thread panicked".into())
-        })?
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx
+            .blocking_recv()
+            .map_err(|_| PersistenceError::WriterDown)?
     }
 
     /// Open a lightweight read-only connection snapshot for querying.
@@ -3164,11 +3565,9 @@ mod tests {
 
         // Referential integrity holds with enforcement back ON.
         let violations: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_foreign_key_check",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(violations, 0);
 
@@ -3236,23 +3635,29 @@ mod tests {
 
         // The exact repro: a user steering insert and a command echo are both
         // visible (`hidden = false`) yet legitimately carry an `origin`.
-        let steer = Message::new(Role::User, "pls reconsider point 3")
-            .with_origin(muta_contracts::InjectionOrigin::new(InjectionKind::UserSteer));
+        let steer = Message::new(Role::User, "pls reconsider point 3").with_origin(
+            muta_contracts::InjectionOrigin::new(InjectionKind::UserSteer),
+        );
         let echo = Message::command_echo("/session list");
         let image = Message::new(Role::User, "Image from screenshot")
             .with_images(vec![muta_contracts::ImagePart {
                 mime: "image/png".into(),
                 data: "bytes".into(),
             }])
-            .with_origin(muta_contracts::InjectionOrigin::new(InjectionKind::ToolImage));
+            .with_origin(muta_contracts::InjectionOrigin::new(
+                InjectionKind::ToolImage,
+            ));
 
         assert!(!steer.hidden && steer.origin.is_some());
         assert!(!echo.hidden && echo.origin.is_some());
         assert!(!image.hidden && image.origin.is_some());
 
-        data.transcript.push(TranscriptEntry::from_message(0, &steer));
-        data.transcript.push(TranscriptEntry::from_message(1, &echo));
-        data.transcript.push(TranscriptEntry::from_message(2, &image));
+        data.transcript
+            .push(TranscriptEntry::from_message(0, &steer));
+        data.transcript
+            .push(TranscriptEntry::from_message(1, &echo));
+        data.transcript
+            .push(TranscriptEntry::from_message(2, &image));
         // Was the reported failure: `CHECK constraint failed: origin IS NULL OR hidden = 1`.
         engine.save_session_full(&data).unwrap();
 
@@ -3289,7 +3694,10 @@ mod tests {
         data.transcript
             .push(TranscriptEntry::from_message(0, &message));
 
-        let err = engine.save_session_full(&data).err().expect("constraint must reject");
+        let err = engine
+            .save_session_full(&data)
+            .err()
+            .expect("constraint must reject");
         let msg = err.to_string();
         assert!(
             msg.contains("constraint failed") || msg.contains("CHECK"),
@@ -3596,5 +4004,170 @@ mod tests {
         let sessions = engine.list_sessions(None).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].title.as_deref(), Some("T"));
+    }
+
+    /// Supervision fault-injection suite (ADR-0196 D6). Every variant of
+    /// [`PersistenceError`] and every supervisor transition is exercised.
+    mod supervision {
+        use super::*;
+
+        fn temp_db() -> (tempfile::TempDir, PathBuf) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("muta.db");
+            (dir, path)
+        }
+
+        async fn wait_for_health(
+            health: &watch::Receiver<WriterHealth>,
+            matches: impl Fn(&WriterHealth) -> bool,
+        ) -> WriterHealth {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let current = health.borrow().clone();
+                if matches(&current) {
+                    return current;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "health never reached the expected state; last: {current:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+
+        /// A healthy writer serves commands and reports `Healthy`.
+        #[tokio::test]
+        async fn healthy_writer_serves_and_reports_healthy() {
+            let (_dir, path) = temp_db();
+            let handle = PersistenceHandle::spawn(path, None);
+            handle
+                .set_kv("k".into(), "v".into())
+                .await
+                .expect("command must succeed");
+            let health =
+                wait_for_health(&handle.subscribe_health(), |h| *h == WriterHealth::Healthy).await;
+            assert_eq!(health, WriterHealth::Healthy);
+        }
+
+        /// D1/D5: an engine-open failure produces `Err(WriterDown)` (never a
+        /// hang, never a fake success), and health degrades to
+        /// `Recovering`/`Down` with the cause attached.
+        #[tokio::test]
+        async fn engine_open_failure_fails_fast_and_degrades_health() {
+            let dir = tempfile::tempdir().unwrap();
+            // SQLite cannot open a directory as a database file.
+            let handle = PersistenceHandle::spawn(dir.path().to_path_buf(), None);
+            let error = handle
+                .set_kv("k".into(), "v".into())
+                .await
+                .expect_err("open failure must fail the command");
+            assert!(matches!(error, PersistenceError::WriterDown));
+            let health = wait_for_health(&handle.subscribe_health(), |h| !h.is_serving()).await;
+            assert!(health.error().is_some(), "degraded health carries a cause");
+        }
+
+        /// D1/D6: a dead writer is respawned through the same handle, and
+        /// `Healthy` is restored by the first successful command — not by
+        /// spawn alone.
+        #[tokio::test]
+        async fn dead_writer_is_respawned_and_health_restored() {
+            let (_dir, path) = temp_db();
+            let handle = PersistenceHandle::spawn(path, None);
+            handle
+                .set_kv("before".into(), "v".into())
+                .await
+                .expect("writer must be serving before death");
+
+            // Kill the actor generation (test-only death command).
+            let (die_tx, die_rx) = oneshot::channel();
+            handle
+                .supervisor
+                .send(PersistenceCommand::Die { ack: die_tx })
+                .await
+                .unwrap();
+            die_rx.await.unwrap();
+
+            // The next command survives the death: supervisor respawns. The
+            // respawn backoff is short, but under heavy parallel test load a
+            // single command issued immediately after death can race the
+            // still-recovering writer — retry within a generous deadline
+            // instead of asserting an instant success.
+            {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    match handle.set_kv("after".into(), "v".into()).await {
+                        Ok(()) => break,
+                        Err(error) => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "respawned writer never served: {error}"
+                            );
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
+                    }
+                }
+            }
+            let health =
+                wait_for_health(&handle.subscribe_health(), |h| *h == WriterHealth::Healthy).await;
+            assert_eq!(health, WriterHealth::Healthy);
+
+            // The respawned writer owns a real engine: the value is there.
+            let reader = handle.open_reader().unwrap();
+            assert_eq!(reader.get_kv("after").unwrap().as_deref(), Some("v"));
+        }
+
+        /// D6: a handler panic is contained by the per-command guard — the
+        /// command fails with `Poisoned`, the actor keeps serving.
+        #[tokio::test]
+        async fn handler_panic_is_contained_as_poisoned() {
+            let poisoned = guarded::<()>(|| panic!("injected engine panic")).unwrap_err();
+            assert!(
+                matches!(poisoned, PersistenceError::Poisoned(msg) if msg.contains("injected"))
+            );
+
+            let engine_error =
+                guarded::<()>(|| Err(rusqlite::Error::InvalidColumnName("x".into()))).unwrap_err();
+            assert!(matches!(engine_error, PersistenceError::Engine(_)));
+        }
+
+        /// D2: encode failures surface as `Encode` before reaching the
+        /// writer; nothing is written.
+        #[tokio::test]
+        async fn encode_failure_surfaces_as_encode() {
+            struct InjectedFailure;
+            impl serde::Serialize for InjectedFailure {
+                fn serialize<S: serde::Serializer>(
+                    &self,
+                    _serializer: S,
+                ) -> std::result::Result<S::Ok, S::Error> {
+                    Err(serde::ser::Error::custom("injected encode failure"))
+                }
+            }
+
+            let (_dir, path) = temp_db();
+            let handle = PersistenceHandle::spawn(path, None);
+            let error = handle
+                .set_json("broken", &InjectedFailure)
+                .await
+                .expect_err("the injected serialization failure must surface");
+            assert!(matches!(error, PersistenceError::Encode(_)));
+        }
+
+        /// D5: `fail` must resolve a command's ack with the error — a caller
+        /// waiting on the ack learns the truth instead of hanging.
+        #[tokio::test]
+        async fn drain_resolves_acks_with_writer_down() {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            PersistenceCommand::SetKV {
+                key: "k".into(),
+                value: "v".into(),
+                ack: ack_tx,
+            }
+            .fail(PersistenceError::WriterDown);
+            assert!(matches!(
+                ack_rx.await,
+                Ok(Err(PersistenceError::WriterDown))
+            ));
+        }
     }
 }

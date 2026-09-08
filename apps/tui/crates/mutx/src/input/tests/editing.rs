@@ -4,19 +4,24 @@ use super::*;
 
 #[test]
 fn typing_in_compose_returns_insert_char() {
-    // process_event must signal InsertChar (not None) so the event loop
+    // route_event must signal InsertChar (not None) so the event loop
     // can reset the completion-dismissal latch after an Enter commit or
     // Esc dismiss. The char is already spliced into `input` here; the
     // event loop treats the action as a signal only.
     let mut input = "/mc".to_string();
     let mut cursor = 3;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
+        Dispatch {
+            modal: crate::Modal::None,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
             ..Default::default()
@@ -35,12 +40,17 @@ fn backspace_in_compose_returns_backspace_action() {
     let mut input = "/mcp".to_string();
     let mut cursor = 4;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
+        Dispatch {
+            modal: crate::Modal::None,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 1,
             has_exact_suggestion: true,
@@ -59,11 +69,14 @@ fn backspace_atomically_deletes_an_image_chip() {
     let mut input = format!("look {chip} ");
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -78,11 +91,14 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
     let prefix_chars = "see ".chars().count() + chip.chars().count();
     let mut cursor = prefix_chars;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -95,11 +111,14 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
     let mut input = "hello".to_string();
     let mut cursor = 5;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -123,11 +142,14 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CtrlC);
@@ -142,14 +164,17 @@ fn single_key_shortcuts_in_connections_modal() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
-        let action = process_event(
+        let action = route_event(
             Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::Connections,
+            Dispatch {
+                modal: crate::Modal::Connections,
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         );
         assert_eq!(action, expected, "key '{key}' in connections modal");
@@ -162,16 +187,21 @@ fn arrows_cycle_custom_provider_selectors_without_editing_text() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
-        let action = process_event(
+        let action = route_event(
             Event::Key(KeyEvent::new(key, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::CustomProvider,
+            Dispatch {
                 // `None` while Protocol or Client Identity is focused.
+                modal: crate::Modal::CustomProvider,
+                ..Default::default()
+            },
+            &ModalKeys {
                 custom_provider_field: None,
                 ..Default::default()
             },
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         );
         assert_eq!(action, InputAction::CycleCustomProviderChoice { forward });
@@ -184,15 +214,20 @@ fn custom_provider_model_field_accepts_plain_text() {
     let mut input = "GLM-5".to_string();
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::CustomProvider,
+        Dispatch {
+            modal: crate::Modal::CustomProvider,
+            ..Default::default()
+        },
+        &ModalKeys {
             custom_provider_field: Some(3),
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('.'));
@@ -212,14 +247,17 @@ fn b_and_d_in_preset_chooser_pick_the_login_method() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
-        let action = process_event(
+        let action = route_event(
             Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::ProviderPreset,
+            Dispatch {
+                modal: crate::Modal::ProviderPreset,
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         );
         assert_eq!(
@@ -908,29 +946,35 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Char('r'),
             KeyModifiers::CONTROL,
         )),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::OpenHistory);
 
-    let action = process_event(
+    let action = route_event(
         Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Char('r'),
             KeyModifiers::CONTROL,
         )),
         &mut input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::HistorySearch,
+        Dispatch {
+            modal: crate::Modal::HistorySearch,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1150,7 +1194,7 @@ fn text_modal_commands_resolve_and_consume_composer() {
     // the composer text. The event loop snapshots the composer before dispatch
     // and relies on `is_text_modal_command` to recover that text for input
     // history + transcript recording — so these must stay in sync with the
-    // intercepted set in `process_event`.
+    // intercepted set in `route_event`.
     for (cmd, expected) in [
         ("/sessions", InputAction::OpenSessions),
         ("/models", InputAction::OpenModels),
@@ -1197,7 +1241,7 @@ fn ctrl_l_opens_command_palette() {
     let mut input = "draft".to_string();
     let mut cursor = 5;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Char('l'),
             modifiers: KeyModifiers::CONTROL,
@@ -1206,7 +1250,10 @@ fn ctrl_l_opens_command_palette() {
         }),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::ViewSwitcherToggle);
@@ -1387,14 +1434,17 @@ fn delete_key_inert_outside_free_text() {
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
     assert_eq!(
-        process_event(
+        route_event(
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::Help,
+            Dispatch {
+                modal: crate::Modal::Help,
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         ),
         InputAction::None
@@ -1408,14 +1458,17 @@ fn delete_key_closes_selected_view_in_switcher() {
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
     assert_eq!(
-        process_event(
+        route_event(
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::ViewSwitcher,
+            Dispatch {
+                modal: crate::Modal::ViewSwitcher,
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         ),
         InputAction::ViewCloseSelected
@@ -1431,15 +1484,20 @@ fn host_prompt_delete_key_removes_forward_char() {
     let mut cursor = 1;
     let mut drag = SelectionDrag::default();
     assert_eq!(
-        process_event(
+        route_event(
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                active_modal: crate::Modal::Host,
+            Dispatch {
+                modal: crate::Modal::Host,
+                ..Default::default()
+            },
+            &ModalKeys {
                 host_prompting: true,
                 ..Default::default()
             },
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         ),
         InputAction::None
@@ -1457,14 +1515,17 @@ fn tab_is_inert_without_a_completion() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
-        let action = process_event(
+        let action = route_event(
             Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
-            InputContext {
-                has_focused_target: focused,
+            Dispatch {
+                focused_target: focused,
                 ..Default::default()
             },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &ViewKeys::default(),
             &mut drag,
         );
         assert_eq!(action, InputAction::None);
@@ -1477,11 +1538,14 @@ fn enter_while_running_in_steer_mode_emits_steer_immediate() {
     let mut cursor = 13;
     let mut drag = SelectionDrag::default();
 
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::Steer,
             ..Default::default()
@@ -1502,11 +1566,14 @@ fn tab_while_running_emits_toggle_send_mode() {
     let mut cursor = 9;
     let mut drag = SelectionDrag::default();
 
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             is_responding: true,
             ..Default::default()
         },
@@ -1521,11 +1588,14 @@ fn enter_while_running_in_follow_up_mode_emits_queue_follow_up() {
     let mut cursor = 13;
     let mut drag = SelectionDrag::default();
 
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::FollowUp,
             ..Default::default()
@@ -1546,14 +1616,17 @@ fn printable_char_in_transcript_is_inert_and_does_not_mutate_composer() {
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
 
-    let action = process_event(
+    let action = route_event(
         Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            has_focused_target: true,
+        Dispatch {
+            focused_target: true,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1573,11 +1646,14 @@ fn key_release_events_are_ignored() {
         KeyModifiers::NONE,
         KeyEventKind::Release,
     );
-    let action = process_event(
+    let action = route_event(
         Event::Key(char_release),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1590,11 +1666,14 @@ fn key_release_events_are_ignored() {
         KeyModifiers::CONTROL,
         KeyEventKind::Release,
     );
-    let action = process_event(
+    let action = route_event(
         Event::Key(ctrl_c_release),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1608,11 +1687,14 @@ fn key_repeat_events_are_processed() {
 
     let char_repeat =
         KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Repeat);
-    let action = process_event(
+    let action = route_event(
         Event::Key(char_repeat),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('a'));

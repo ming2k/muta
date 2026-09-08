@@ -138,7 +138,10 @@ where
 }
 
 /// Snapshot helper used by the fabric when a job finishes.
-pub fn outcome_from_info(info: &BackgroundJobInfo, summary: String) -> Option<BackgroundJobOutcome> {
+pub fn outcome_from_info(
+    info: &BackgroundJobInfo,
+    summary: String,
+) -> Option<BackgroundJobOutcome> {
     let state = match &info.state {
         s if s.is_terminal() => Some(s.clone()),
         _ => None,
@@ -204,7 +207,11 @@ mod tests {
         );
 
         let candidates = rehost_candidates(&rows);
-        assert_eq!(candidates.len(), 1, "only the restart-policy service rehosts");
+        assert_eq!(
+            candidates.len(),
+            1,
+            "only the restart-policy service rehosts"
+        );
         assert_eq!(candidates[0].job_id, with_policy.job_id.0);
         assert_eq!(candidates[0].summary, "tail");
     }

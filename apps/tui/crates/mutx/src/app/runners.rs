@@ -84,7 +84,8 @@ impl App {
         let sticky_summary_line = self.sticky_summary_line;
 
         let transcript_top_y = self
-            .ui.document
+            .ui
+            .document
             .transcript_content_rect()
             .map(|r| r.y)
             .unwrap_or(0);

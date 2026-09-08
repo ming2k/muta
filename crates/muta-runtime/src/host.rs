@@ -217,6 +217,9 @@ async fn run_inner(
     // ADR-0190 D6: the daemon-task monitor tap folds daemon-fabric events
     // into monitor snapshots/diffs so rehosted services are operator-visible.
     registry.start_daemon_task_monitor();
+    // ADR-0196 D4: the durability-health tap publishes persistence-writer
+    // transitions so degradation is user-visible, not log-only.
+    registry.start_persistence_health_monitor();
 
     // Single instance (ADR-0101)
     // Hold the global lock for the process lifetime. A second daemon spawned

@@ -37,6 +37,7 @@ fn render_full_view(
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: hints,

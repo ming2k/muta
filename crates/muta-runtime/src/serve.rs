@@ -1262,6 +1262,7 @@ async fn run_monitor(
                     MonitorEvent::Snapshot(_)
                     | MonitorEvent::TaskUpdated(_)
                     | MonitorEvent::TaskRemoved { .. }
+                    | MonitorEvent::PersistenceHealth(_)
                     | MonitorEvent::SessionRemoved { .. }
                     | MonitorEvent::DaemonDraining => Some(event.clone()),
                 };

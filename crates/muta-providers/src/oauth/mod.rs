@@ -12,7 +12,6 @@
 
 pub mod browser;
 pub mod chatgpt_device;
-pub mod config;
 pub mod credential_source;
 pub mod device;
 pub mod manual;
@@ -27,15 +26,15 @@ pub use chatgpt_device::{
     request_device_code as request_chatgpt_device_code,
     verification_url as chatgpt_verification_url,
 };
-pub use config::{
+pub use credential_source::OAuthCredentialSource;
+pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
+pub use manual::parse_authorization_response;
+pub use muta_contracts::provider_auth::{
     CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, GOOGLE_ANTIGRAVITY_CLI,
     OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
     config_by_provider_id, copilot_preset, google_antigravity_cli_preset,
     google_antigravity_preset, xai_preset,
 };
-pub use credential_source::OAuthCredentialSource;
-pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
-pub use manual::parse_authorization_response;
 pub use pkce::{PkceCodes, new_nonce, new_state};
 pub use store::{AuthStore, AuthStoreError, LockedAuthStore, TokenSet};
 pub use token::{
@@ -276,7 +275,7 @@ impl OAuth {
                 (prompt, OAuthLoginFlow::Browser(login))
             }
             LoginMethod::Device => match self.config.device_flow {
-                config::DeviceFlow::Rfc8628 => {
+                muta_contracts::provider_auth::DeviceFlow::Rfc8628 => {
                     let device = request_device_code(&self.client, &self.config).await?;
                     let prompt = OAuthLoginPrompt {
                         method,
@@ -293,7 +292,7 @@ impl OAuth {
                         },
                     )
                 }
-                config::DeviceFlow::ChatGpt => {
+                muta_contracts::provider_auth::DeviceFlow::ChatGpt => {
                     let device = request_chatgpt_device_code(&self.client, &self.config).await?;
                     let prompt = OAuthLoginPrompt {
                         method,
@@ -310,7 +309,9 @@ impl OAuth {
                         },
                     )
                 }
-                config::DeviceFlow::Disabled => unreachable!("support checked above"),
+                muta_contracts::provider_auth::DeviceFlow::Disabled => {
+                    unreachable!("support checked above")
+                }
             },
         };
         Ok(OAuthLoginSession {

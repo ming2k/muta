@@ -81,6 +81,9 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
             MonitorEvent::TaskRemoved { task_id } => {
                 state.tasks.retain(|row| row.id != task_id);
             }
+            MonitorEvent::PersistenceHealth(health) => {
+                state.persistence_health = Some(health);
+            }
             // The daemon is draining (ADR-0101): the stream ends right
             // after this frame. Print a note and stop watching — the next
             // `muta status` re-discovers (or reports none running).
@@ -246,6 +249,21 @@ pub(crate) fn table(snapshot: &MonitorSnapshot) -> String {
         root,
         snapshot.sessions.len()
     ));
+    // Durability health (ADR-0196 D4): visible in the operator's first line
+    // of view, never log-only.
+    if let Some(health) = &snapshot.persistence_health
+        && !health.is_healthy()
+    {
+        let state = match health {
+            muta_contracts::monitor::PersistenceHealth::Recovering { .. } => "recovering",
+            muta_contracts::monitor::PersistenceHealth::Down { .. } => "down",
+            muta_contracts::monitor::PersistenceHealth::Healthy => unreachable!("filtered above"),
+        };
+        let detail = health.detail().unwrap_or_default();
+        out.push_str(&format!(
+            "  WARNING: persistence writer is {state}: {detail}\n"
+        ));
+    }
     if !snapshot.tasks.is_empty() {
         out.push_str(&format!("  {} daemon task(s):\n", snapshot.tasks.len()));
         out.push_str(&format!(
@@ -423,6 +441,7 @@ mod tests {
             daemon_started_at: 50,
             sessions: rows,
             tasks: Vec::new(),
+            persistence_health: None,
         }
     }
 
@@ -592,5 +611,38 @@ mod tests {
             text.contains("/tmp/muta-dev/muta/instance (default port 9801)"),
             "{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod persistence_health_tests {
+    use super::*;
+    use muta_contracts::monitor::PersistenceHealth;
+
+    #[test]
+    fn table_warns_when_the_persistence_writer_is_down() {
+        let mut snap = MonitorSnapshot {
+            project_root: "/home/u/proj".into(),
+            daemon_started_at: 50,
+            sessions: Vec::new(),
+            tasks: Vec::new(),
+            persistence_health: Some(PersistenceHealth::Down {
+                attempt: 6,
+                since_ms: 1_000,
+                error: "engine open failed: database is locked".into(),
+            }),
+        };
+        let rendered = table(&snap);
+        assert!(
+            rendered.contains("persistence writer is down"),
+            "degraded durability must surface in `muta status`: {rendered:?}"
+        );
+        assert!(rendered.contains("database is locked"), "cause must render");
+
+        // Healthy (and absence) render no warning line.
+        snap.persistence_health = Some(PersistenceHealth::Healthy);
+        assert!(!table(&snap).contains("WARNING: persistence"));
+        snap.persistence_health = None;
+        assert!(!table(&snap).contains("WARNING: persistence"));
     }
 }

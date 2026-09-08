@@ -46,6 +46,7 @@ fn redesigned_components_render_without_panicking() {
                             paused: false,
                             blocked: false,
                         },
+                        persistence_health: None,
                         runner_bar: None,
                         side_banner: None,
                         page_hints: None,
@@ -275,7 +276,7 @@ fn redesigned_components_render_without_panicking() {
             origin: None,
         };
         let mut hit_map = crate::ui::ComponentTree::new();
-        hit_map.begin(f.area(), crate::Modal::None);
+        hit_map.begin(f.area());
         draw_question_modal(
             f,
             &mut hit_map,
@@ -307,7 +308,7 @@ fn redesigned_components_render_without_panicking() {
         };
         let rect = mutx_engine::Rect::new(0, 0, 60, 3);
         let mut hit_map = crate::ui::ComponentTree::new();
-        hit_map.begin(f.area(), crate::Modal::None);
+        hit_map.begin(f.area());
         let _ = draw_permission_sheet(
             f,
             &mut hit_map,
@@ -474,6 +475,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                         paused: false,
                         blocked: false,
                     },
+                    persistence_health: None,
                     runner_bar: None,
                     side_banner: None,
                     page_hints: None,
@@ -541,6 +543,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -609,6 +612,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -672,6 +676,7 @@ fn nonempty_session_does_not_render_empty_state() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -744,6 +749,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -850,6 +856,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -919,6 +926,7 @@ fn h1_underline_clamps_to_text_extent() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -1006,6 +1014,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -1088,6 +1097,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                     paused: false,
                     blocked: false,
                 },
+                persistence_health: None,
                 runner_bar: None,
                 side_banner: None,
                 page_hints: None,
@@ -1167,4 +1177,57 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
             first_text_cell.symbol(),
         );
     }
+}
+
+/// The durability-health banner (ADR-0196 D4) renders its state label, the
+/// cause detail, and truncates under width pressure; a healthy writer never
+/// places the row at all, so no code path draws a healthy banner.
+#[test]
+fn persistence_health_banner_renders_state_and_detail() {
+    use crate::render::draw_persistence_health_bar;
+    let theme = Theme::default();
+
+    let render = |health: &muta_contracts::monitor::PersistenceHealth, width: u16| {
+        let mut terminal = mutx_engine::TestTerminal::new(width, 1);
+        terminal.draw(|f| {
+            draw_persistence_health_bar(f, f.area(), health, &theme);
+        });
+        let buffer = terminal.buffer();
+        (0..buffer.area().width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    };
+
+    let recovering = muta_contracts::monitor::PersistenceHealth::Recovering {
+        attempt: 1,
+        since_ms: 0,
+        error: "engine open failed: database is locked".into(),
+    };
+    let recovering_row = render(&recovering, 80);
+    assert!(
+        recovering_row.contains("RECOVERING"),
+        "banner carries the recovering label: {recovering_row:?}"
+    );
+    assert!(
+        recovering_row.contains("database is locked"),
+        "banner carries the cause: {recovering_row:?}"
+    );
+
+    let down = muta_contracts::monitor::PersistenceHealth::Down {
+        attempt: 7,
+        since_ms: 0,
+        error: "persistence writer stopped".into(),
+    };
+    let down_row = render(&down, 80);
+    assert!(
+        down_row.contains("STORAGE DOWN") && down_row.contains("persistence writer stopped"),
+        "down banner carries label + cause: {down_row:?}"
+    );
+
+    // Width pressure truncates the detail, never panics.
+    let squeezed = render(&recovering, 24);
+    assert!(
+        squeezed.contains("RECOVERING") && squeezed.chars().count() <= 24,
+        "narrow banner truncates cleanly: {squeezed:?}"
+    );
 }

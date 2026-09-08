@@ -781,12 +781,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     label.clone().unwrap_or_else(|| "process".to_string()),
                                     command.clone(),
                                 ),
-                                muta_contracts::JobSpec::Timer {
-                                    label, prompt, ..
-                                } => (
-                                    label
-                                        .clone()
-                                        .unwrap_or_else(|| "timer".to_string()),
+                                muta_contracts::JobSpec::Timer { label, prompt, .. } => (
+                                    label.clone().unwrap_or_else(|| "timer".to_string()),
                                     prompt.clone(),
                                 ),
                             };

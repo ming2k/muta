@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
-use muta_contracts::LoginMethod;
+use crate::LoginMethod;
 
 const fn enabled() -> bool {
     true
@@ -508,7 +508,7 @@ pub fn google_antigravity_preset() -> OAuthConfig {
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
         user_agent: Some(Cow::Borrowed(
-            muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
+            crate::client_identity::ANTIGRAVITY_USER_AGENT,
         )),
         browser_login: true,
         default_login_method: LoginMethod::Browser,
@@ -553,7 +553,7 @@ pub fn google_antigravity_cli_preset() -> OAuthConfig {
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
         user_agent: Some(Cow::Borrowed(
-            muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
+            crate::client_identity::ANTIGRAVITY_USER_AGENT,
         )),
         browser_login: true,
         default_login_method: LoginMethod::Browser,
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(cfg.port_mode, PortMode::PreferredOrDynamic(51121));
         assert_eq!(
             cfg.user_agent.as_deref(),
-            Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT)
+            Some(crate::client_identity::ANTIGRAVITY_USER_AGENT)
         );
 
         let cli_cfg = google_antigravity_cli_preset();

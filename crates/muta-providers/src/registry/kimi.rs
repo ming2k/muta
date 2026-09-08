@@ -10,7 +10,7 @@ use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSp
 /// order — the first entry is the initial active channel. `k3` is the
 /// platform's current flagship; `kimi-k2.7-code` remains as the previous
 /// pinned alias.
-pub const KIMI_CODE_MODELS: &[&str] = &["k3", "kimi-k2.7-code"];
+pub use muta_contracts::provider_presets::KIMI_CODE_MODELS;
 
 // Kimi Code — Moonshot AI's coding platform (api.kimi.com/coding/v1).
 // The platform pins the model id to the fixed `k3` alias (Kimi K3, 1M

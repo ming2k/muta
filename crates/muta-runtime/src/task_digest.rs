@@ -12,24 +12,27 @@ fn chars_head(s: &str, n: usize) -> String {
 /// Render the digest for a settled task.
 pub fn outcome_digest(outcome: &BackgroundJobOutcome) -> String {
     let command = match &outcome.spec {
-        JobSpec::Process { command, label, .. } => label
-            .as_deref()
-            .unwrap_or(command)
-            .to_string(),
+        JobSpec::Process { command, label, .. } => label.as_deref().unwrap_or(command).to_string(),
         JobSpec::Timer { label, prompt, .. } => label
             .clone()
             .unwrap_or_else(|| format!("timer: {}", chars_head(prompt, 40))),
     };
 
     let state_line = match &outcome.state {
-        JobState::Succeeded { duration_ms, exit_code: _ } => {
+        JobState::Succeeded {
+            duration_ms,
+            exit_code: _,
+        } => {
             format!("exited 0 (ok) after {}s", duration_ms / 1000)
         }
         JobState::Failed {
             duration_ms,
             exit_code,
             error,
-        } => format!("FAILED with exit {exit_code} after {}s — {error}", duration_ms / 1000),
+        } => format!(
+            "FAILED with exit {exit_code} after {}s — {error}",
+            duration_ms / 1000
+        ),
         JobState::Killed { duration_ms } => {
             format!("stopped by operator after {}s", duration_ms / 1000)
         }
@@ -52,8 +55,6 @@ pub fn outcome_digest(outcome: &BackgroundJobOutcome) -> String {
     if let Some(log) = &outcome.log_path {
         digest.push_str(&format!("full log: {}\n", log.display()));
     }
-    digest.push_str(
-        "Review the result and continue your task; do not repeat this command.]",
-    );
+    digest.push_str("Review the result and continue your task; do not repeat this command.]");
     digest
 }

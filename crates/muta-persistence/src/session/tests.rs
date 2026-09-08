@@ -98,7 +98,10 @@ async fn open_repoints_projection_to_the_switched_session() {
 
     let window = store.model_window().await;
     assert_eq!(
-        window.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+        window
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>(),
         vec!["from session B"],
         "model_window after `open` must derive from the switched-to session, \
          never the session left behind"
@@ -130,7 +133,12 @@ async fn reset_does_not_inherit_the_previous_projection() {
     // dropped by a stale cache length.
     store.append_turn(&[user("hello")]).await.unwrap();
     assert_eq!(
-        store.model_window().await.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+        store
+            .model_window()
+            .await
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>(),
         vec!["hello"],
         "the fresh session's first turn must be committed, not swallowed by \
          a stale projection length"

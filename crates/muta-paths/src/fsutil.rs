@@ -1,5 +1,4 @@
-//! Filesystem durability helpers shared by [`crate::config`] and
-//! [`crate::session`].
+//! Filesystem durability helpers: atomic-rename writes, fsync, file locks.
 //!
 //! The functions here implement the **atomic-rename + fsync** durability
 //! pattern required for crash-safe single-file updates. POSIX guarantees that

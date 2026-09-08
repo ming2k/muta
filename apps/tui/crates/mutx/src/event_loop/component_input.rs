@@ -1,17 +1,41 @@
-//! Input pre-dispatch probes (Dropdown, Selection Relay, Delete Confirm).
+//! Scene-resolved component input handlers (ADR-0197 M2).
+//!
+//! The event loop asks the committed scene for a keyboard path, then offers
+//! the event to the components on that path. These handlers contain the few
+//! component-local mutations that cannot be represented by the shared input
+//! action vocabulary.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::components::dropdown::DropdownEventOutcome;
 use crate::input::{self};
 use crate::model::selection::{SelectionState, floor_grapheme_boundary, inclusive_grapheme_end};
+use crate::ui;
 use crate::{App, Modal, ProviderDeleteChoice, SelectionEdge};
 
-/// Probe a raw input event against an active **whole-input selection**.
-pub(crate) fn probe_input_selection_relay(
+/// Offer an event to the handlers on the scene-resolved keyboard path.
+pub(crate) fn route(
     app: &mut App,
     event: &Event,
+    keyboard_path: &[ui::UiKey],
 ) -> Option<input::InputAction> {
+    for key in keyboard_path {
+        match key {
+            ui::UiKey::ConfigDropdown => return handle_config_dropdown(app, event),
+            ui::UiKey::ProviderDelete => return handle_delete_overlay(app, event),
+            ui::UiKey::Composer => {
+                if let Some(action) = handle_input_selection(app, event) {
+                    return Some(action);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Probe a raw input event against an active **whole-input selection**.
+fn handle_input_selection(app: &mut App, event: &Event) -> Option<input::InputAction> {
     if !app.input_selection_relays_arrows() {
         return None;
     }
@@ -121,7 +145,7 @@ pub(crate) fn probe_input_selection_relay(
     }
 }
 
-pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAction> {
+fn handle_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAction> {
     app.config_dropdown.as_ref()?;
 
     let Event::Key(k) = event else {
@@ -158,14 +182,12 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                         app.config_dropdown = Some((add_dropdown, anchor));
                         return Some(input::InputAction::None);
                     }
-                    let _ = app
-                        .tx
-                        .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                            Box::new(muta_contracts::WebSearchConfigUpdate {
-                                provider: Some(payload),
-                                ..Default::default()
-                            }),
-                        ));
+                    app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                        Box::new(muta_contracts::WebSearchConfigUpdate {
+                            provider: Some(payload),
+                            ..Default::default()
+                        }),
+                    ));
                 }
                 "websearch_reader" => {
                     if payload == "add_new" {
@@ -175,14 +197,12 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                         app.config_dropdown = Some((add_dropdown, anchor));
                         return Some(input::InputAction::None);
                     }
-                    let _ = app
-                        .tx
-                        .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                            Box::new(muta_contracts::WebSearchConfigUpdate {
-                                reader: Some(payload),
-                                ..Default::default()
-                            }),
-                        ));
+                    app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                        Box::new(muta_contracts::WebSearchConfigUpdate {
+                            reader: Some(payload),
+                            ..Default::default()
+                        }),
+                    ));
                 }
                 "add_search_connection" => {
                     let (name, needs_key) = match payload.as_str() {
@@ -212,15 +232,13 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                             custom_headers: None,
                             enabled: true,
                         };
-                        let _ = app
-                            .tx
-                            .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                                Box::new(muta_contracts::WebSearchConfigUpdate {
-                                    upsert_search_connection: Some(new_conn),
-                                    provider: Some(id),
-                                    ..Default::default()
-                                }),
-                            ));
+                        app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                upsert_search_connection: Some(new_conn),
+                                provider: Some(id),
+                                ..Default::default()
+                            }),
+                        ));
                     }
                 }
                 "add_reader_connection" => {
@@ -248,15 +266,13 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
                             custom_headers: None,
                             enabled: true,
                         };
-                        let _ = app
-                            .tx
-                            .send(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                                Box::new(muta_contracts::WebSearchConfigUpdate {
-                                    upsert_reader_connection: Some(new_conn),
-                                    reader: Some(id),
-                                    ..Default::default()
-                                }),
-                            ));
+                        app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
+                            Box::new(muta_contracts::WebSearchConfigUpdate {
+                                upsert_reader_connection: Some(new_conn),
+                                reader: Some(id),
+                                ..Default::default()
+                            }),
+                        ));
                     }
                 }
                 _ => {}
@@ -267,8 +283,8 @@ pub(crate) fn probe_config_dropdown(app: &mut App, event: &Event) -> Option<inpu
     }
 }
 
-pub(crate) fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
-    if app.pending_provider_delete.is_none() || app.active_modal() != Modal::Connections {
+fn handle_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
+    if app.pending_provider_delete.is_none() {
         return None;
     }
 

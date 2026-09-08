@@ -33,15 +33,17 @@ fn tab_after_esc_reopens_through_the_event_loop_context_shape() {
     let mut input = app.input.clone();
     let mut cursor = app.cursor_position;
     let mut drag = crate::model::selection::SelectionDrag::default();
-    let action = crate::input::process_event(
+    let action = crate::input::route_event(
         crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Tab,
             crossterm::event::KeyModifiers::NONE,
         )),
         &mut input,
         &mut cursor,
-        crate::input::InputContext {
-            active_modal: crate::Modal::None,
+        crate::input::Dispatch::default(),
+        &crate::modal_keys::ModalKeys::default(),
+        &crate::sheet::SheetKeys::default(),
+        &crate::session::ViewKeys {
             completion_kind,
             suggestion_count: completions.len(),
             has_exact_suggestion: false,
@@ -358,30 +360,26 @@ async fn sheet_mount_parks_browse_focus_not_just_step_target() {
     app.transcript_focused = true;
 
     // The agent's question arrives; the per-frame sync mounts the sheet.
-    runtime
-        .pending_question
-        .lock()
-        .await
-        .push_back(UserQuestionRequest {
-            id: "q1".into(),
-            questions: vec![UserQuestion {
-                header: Some("Style".into()),
-                question: "Which error handling crate?".into(),
-                options: vec![
-                    UserQuestionOption {
-                        label: "anyhow".into(),
-                        description: None,
-                    },
-                    UserQuestionOption {
-                        label: "eyre".into(),
-                        description: None,
-                    },
-                ],
-                multi_select: false,
-            }],
-            origin: None,
-        });
-    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    app.pending_questions.push_back(UserQuestionRequest {
+        id: "q1".into(),
+        questions: vec![UserQuestion {
+            header: Some("Style".into()),
+            question: "Which error handling crate?".into(),
+            options: vec![
+                UserQuestionOption {
+                    label: "anyhow".into(),
+                    description: None,
+                },
+                UserQuestionOption {
+                    label: "eyre".into(),
+                    description: None,
+                },
+            ],
+            multi_select: false,
+        }],
+        origin: None,
+    });
+    crate::event_loop::sync::sync_request_surfaces(&mut app, &runtime);
 
     assert_eq!(
         app.active_sheet(),
@@ -417,24 +415,20 @@ async fn permission_sheet_does_not_steal_focus_rearmed_behind_it() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let runtime = crate::event_loop::UiRuntime::minimal_for_test();
 
-    runtime
-        .pending_permission
-        .lock()
-        .await
-        .push_back(PermissionRequest {
-            id: "p1".into(),
-            tool: "bash".into(),
-            label: "Run tests".into(),
-            description: String::new(),
-            arguments: "{}".into(),
-            scope: String::new(),
-            elevation: false,
-            one_off: false,
-            origin: None,
-            hazard: None,
-            submission: None,
-        });
-    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    app.pending_permissions.push_back(PermissionRequest {
+        id: "p1".into(),
+        tool: "bash".into(),
+        label: "Run tests".into(),
+        description: String::new(),
+        arguments: "{}".into(),
+        scope: String::new(),
+        elevation: false,
+        one_off: false,
+        origin: None,
+        hazard: None,
+        submission: None,
+    });
+    crate::event_loop::sync::sync_request_surfaces(&mut app, &runtime);
     assert_eq!(
         app.active_sheet(),
         Some(crate::sheet::SheetKind::Permission)
@@ -447,7 +441,7 @@ async fn permission_sheet_does_not_steal_focus_rearmed_behind_it() {
 
     // A later sync frame must not clear it again (no re-mount occurs —
     // the sheet is already up).
-    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    crate::event_loop::sync::sync_request_surfaces(&mut app, &runtime);
     assert!(
         app.transcript_focused,
         "browse focus re-armed behind the pass-through sheet must survive"

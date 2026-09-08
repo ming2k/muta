@@ -34,7 +34,7 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
             if name.is_empty() {
                 app.load_custom_field();
             } else {
-                let _ = app.tx.send(AgentRequest::EditProvider {
+                app.send_intent(AgentRequest::EditProvider {
                     id,
                     name,
                     protocol,
@@ -77,7 +77,7 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                 // declarations with no preset id; the catalog still accepts
                 // the old id when loading existing configurations.
                 let preset_id = created_connection_preset_id(app.custom_preset_id.take());
-                let _ = app.tx.send(AgentRequest::AddProvider {
+                app.send_intent(AgentRequest::AddProvider {
                     name,
                     protocol,
                     base_url,
@@ -122,12 +122,15 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             app.editor_target_is_builtin = is_builtin;
             app.editor_key.clear();
             // Load the stored capability overrides (ADR-0149 layer 1) so
-            // the editor opens showing what is already forced, if anything.
-            let stored = muta_persistence::route_settings::RouteSettingsStore::load()
-                .settings_for(&row.provider_id, &row.model)
-                .and_then(|r| r.capability_overrides.clone());
-            app.editor_vision_override = stored.as_ref().and_then(|o| o.vision);
-            app.editor_tool_override = stored.as_ref().and_then(|o| o.tool_call);
+            // the editor shows what is already forced, if anything. The read
+            // is a daemon round-trip now (ADR-0197): open with the defaults
+            // cleared and prefill when the `RouteSettings` answer lands.
+            app.editor_vision_override = None;
+            app.editor_tool_override = None;
+            app.send_intent(muta_contracts::AgentRequest::QueryRouteSettings {
+                provider_id: row.provider_id.clone(),
+                model: row.model.clone(),
+            });
             // Default the effort to the model's own configured
             // value, else `medium` clamped onto the model's
             // ladder — a ladder without `medium` (e.g. Kimi
@@ -261,9 +264,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     _ => {}
                 }
             }
-            let _ = app
-                .tx
-                .send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
 
             app.input.clear();
             app.set_cursor(0);
@@ -301,9 +302,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             if !key.is_empty() && payload == "jina" {
                 update.jina_api_key = Some(key);
             }
-            let _ = app
-                .tx
-                .send(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
+            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
 
             app.input.clear();
             app.set_cursor(0);
@@ -337,7 +336,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             // user-editable channel); user-defined models persist
             // to their channel. ADR-0045.
             if app.editor_target_is_builtin {
-                let _ = app.tx.send(AgentRequest::EditModelReasoning {
+                app.send_intent(AgentRequest::EditModelReasoning {
                     model,
                     effort: Some(effort),
                     thinking: app.editor_thinking_available.then_some(app.editor_thinking),
@@ -348,7 +347,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     }),
                 });
             } else {
-                let _ = app.tx.send(AgentRequest::EditProviderModel {
+                app.send_intent(AgentRequest::EditProviderModel {
                     provider_id: id,
                     model,
                     effort: Some(effort),
@@ -381,7 +380,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
         // (effort/thinking are set per model from the Models
         // picker `e` editor).
         let key = app.input.trim().to_string();
-        let _ = app.tx.send(AgentRequest::SwitchProvider {
+        app.send_intent(AgentRequest::SwitchProvider {
             provider_type: id,
             model,
             api_key: if key.is_empty() {
@@ -874,7 +873,7 @@ pub(crate) fn arm_effort_ignition_if_max(app: &mut App) {
 
 pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bool) {
     if key_ready {
-        let _ = app.tx.send(AgentRequest::SwitchProvider {
+        app.send_intent(AgentRequest::SwitchProvider {
             provider_type: id,
             model,
             api_key: None,
@@ -886,11 +885,11 @@ pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, ke
         let auth = app.provider_row_auth(&id);
         let method = auth
             .oauth_provider_id()
-            .and_then(muta_providers::oauth::config_by_provider_id)
+            .and_then(muta_contracts::provider_auth::config_by_provider_id)
             .and_then(|config| config.effective_default_login_method())
             .or_else(|| auth.default_login_method())
             .unwrap_or(muta_contracts::LoginMethod::Device);
-        let _ = app.tx.send(AgentRequest::ConnectProvider { id, method });
+        app.send_intent(AgentRequest::ConnectProvider { id, method });
         app.dismiss_surface();
     } else {
         app.push_transient_surface(Modal::ModelEditor);
@@ -910,7 +909,7 @@ pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, ke
 
 pub(crate) async fn handle_permission_submit(
     app: &mut App,
-    runtime: &crate::event_loop::runtime::UiRuntime,
+    _runtime: &crate::event_loop::runtime::UiRuntime,
 ) {
     let one_off = app.pending_permission.as_ref().is_some_and(|r| r.one_off);
     let reject_idx = if one_off { 1 } else { 2 };
@@ -945,23 +944,18 @@ pub(crate) async fn handle_permission_submit(
             }
         };
         let request_id = request.id;
-        let parent_call_id = runtime
-            .runner_permission_parent
-            .lock()
-            .await
-            .remove(&request_id);
-        let _ = app.tx.send(AgentRequest::PermissionReply {
+        let parent_call_id = app.runner_permission_parent.remove(&request_id);
+        app.send_intent(AgentRequest::PermissionReply {
             request_id: request_id.clone(),
             decision,
             parent_call_id,
         });
         if decision == muta_contracts::PermissionDecision::Reject {
             let queued: Vec<muta_contracts::PermissionRequest> =
-                runtime.pending_permission.lock().await.drain(..).collect();
-            let mut parents = runtime.runner_permission_parent.lock().await;
+                app.pending_permissions.drain(..).collect();
             for pending in queued {
-                let parent_call_id = parents.remove(&pending.id);
-                let _ = app.tx.send(AgentRequest::PermissionReply {
+                let parent_call_id = app.runner_permission_parent.remove(&pending.id);
+                app.send_intent(AgentRequest::PermissionReply {
                     request_id: pending.id,
                     decision: muta_contracts::PermissionDecision::Reject,
                     parent_call_id,
@@ -970,10 +964,8 @@ pub(crate) async fn handle_permission_submit(
             app.pending_permission = None;
             app.pop_transient_surface();
         } else {
-            let mut queue = runtime.pending_permission.lock().await;
-            queue.retain(|r| r.id != request_id);
-            app.pending_permission = queue.front().cloned();
-            drop(queue);
+            app.pending_permissions.retain(|r| r.id != request_id);
+            app.pending_permission = app.pending_permissions.front().cloned();
             if app.pending_permission.is_none() {
                 app.pop_transient_surface();
             }
@@ -1026,18 +1018,14 @@ pub(crate) mod question_effects {
                             crate::trust_gate::answer_to_decision(answers),
                             crate::trust_gate::TrustGateDecision::Trust
                         ) {
-                            let _ = app.tx.send(AgentRequest::TrustWorkspace {
+                            app.send_intent(AgentRequest::TrustWorkspace {
                                 domains: Vec::new(),
                             });
                         }
                         continue;
                     }
-                    let parent_call_id = runtime
-                        .runner_question_parent
-                        .lock()
-                        .await
-                        .remove(request_id);
-                    let _ = app.tx.send(AgentRequest::UserQuestionReply {
+                    let parent_call_id = app.runner_question_parent.remove(request_id);
+                    app.send_intent(AgentRequest::UserQuestionReply {
                         request_id: request_id.clone(),
                         answers: answers.clone(),
                         parent_call_id,
@@ -1049,22 +1037,16 @@ pub(crate) mod question_effects {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
                         continue;
                     }
-                    let parent_call_id = runtime
-                        .runner_question_parent
-                        .lock()
-                        .await
-                        .remove(request_id);
-                    let _ = app.tx.send(AgentRequest::UserQuestionReply {
+                    let parent_call_id = app.runner_question_parent.remove(request_id);
+                    app.send_intent(AgentRequest::UserQuestionReply {
                         request_id: request_id.clone(),
                         answers: Vec::new(),
                         parent_call_id,
                     });
                 }
                 crate::question_model::QuestionEffect::Closed { request_id } => {
-                    let mut queue = runtime.pending_question.lock().await;
-                    queue.retain(|r| r.id != *request_id);
-                    if queue.is_empty() {
-                        drop(queue);
+                    app.pending_questions.retain(|r| r.id != *request_id);
+                    if app.pending_questions.is_empty() {
                         app.question = None;
                         // The sheet is composer-slot state (ADR-0173 §3),
                         // not router foreground identity: unmount it via

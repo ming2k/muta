@@ -23,13 +23,12 @@ use crate::render::Theme;
 use crate::transcript::{
     finalize_streaming_reasoning, transcript_message_from_core, transcript_messages_from_core,
 };
-use crate::versioned::{TranscriptPatch, TranscriptUpdate};
 use muta_contracts::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;
 
 fn test_command_catalog() -> muta_contracts::CommandCatalog {
-    muta_runtime::startup::command_catalog(&[])
+    muta_client::command_catalog(&[])
 }
 
 fn conversation_with_runners() -> Vec<TranscriptMessage> {
@@ -98,11 +97,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         recent_commands: Vec::new(),
         input: String::new(),
         messages: Vec::new(),
-        messages_version: 0,
-        stream_cursor: None,
         side_messages: Vec::new(),
-        side_messages_version: 0,
-        side_stream_cursor: None,
         layout_height_cache: Default::default(),
         in_side_view: false,
         side_session_id: None,
@@ -183,6 +178,26 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         harness_retry_pending: false,
         phase: None,
         provider_retry: None,
+        persistence_health: None,
+        link_down: false,
+        live_session_id: "session-test".to_string(),
+        pending_permissions: std::collections::VecDeque::new(),
+        pending_questions: std::collections::VecDeque::new(),
+        pending_inputs: std::collections::VecDeque::new(),
+        runner_permission_parent: HashMap::new(),
+        runner_question_parent: HashMap::new(),
+        workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
+        context_tokens_by_session: HashMap::new(),
+        open_sessions_signal: false,
+        open_tree_signal: false,
+        open_host_signal: false,
+        view_transitioned: false,
+        transcript_changed_pending: false,
+        side_transcript_changed_pending: false,
+        tool_density: false,
+        reasoning_default_expanded: false,
+        backend_completion_signal: None,
+        tui_config: crate::config::TuiConfig::default(),
         unattended: false,
         confined: true,
         round_count: 0,
@@ -241,8 +256,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_dispatch: std::collections::VecDeque::new(),
         composer_send_mode: crate::app::ComposerSendMode::default(),
         queue_blocked_sessions: std::collections::HashSet::new(),
-        naturally_completed_sessions: std::collections::HashSet::new(),
-        idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
@@ -403,12 +416,13 @@ fn relay_probe(
     app: &mut App,
     code: crossterm::event::KeyCode,
 ) -> Option<crate::input::InputAction> {
-    crate::event_loop::probe_input_selection_relay(
+    crate::event_loop::component_input::route(
         app,
         &crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
             code,
             crossterm::event::KeyModifiers::NONE,
         )),
+        &[crate::ui::UiKey::Composer],
     )
 }
 

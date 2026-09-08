@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{
     AgentRequest, ConnectionAuth, ImagePart, LoopStatus, ParentStatus, PermissionRequest,
-    ProviderPickerSnapshot, SessionOverview,
+    ProviderPickerSnapshot, SessionOverview, UserQuestionRequest,
 };
 
 use crate::completion::CompletionItemKind;
@@ -258,6 +258,20 @@ pub enum DraftAdoption {
     OnlyIfIdle,
 }
 
+/// The OAuth add-flow handoff payload (ADR-0197 M1): a mutation from the
+/// translator, applied by the loop against the add-flow state above.
+pub enum OauthAddSignal {
+    Pending {
+        url: String,
+        user_code: String,
+        message: String,
+    },
+    Done,
+    Failed {
+        message: String,
+    },
+}
+
 pub struct App {
     pub input: String,
     /// Structured transcript messages (semantic document model).
@@ -266,19 +280,19 @@ pub struct App {
     /// from. The loop re-clones the buffer only when the runtime version moves
     /// past this, so an unchanged transcript costs no per-frame deep clone.
     /// Starts at 0 (the `Versioned` sentinel) so the first frame always syncs.
-    pub messages_version: u64,
+
     /// O(1) streaming-delta target for `messages` (id, index); reset on
     /// wholesale replacement (ADR-0187).
-    pub stream_cursor: Option<(u64, usize)>,
+
     /// Side-conversation transcript (ADR-0017). Populated only while a `/btw`
     /// side session is live; per-turn events tagged with the side `session_id`
     /// route here instead of into `messages`.
     pub side_messages: Vec<TranscriptMessage>,
     /// Companion to `messages_version` for the side buffer.
-    pub side_messages_version: u64,
+
     /// O(1) streaming-delta target for `side_messages`; reset on wholesale
     /// replacement (ADR-0187).
-    pub side_stream_cursor: Option<(u64, usize)>,
+
     /// Per-message laid-out height cache (Stage 2). Lets the transcript renderer
     /// skip re-wrapping off-screen messages, making per-frame layout O(visible)
     /// instead of O(transcript). Cleared whenever the transcript changes (a
@@ -346,6 +360,51 @@ pub struct App {
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<muta_contracts::ContextTokenSnapshot>,
+    /// Per-session context snapshots (ADR-0197 M1): the applier keys them by
+    /// session; the render loop projects the *viewed* session's value into
+    /// `context_tokens` each frame.
+    pub context_tokens_by_session: HashMap<String, muta_contracts::ContextTokenSnapshot>,
+    /// The **live primary session id** (ADR-0197 M1): the harness repoints
+    /// its shared store on `/new`, `/session open`, `/resume`, and `/fork`;
+    /// the translator reports each repoint here and session-scoped client
+    /// state (the ↑/↓ prompt history's origin above all) follows.
+    pub live_session_id: String,
+    /// Human-in-the-loop request queues (ADR-0197 M1): the applier owns the
+    /// queues; `pending_permission` / `pending_question` / `pending_input`
+    /// remain the *mounted front* projections the sheets render.
+    pub pending_permissions: std::collections::VecDeque<PermissionRequest>,
+    pub pending_questions: std::collections::VecDeque<UserQuestionRequest>,
+    pub pending_inputs: std::collections::VecDeque<muta_contracts::InputRequest>,
+    /// Full-duplex (ADR-0029): which runner (by parent tool-call id)
+    /// surfaced a given permission / ask_user request, so the modal's reply
+    /// can be tagged for down-routing.
+    pub runner_permission_parent: HashMap<String, String>,
+    pub runner_question_parent: HashMap<String, String>,
+    /// The latest harness workspace-security snapshot (trust-gate state).
+    pub workspace_security: muta_contracts::WorkspaceSecuritySnapshot,
+    /// One-shot backend navigation signals (ADR-0197 M1): the applier latches
+    /// them; the loop consumes and clears when it mounts the surface.
+    pub open_sessions_signal: bool,
+    pub open_tree_signal: bool,
+    pub open_host_signal: bool,
+    /// Set by the applier when a view transition (aside enter/exit) landed;
+    /// the loop consumes it to re-anchor scroll exactly once.
+    pub view_transitioned: bool,
+    /// Set by the applier when a transcript document changed; the loop
+    /// consumes it for bottom-follow scroll staging.
+    pub transcript_changed_pending: bool,
+    pub side_transcript_changed_pending: bool,
+    /// Global tool-step density (`true` = Comfortable: new tool steps spawn
+    /// expanded). Config-derived; read by the applier's disclosure defaults.
+    pub tool_density: bool,
+    /// Effective default-expand state for a reasoning trace
+    /// (`[tui.default_expanded] thinking`, ADR-0197 M1: applier-owned).
+    pub reasoning_default_expanded: bool,
+    /// Backend completion round-trip awaiting consumption by the loop.
+    pub(crate) backend_completion_signal: Option<crate::event_loop::CompletionSignal>,
+    /// The effective TUI config (the applier's disclosure defaults read it;
+    /// the translator no longer carries config clones).
+    pub tui_config: crate::config::TuiConfig,
     /// Active tab in the Session Stats modal (`Overview` or `Activity`).
     pub telemetry_tab: TelemetryTab,
     /// Scroll offset of the Session Stats modal body.
@@ -578,6 +637,10 @@ pub struct App {
     /// bar hidden). Never holds transport setbacks — see `crate::phase`.
     pub phase: Option<crate::phase::Phase>,
     pub provider_retry: Option<ProviderRetryState>,
+    /// Durability-health banner state (ADR-0196 D4): the daemon's
+    /// persistence-writer degradation, folded from the monitor stream.
+    /// `None` / `Healthy` renders no banner.
+    pub persistence_health: Option<muta_contracts::monitor::PersistenceHealth>,
     /// Whether all tool permissions are auto-approved this session
     /// (`--unattended` / `/unattended on`). Mirrored from the harness snapshot.
     pub unattended: bool,
@@ -815,8 +878,6 @@ pub struct App {
     /// Sessions whose last interactive round reached its natural completion
     /// event and whose harness has subsequently reported idle. Both facts are
     /// tracked separately so errors/interrupts never auto-run follow-ups.
-    pub naturally_completed_sessions: std::collections::HashSet<String>,
-    pub idle_sessions: std::collections::HashSet<String>,
     pub running_sessions: std::collections::HashSet<String>,
     /// Semantic selection state.
     pub selection: SelectionState,
@@ -1088,10 +1149,17 @@ pub struct App {
     /// box). `None` when no user logo is present → built-in wordmark is used.
     /// Passed into the empty-state hero via `TranscriptProps::logo`.
     pub logo: Option<Vec<String>>,
+    /// Dead-link latch (ADR-0197 D6): set the first time an outbox send
+    /// fails (the session driver's receiver is gone). A dead link is a
+    /// visible chrome state — the activity bar reports it — never a
+    /// swallowed send. It does not clear: with the driver gone nothing can
+    /// acknowledge recovery, and pretending otherwise would be a lie.
+    pub link_down: bool,
 }
 
 mod composer;
 mod history;
+mod link;
 mod providers;
 mod queue;
 mod runners;

@@ -2,12 +2,15 @@
 //! builders live here; per-concern groups are sibling modules.
 
 use super::*;
+use crate::modal_keys::ModalKeys;
+use crate::session::ViewKeys;
+use crate::sheet::SheetKeys;
 use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
 
 fn enter(input: &mut String, exact: bool) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Enter,
             modifiers: KeyModifiers::NONE,
@@ -16,9 +19,10 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
         }),
         input,
         &mut cursor,
-        InputContext {
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             has_exact_suggestion: exact,
             ..Default::default()
         },
@@ -35,7 +39,7 @@ fn enter_with_completion(
 ) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Enter,
             modifiers: KeyModifiers::NONE,
@@ -44,7 +48,10 @@ fn enter_with_completion(
         }),
         input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind: kind,
             suggestion_count,
             has_exact_suggestion,
@@ -58,7 +65,7 @@ fn enter_with_completion(
 fn enter_shell(input: &mut String) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code: KeyCode::Enter,
             modifiers: KeyModifiers::NONE,
@@ -67,18 +74,19 @@ fn enter_shell(input: &mut String) -> InputAction {
         }),
         input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
 
 fn key_in_view(code: KeyCode, in_runner_view: bool, input: &mut String) -> InputAction {
-    key_in_side_view_with(code, input, move |ctx| {
-        ctx.in_runner_view = in_runner_view;
-        ctx.in_side_view = false;
+    key_in_view_with(code, input, move |dispatch| {
         // Surface dispatch keys off the explicit view (ADR-0172), not the
         // legacy flags.
-        ctx.current_view = if in_runner_view {
+        dispatch.view = if in_runner_view {
             crate::surfaces::View::Runner
         } else {
             crate::surfaces::View::Session
@@ -89,21 +97,23 @@ fn key_in_view(code: KeyCode, in_runner_view: bool, input: &mut String) -> Input
 fn key_in_side_view_with(
     code: KeyCode,
     input: &mut String,
-    tune: impl FnOnce(&mut InputContext),
+    tune: impl FnOnce(&mut Dispatch),
 ) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    let mut context = InputContext {
-        in_side_view: true,
-        current_view: crate::surfaces::View::Side,
+    let mut dispatch = Dispatch {
+        view: crate::surfaces::View::Side,
         ..Default::default()
     };
-    tune(&mut context);
-    process_event(
+    tune(&mut dispatch);
+    route_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         input,
         &mut cursor,
-        context,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -112,16 +122,43 @@ fn key_in_side_view(code: KeyCode, input: &mut String) -> InputAction {
     key_in_side_view_with(code, input, |_| {})
 }
 
+fn key_in_view_with(
+    code: KeyCode,
+    input: &mut String,
+    tune: impl FnOnce(&mut Dispatch),
+) -> InputAction {
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    let mut dispatch = Dispatch::default();
+    tune(&mut dispatch);
+    route_event(
+        Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
+        input,
+        &mut cursor,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
+        &mut drag,
+    )
+}
+
 fn key_with_focus(code: KeyCode) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
-            has_focused_target: true,
+        Dispatch {
+            focused_target: true,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
+            focused_target: true,
             ..Default::default()
         },
         &mut drag,
@@ -137,7 +174,7 @@ fn run_key(
     has_focus: bool,
 ) -> InputAction {
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code,
             modifiers,
@@ -146,13 +183,18 @@ fn run_key(
         }),
         input,
         cursor,
-        InputContext {
-            active_modal: modal,
-            has_focused_target: has_focus,
+        Dispatch {
+            modal,
+            focused_target: has_focus,
+            ..Default::default()
+        },
+        &ModalKeys {
             history_searching: modal == crate::Modal::HistorySearch,
             model_searching: matches!(modal, crate::Modal::Models | crate::Modal::Connections),
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -166,7 +208,7 @@ fn run_sheet_key(
     has_focus: bool,
 ) -> InputAction {
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code,
             modifiers,
@@ -175,12 +217,18 @@ fn run_sheet_key(
         }),
         input,
         cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            active_sheet: Some(kind),
-            has_focused_target: has_focus,
+        Dispatch {
+            modal: crate::Modal::None,
+            sheet: Some(kind),
+            focused_target: has_focus,
             ..Default::default()
         },
+        &ModalKeys::default(),
+        &SheetKeys {
+            focused_target: has_focus,
+            ..Default::default()
+        },
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -192,7 +240,7 @@ fn run_history_key(
     modifiers: KeyModifiers,
 ) -> InputAction {
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent {
             code,
             modifiers,
@@ -201,11 +249,16 @@ fn run_history_key(
         }),
         input,
         cursor,
-        InputContext {
-            active_modal: crate::Modal::HistorySearch,
+        Dispatch {
+            modal: crate::Modal::HistorySearch,
+            ..Default::default()
+        },
+        &ModalKeys {
             history_searching: true,
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -213,15 +266,20 @@ fn run_history_key(
 fn editor_key(code: KeyCode, field: u8, input: &mut String) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::ModelEditor,
+        Dispatch {
+            modal: crate::Modal::ModelEditor,
+            ..Default::default()
+        },
+        &ModalKeys {
             editor_field: Some(field),
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -233,11 +291,14 @@ fn compose_key(
     cursor: &mut usize,
 ) -> InputAction {
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent::new(code, modifiers)),
         input,
         cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -250,11 +311,14 @@ fn key_without_modal(code: KeyCode) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -268,11 +332,14 @@ fn compose_key_with_completion(
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        InputContext {
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys {
             completion_kind,
             suggestion_count,
             has_exact_suggestion: exact,
@@ -290,16 +357,21 @@ fn run_paste(
     modal: crate::Modal,
 ) -> InputAction {
     let mut drag = SelectionDrag::default();
-    process_event(
+    route_event(
         Event::Paste(text.to_string()),
         input,
         cursor,
-        InputContext {
-            active_modal: modal,
+        Dispatch {
+            modal,
+            ..Default::default()
+        },
+        &ModalKeys {
             history_searching: modal == crate::Modal::HistorySearch,
             model_searching: matches!(modal, crate::Modal::Models | crate::Modal::Connections),
             ..Default::default()
         },
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     )
 }
@@ -308,11 +380,14 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
     let mut input = seed.to_string();
     let mut cur = cursor;
     let mut drag = SelectionDrag::default();
-    let action = process_event(
+    let action = route_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         &mut input,
         &mut cur,
-        InputContext::default(),
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
         &mut drag,
     );
     (action, cur)

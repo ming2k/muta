@@ -111,7 +111,7 @@ impl TuiConfig {
         }
 
         // Migration check: check if muta/config.toml has [tui] or [input_history]
-        let muta_config_path = muta_persistence::paths::get().config_file();
+        let muta_config_path = muta_paths::paths::get().config_file();
         if let Ok(content) = fs::read_to_string(&muta_config_path) {
             #[derive(Deserialize)]
             struct LegacyContainer {
@@ -140,7 +140,7 @@ impl TuiConfig {
             fs::create_dir_all(parent)?;
         }
         let serialized = toml::to_string_pretty(self)?;
-        muta_persistence::fsutil::atomic_write_bytes(&path, serialized.as_bytes())?;
+        muta_paths::fsutil::atomic_write_bytes(&path, serialized.as_bytes())?;
         Ok(())
     }
 }
@@ -170,45 +170,6 @@ pub fn reasoning_default_expanded(config: &TuiConfig) -> bool {
         .get(THINKING_KEY)
         .copied()
         .unwrap_or(false)
-}
-
-/// Load prompt input history from SQLite muta.db (authoritative SSOT).
-pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
-    let db_path = muta_persistence::paths::get().db_file();
-    if let Ok(engine) = muta_persistence::db::DatabaseEngine::open(&db_path, None)
-        && let Ok(entries) = engine.load_input_history(muta_contracts::HISTORY_CAP)
-    {
-        return entries;
-    }
-    Vec::new()
-}
-
-/// Save prompt input history to SQLite muta.db (authoritative SSOT).
-pub fn save_history(
-    history: &[muta_contracts::HistoryEntry],
-    dedup: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = muta_persistence::paths::get().db_file();
-    let engine = muta_persistence::db::DatabaseEngine::open(&db_path, None)
-        .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-    engine
-        .save_input_history(history, dedup)
-        .map_err(|e| format!("could not save input history to sqlite: {e}"))?;
-    Ok(())
-}
-
-/// Delete a prompt input history record from SQLite muta.db (authoritative SSOT).
-pub fn delete_history_entry(
-    text: &str,
-    created_at_ms: u64,
-) -> Result<usize, Box<dyn std::error::Error>> {
-    let db_path = muta_persistence::paths::get().db_file();
-    let engine = muta_persistence::db::DatabaseEngine::open(&db_path, None)
-        .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-    let count = engine
-        .delete_input_history_entry(text, created_at_ms)
-        .map_err(|e| format!("could not delete input history entry from sqlite: {e}"))?;
-    Ok(count)
 }
 
 /// Discover all candidate theme directories across project workspace and user configuration roots.
@@ -243,7 +204,7 @@ pub fn candidate_theme_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     if !dirs.contains(&mutx_themes) {
         dirs.push(mutx_themes);
     }
-    let legacy_muta_themes = muta_persistence::paths::get().themes_dir();
+    let legacy_muta_themes = muta_paths::paths::get().themes_dir();
     if !dirs.contains(&legacy_muta_themes) {
         dirs.push(legacy_muta_themes);
     }

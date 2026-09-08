@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn provider_retry_state_formats_summary_and_timing() {
     let now = std::time::Instant::now();
-    let state = ProviderRetryState {
+    let state = crate::app::ProviderRetryState {
         attempt: 2,
         max_attempts: 16,
         retry_at: now + std::time::Duration::from_millis(6_600),
@@ -14,7 +14,7 @@ fn provider_retry_state_formats_summary_and_timing() {
     let summary = state.summary(now);
     assert_eq!(summary, "retry 1/15 (next in 6.6s)");
 
-    let running_state = ProviderRetryState {
+    let running_state = crate::app::ProviderRetryState {
         attempt: 4,
         max_attempts: 16,
         retry_at: now - std::time::Duration::from_millis(1_200),
@@ -339,7 +339,10 @@ fn antigravity_preset_prefills_url_and_seeds_relay_models() {
         app.custom_base_url,
         "https://daily-cloudcode-pa.googleapis.com"
     );
-    assert_eq!(app.custom_models, muta_providers::ANTIGRAVITY_OAUTH_MODELS);
+    assert_eq!(
+        app.custom_models,
+        muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS
+    );
     // No free-text Model field — the closed Gemini family is the seed.
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
     // Name and Token still start empty (the user supplies them).
@@ -765,8 +768,11 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
         usage: muta_contracts::ConnectionUsageState::Fetching,
     };
 
-    *runtime.connection_detail.lock().await = Some(detail_phase1.clone());
-    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::ConnectionDetail(detail_phase1.clone()),
+    );
 
     assert_eq!(app.connection_info_scroll, 0);
     assert_eq!(
@@ -781,8 +787,11 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
     let mut detail_phase2 = detail_phase1.clone();
     detail_phase2.usage = muta_contracts::ConnectionUsageState::Available(Box::default());
 
-    *runtime.connection_detail.lock().await = Some(detail_phase2);
-    crate::event_loop::sync::sync_runtime_state_to_app(&mut app, &runtime, &mut 0, &mut 0).await;
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::ConnectionDetail(detail_phase2),
+    );
 
     // Scroll must be preserved and not jump to 0!
     assert_eq!(

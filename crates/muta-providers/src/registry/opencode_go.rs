@@ -12,7 +12,7 @@ use super::{LiveCatalog, ProviderPresetSpec};
 /// activates from this list before the first models.dev fetch completes; the
 /// live catalog then refreshes the served set (including relay models this
 /// client has never heard of).
-pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
+pub use muta_contracts::provider_presets::OPENCODE_GO_MODELS;
 
 /// Wire-format exceptions for the opencode-go relay. The relay's default route
 /// is OpenAI chat-completions, but the `minimax-*` family is served over
