@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.2] - 2026-09-08
+
+### Fixed
+
+- **SQLite migration 10 failed to commit on databases with live transcript
+  rows, wedging workspace trust.** The `entries` rebuild (ADR-0186 integrity
+  fix) relied on `PRAGMA defer_foreign_keys`, but dropping `entries` — the
+  parent of `entry_memberships`' foreign key — increments SQLite's
+  deferred-constraint counter and the rename swap never decrements it, so
+  COMMIT failed with `FOREIGN KEY constraint failed`, `user_version` never
+  advanced, and every open re-ran and re-failed the rebuild. Trust
+  persistence then failed and the TUI hung on the "Trusting workspace..."
+  PreAttach interstitial while ad-hoc opens thrashed the database with
+  `database is locked`. The migration runner now follows the canonical
+  table-rebuild procedure (sqlite.org/lang_altertable): foreign-key
+  enforcement is disabled before `BEGIN` and restored after COMMIT, the
+  post-migration state is gated on `PRAGMA foreign_key_check`, and `BEGIN
+  IMMEDIATE` with a re-read `user_version` serializes concurrent openers.
+
 ## [0.41.1] - 2026-09-08
 
 ### Fixed
