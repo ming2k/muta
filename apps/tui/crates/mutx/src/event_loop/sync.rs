@@ -171,7 +171,10 @@ fn user_prompt_tail(messages: &[TranscriptMessage]) -> Vec<(String, bool, u64)> 
 /// viewed session's state, publish the routing fact to the translator, and
 /// run the history backfill. Returns whether the *displayed* transcript
 /// changed shape (bottom-follow staging) and the viewed session id.
-pub(crate) fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -> (bool, String) {
+pub(crate) async fn sync_transcripts_and_session(
+    app: &mut App,
+    runtime: &UiRuntime,
+) -> (bool, String) {
     let side_view_transitioned = std::mem::take(&mut app.view_transitioned);
     let transcript_changed = std::mem::take(&mut app.transcript_changed_pending);
     let side_transcript_changed = std::mem::take(&mut app.side_transcript_changed_pending);
@@ -217,7 +220,7 @@ pub(crate) fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -
     }
 
     // Publish the routing fact to the translator (loop → translator).
-    *runtime.viewed_session_id.blocking_lock() = Some(viewed_session_id.clone());
+    *runtime.viewed_session_id.lock().await = Some(viewed_session_id.clone());
 
     let workspace = crate::chrome::tilde_home(&app.cwd);
     if app.current_workspace != workspace {

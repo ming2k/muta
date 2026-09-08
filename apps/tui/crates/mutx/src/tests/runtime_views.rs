@@ -2,6 +2,20 @@
 
 use super::*;
 
+#[tokio::test]
+async fn transcript_sync_publishes_viewed_session_inside_runtime() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    let (_, viewed_session_id) =
+        crate::event_loop::sync::sync_transcripts_and_session(&mut app, &runtime).await;
+
+    assert_eq!(
+        runtime.viewed_session_id.lock().await.as_deref(),
+        Some(viewed_session_id.as_str())
+    );
+}
+
 /// Regression for the wiring itself: the event loop feeds the input layer the
 /// **unsuppressed** `completion_kind` (the dismissal latch travels as its own
 /// `completion_dismissed` flag). Suppressing the kind while the latch is set

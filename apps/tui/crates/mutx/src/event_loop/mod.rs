@@ -174,7 +174,7 @@ pub async fn run_app_loop(
         }
 
         let (displayed_transcript_changed, viewed_session_id) =
-            sync_transcripts_and_session(app, &runtime);
+            sync_transcripts_and_session(app, &runtime).await;
 
         let (open_sessions, open_tree, open_host) = consume_navigation_signals(app, &runtime);
         if open_sessions {
