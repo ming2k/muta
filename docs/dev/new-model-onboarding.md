@@ -46,20 +46,19 @@ own home. No single edit makes a model appear everywhere:
       column) and the provider bullet (behavior, discovery, defaults).
 - [ ] Add a `CHANGELOG.md` `Unreleased` entry describing what a user gains.
 - [ ] If the platform's `/models` endpoint now returns capability metadata it
-      did not before, revisit `fitting:` on the preset spec (see
-      [ADR-0070](../adr/0070-provider-scoped-remote-model-metadata.md)):
-      ids-only endpoints stay `fitting: false` (baselines own capabilities);
-      trusted rich-metadata endpoints may flip to `fitting: true`.
+      did not before, check its `RemoteCatalogSource` binding (see
+      [ADR-0203](../adr/0203-remote-catalog-overlay-and-connection-gated-pipeline.md)):
+      standard endpoints can bind to first-party `Endpoint` or verified `ModelsDev`.
 
 ## Layer weights (why the checklist looks like this)
 
 Effective capability resolution for a model id is:
 
 ```
-user config (RouteSettings, per provider-instance + model id)
-  > remote advertised metadata (fitting: true presets only)
-  > provider baseline table (this checklist's layer 1)
-  > (visibility only) live /models discovery intersection
+user connection overrides (ConnectionOverrides)
+  > provider overrides (model_providers.toml)
+  > master catalog (Baseline ⊕ RemoteCatalog)
+  > conservative floor (128k context, text-only safe defaults)
 ```
 
 A new model therefore needs a baseline entry even when discovery is on: the

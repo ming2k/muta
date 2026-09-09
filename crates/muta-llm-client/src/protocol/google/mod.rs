@@ -239,9 +239,11 @@ impl GoogleProvider {
         muta_contracts::ProviderError,
     > {
         let response = self.send_google_request(&request, true, true, None).await?;
-        let response = ensure_success(response, "Google").await.map_err(|e| {
-            response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
-        })?;
+        let response = ensure_success(response, "Google", Some(&self.endpoint.model))
+            .await
+            .map_err(|e| {
+                response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
+            })?;
         Ok(self.wrap_event_stream(response))
     }
 
@@ -489,9 +491,11 @@ impl GoogleProvider {
         let response = self
             .send_google_request(&request, false, true, Some(self.client.request_timeout()))
             .await?;
-        let response = ensure_success(response, "Google").await.map_err(|e| {
-            response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
-        })?;
+        let response = ensure_success(response, "Google", Some(&self.endpoint.model))
+            .await
+            .map_err(|e| {
+                response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
+            })?;
 
         let response_json: serde_json::Value = decode_response_json(response, "Google").await?;
         let root = response_json.get("response").unwrap_or(&response_json);
@@ -697,7 +701,7 @@ impl Provider for GoogleProvider {
         let response = self
             .send_google_request(&request, false, omit, Some(self.client.request_timeout()))
             .await?;
-        let response = match ensure_success(response, "Google").await {
+        let response = match ensure_success(response, "Google", Some(&self.endpoint.model)).await {
             Ok(response) => response,
             Err(e) => {
                 // Elastic downgrade (see `stream_chat_events`): when the
@@ -739,7 +743,7 @@ impl Provider for GoogleProvider {
     > {
         let omit = self.thinking_was_rejected();
         let response = self.send_google_request(&request, true, omit, None).await?;
-        let response = match ensure_success(response, "Google").await {
+        let response = match ensure_success(response, "Google", Some(&self.endpoint.model)).await {
             Ok(response) => response,
             Err(e) => {
                 // Elastic downgrade (see `stream_chat_events`): an upstream
@@ -776,7 +780,7 @@ impl Provider for GoogleProvider {
     > {
         let omit = self.thinking_was_rejected();
         let response = self.send_google_request(&request, true, omit, None).await?;
-        let response = match ensure_success(response, "Google").await {
+        let response = match ensure_success(response, "Google", Some(&self.endpoint.model)).await {
             Ok(response) => response,
             Err(e) => {
                 // Elastic downgrade: an upstream that rejects

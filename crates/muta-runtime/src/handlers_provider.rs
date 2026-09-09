@@ -327,6 +327,41 @@ pub(crate) async fn add(
         stored_api_key = true;
     }
 
+    // Snapshot the provider's valve policy at creation time. Curated baseline
+    // ids remain derived from the provider spec and are never frozen into the
+    // connection; only explicit filter/inject/block rules are copied.
+    let provider_rules = ModelProviders::load()
+        .get(&provider)
+        .cloned()
+        .unwrap_or_default();
+    let mut model_rules = muta_contracts::model::ModelScopeConfig {
+        filter: provider_rules.filter.or_else(|| {
+            Some(muta_contracts::ConnectionFilterPolicy::Named(
+                if spec.catalog_source == muta_providers::RemoteCatalogSource::None {
+                    muta_contracts::NamedFilterPolicy::Baseline
+                } else {
+                    muta_contracts::NamedFilterPolicy::All
+                },
+            ))
+        }),
+        include: provider_rules.include,
+        exclude: provider_rules.exclude,
+        // Provider capability overrides stay in their own cascade layer.
+        overrides: std::collections::BTreeMap::new(),
+    };
+    if is_custom {
+        for id in declared_models {
+            if !model_rules.include.iter().any(|model| model.id == id) {
+                model_rules
+                    .include
+                    .push(muta_contracts::model::DeclaredModel {
+                        id,
+                        ..Default::default()
+                    });
+            }
+        }
+    }
+
     // Step 2: Publish connection to Connections store.
     let connection = Connection {
         name: name.clone(),
@@ -338,23 +373,9 @@ pub(crate) async fn add(
         // provider owns its wire (and per-model wire overrides).
         protocol: if is_custom { protocol } else { None },
         base_url,
+        catalog_source: None,
         user_agent,
-        models: if declared_models.is_empty() {
-            muta_contracts::model::ModelScopeConfig::default()
-        } else {
-            muta_contracts::model::ModelScopeConfig {
-                filter: None,
-                include: declared_models
-                    .into_iter()
-                    .map(|id| muta_contracts::model::DeclaredModel {
-                        id,
-                        ..Default::default()
-                    })
-                    .collect(),
-                exclude: Vec::new(),
-                overrides: std::collections::BTreeMap::new(),
-            }
-        },
+        models: model_rules,
     };
     connections.connections.push(connection);
     let conn_save_err = connections.save().err().map(|e| e.to_string());
@@ -2175,6 +2196,70 @@ mod tests {
         let providers = ModelProviders::load();
         let ds = providers.get("deepseek").unwrap();
         assert!(!ds.exclude.contains(&"deepseek-chat".to_string()));
+
+        muta_persistence::paths::set_test_default(None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_provider_snapshots_rules_without_materializing_model_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        let mut config = Config::default();
+        let session = SessionStore::for_path(dir.path().join("session.json"));
+        let agent = muta_agent::Agent::builder(
+            Arc::new(muta_agent::NoProvider),
+            Vec::new(),
+            muta_agent::AgentIdentity::default(),
+        )
+        .build();
+        let provider_for_task = Arc::new(std::sync::RwLock::new(agent.provider.clone()));
+        let (resp_tx, _resp_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut usage = ConnectionUsage::default();
+
+        let env = ProviderEnv {
+            config: &mut config,
+            agent: &agent,
+            provider_for_task: &provider_for_task,
+            session: &session,
+            resp_tx: &resp_tx,
+            provider_usage: &mut usage,
+        };
+
+        let params = AddConnectionParams {
+            name: "openai-test".to_string(),
+            provider: "openai".to_string(),
+            protocol: None,
+            base_url: None,
+            api_key: SecretString::from("sk-test"),
+            user_agent: None,
+            models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
+            auth: muta_contracts::ConnectionAuth::ApiKey,
+            client_identity: None,
+        };
+
+        add(env, params, None).await;
+
+        let conns = Connections::load();
+        let conn = conns.get("openai-test").expect("connection was saved");
+        // ADR-0203 [INV-CATALOG-05]: filter rule is persisted, not materialized model ID list!
+        assert!(
+            conn.models.include.is_empty(),
+            "curated connection must not persist materialized model list"
+        );
+        assert_eq!(
+            conn.models.filter,
+            Some(muta_contracts::ConnectionFilterPolicy::Named(
+                muta_contracts::NamedFilterPolicy::All
+            ))
+        );
 
         muta_persistence::paths::set_test_default(None);
     }

@@ -346,6 +346,46 @@ pub enum ConnectionFilterPolicy {
     Glob(Vec<String>),
 }
 
+/// A connection-local override for the provider's remote catalog source.
+///
+/// The transport endpoint and the catalog source are deliberately independent:
+/// a private relay can send inference traffic to its own `base_url` while
+/// sourcing model metadata from a verified models.dev provider entry.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(untagged)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub enum RemoteCatalogSourceOverride {
+    /// Query the connection/provider endpoint with the selected catalog protocol.
+    Endpoint { endpoint: RemoteCatalogEndpoint },
+    /// Read a structured provider entry from models.dev.
+    ModelsDev { models_dev: String },
+}
+
+/// Network protocol used to query a first-party remote model catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub enum RemoteCatalogEndpoint {
+    OpenAiCompatible,
+    Anthropic,
+    Google,
+    GoogleCloudCode,
+    Codex,
+    Copilot,
+}
+
 /// Standard named pipe filter policies (ADR-0203).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
@@ -443,10 +483,20 @@ pub struct ModelScopeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<ConnectionFilterPolicy>,
     /// Explicitly declared or included/injected models with optional capability facts.
-    #[serde(default, alias = "inject", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "inject",
+        alias = "include",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub include: Vec<DeclaredModel>,
     /// Explicitly excluded or blocked model ids.
-    #[serde(default, alias = "block", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "block",
+        alias = "exclude",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub exclude: Vec<String>,
     /// Per-model capability overrides keyed by exact model id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -456,7 +506,10 @@ pub struct ModelScopeConfig {
 impl ModelScopeConfig {
     /// Whether this configuration contains no rules.
     pub fn is_empty(&self) -> bool {
-        self.include.is_empty() && self.exclude.is_empty() && self.overrides.is_empty()
+        self.filter.is_none()
+            && self.include.is_empty()
+            && self.exclude.is_empty()
+            && self.overrides.is_empty()
     }
 
     /// Look up an included model declaration by exact id.
@@ -466,7 +519,9 @@ impl ModelScopeConfig {
 
     /// Whether this scope explicitly excludes `id`.
     pub fn is_excluded(&self, id: &str) -> bool {
-        self.exclude.iter().any(|m| m == id)
+        self.exclude
+            .iter()
+            .any(|pattern| simple_glob_matches(pattern, id))
     }
 
     /// All model ids explicitly included, preserving order.
@@ -666,9 +721,9 @@ pub fn fallback_model(_id: &str) -> Model {
     Model {
         id: "",
         family: "",
-        context_window: 0,
+        context_window: 128_000,
         thinking: ReasoningSupport::None,
-        tool_call: true,
+        tool_call: false,
         vision: false,
         protocol: WireProtocol::OpenAiChatCompletions,
         model_guidance: "",
@@ -802,9 +857,9 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
                 } else {
                     ReasoningSupport::None
                 },
-                // The harness depends on tool calling; an advertised coding
-                // model is assumed capable (same assumption as the fallback).
-                tool_call: true,
+                // Unknown remote ids remain plain-text-only until the source
+                // or user explicitly declares tool support (ADR-0203).
+                tool_call: false,
                 vision: fitted.vision,
                 protocol: fitted.protocol,
                 model_guidance: "",
@@ -994,10 +1049,11 @@ mod tests {
     #[test]
     fn resolve_falls_back_for_unknown() {
         let m = resolve("some-local-model");
-        assert_eq!(m.context_window, 0);
+        // Safe conservative text defaults (ADR-0203 §4).
+        assert_eq!(m.context_window, 128_000);
         assert!(!m.reasoning());
-        // The harness depends on tool calling, so even the fallback assumes it.
-        assert!(m.tool_call);
+        assert!(!m.tool_call);
+        assert!(!m.vision);
     }
 
     #[test]

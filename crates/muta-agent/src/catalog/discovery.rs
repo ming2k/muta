@@ -11,7 +11,7 @@
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
 use futures::stream::{self, StreamExt};
-use muta_contracts::WireProtocol;
+use muta_contracts::{RemoteCatalogEndpoint, RemoteCatalogSourceOverride, WireProtocol};
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
@@ -31,15 +31,11 @@ enum DiscoverySource {
     FirstParty {
         protocol: DiscoveryProtocol,
         base_url: String,
-        user_agent: Option<String>,
+        client_profile: muta_contracts::ClientProfile,
         cached_etag: Option<String>,
-        /// When set, fall back to this models.dev entry if the first-party
-        /// fetch fails (unreachable/empty/unauthable). "Official upstream
-        /// first, third-party catalog as the resilience net".
-        models_dev_fallback: Option<&'static str>,
     },
     /// A third-party catalog entry (models.dev), keyed by provider id.
-    ModelsDev { provider: &'static str },
+    ModelsDev { provider: String },
 }
 
 struct DiscoveryJob {
@@ -58,7 +54,7 @@ struct DiscoveryFetch {
 async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
     match job.source {
         DiscoverySource::ModelsDev { provider } => {
-            let update = fetch_models_dev(provider).await;
+            let update = fetch_models_dev(&provider).await;
             DiscoveryFetch {
                 connection: job.connection,
                 spec: job.spec,
@@ -68,9 +64,8 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
         DiscoverySource::FirstParty {
             protocol,
             base_url,
-            user_agent,
+            client_profile,
             cached_etag,
-            models_dev_fallback,
         } => {
             let auth = if job.connection.auth.is_oauth() {
                 let source = muta_providers::oauth::OAuthCredentialSource::new(
@@ -83,42 +78,28 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
                         return DiscoveryFetch {
                             connection: job.connection,
                             spec: job.spec,
-                            update: match models_dev_fallback {
-                                Some(provider) => fetch_models_dev(provider).await,
-                                None => Err(error),
-                            },
+                            update: Err(error),
                         };
                     }
                 }
             } else {
                 muta_contracts::ResolvedAuth::new(job.api_key)
             };
+            let extra_headers = client_profile.headers();
             let request = ModelDiscoveryRequest {
                 protocol,
                 base_url: &base_url,
                 api_key: &auth.token,
                 account_id: auth.account_id.as_deref(),
-                user_agent: user_agent.as_deref(),
-                extra_headers: &[],
+                user_agent: Some(client_profile.user_agent()),
+                extra_headers: &extra_headers,
             };
             let options = ModelDiscoveryOptions {
                 etag: cached_etag.as_deref(),
             };
-            let update = match muta_providers::discover_models(request, options).await {
-                Ok(update) => Ok(update),
-                Err(error) => match models_dev_fallback {
-                    Some(provider) => {
-                        tracing::warn!(
-                            connection = %job.connection.name,
-                            provider = provider,
-                            error = %error,
-                            "first-party model discovery failed; falling back to models.dev"
-                        );
-                        fetch_models_dev(provider).await
-                    }
-                    None => Err(error.to_string()),
-                },
-            };
+            let update = muta_providers::discover_models(request, options)
+                .await
+                .map_err(|error| error.to_string());
             DiscoveryFetch {
                 connection: job.connection,
                 spec: job.spec,
@@ -131,7 +112,7 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
 /// Resolve a models.dev provider entry into a discovery update. This is the
 /// shared fetch for both the dedicated `ModelsDev` source and the first-party
 /// fallback path.
-async fn fetch_models_dev(provider: &'static str) -> Result<ModelDiscoveryUpdate, String> {
+async fn fetch_models_dev(provider: &str) -> Result<ModelDiscoveryUpdate, String> {
     muta_providers::models_dev_models(provider)
         .await
         .map(|models| ModelDiscoveryUpdate::Modified { models, etag: None })
@@ -145,6 +126,19 @@ pub struct DiscoveryOutcome {
     pub changed: bool,
     /// Per-connection fetch failures: `(connection_name, error_message)`.
     pub failures: Vec<(String, String)>,
+}
+
+/// Canonical ADR-0203 alias for [`DiscoveryOutcome`].
+pub type RemoteCatalogOutcome = DiscoveryOutcome;
+
+/// Synchronize the remote model catalog across all connections (ADR-0203 canonical entry point).
+pub async fn sync_remote_catalog(force: bool) -> DiscoveryOutcome {
+    discover_provider_models(force).await
+}
+
+/// Synchronize the remote model catalog for one exact connection (ADR-0203 canonical entry point).
+pub async fn sync_connection_remote_catalog(connection_name: &str, force: bool) -> DiscoveryOutcome {
+    discover_connection_models(connection_name, force).await
 }
 
 /// Fetch every discovery-capable connection's live model list and update the
@@ -217,9 +211,6 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
             continue;
         };
         let catalog_source = spec.catalog_source;
-        if catalog_source == RemoteCatalogSource::None {
-            continue;
-        }
         if !force
             && stores
                 .cache
@@ -237,21 +228,49 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
         {
             continue;
         }
-        let source = match catalog_source {
-            RemoteCatalogSource::ModelsDev { provider } => DiscoverySource::ModelsDev { provider },
-            RemoteCatalogSource::Endpoint(discovery_protocol) => {
+        let source = match connection.catalog_source.as_ref() {
+            Some(RemoteCatalogSourceOverride::ModelsDev { models_dev }) => {
+                DiscoverySource::ModelsDev {
+                    provider: models_dev.clone(),
+                }
+            }
+            Some(RemoteCatalogSourceOverride::Endpoint { endpoint }) => {
+                let discovery_protocol = match endpoint {
+                    RemoteCatalogEndpoint::OpenAiCompatible | RemoteCatalogEndpoint::Copilot => {
+                        DiscoveryProtocol::OpenAi
+                    }
+                    RemoteCatalogEndpoint::Anthropic => DiscoveryProtocol::Anthropic,
+                    RemoteCatalogEndpoint::Google => DiscoveryProtocol::Google,
+                    RemoteCatalogEndpoint::GoogleCloudCode => DiscoveryProtocol::GoogleCloudCode,
+                    RemoteCatalogEndpoint::Codex => DiscoveryProtocol::Codex,
+                };
                 let Some(first_party) = build_first_party_source(
                     connection,
                     &stores.cache,
                     &connection.provider,
                     discovery_protocol,
-                    None,
                 ) else {
                     continue;
                 };
                 first_party
             }
-            RemoteCatalogSource::None => continue,
+            None => match catalog_source {
+                RemoteCatalogSource::ModelsDev { provider } => DiscoverySource::ModelsDev {
+                    provider: provider.to_string(),
+                },
+                RemoteCatalogSource::Endpoint(discovery_protocol) => {
+                    let Some(first_party) = build_first_party_source(
+                        connection,
+                        &stores.cache,
+                        &connection.provider,
+                        discovery_protocol,
+                    ) else {
+                        continue;
+                    };
+                    first_party
+                }
+                RemoteCatalogSource::None => continue,
+            },
         };
         jobs.push(DiscoveryJob {
             connection: connection.clone(),
@@ -401,7 +420,7 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
 }
 
 /// Build the [`DiscoverySource::FirstParty`] variant for a connection,
-/// including the optional models.dev fallback. Returns `None` only when the
+/// Returns `None` only when the
 /// connection's first route cannot be derived (unknown provider or an empty
 /// model seed) — a provider's declared `live_catalog` scheme is authoritative,
 /// so OAuth providers (ChatGPT Codex, Google Antigravity cloudcode) discover
@@ -412,7 +431,6 @@ fn build_first_party_source(
     cache: &DiscoveryCache,
     provider: &str,
     protocol: DiscoveryProtocol,
-    models_dev_fallback: Option<&'static str>,
 ) -> Option<DiscoverySource> {
     let first_model = route_models(connection, cache)
         .into_iter()
@@ -424,13 +442,18 @@ fn build_first_party_source(
         .clone()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| provider_base.to_string());
-    let user_agent = connection.user_agent.clone().or_else(|| {
-        if connection.client_identity != muta_contracts::ClientIdentity::Native {
-            Some(connection.client_identity.user_agent().to_string())
-        } else {
-            provider_ua.map(str::to_string)
-        }
-    });
+    let spec = model_provider_spec(provider)?;
+    let client_profile = if let Some(user_agent) = connection.user_agent.as_deref() {
+        muta_contracts::ClientProfile::from_user_agent(user_agent)
+    } else if connection.client_identity != muta_contracts::ClientIdentity::Native {
+        connection.client_identity.clone()
+    } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {
+        muta_contracts::ClientProfile::from(spec.default_client_profile)
+    } else if let Some(user_agent) = provider_ua {
+        muta_contracts::ClientProfile::from_user_agent(user_agent)
+    } else {
+        muta_contracts::ClientProfile::Native
+    };
     let cached_etag = cache
         .model_lists
         .get(&connection.name)
@@ -438,9 +461,8 @@ fn build_first_party_source(
     Some(DiscoverySource::FirstParty {
         protocol,
         base_url,
-        user_agent,
+        client_profile,
         cached_etag,
-        models_dev_fallback,
     })
 }
 

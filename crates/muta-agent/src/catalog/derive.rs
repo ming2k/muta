@@ -88,8 +88,6 @@ pub fn route_models_with_providers(
         return Vec::new();
     };
     let mut models = if spec.catalog_source != RemoteCatalogSource::None {
-        // Prefer the last successful live list (derived from single-source remote sync overlaid onto baseline);
-        // fall back to the provider's compiled baseline.
         if let Some(discovered) = cache.connection_models.get(&connection.name)
             && !discovered.is_empty()
         {
@@ -216,13 +214,7 @@ pub fn derive_channel(
 
     let transport = match connection.auth {
         ConnectionAuth::ChatGptOAuth => {
-            let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-                ClientProfile::from_user_agent(ua)
-            } else if connection.client_identity != ClientProfile::Native {
-                connection.client_identity.clone()
-            } else {
-                ClientProfile::Native
-            };
+            let client_profile = effective_client_profile(connection);
             Transport::OpenAiResponses {
                 base_url: connection
                     .base_url
@@ -237,13 +229,7 @@ pub fn derive_channel(
             copilot_route(connection, remote.as_ref(), effort, thinking)
         }
         ConnectionAuth::AntigravityOAuth => {
-            let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-                ClientProfile::from_user_agent(ua)
-            } else if connection.client_identity != ClientProfile::Native {
-                connection.client_identity.clone()
-            } else {
-                ClientProfile::Antigravity
-            };
+            let client_profile = effective_client_profile(connection);
             Transport::Google {
                 base_url: connection
                     .base_url
@@ -313,16 +299,15 @@ fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, Cl
     let (provider_protocol, provider_base_url, provider_ua) =
         provider_route(&connection.provider, model).unwrap_or((spec.protocol, "", spec.user_agent));
     let protocol = connection.protocol.unwrap_or(provider_protocol);
-    let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-        ClientProfile::from_user_agent(ua)
-    } else if connection.client_identity != ClientProfile::Native {
-        connection.client_identity.clone()
-    } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {
-        ClientProfile::from(spec.default_client_profile)
+    let client_profile = if connection.user_agent.is_some()
+        || connection.client_identity != ClientProfile::Native
+        || spec.default_client_profile != muta_contracts::ClientPreset::Native
+    {
+        effective_client_profile(connection)
     } else if let Some(pua) = provider_ua {
         ClientProfile::from_user_agent(pua)
     } else {
-        connection.client_identity.clone()
+        ClientProfile::Native
     };
     let base_url = if provider_base_url.is_empty() {
         connection
@@ -344,13 +329,7 @@ fn copilot_route(
     effort: Option<Effort>,
     thinking: Option<ReasoningMode>,
 ) -> Transport {
-    let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-        ClientProfile::from_user_agent(ua)
-    } else if connection.client_identity != ClientProfile::Native {
-        connection.client_identity.clone()
-    } else {
-        ClientProfile::Copilot
-    };
+    let client_profile = effective_client_profile(connection);
     match remote.and_then(|r| r.protocol) {
         Some(WireProtocol::OpenAiResponses) => Transport::OpenAiResponses {
             base_url: "https://api.githubcopilot.com/responses".to_string(),
@@ -375,6 +354,22 @@ fn copilot_route(
             panic!("Copilot advertised unsupported Google generateContent protocol")
         }
     }
+}
+
+/// Resolve the sparse connection override over the provider's recommended
+/// client profile. `Native` in legacy connection state is treated as omitted;
+/// an explicit custom User-Agent remains the escape hatch for a native-like
+/// override on sensitive providers.
+fn effective_client_profile(connection: &Connection) -> ClientProfile {
+    if let Some(ua) = connection.user_agent.as_deref() {
+        return ClientProfile::from_user_agent(ua);
+    }
+    if connection.client_identity != ClientProfile::Native {
+        return connection.client_identity.clone();
+    }
+    model_provider_spec(&connection.provider)
+        .map(|spec| ClientProfile::from(spec.default_client_profile))
+        .unwrap_or(ClientProfile::Native)
 }
 
 /// A transport's default endpoint when a `custom` connection omits one.

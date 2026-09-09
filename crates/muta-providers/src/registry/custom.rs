@@ -29,7 +29,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     protocol: WireProtocol::OpenAiChatCompletions,
     // Open model universe: the connection declares whatever it serves.
     models: &[],
-    catalog_source: RemoteCatalogSource::None,
+    catalog_source: RemoteCatalogSource::Endpoint(crate::DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
     wire_overrides: &[],

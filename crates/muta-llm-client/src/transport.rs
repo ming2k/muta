@@ -34,6 +34,7 @@ pub fn retry_after_ms(headers: &http::header::HeaderMap) -> Option<u64> {
 pub async fn ensure_success(
     response: crate::egress::HttpResponse,
     provider: &str,
+    model: Option<&str>,
 ) -> Result<crate::egress::HttpResponse, ProviderError> {
     let status = response.status;
     if status.is_success() {
@@ -46,11 +47,13 @@ pub async fn ensure_success(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let body = response.into_text().await.unwrap_or_default();
+    let rollout_denied = (status.as_u16() == 404 && body.contains("model_not_found"))
+        || (status.as_u16() == 403 && body.contains("permission_denied"));
     let message = match http_error_body_detail(content_type.as_deref(), &body) {
         Some(detail) => {
-            if status.as_u16() == 404 && body.contains("model_not_found") {
+            if rollout_denied && let Some(model) = model {
                 format!(
-                    "{provider} HTTP 404: {detail} (Note: If this is a newly released model, your account or API key tier may not yet have rollout access)."
+                    "Model `{model}` is registered in the upstream catalog but returned HTTP {status}: {detail}. Your API key or organization may not yet have rollout entitlement from {provider}."
                 )
             } else {
                 format!("{provider} HTTP {status}: {detail}")
@@ -660,5 +663,43 @@ mod tests {
             classify_http_error(http::StatusCode::TOO_MANY_REQUESTS, "too many tokens"),
             ProviderErrorKind::RateLimited
         );
+    }
+
+    #[tokio::test]
+    async fn staged_rollout_error_translation_annotates_404_and_403() {
+        use crate::egress::HttpResponse;
+        use futures::StreamExt;
+
+        let res_404 = HttpResponse {
+            status: http::StatusCode::NOT_FOUND,
+            headers: http::HeaderMap::new(),
+            body: futures::stream::once(async {
+                Ok(bytes::Bytes::from(
+                    r#"{"error":{"message":"The model `gpt-6-astra` does not exist or you do not have access to it.","code":"model_not_found"}}"#,
+                ))
+            })
+            .boxed(),
+        };
+        let err_404 = ensure_success(res_404, "OpenAI", Some("gpt-6-astra"))
+            .await
+            .unwrap_err();
+        assert!(err_404.message().contains("rollout entitlement"));
+        assert!(err_404.message().contains("gpt-6-astra"));
+
+        let res_403 = HttpResponse {
+            status: http::StatusCode::FORBIDDEN,
+            headers: http::HeaderMap::new(),
+            body: futures::stream::once(async {
+                Ok(bytes::Bytes::from(
+                    r#"{"error":{"message":"User is not permitted to use model","code":"permission_denied"}}"#,
+                ))
+            })
+            .boxed(),
+        };
+        let err_403 = ensure_success(res_403, "OpenAI", Some("gpt-6-astra"))
+            .await
+            .unwrap_err();
+        assert!(err_403.message().contains("rollout entitlement"));
+        assert!(err_403.message().contains("gpt-6-astra"));
     }
 }

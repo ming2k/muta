@@ -215,7 +215,7 @@ impl OpenAiChatCompletionsProvider {
             return self.client.send(retry_req, self.label()).await;
         }
 
-        ensure_success(response, self.label()).await
+        ensure_success(response, self.label(), Some(&self.endpoint.model)).await
     }
 }
 

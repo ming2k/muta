@@ -24,15 +24,15 @@ pub use muta_models_dev::ModelsDevError;
 /// reconciler can trust/persist them per preset (fitting).
 fn from_dev_model(m: DevModel) -> DiscoveredModel {
     let modalities_in = &m.modalities.input;
-    let reasoning = m.reasoning.then_some(true);
-    let thinking = if m.reasoning {
+    let reasoning = Some(m.reasoning);
+    let thinking = Some(if m.reasoning {
         // models.dev does not distinguish reasoning-content from summary; the
         // opencode-go relay surfaces it via the OpenAI-compatible stream, so
         // the conservative mapping is `ReasoningContent`.
-        Some(ReasoningSupport::ReasoningContent)
+        ReasoningSupport::ReasoningContent
     } else {
-        None
-    };
+        ReasoningSupport::None
+    });
     let effort_levels = m
         .reasoning_options
         .iter()
@@ -49,13 +49,13 @@ fn from_dev_model(m: DevModel) -> DiscoveredModel {
         max_output_tokens: m.limit.output.map(|o| o as u32),
         reasoning,
         thinking,
-        tool_call: m.tool_call.then_some(true),
+        tool_call: Some(m.tool_call),
         vision: if modalities_in.is_empty() {
             None
         } else {
             Some(modalities_in.iter().any(|m| m == "image"))
         },
-        effort_levels: (!effort_levels.is_empty()).then_some(effort_levels),
+        effort_levels: Some(effort_levels),
     }
 }
 

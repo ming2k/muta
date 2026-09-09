@@ -22,7 +22,7 @@
 //! state file, separate from the user-edited `config.toml`.
 
 use muta_contracts::model_providers::canonical_provider_id;
-use muta_contracts::{ClientIdentity, ConnectionAuth, WireProtocol};
+use muta_contracts::{ClientIdentity, ConnectionAuth, RemoteCatalogSourceOverride, WireProtocol};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil;
@@ -68,6 +68,10 @@ pub struct Connection {
     /// Endpoint override. `None` uses the provider's default endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Optional catalog-source override. This never changes the inference
+    /// transport endpoint; omitted connections inherit their provider source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_source: Option<RemoteCatalogSourceOverride>,
     /// `User-Agent` header override. `None` uses the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
@@ -89,6 +93,7 @@ impl Default for Connection {
             client_identity: ClientIdentity::Native,
             protocol: None,
             base_url: None,
+            catalog_source: None,
             user_agent: None,
             models: ModelScopeConfig::default(),
         }
@@ -146,6 +151,8 @@ struct RawConnection {
     #[serde(default)]
     base_url: Option<String>,
     #[serde(default)]
+    catalog_source: Option<RemoteCatalogSourceOverride>,
+    #[serde(default)]
     user_agent: Option<String>,
     #[serde(default, deserialize_with = "deserialize_connection_models")]
     models: ModelScopeConfig,
@@ -195,6 +202,7 @@ impl RawConnection {
             client_identity: self.client_identity,
             protocol: self.protocol,
             base_url: self.base_url,
+            catalog_source: self.catalog_source,
             user_agent: self.user_agent,
             models,
         })
@@ -402,7 +410,10 @@ mod tests {
             connections: vec![conn],
         };
         let text = toml::to_string_pretty(&store).unwrap();
-        assert!(text.contains("[[connections.models.include]]"));
+        assert!(
+            text.contains("[[connections.models.inject]]")
+                || text.contains("[[connections.models.include]]")
+        );
         assert!(text.contains("deprecated-model"));
         let parsed: Connections = toml::from_str(&text).unwrap();
         assert_eq!(parsed, store);

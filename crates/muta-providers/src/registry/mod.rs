@@ -67,8 +67,6 @@ pub enum RemoteCatalogSource {
     None,
 }
 
-pub use RemoteCatalogSource as LiveCatalog;
-
 /// Specification for an OpenAI-compatible provider.
 ///
 /// Every provider in [`OPENAI_PROVIDER_SPECS`] speaks the OpenAI
@@ -238,7 +236,13 @@ pub fn route_for_model(
         };
         return Some((*protocol, base_url, spec.user_agent));
     }
-    if matches!(spec.catalog_source, RemoteCatalogSource::ModelsDev { .. }) {
+    // models.dev describes catalog metadata, not inference routing. Only the
+    // OpenCode Go relay has the provider-specific multi-wire endpoint family;
+    // other models.dev-backed providers (notably OpenAI) retain their own
+    // transport endpoint.
+    if provider_id == "opencode-go"
+        && matches!(spec.catalog_source, RemoteCatalogSource::ModelsDev { .. })
+    {
         let protocol = muta_contracts::model::resolve(model_id).protocol;
         let base_url = match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => {

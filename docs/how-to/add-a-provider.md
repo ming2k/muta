@@ -150,7 +150,7 @@ and a model provider spec. Use `deepseek.rs` as a minimal reference.
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ModelProviderSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids this provider serves (display order).
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
@@ -182,8 +182,9 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
     models: ACME_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };
 ```

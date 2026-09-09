@@ -237,7 +237,7 @@ impl AnthropicMessagesProvider {
             return self.client.send(retry_req, "Anthropic").await;
         }
 
-        ensure_success(response, "Anthropic").await
+        ensure_success(response, "Anthropic", Some(&self.endpoint.model)).await
     }
 }
 

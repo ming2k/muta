@@ -127,8 +127,12 @@ fn cache_path() -> PathBuf {
 /// always present, so "provider not found" only surfaces if the embedded
 /// snapshot truly lacks the provider.
 pub async fn provider_models(provider_id: &str) -> Result<Vec<DevModel>, ModelsDevError> {
-    // 1. Fresh disk cache (a plain read needs no lock).
-    if let Some(provider) = read_cached_catalog().and_then(|c| c.get(provider_id).cloned()) {
+    // 1. Fresh disk cache (a plain read needs no lock). Keep a stale parsed
+    // cache around as the non-destructive fallback if revalidation fails.
+    let cached = read_cached_catalog();
+    if let Some((catalog, true)) = cached.as_ref()
+        && let Some(provider) = catalog.get(provider_id).cloned()
+    {
         return Ok(provider.models.into_values().collect());
     }
     // 2. Network fetch + cache write. On any failure, fall through to the
@@ -138,7 +142,14 @@ pub async fn provider_models(provider_id: &str) -> Result<Vec<DevModel>, ModelsD
     {
         return Ok(provider.models.into_values().collect());
     }
-    // 3. Embedded snapshot (offline fallback).
+    // 3. A stale last-known-good cache is safer than an older embedded
+    // snapshot: a transient outage must never diminish an existing catalog.
+    if let Some((catalog, _)) = cached
+        && let Some(provider) = catalog.get(provider_id).cloned()
+    {
+        return Ok(provider.models.into_values().collect());
+    }
+    // 4. Embedded snapshot (first-run offline fallback).
     let snapshot = parse_catalog(SNAPSHOT_JSON).map_err(ModelsDevError::Snapshot)?;
     match snapshot.get(provider_id) {
         Some(provider) if !provider.models.is_empty() => {
@@ -163,7 +174,7 @@ fn parse_catalog(json: &str) -> Result<BTreeMap<String, DevProvider>, String> {
 }
 
 /// Read a cached catalog from disk if it exists and is fresh.
-fn read_cached_catalog() -> Option<BTreeMap<String, DevProvider>> {
+fn read_cached_catalog() -> Option<(BTreeMap<String, DevProvider>, bool)> {
     let path = cache_path();
     let (mtime, content) = {
         let Ok(meta) = std::fs::metadata(&path) else {
@@ -177,11 +188,8 @@ fn read_cached_catalog() -> Option<BTreeMap<String, DevProvider>> {
         };
         (modified, content)
     };
-    if mtime.elapsed().map(|e| e <= CACHE_TTL).unwrap_or(false) {
-        parse_catalog(&content).ok()
-    } else {
-        None
-    }
+    let fresh = mtime.elapsed().map(|e| e <= CACHE_TTL).unwrap_or(false);
+    parse_catalog(&content).ok().map(|catalog| (catalog, fresh))
 }
 
 /// Fetch `api.json` and write it to the cache under a cross-process lock.

@@ -158,7 +158,7 @@ A new model provider must declare:
 1. one default wire protocol and any typed dialect;
 2. exact per-model routing exceptions;
 3. authentication and client identity;
-4. trusted discovery/fitting behavior;
+4. single remote catalog source (`catalog_source`, ADR-0203);
 5. an explicit prompt-cache capability record, using unsupported when the
    behavior is undocumented or not implemented end to end;
 6. a stable id in `MODEL_PROVIDER_IDS` — the id names a service surface, so it

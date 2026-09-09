@@ -216,8 +216,9 @@ pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, CapabilityOverrides, ConnectionFilterPolicy, DeclaredModel, FittedModel, Model,
     ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig, ModelTargetScope, NamedFilterPolicy,
-    RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models, model_by_id,
-    register_fitted_models, resolve as resolve_model, sanitize_model_id, simple_glob_matches,
+    RemoteCatalogEndpoint, RemoteCatalogSourceOverride, RemoteModelMetadata, RouteCapabilities,
+    WireProtocol, baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
+    sanitize_model_id, simple_glob_matches,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,

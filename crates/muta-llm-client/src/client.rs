@@ -287,7 +287,7 @@ impl Client {
         label: &'static str,
     ) -> Result<HttpResponse, ProviderError> {
         let response = self.send_raw(request, label).await?;
-        ensure_success(response, label).await
+        ensure_success(response, label, None).await
     }
 
     /// Send a fully-built request, enforce success, and decode the body as

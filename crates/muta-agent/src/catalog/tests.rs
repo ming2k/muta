@@ -338,6 +338,54 @@ fn opencode_go_routes_models_by_wire_format() {
 }
 
 #[test]
+fn openai_route_uses_official_api_not_opencode_go_relay() {
+    // ADR-0203: OpenAI uses models.dev as its remote catalog source for capability
+    // facts, but its inference routes MUST target https://api.openai.com, never
+    // the opencode.ai relay endpoint.
+    let (protocol, base_url, _) =
+        route_for_model("openai", "gpt-4o").expect("openai gpt-4o route must exist");
+    assert_eq!(protocol, WireProtocol::OpenAiChatCompletions);
+    assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
+
+    let openai_conn = instance("openai-main", Some("openai"));
+    let channel = derive_channel(
+        &openai_conn,
+        "gpt-4o",
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
+    match &channel.transport {
+        Transport::OpenAi { base_url, .. } => {
+            assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
+        }
+        other => panic!("expected OpenAi transport, got {other:?}"),
+    }
+}
+
+#[test]
+fn connection_catalog_source_override_preserves_transport_endpoint() {
+    use muta_contracts::RemoteCatalogSourceOverride;
+    let mut relay_conn = instance("corp-relay", Some("openai"));
+    relay_conn.catalog_source = Some(RemoteCatalogSourceOverride::ModelsDev {
+        models_dev: "openai".to_string(),
+    });
+    let channel = derive_channel(
+        &relay_conn,
+        "gpt-4o",
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
+    match &channel.transport {
+        Transport::OpenAi { base_url, .. } => {
+            assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
+        }
+        other => panic!("expected OpenAi transport, got {other:?}"),
+    }
+}
+
+#[test]
 fn preset_instance_always_uses_the_hardcoded_template_endpoint() {
     let mut deepseek = instance("deepseek", Some("deepseek"));
     deepseek.base_url = Some("https://relay.example.com/v1/responses".to_string());
