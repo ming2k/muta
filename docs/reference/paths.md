@@ -97,6 +97,7 @@ re-prompts; no conversation is lost.
 | `history.json` | Slash-command input history | Rebuildable |
 | `connections.toml` | **Connections** — the program-managed "who I connect to" records: `name` (the identity), `provider` (a model provider id), `auth`, optional `api_key_env`, optional `protocol` / `base_url` / `user_agent` overrides, and the connection-level `models` delta. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's model provider + the discovery cache, never persisted | No (user-managed connections) |
 | `route_settings.json` | The user's per-(connection, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
+| `models_discovery.json` | Per-connection discovered model lists, fitted capability metadata, and ETag revalidation state from live `GET /models`. Program-generated but expected to survive restarts — moved out of `$XDG_CACHE_HOME` in 0.43; the legacy location is adopted once on first load | Rebuildable |
 | `workspace_security.json` | Versioned, canonical-workspace-keyed SHA-256 grants for the concrete `mcp`, `skills`, `hooks`, `rules`, and `roots` project asset domains | Rebuildable (project asset trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `auth.toml` | OAuth token sets per connection name (`[tokens.<name>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
@@ -126,7 +127,6 @@ Derived, deletable, repopulated on demand. Safe to delete.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `skills/remote/` | Cached remote skill repositories (fetched from `[skills] urls`) | Safe to delete |
-| `models_discovery.json` | Per-route facts derived from live `GET /models`: the discovered model list and fitted capability metadata. All derived — wiping the file costs one re-discovery | Rebuildable |
 
 Default location: `~/.cache/muta/`.
 

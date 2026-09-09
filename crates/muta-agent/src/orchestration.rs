@@ -1005,10 +1005,14 @@ pub async fn execute_round(
 
     // Phase 1: Pre-flight Aspect Evaluation (ADR-0183)
     if !input.hidden && !input.is_retry() {
-        let pre_flight = agent
-            .aspects()
-            .evaluate_pre_flight(&input.prompt, false)
-            .await;
+        if token.is_cancelled() {
+            return Err(HarnessError::Interrupted);
+        }
+        let aspects = agent.aspects();
+        let pre_flight = tokio::select! {
+            _ = token.cancelled() => return Err(HarnessError::Interrupted),
+            pf = aspects.evaluate_pre_flight(&input.prompt, false) => pf,
+        };
         tracing::debug!(
             tier = ?pre_flight.tier,
             thinking = pre_flight.enable_thinking,
@@ -1066,17 +1070,23 @@ pub async fn execute_round(
     } else {
         let mut th = session.model_window().await;
         // Phase 2: Turn-Intake Aspect Evaluation (ADR-0183)
-        if !input.hidden
-            && let Some(reminder) = agent
-                .aspects()
-                .evaluate_turn_intake(agent.workspace_root().as_deref())
-                .await
-        {
-            tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
-            th.push(crate::conversation_context::hidden_user(
-                InjectionKind::SystemReminder,
-                format!("<system-reminder>\n{reminder}\n</system-reminder>"),
-            ));
+        if !input.hidden {
+            if token.is_cancelled() {
+                return Err(HarnessError::Interrupted);
+            }
+            let aspects = agent.aspects();
+            let root = agent.workspace_root();
+            let reminder = tokio::select! {
+                _ = token.cancelled() => return Err(HarnessError::Interrupted),
+                rem = aspects.evaluate_turn_intake(root.as_deref()) => rem,
+            };
+            if let Some(reminder) = reminder {
+                tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
+                th.push(crate::conversation_context::hidden_user(
+                    InjectionKind::SystemReminder,
+                    format!("<system-reminder>\n{reminder}\n</system-reminder>"),
+                ));
+            }
         }
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
@@ -1175,6 +1185,9 @@ pub async fn execute_round(
     // async executor (starving it stalls TUI rendering and stream forwarding).
     // First estimate of a session pays full price once; later passes reuse
     // the content-addressed weights cache (O(new bytes), not O(session)).
+    if token.is_cancelled() {
+        return Err(HarnessError::Interrupted);
+    }
     let mut request_estimate = estimate_off_executor(&agent, &round_history).await;
     if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {

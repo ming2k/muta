@@ -8,10 +8,9 @@
 //! [`OPENAI_PROVIDER_SPECS`](super::OPENAI_PROVIDER_SPECS).
 //!
 //! Both V4 models natively speak the OpenAI **Responses API**
-//! (`https://api.deepseek.com/v1/responses`): Flash gained it with the 0731 GA
-//! (adapted for Codex), Pro with the 0813 release — so this preset's
-//! channels use the Responses transport. Chat-completions remains available
-//! upstream, but is no longer what the preset seeds.
+//! (`https://api.deepseek.com/v1/responses`), so this preset's channels use
+//! the Responses transport. Chat-completions remains available upstream, but
+//! is no longer what the preset seeds.
 
 use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::reasoning::ReasoningSupport;
@@ -21,8 +20,7 @@ use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash, Pro, and
 /// Flash Vision over the Responses API, one key). Each id exists in the model
-/// registry. The dated ids pin a snapshot (`-0731` / `-0813`); the bare ids
-/// float with the upstream latest.
+/// registry and floats with the upstream latest.
 pub use muta_contracts::model_providers::DEEPSEEK_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
@@ -42,29 +40,7 @@ pub const MODELS: &[Model] = &[
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
     Model {
-        id: "deepseek-v4-flash-0731",
-        family: "deepseek",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
-    },
-    Model {
         id: "deepseek-v4-pro",
-        family: "deepseek",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
-    },
-    Model {
-        id: "deepseek-v4-pro-0813",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ReasoningSupport::ReasoningContent,

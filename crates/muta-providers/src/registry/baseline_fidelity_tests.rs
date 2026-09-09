@@ -519,29 +519,7 @@ const PRE_MIGRATION: &[Model] = &[
         effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
-        id: "deepseek-v4-flash-0731",
-        family: "deepseek",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
-    },
-    Model {
         id: "deepseek-v4-pro",
-        family: "deepseek",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
-    },
-    Model {
-        id: "deepseek-v4-pro-0813",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ReasoningSupport::ReasoningContent,
@@ -727,7 +705,7 @@ const PRE_MIGRATION: &[Model] = &[
 
 #[test]
 fn resolve_matches_the_pre_migration_registry_for_every_model() {
-    assert_eq!(PRE_MIGRATION.len(), 58, "snapshot covers every known model");
+    assert_eq!(PRE_MIGRATION.len(), 56, "snapshot covers every known model");
     for expected in PRE_MIGRATION {
         let m = resolve_model(expected.id);
         assert_eq!(m.id, expected.id, "id");

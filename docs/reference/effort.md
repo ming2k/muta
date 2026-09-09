@@ -115,7 +115,7 @@ stored in the discovery cache (`route_settings`) and edited from the model `e`
 picker in the TUI:
 
 ```toml
-# $XDG_CACHE_HOME/muta/models_discovery.json
+# $XDG_STATE_HOME/muta/models_discovery.json
 # route_settings["<connection_name>"]["<model_id>"] = { "effort": "high" }
 ```
 

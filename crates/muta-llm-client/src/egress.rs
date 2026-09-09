@@ -82,6 +82,11 @@ impl std::fmt::Debug for HttpResponse {
 #[async_trait::async_trait]
 pub trait Egress: Send + Sync {
     async fn send(&self, parts: RequestParts) -> Result<HttpResponse, ProviderError>;
+
+    /// Optional pre-warm: prime a connection to `url` into the idle pool in advance.
+    async fn prewarm(&self, _url: &str) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
 }
 
 /// The `reqwest` transport, used **only** as the differential/shadow oracle.
@@ -365,6 +370,16 @@ mod owned {
                 headers,
                 body,
             })
+        }
+
+        async fn prewarm(&self, url: &str) -> Result<bool, ProviderError> {
+            let (target, _) = muta_net::Target::from_url(url).map_err(|error| {
+                ProviderError::invalid_request("muta-net", format!("invalid prewarm url: {error}"))
+            })?;
+            self.client
+                .prewarm(&target)
+                .await
+                .map_err(|error| net_error("muta-net", error))
         }
     }
 }

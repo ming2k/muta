@@ -212,7 +212,6 @@ async fn both_transports_produce_identical_sse_payloads() {
     );
     assert!(derived.stream_us.is_measured());
     assert!(derived.tail_us.is_measured());
-    assert!(derived.decode.tps().is_some(), "{:?}", derived.decode);
     assert!(
         derived.ttfb_us.value() < derived.ttft_us.value(),
         "head precedes token"

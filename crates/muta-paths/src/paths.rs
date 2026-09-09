@@ -171,8 +171,22 @@ impl Dirs {
         self.state_dir.join("web_connections.toml")
     }
 
-    /// Cached model discovery lists and capability metadata (`$XDG_CACHE_HOME/muta/models_discovery.json`).
+    /// Cached model discovery lists and capability metadata
+    /// (`$XDG_STATE_HOME/muta/models_discovery.json`).
+    ///
+    /// Lives under state (not cache) because the contents — discovered model
+    /// ids, ETag revalidation state, advertised capability metadata — are
+    /// program-generated state the user expects to persist across sessions,
+    /// not regenerable-from-scratch cache data. See ADR-0123 §"Derived state".
     pub fn discovery_cache_file(&self) -> PathBuf {
+        self.state_dir.join("models_discovery.json")
+    }
+
+    /// Legacy discovery-cache location under `$XDG_CACHE_HOME` (pre-0.43).
+    /// Read-only migration source — production writes use
+    /// [`Self::discovery_cache_file`]. The cache→state move brought this
+    /// file's contents forward once; the legacy file is removed on adoption.
+    pub fn legacy_discovery_cache_file(&self) -> PathBuf {
         self.cache_dir.join("models_discovery.json")
     }
 

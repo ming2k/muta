@@ -31,7 +31,7 @@ pub struct TcpSample {
 }
 
 /// How often the socket is polled while a request is in flight.
-pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
+pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A live sampling task. Dropping this handle stops sampling.
 #[derive(Debug)]

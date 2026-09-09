@@ -248,3 +248,41 @@ async fn a_pooled_reuse_is_attributed_rather_than_charged_to_the_peer() {
 
     let _ = server.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prewarming_primes_pool_for_zero_handshake_first_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("addr");
+    let server = tokio::spawn(serve(listener, 1));
+
+    let client = client();
+    let target = Target::plain(address.to_string());
+
+    // Pre-warm the pool before any request has been submitted.
+    let warmed = client.prewarm(&target).await.expect("prewarm");
+    assert!(warmed, "first prewarm must establish a fresh connection");
+
+    // Idempotent: second prewarm knows the pool is already warm.
+    let second_warm = client.prewarm(&target).await.expect("prewarm again");
+    assert!(!second_warm, "subsequent prewarm on a warm pool is a no-op");
+
+    // First actual user request immediately hits the warm pool!
+    let recorder = Arc::new(Mutex::new(Recorder::start(4096)));
+    request_once(&client, &target, Arc::clone(&recorder)).await;
+    let trace = trace_of(
+        recorder.lock().expect("recorder").log().clone(),
+        &address.to_string(),
+    );
+    let derived = derive(&trace);
+
+    assert!(
+        trace.log.first_of(EventKind::ConnectReused).is_some(),
+        "first request after prewarm must hit the warm pool with zero handshake"
+    );
+    assert_eq!(
+        derived.dns_us.validity(),
+        Validity::NotApplicable(Reason::ConnectionReused),
+    );
+
+    let _ = server.await;
+}

@@ -64,6 +64,27 @@ impl<C: Connector> Client<C> {
         &self.pool
     }
 
+    /// Pre-warm a connection for `target` into the idle pool if none exists.
+    ///
+    /// Runs DNS + TCP + TLS in advance so the next user request can start with
+    /// zero connection overhead (instant warm-pool hit). Returns `true` if a fresh
+    /// connection was opened, or `false` if an idle connection was already available.
+    pub async fn prewarm(&self, target: &Target) -> Result<bool, NetError> {
+        if self.pool.idle_count(&target.authority) > 0 {
+            return Ok(false);
+        }
+        let recorder = Arc::new(Mutex::new(Recorder::start(crate::DEFAULT_TRACE_CAPACITY)));
+        let established = self.connector.connect(target, &recorder).await?;
+        self.pool.put(
+            &target.authority,
+            established.stream,
+            BytesMut::new(),
+            established.local_port,
+            established.socket,
+        );
+        Ok(true)
+    }
+
     /// Send one request without installing a trace consumer.
     ///
     /// Convenience for call sites that are not model attempts (catalog fetches,

@@ -42,17 +42,6 @@ pub const MODELS: &[Model] = &[
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
     Model {
-        id: "deepseek-v4-flash-0731",
-        family: "deepseek",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
-        model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
-    },
-    Model {
         id: "deepseek-v4-pro",
         family: "deepseek",
         context_window: 1_000_000,
