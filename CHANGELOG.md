@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.3] - 2026-09-09
+
 ### Changed
 
 - **Web search and reader now use one typed provider selection per axis
