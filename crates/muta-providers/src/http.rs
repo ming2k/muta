@@ -96,7 +96,8 @@ pub struct Http {
 impl Http {
     /// Build a handle with an overall per-request deadline.
     pub fn new(timeout: Duration) -> Result<Self, String> {
-        let connector = TlsConnector::platform(TcpConnector).map_err(|error| error.to_string())?;
+        let connector =
+            TlsConnector::platform(TcpConnector::new()).map_err(|error| error.to_string())?;
         Ok(Self {
             client: Arc::new(Client::new(
                 connector,

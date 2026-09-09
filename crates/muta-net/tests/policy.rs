@@ -143,7 +143,11 @@ async fn send(
 }
 
 fn client() -> Client<TcpConnector> {
-    Client::new(TcpConnector, Pool::default(), ClientConfig::default())
+    Client::new(
+        TcpConnector::new(),
+        Pool::default(),
+        ClientConfig::default(),
+    )
 }
 
 fn events(recorder: &Arc<Mutex<Recorder>>) -> Vec<EventKind> {

@@ -191,7 +191,7 @@ impl McpClient {
             // connect time with a clear message, not on first request.
             muta_net::Target::from_url(url)
                 .map_err(|error| format!("invalid MCP url '{url}': {error}"))?;
-            let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector)
+            let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
                 .map_err(|error| format!("failed to build MCP HTTP client: {error}"))?;
             McpConnection::Http {
                 url: url.to_string(),

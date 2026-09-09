@@ -1,10 +1,10 @@
 # 0200. Owned egress path with a packet-level request trace
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-08
 - **Builds on:** ADR-0151 (per-attempt client-observed performance telemetry), ADR-0157 (single TTFT definition), ADR-0184 (incremental streaming pipeline / single-parse hot path), ADR-0190 (agent-as-actor task fabric)
 - **Implementation:** P0 core landed in `crates/muta-trace` (event vocabulary, delta-coded bounded ring, `Recorder`, pure derivations, robust rate estimator). P1 core landed in `crates/muta-http1` (owned HTTP/1.1 codec, differential-tested against hyper as a dev-dependency) and `crates/muta-net` (DNS/TCP establishment with per-phase events, TLS via rustls + platform trust store with ALPN/version recorded, `TimedIo` syscall tap, keep-alive pool with reuse attribution, `TCP_INFO` sampling for RTT/retransmits, redirect following with credential rules, streaming gzip/brotli decoding, HTTP `CONNECT` and SOCKS5 proxies, request deadlines, traced request lifecycle, measured overhead harness). The egress seam landed in `crates/muta-llm-client/src/egress.rs`: `Egress`/`RequestParts`/`HttpResponse` let every protocol adapter run unchanged on the owned transport, and `crate::RequestBuilder` replaced `reqwest::RequestBuilder` as the request-construction API. `net-transport-default` is a default feature, so an unset `MUTA_EGRESS` means the owned transport. `tests/egress_seam.rs` proves the same provider emits identical events on both. Shadow comparison exists in three forms: hermetic (`tests/shadow.rs`), runtime (`src/shadow.rs`, feature `net-shadow`, `MUTA_NET_SHADOW=1`) and live (`examples/live_shadow.rs`, 5/5 completed against DeepSeek). The L2 probe is `crates/muta-net-probe`, a separate opt-in binary with a pure, unit-tested packet parser. **All six egress call-site crates are migrated**: `muta-models-dev`, `muta-skills`, `muta-mcp`, `muta-providers` (shared `http.rs` handle: OAuth, usage, discovery), `muta-runtime` (URL/proxy validation) and `muta-agent` (`tools/web/http.rs` `WebHttp`: search backends + reader). `reqwest` is an optional dependency behind `reqwest-oracle` only, and `scripts/check-egress-deps.sh` enforces that with an empty allow-list — `cargo tree --workspace --edges normal -i reqwest` finds nothing.
-- **Supersedes (on acceptance):** `muta-llm-client/src/client.rs` and `muta-llm-client/src/transport.rs` as the HTTP egress implementation
+- **Supersedes:** `muta-llm-client/src/client.rs` and `muta-llm-client/src/transport.rs` as the HTTP egress implementation
 
 ## Context
 

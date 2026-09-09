@@ -19,6 +19,8 @@ pub enum NetError {
     Decode(String),
     /// The redirect chain exceeded the configured limit.
     TooManyRedirects(u8),
+    /// Blocked by egress security policy (non-public / SSRF address).
+    Security(String),
 }
 
 impl NetError {
@@ -32,6 +34,7 @@ impl NetError {
             Self::UnsupportedEncoding(_) => "encoding",
             Self::Decode(_) => "decode",
             Self::TooManyRedirects(_) => "redirect",
+            Self::Security(_) => "security",
         }
     }
 
@@ -46,7 +49,10 @@ impl NetError {
         match self {
             Self::Resolve(_) | Self::Connect(_) | Self::Io(_) => true,
             Self::Http(error) => error.is_retryable(),
-            Self::UnsupportedEncoding(_) | Self::Decode(_) | Self::TooManyRedirects(_) => false,
+            Self::UnsupportedEncoding(_)
+            | Self::Decode(_)
+            | Self::TooManyRedirects(_)
+            | Self::Security(_) => false,
         }
     }
 }
@@ -63,6 +69,7 @@ impl std::fmt::Display for NetError {
             }
             Self::Decode(what) => write!(f, "could not decode response body: {what}"),
             Self::TooManyRedirects(limit) => write!(f, "more than {limit} redirects"),
+            Self::Security(what) => write!(f, "security policy: {what}"),
         }
     }
 }

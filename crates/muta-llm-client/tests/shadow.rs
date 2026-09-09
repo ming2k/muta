@@ -121,7 +121,11 @@ async fn both_transports_produce_identical_sse_payloads() {
 
     // --- Path B: the owned transport, feeding the same reassembly ---
     let recorder = Arc::new(Mutex::new(Recorder::start(4096)));
-    let client = Client::new(TcpConnector, Pool::default(), ClientConfig::default());
+    let client = Client::new(
+        TcpConnector::new(),
+        Pool::default(),
+        ClientConfig::default(),
+    );
     let head = RequestHead::new(Method::POST, "/v1/chat/completions")
         .with_header("content-type", "application/json");
     let response = client

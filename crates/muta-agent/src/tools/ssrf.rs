@@ -16,8 +16,6 @@
 //! would require resolve-and-pin; this module closes the direct and redirect
 //! vectors.
 
-use std::net::IpAddr;
-
 /// Reject URLs whose host resolves to a non-public IP address.
 ///
 /// `url` must already be validated as `http(s)`. The host is extracted with the
@@ -49,79 +47,7 @@ pub(crate) async fn assert_public_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// True only for globally-routable addresses. Rejects loopback, private RFC1918
-/// ranges, link-local, the cloud metadata endpoint, and unspecified/broadcast.
-pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            let [a, b, c, _d] = octets;
-            // Cloud instance-metadata endpoint (AWS/Azure/GCP): must be blocked
-            // explicitly — it is link-local 169.254.169.254 and the strongest
-            // SSRF prize.
-            if octets == [169, 254, 169, 254] {
-                return false;
-            }
-            if v4.is_loopback()        // 127.0.0.0/8
-                || v4.is_private()     // 10/8, 172.16/12, 192.168/16
-                || v4.is_link_local()  // 169.254/16
-                || v4.is_unspecified() // 0.0.0.0
-                || v4.is_broadcast()
-            // 255.255.255.255
-            {
-                return false;
-            }
-            // Carrier-grade NAT (100.64.0.0/10) — not routable on the internet.
-            if a == 100 && (b & 0xc0) == 64 {
-                return false;
-            }
-            // Documentation/benchmarking networks (198.18.0.0/15, 198.51.100/24,
-            // 203.0.113/24) and other reserved ranges are not public.
-            if a == 198 && (18..=19).contains(&b) {
-                return false;
-            }
-            // TEST-NET-1/2 and 192.0.0.9 (IANA special-purpose) — not public.
-            if a == 192 && b == 0 && (c == 0 || c == 2) {
-                return false;
-            }
-            if a == 198 && b == 51 && c == 100 {
-                return false;
-            }
-            if a == 203 && b == 0 && c == 113 {
-                return false;
-            }
-            // 240.0.0.0/4 (reserved, incl. 255.255.255.255's neighbors).
-            if a >= 240 {
-                return false;
-            }
-            true
-        }
-        IpAddr::V6(v6) => {
-            if v6.is_loopback()         // ::1
-                || v6.is_unspecified()  // ::
-                || v6.is_multicast()
-            // ff00::/8
-            {
-                return false;
-            }
-            // Unique-local fc00::/7 (RFC 4193) — IPv6's RFC1918 equivalent.
-            let seg0 = v6.segments()[0];
-            if (seg0 & 0xfe00) == 0xfc00 {
-                return false;
-            }
-            // Link-local fe80::/10 — IPv6's 169.254/16 equivalent.
-            if (seg0 & 0xffc0) == 0xfe80 {
-                return false;
-            }
-            // IPv4-mapped/IPv4-compatible (::ffff:a.b.c.d) — defer to the v4
-            // rules so a v6 wrapping of a private v4 is still blocked.
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public_ip(IpAddr::V4(v4));
-            }
-            true
-        }
-    }
-}
+pub(crate) use muta_net::is_public_ip;
 
 /// Extract the host component from an `http(s)://` URL without a URL crate.
 ///

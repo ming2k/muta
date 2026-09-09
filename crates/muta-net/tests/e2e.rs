@@ -113,7 +113,11 @@ async fn request_once(
 }
 
 fn client() -> Client<TcpConnector> {
-    Client::new(TcpConnector, Pool::default(), ClientConfig::default())
+    Client::new(
+        TcpConnector::new(),
+        Pool::default(),
+        ClientConfig::default(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]

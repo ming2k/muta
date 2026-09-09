@@ -109,7 +109,11 @@ async fn main() {
     let server = tokio::spawn(serve(listener, options.frames, options.gap));
 
     let recorder = Arc::new(Mutex::new(Recorder::start(4096)));
-    let client = Client::new(TcpConnector, Pool::default(), ClientConfig::default());
+    let client = Client::new(
+        TcpConnector::new(),
+        Pool::default(),
+        ClientConfig::default(),
+    );
     let mut response = client
         .send(
             &Target::plain(format!("127.0.0.1:{port}")),

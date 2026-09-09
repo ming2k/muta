@@ -206,7 +206,7 @@ mod owned {
     impl MutaNetEgress<TlsConnector<TcpConnector>> {
         /// The production configuration: platform trust store, direct.
         pub fn new() -> Result<Self, String> {
-            TlsConnector::platform(TcpConnector)
+            TlsConnector::platform(TcpConnector::new())
                 .map(Self::from_connector)
                 .map_err(|error| error.to_string())
         }
@@ -215,7 +215,7 @@ mod owned {
     impl MutaNetEgress<TlsConnector<ProxyConnector<TcpConnector>>> {
         /// The production configuration routed through `proxy`.
         pub fn with_proxy(proxy: Proxy) -> Result<Self, String> {
-            TlsConnector::platform(ProxyConnector::new(TcpConnector, proxy))
+            TlsConnector::platform(ProxyConnector::new(TcpConnector::new(), proxy))
                 .map(Self::from_connector)
                 .map_err(|error| error.to_string())
         }
@@ -224,7 +224,7 @@ mod owned {
     impl MutaNetEgress<TcpConnector> {
         /// Plaintext, no proxy: tests and local servers only.
         pub fn plain() -> Self {
-            Self::from_connector(TcpConnector)
+            Self::from_connector(TcpConnector::new())
         }
     }
 

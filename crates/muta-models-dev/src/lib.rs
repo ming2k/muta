@@ -188,7 +188,7 @@ fn read_cached_catalog() -> Option<BTreeMap<String, DevProvider>> {
 async fn fetch_and_cache() -> Result<BTreeMap<String, DevProvider>, ModelsDevError> {
     // The owned transport (ADR-0200): platform trust store, redirects and
     // content-encoding handled by the same code the model path uses.
-    let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector)
+    let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
         .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
     let client = muta_net::Client::new(
         connector,

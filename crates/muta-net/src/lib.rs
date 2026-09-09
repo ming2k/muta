@@ -34,7 +34,9 @@ mod tls;
 pub const DEFAULT_TRACE_CAPACITY: usize = 1024;
 
 pub use client::{BodyStream, Client, ClientConfig, Response};
-pub use connect::{Connector, Established, Target, TcpConnector, Transport};
+pub use connect::{
+    Connector, EgressConfinement, Established, Target, TcpConnector, Transport, is_public_ip,
+};
 pub use decompress::Decoder;
 pub use error::NetError;
 pub use http::{HeaderMap, Method};

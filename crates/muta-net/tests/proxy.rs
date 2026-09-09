@@ -137,7 +137,7 @@ async fn bind() -> (TcpListener, String) {
 
 async fn fetch_through(proxy: Proxy, origin_address: &str) -> (String, Arc<Mutex<Recorder>>) {
     let client = Client::new(
-        ProxyConnector::new(TcpConnector, proxy),
+        ProxyConnector::new(TcpConnector::new(), proxy),
         Pool::default(),
         ClientConfig::default(),
     );
@@ -267,7 +267,7 @@ async fn a_refused_tunnel_is_an_error_not_a_truncated_stream() {
 
     let proxy = Proxy::parse(&format!("http://{proxy_address}")).expect("proxy");
     let client = Client::new(
-        ProxyConnector::new(TcpConnector, proxy),
+        ProxyConnector::new(TcpConnector::new(), proxy),
         Pool::default(),
         ClientConfig::default(),
     );

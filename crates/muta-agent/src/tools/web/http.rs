@@ -56,8 +56,9 @@ impl WebHttp {
             Some(url) => {
                 let proxy =
                     Proxy::parse(url).map_err(|error| format!("Invalid proxy '{url}': {error}"))?;
-                let connector = TlsConnector::platform(ProxyConnector::new(TcpConnector, proxy))
-                    .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
+                let connector =
+                    TlsConnector::platform(ProxyConnector::new(TcpConnector::new(), proxy))
+                        .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
                 Ok(Self::Proxied(Box::new(Client::new(
                     connector,
                     Pool::default(),
@@ -65,7 +66,7 @@ impl WebHttp {
                 ))))
             }
             None => {
-                let connector = TlsConnector::platform(TcpConnector)
+                let connector = TlsConnector::platform(TcpConnector::strict_public())
                     .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
                 Ok(Self::Direct(Box::new(Client::new(
                     connector,

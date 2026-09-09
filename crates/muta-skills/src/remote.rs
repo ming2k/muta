@@ -68,7 +68,7 @@ struct Fetcher {
 
 impl Fetcher {
     fn new() -> Result<Self, String> {
-        let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector)
+        let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
             .map_err(|e| format!("failed to build http client: {e}"))?;
         Ok(Self {
             client: muta_net::Client::new(

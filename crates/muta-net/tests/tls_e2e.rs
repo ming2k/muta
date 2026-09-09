@@ -111,7 +111,7 @@ async fn request_once<C: muta_net::Connector>(
 
 fn tls_client(config: Arc<rustls::ClientConfig>) -> Client<TlsConnector<TcpConnector>> {
     Client::new(
-        TlsConnector::new(TcpConnector, config),
+        TlsConnector::new(TcpConnector::new(), config),
         Pool::default(),
         ClientConfig::default(),
     )
