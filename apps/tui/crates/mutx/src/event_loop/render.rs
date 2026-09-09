@@ -6,9 +6,11 @@ use crate::composer::{ComposerProps, ComposerText};
 use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ConfirmChoice;
+use crate::primitives::Recess;
 use crate::render;
+use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
 use crate::ui::UiKey;
-use crate::{App, Modal, ProviderDeleteChoice, Recess};
+use crate::{App, ProviderDeleteChoice};
 
 use super::actions::effective_reasoning_effort;
 use super::transcript::display_status;
@@ -36,8 +38,8 @@ fn compose_frame(
     // mounted component declares `Modal` policy, not because an app flag says
     // so. The mount here pre-registers the modal at viewport size; the modal
     // renderer places it at its drawn rect further down.
-    if app.active_modal() != Modal::None {
-        ui.mount(UiKey::Modal(app.active_modal()), f.area());
+    if let Some(overlay) = app.surfaces.active_overlay() {
+        ui.mount(UiKey::Overlay(overlay), f.area());
     }
     if app.config_dropdown.is_some() {
         ui.mount(UiKey::ConfigDropdown, f.area());
@@ -62,7 +64,7 @@ fn compose_frame(
     }
 
     if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(DialogKind::Sessions)
     {
         // `mutx attach` (no id): initial launch opens ONLY the sessions picker
         // on a clean background. Do not open/render the chat interface, empty state,
@@ -106,7 +108,9 @@ fn compose_frame(
                         footer: true,
                     },
                 ));
-        ui.mount(UiKey::Modal(app.active_modal()), drawn_modal_rect);
+        if let Some(overlay) = app.surfaces.active_overlay() {
+            ui.mount(UiKey::Overlay(overlay), drawn_modal_rect);
+        }
         return;
     }
 
@@ -158,7 +162,7 @@ fn compose_frame(
     // guarantees. Mapping the char-indexed caret through the same mask
     // keeps every consumer operating on one coherent string.
     let (masked_input, masked_byte_cursor) =
-        if app.active_modal() == Modal::ModelEditor && app.editor_field == 0 {
+        if app.surfaces.contains_sheet(SheetKind::ModelEditor) && app.editor_field == 0 {
             // Mask the API key everywhere it could be rendered (the editor
             // field itself, and any layout pass that inspects the input).
             let mask = "•".repeat(app.input.chars().count());
@@ -172,24 +176,19 @@ fn compose_frame(
             (app.input.clone(), app.byte_cursor())
         };
 
-    // Modal recess policy (single source of truth: `Modal::recess`).
-    // A terminal cannot alpha-blend, so a modal either floats, darkens
-    // the live surface in place, or fully occludes it:
-    // - Takeover (Sessions): the footer collapses to zero height and
-    //   the surface is occluded — opening a different session is a full
-    //   context switch, so a clean slate is the intent.
-    // - Dim (every other centered modal): the footer keeps its height
-    //   so layout is stable, and the whole surface is darkened in place
-    //   by the recess pass just before the modal is drawn. Context
-    //   (transcript, input, hint bar, activity bar, state bar) stays visible for
-    //   focus while the centered panel reads as the focal layer.
-    // - None (Question / Permission): floats on the fully-live surface.
-    // Provider / ModelEditor / HistorySearch borrow the input line as
-    // their own field, so the composer is suppressed for them (its rect
-    // stays as recessed surface) — no duplicate field, and no
-    // masked-cursor panic in the editor.
-    let recess = app.active_modal().recess();
-    let chrome_hidden = recess == Recess::Takeover;
+    let is_fullscreen_scene = matches!(
+        app.current_scene(),
+        SceneKind::Dashboard | SceneKind::Settings
+    );
+    let has_overlay = app.surfaces.active_overlay().is_some();
+    let chrome_hidden = is_fullscreen_scene;
+    let recess = if is_fullscreen_scene {
+        Recess::Takeover
+    } else if has_overlay {
+        Recess::Dim
+    } else {
+        Recess::None
+    };
 
     // When zoomed into a Subagent, render its child messages and
     // show a contextual first-row header; otherwise render the
@@ -286,7 +285,7 @@ fn compose_frame(
     // open so no stale highlight bleeds through. The foreground
     // permission sheet keeps the transcript interactive, so it is
     // exempted; a coexisting modal covers it and restores the suppression.
-    let chrome_interactive = app.active_modal() == Modal::None
+    let chrome_interactive = app.surfaces.active_overlay().is_none()
         && app
             .active_sheet()
             .is_none_or(|kind| kind == crate::sheet::SheetKind::Permission);
@@ -507,9 +506,11 @@ fn compose_frame(
                 app.permission_scroll = app.permission_scroll.min(app.permission_max_scroll);
             }
         } else if matches!(
-            app.active_modal(),
-            Modal::Connections | Modal::Models | Modal::ModelEditor | Modal::CustomProvider
-        ) {
+            app.active_dialog(),
+            Some(DialogKind::Connections | DialogKind::Models)
+        ) || app.surfaces.contains_sheet(SheetKind::ModelEditor)
+            || app.surfaces.contains_sheet(SheetKind::CustomProvider)
+        {
             // These modals borrow the input line as their own field
             // (filter / key+model / history-query), so the composer
             // underneath would only duplicate the same `app.input` the
@@ -763,7 +764,7 @@ fn compose_frame(
     // composer paints it bold + accent), the popup has nothing left
     // to offer, and ↑/↓ keep walking history instead of cycling a
     // single pinned row.
-    if app.active_modal() == Modal::None
+    if app.surfaces.active_overlay().is_none()
         && app.active_sheet().is_none()
         && !app.completion_dismissed
         && app.completion_kind() != CompletionKind::None
@@ -834,487 +835,468 @@ fn compose_frame(
     // The dashboard reports its true list-body height through this
     // slot (its body is not the centered panel-minus-chrome the
     // shared post-match math assumes). Reset each frame; only the
-    // `Modal::Host` arm sets it.
+    // `SceneKind::Dashboard` arm sets it.
     let mut dashboard_list_body_height: Option<u16> = None;
 
-    // Modals
-    let drawn_modal_rect = match app.active_modal() {
-        Modal::Connections => {
-            let providers = app.providers_filtered();
-            Some(render::draw_connections_modal(
-                f,
-                &mut layout_map,
-                crate::overlays::provider::connections::ConnectionsModalProps {
-                    providers: &providers,
-                    current_provider: &app.current_provider,
-                    modal_index: app.modal_index,
-                    query: &app.input,
-                    cursor_position: app.cursor_position,
-                    scroll: &mut app.model_scroll,
-                    follow_selection: app.model_modal_follow,
-                    search: app.model_search,
-                    connection_info_detail: app.connection_info_detail,
-                    connection_detail: app.connection_detail.as_ref(),
-                    connection_info_scroll: &mut app.connection_info_scroll,
-                    spinner_phase,
-                    connection_info_standalone: app.connection_info_standalone,
-                },
-                &app.theme,
-                &app.selection,
-            ))
-        }
-        Modal::Models => {
-            let models = app.models_flat_filtered();
-            Some(render::draw_models_modal(
-                f,
-                crate::overlays::provider::models::ModelsModalProps {
-                    models: &models,
-                    current_provider: &app.current_provider,
-                    current_model: &app.current_model,
-                    modal_index: app.modal_index,
-                    query: &app.input,
-                    cursor_position: app.cursor_position,
-                    scroll: &mut app.model_scroll,
-                    follow_selection: app.model_modal_follow,
-                    search: app.model_search,
-                },
-                &app.theme,
-            ))
-        }
-        Modal::HistorySearch => {
-            let ranked = app.history_rows();
-            // The activity bar sits directly above the composer, so
-            // reserve its rows: the dropdown must never paint over
-            // the live status bar above it. The footer registry carries
-            // the bar's exact footprint this frame (None when idle,
-            // height 0).
-            let activity_height =
-                render::footer_rect(&transcript_render.footer, render::FooterRowId::Activity)
-                    .map_or(0, |r| r.height);
-            render::draw_history_panel(
-                f,
-                crate::overlays::history::HistoryPanelProps {
-                    history: &app.input_history,
-                    ranked: &ranked,
-                    modal_index: app.modal_index,
-                    scroll: &mut app.history_scroll,
-                    follow_selection: app.history_modal_follow,
-                    input_rect,
-                    activity_height,
-                },
-                &app.theme,
-            )
-        }
-        Modal::None => None,
-        Modal::ModelEditor => {
-            if let Some(target) = app.editor_target.as_deref()
-                && (target.starts_with("web_credential:") || target.starts_with("web_endpoint:"))
-            {
-                let endpoint = target.starts_with("web_endpoint:");
-                Some(render::draw_web_value_editor(
-                    f,
-                    &format!("Configure {}", app.editor_model),
-                    if endpoint { "Endpoint" } else { "API token" },
-                    &app.input,
-                    app.cursor_position,
-                    !endpoint,
-                    &app.theme,
-                ))
-            } else {
-                let title = if app.editor_model_settings_only {
-                    app.editor_model.clone()
-                } else {
-                    app.editor_target
-                        .as_deref()
-                        .and_then(|id| app.provider_picker.rows.iter().find(|r| r.id == id))
-                        .map(|r| r.name.clone())
-                        .unwrap_or_else(|| "model".to_string())
-                };
-                // ADR-0046: the effort/thinking rows belong ONLY to the
-                // per-model settings editor (`editor_model_settings_only`,
-                // opened from the Models picker). The provider key editor
-                // never shows them — reasoning is set per model, not per
-                // provider.
-                let effort = app
-                    .editor_model_settings_only
-                    .then_some(app.editor_effort.as_str());
-                // The model's advertised ladder lays out the slider's rungs; an
-                // unresolved model passes an empty slice so the block shows the
-                // bare value row + caption instead.
-                let effort_levels: Vec<String> = if app.editor_model_settings_only {
-                    muta_contracts::resolve_model(&app.editor_model)
-                        .effort_levels
-                        .iter()
-                        .map(|e| e.as_str().to_string())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let thinking = app
-                    .editor_model_settings_only
-                    .then_some(app.editor_thinking)
-                    .filter(|_| app.editor_thinking_available);
-                // Capability overrides (ADR-0149 layer 1): shown in the
-                // settings-only editor (fields 3/4), cycled with Space.
-                let overrides = app
-                    .editor_model_settings_only
-                    .then_some((app.editor_vision_override, app.editor_tool_override));
-                Some(render::draw_model_editor(
-                    f,
-                    &title,
-                    &app.input,
-                    app.cursor_position,
-                    !app.editor_model_settings_only,
-                    app.editor_field,
-                    effort,
-                    &effort_levels,
-                    thinking,
-                    overrides,
-                    &app.theme,
-                ))
-            }
-        }
-        Modal::ProviderPreset => Some(render::draw_preset_chooser(
-            app.preset_choice,
-            f,
-            &app.theme,
-            &mut app.preset_scroll,
-        )),
-        Modal::OauthPending => {
-            let title: &'static str = match app.custom_auth {
-                muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
-                muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
-                muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
-                muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
-                muta_contracts::ConnectionAuth::ApiKey => "OAuth",
-            };
-            Some(render::draw_oauth_pending(
-                title,
-                &app.oauth_pending_message,
-                &app.oauth_pending_url,
-                &app.oauth_pending_user_code,
-                app.oauth_pending_error.as_deref(),
-                app.oauth_selected_item,
-                f,
-                &app.theme,
-                &mut app.oauth_scroll,
-                Some(&mut ui),
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
-        Modal::CustomProvider => {
-            let editing = app.custom_is_editing();
-            let title = if editing {
-                format!("Edit — {}", app.custom_name)
-            } else {
-                crate::provider_label_for(app.custom_provider_id.as_deref())
-            };
-            Some(render::draw_custom_provider_editor(
-                render::CustomEditorProps {
-                    fields: &app.custom_fields,
-                    field: app.custom_field,
-                    editing,
-                    custom: app.custom_provider_id.as_deref()
-                        == Some(crate::providers::CUSTOM_TEMPLATE.id),
-                    title: &title,
-                    name_buf: &app.custom_name,
-                    base_url_buf: &app.custom_base_url,
-                    token_buf: &app.custom_token,
-                    model_buf: &app.custom_model,
-                    protocol_display: &app.custom_protocol_wire,
-                    identity_display: app.custom_client_identity.label(),
-                    url_hint: &app.custom_url_hint,
-                    input: &app.input,
-                    cursor_position: app.cursor_position,
-                },
-                f,
-                &app.theme,
-                &mut app.custom_scroll,
-            ))
-        }
-        Modal::Help => {
-            let app_ctx = crate::keymap::AppContext {
-                active_view: app.current_view(),
-                active_modal: app.active_modal(),
-                is_responding: viewed_running,
-                has_input: !app.input.is_empty(),
-                has_selection: !matches!(
-                    app.selection,
-                    crate::model::selection::SelectionState::None
-                ),
-                has_running_task: viewed_running,
-                in_subagent_view: app.in_subagent_view(),
-                in_side_view: app.in_side_view,
-                queue_count: app.pending_dispatch.len(),
-                has_focused_target: app.focused_target.is_some(),
-            };
-            Some(render::draw_help_modal(
-                f,
-                &mut app.help_scroll,
-                &app_ctx,
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
-        Modal::Sessions => Some(render::draw_sessions_modal(
-            f,
-            crate::overlays::session::SessionsModalProps {
-                sessions: &app.sessions_overview,
-                selected: app
-                    .modal_index
-                    .min(app.sessions_overview.len().saturating_sub(1)),
-                scroll: &mut app.session_scroll,
-                follow: app.session_modal_follow,
-                startup_picker: app.startup_overlay == crate::StartupOverlay::SessionsPicker,
-                spinner_phase,
-                session_info_detail: app.session_info_detail,
-                session_detail: app.session_detail.as_ref(),
-                session_info_scroll: &mut app.session_info_scroll,
-                sessions_loading: app.sessions_loading,
-            },
-            &app.theme,
-            &app.selection,
-            &mut layout_map,
-        )),
-        Modal::Host => {
-            let rects = render::draw_dashboard(
-                f,
-                crate::overlays::dashboard::DashboardProps {
-                    rows: &app.host_sessions,
-                    selected: app
-                        .modal_index
-                        .min(app.host_sessions.len().saturating_sub(1)),
-                    focus: app.host_focus,
-                    list_scroll: &mut app.host_scroll,
-                    list_follow: app.host_modal_follow,
-                    detail_scroll: &mut app.host_detail_scroll,
-                    log: &app.host_console_log,
-                    prompting: app.host_prompting,
-                    prompt_create_new: app.host_prompt_new,
-                    prompt_text: &app.input,
-                    current_session_id: viewed_session_id,
-                },
-                &app.theme,
-            );
-            // Stash the list-body height so the page-scroll step
-            // (computed after this match from `drawn_modal_rect`)
-            // can use the real body height, not panel-minus-chrome.
-            dashboard_list_body_height = Some(rects.list_body.height);
-            // The session preview overlays the dashboard (Enter on
-            // a dock selection). Rendered after the dashboard so
-            // it floats on top.
-            if let Some(preview_id) = &app.host_preview {
-                let row = app.host_sessions.iter().find(|r| &r.id == preview_id);
-                render::draw_session_preview(f, row, &mut app.host_preview_scroll, &app.theme);
-            }
-            Some(rects.area)
-        }
-        Modal::Telemetry => {
-            // Snapshot the shared ledger (standalone path) or the
-            // on-demand harness reply (attach path); the attach
-            // path renders a loading placeholder until the reply
-            // lands.
-            let report = app.token_source_report(viewed_session_id);
-            let loading = app.token_ledger.is_none() && report.is_none();
-            let report = report.unwrap_or_default();
-            Some(render::draw_telemetry_modal(
-                f,
-                &report,
-                render::ContextUsageProps {
-                    snapshot: app.context_tokens,
-                    window_tokens: Some(app.active_model_context_window()),
-                    draft_content_tokens: muta_contracts::count_tokens(&app.input),
-                    draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
-                },
-                app.telemetry_tab,
-                app.modal_index
-                    .min(render::telemetry_round_count(&report).saturating_sub(1)),
-                app.telemetry_detail,
-                app.telemetry_turn,
-                app.telemetry_turn_cursor,
-                app.last_submit_ms,
-                loading,
-                &mut app.telemetry_scroll,
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
-        Modal::UsageStats => {
-            // The durable cross-session view (`/usage`, ADR-0122). The
-            // daemon-side store aggregates every session's terminal
-            // requests; a loading placeholder shows until the
-            // `QueryUsageStats` reply lands.
-            let loading = app.usage_stats.is_none();
-            let report = app.usage_stats.clone().unwrap_or_default();
-            Some(render::draw_usage_stats_modal(
-                f,
-                &report,
-                loading,
-                &mut app.usage_stats_scroll,
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
-        Modal::Tools => Some(render::draw_tools_modal(
-            f,
-            app.session_context.as_ref(),
-            app.modal_index,
-            &mut app.session_scroll,
-            app.session_modal_follow,
-            &app.theme,
-        )),
-        Modal::Mcp => Some(render::draw_mcp_modal(
-            f,
-            app.session_context.as_ref(),
-            app.modal_index,
-            &mut app.session_scroll,
-            app.session_modal_follow,
-            &app.theme,
-        )),
-        Modal::Skills => Some(render::draw_skills_modal(
-            f,
-            app.session_context.as_ref(),
-            app.modal_index,
-            app.skills_expanded,
-            &mut app.session_scroll,
-            &app.theme,
-        )),
-        Modal::Permissions => Some(render::draw_permissions_manager(
-            f,
-            app.session_context.as_ref(),
-            app.modal_index,
-            &mut app.permissions_scroll,
-            &app.theme,
-        )),
-        Modal::Config => {
-            let breadcrumbs_str = if app.in_side_view {
-                "Main › Aside › Settings"
-            } else if app.in_subagent_view() {
-                "Main › Subagent › Settings"
-            } else {
-                "Main › Settings"
-            };
-            let rects = render::draw_settings_view(
-                f,
-                render::SettingsProps {
-                    category_index: app.config_category,
-                    detail_index: app.config_detail_index,
-                    focus: app.config_focus,
-                    color_scheme: &app.color_scheme,
-                    custom_color_scheme: &app.custom_color_scheme,
-                    transcript_layout: app.transcript_layout,
-                    expand_auto_scroll: app.expand_auto_scroll,
-                    click_outside_dismiss: app.click_outside_dismiss,
-                    websearch: app.websearch_config.as_ref(),
-                    workspace: &app.current_workspace,
-                    category_scroll: &mut app.config_scroll,
-                    detail_scroll: &mut app.config_detail_scroll,
-                    breadcrumbs: Some(breadcrumbs_str),
-                    theme: &app.theme,
-                },
-            );
-            app.config_selected_rect = rects.selected_row_rect;
-            if let Some(row_rect) = rects.selected_row_rect {
-                ui.mount(UiKey::SettingsOption(app.config_detail_index), row_rect);
-            }
-            if let Some((ref mut state, ref mut anchor)) = app.config_dropdown {
-                if let Some(target_rect) = app.config_selected_rect
-                    && anchor.placement
-                        != crate::components::dropdown::DropdownPlacement::CenterScreen
-                {
-                    anchor.target_rect = target_rect;
+    // Overlays and Scenes (ADR-0205)
+    let drawn_modal_rect = if let Some(overlay) = app.surfaces.active_overlay() {
+        match overlay {
+            OverlaySurface::Dialog(d) => match d {
+                DialogKind::Connections => {
+                    let providers = app.providers_filtered();
+                    Some(render::draw_connections_modal(
+                        f,
+                        &mut layout_map,
+                        crate::overlays::provider::connections::ConnectionsModalProps {
+                            providers: &providers,
+                            current_provider: &app.current_provider,
+                            modal_index: app.modal_index,
+                            query: &app.input,
+                            cursor_position: app.cursor_position,
+                            scroll: &mut app.model_scroll,
+                            follow_selection: app.model_modal_follow,
+                            search: app.model_search,
+                            connection_info_detail: app.connection_info_detail,
+                            connection_detail: app.connection_detail.as_ref(),
+                            connection_info_scroll: &mut app.connection_info_scroll,
+                            spinner_phase,
+                            connection_info_standalone: app.connection_info_standalone,
+                        },
+                        &app.theme,
+                        &app.selection,
+                    ))
                 }
-                let popup_area = crate::components::dropdown::draw_dropdown(
+                DialogKind::Models => {
+                    let models = app.models_flat_filtered();
+                    Some(render::draw_models_modal(
+                        f,
+                        crate::overlays::provider::models::ModelsModalProps {
+                            models: &models,
+                            current_provider: &app.current_provider,
+                            current_model: &app.current_model,
+                            modal_index: app.modal_index,
+                            query: &app.input,
+                            cursor_position: app.cursor_position,
+                            scroll: &mut app.model_scroll,
+                            follow_selection: app.model_modal_follow,
+                            search: app.model_search,
+                        },
+                        &app.theme,
+                    ))
+                }
+                DialogKind::HistorySearch => {
+                    let ranked = app.history_rows();
+                    let activity_height = render::footer_rect(
+                        &transcript_render.footer,
+                        render::FooterRowId::Activity,
+                    )
+                    .map_or(0, |r| r.height);
+                    render::draw_history_panel(
+                        f,
+                        crate::overlays::history::HistoryPanelProps {
+                            history: &app.input_history,
+                            ranked: &ranked,
+                            modal_index: app.modal_index,
+                            scroll: &mut app.history_scroll,
+                            follow_selection: app.history_modal_follow,
+                            input_rect,
+                            activity_height,
+                        },
+                        &app.theme,
+                    )
+                }
+                DialogKind::Help => {
+                    let app_ctx = crate::keymap::AppContext {
+                        active_scene: app.current_scene(),
+                        has_overlay: app.surfaces.active_overlay().is_some(),
+                        is_responding: viewed_running,
+                        has_input: !app.input.is_empty(),
+                        has_selection: !matches!(
+                            app.selection,
+                            crate::model::selection::SelectionState::None
+                        ),
+                        has_running_task: viewed_running,
+                        in_subagent_view: app.in_subagent_view(),
+                        in_side_view: app.in_side_view,
+                        queue_count: app.pending_dispatch.len(),
+                        has_focused_target: app.focused_target.is_some(),
+                    };
+                    Some(render::draw_help_modal(
+                        f,
+                        &mut app.help_scroll,
+                        &app_ctx,
+                        &app.theme,
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
+                DialogKind::Sessions => Some(render::draw_sessions_modal(
                     f,
-                    state,
-                    anchor,
+                    crate::overlays::session::SessionsModalProps {
+                        sessions: &app.sessions_overview,
+                        selected: app
+                            .modal_index
+                            .min(app.sessions_overview.len().saturating_sub(1)),
+                        scroll: &mut app.session_scroll,
+                        follow: app.session_modal_follow,
+                        startup_picker: app.startup_overlay
+                            == crate::StartupOverlay::SessionsPicker,
+                        spinner_phase,
+                        session_info_detail: app.session_info_detail,
+                        session_detail: app.session_detail.as_ref(),
+                        session_info_scroll: &mut app.session_info_scroll,
+                        sessions_loading: app.sessions_loading,
+                    },
                     &app.theme,
-                    f.area(),
-                );
-                ui.mount(UiKey::ConfigDropdown, popup_area);
-            }
-            Some(rects.area)
+                    &app.selection,
+                    &mut layout_map,
+                )),
+                DialogKind::Telemetry => {
+                    let report = app.token_source_report(viewed_session_id);
+                    let loading = app.token_ledger.is_none() && report.is_none();
+                    let report = report.unwrap_or_default();
+                    Some(render::draw_telemetry_modal(
+                        f,
+                        &report,
+                        render::ContextUsageProps {
+                            snapshot: app.context_tokens,
+                            window_tokens: Some(app.active_model_context_window()),
+                            draft_content_tokens: muta_contracts::count_tokens(&app.input),
+                            draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
+                        },
+                        app.telemetry_tab,
+                        app.modal_index
+                            .min(render::telemetry_round_count(&report).saturating_sub(1)),
+                        app.telemetry_detail,
+                        app.telemetry_turn,
+                        app.telemetry_turn_cursor,
+                        app.last_submit_ms,
+                        loading,
+                        &mut app.telemetry_scroll,
+                        &app.theme,
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
+                DialogKind::UsageStats => {
+                    let loading = app.usage_stats.is_none();
+                    let report = app.usage_stats.clone().unwrap_or_default();
+                    Some(render::draw_usage_stats_modal(
+                        f,
+                        &report,
+                        loading,
+                        &mut app.usage_stats_scroll,
+                        &app.theme,
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
+                DialogKind::Tools => Some(render::draw_tools_modal(
+                    f,
+                    app.session_context.as_ref(),
+                    app.modal_index,
+                    &mut app.session_scroll,
+                    app.session_modal_follow,
+                    &app.theme,
+                )),
+                DialogKind::Mcp => Some(render::draw_mcp_modal(
+                    f,
+                    app.session_context.as_ref(),
+                    app.modal_index,
+                    &mut app.session_scroll,
+                    app.session_modal_follow,
+                    &app.theme,
+                )),
+                DialogKind::Skills => Some(render::draw_skills_modal(
+                    f,
+                    app.session_context.as_ref(),
+                    app.modal_index,
+                    app.skills_expanded,
+                    &mut app.session_scroll,
+                    &app.theme,
+                )),
+                DialogKind::Permissions => Some(render::draw_permissions_manager(
+                    f,
+                    app.session_context.as_ref(),
+                    app.modal_index,
+                    &mut app.permissions_scroll,
+                    &app.theme,
+                )),
+                DialogKind::Queue => Some(render::draw_queue_modal(
+                    f,
+                    render::QueueModalProps {
+                        items: &queue_modal_items,
+                        blocked: app.pending_count(viewed_session_id) > 0
+                            && app.is_queue_blocked(viewed_session_id),
+                    },
+                    app.modal_index,
+                    &mut app.queue_scroll,
+                    app.queue_modal_follow,
+                    &app.theme,
+                )),
+                DialogKind::Asides => Some(render::draw_btw_modal(
+                    f,
+                    render::BtwModalProps {
+                        asides: &app.btw_list,
+                        running: &app
+                            .btw_list
+                            .iter()
+                            .map(|row| app.running_sessions.contains(row.id.as_str()))
+                            .collect::<Vec<bool>>(),
+                        active_id: app.side_session_id.as_deref(),
+                    },
+                    app.modal_index,
+                    &mut app.btw_scroll,
+                    app.btw_modal_follow,
+                    &app.theme,
+                    &app.selection,
+                    &mut layout_map,
+                )),
+                DialogKind::SessionTree => Some(render::draw_tree_modal(
+                    f,
+                    &app.session_tree,
+                    app.modal_index,
+                    &mut app.tree_scroll,
+                    app.tree_modal_follow,
+                    &app.theme,
+                )),
+                DialogKind::Switcher => {
+                    let app_ctx = crate::keymap::AppContext {
+                        active_scene: app.current_scene(),
+                        has_overlay: app.surfaces.active_overlay().is_some(),
+                        is_responding: viewed_running,
+                        has_input: !app.input.is_empty(),
+                        has_selection: !matches!(
+                            app.selection,
+                            crate::model::selection::SelectionState::None
+                        ),
+                        has_running_task: viewed_running,
+                        in_subagent_view: app.in_subagent_view(),
+                        in_side_view: app.in_side_view,
+                        queue_count: app.pending_dispatch.len(),
+                        has_focused_target: app.focused_target.is_some(),
+                    };
+                    let entries = crate::overlays::command_palette::filter_palette_commands(
+                        &app.command_palette_query,
+                        &app.command_catalog,
+                        &app.recent_commands,
+                        &app_ctx,
+                    );
+                    Some(crate::overlays::draw_command_palette(
+                        f,
+                        crate::overlays::command_palette::CommandPaletteProps {
+                            query: &app.command_palette_query,
+                            entries: &entries,
+                            selected_index: app.command_palette_selected,
+                            scroll: &mut app.command_palette_scroll,
+                        },
+                        &app.theme,
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
+            },
+            OverlaySurface::Sheet(s) => match s {
+                SheetKind::ModelEditor => {
+                    if let Some(target) = app.editor_target.as_deref()
+                        && (target.starts_with("web_credential:")
+                            || target.starts_with("web_endpoint:"))
+                    {
+                        let endpoint = target.starts_with("web_endpoint:");
+                        Some(render::draw_web_value_editor(
+                            f,
+                            &format!("Configure {}", app.editor_model),
+                            if endpoint { "Endpoint" } else { "API token" },
+                            &app.input,
+                            app.cursor_position,
+                            !endpoint,
+                            &app.theme,
+                        ))
+                    } else {
+                        let title = if app.editor_model_settings_only {
+                            app.editor_model.clone()
+                        } else {
+                            app.editor_target
+                                .as_deref()
+                                .and_then(|id| app.provider_picker.rows.iter().find(|r| r.id == id))
+                                .map(|r| r.name.clone())
+                                .unwrap_or_else(|| "model".to_string())
+                        };
+                        let effort = app
+                            .editor_model_settings_only
+                            .then_some(app.editor_effort.as_str());
+                        let effort_levels: Vec<String> = if app.editor_model_settings_only {
+                            muta_contracts::resolve_model(&app.editor_model)
+                                .effort_levels
+                                .iter()
+                                .map(|e| e.as_str().to_string())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let thinking = app
+                            .editor_model_settings_only
+                            .then_some(app.editor_thinking)
+                            .filter(|_| app.editor_thinking_available);
+                        let overrides = app
+                            .editor_model_settings_only
+                            .then_some((app.editor_vision_override, app.editor_tool_override));
+                        Some(render::draw_model_editor(
+                            f,
+                            &title,
+                            &app.input,
+                            app.cursor_position,
+                            !app.editor_model_settings_only,
+                            app.editor_field,
+                            effort,
+                            &effort_levels,
+                            thinking,
+                            overrides,
+                            &app.theme,
+                        ))
+                    }
+                }
+                SheetKind::ProviderPreset => Some(render::draw_preset_chooser(
+                    app.preset_choice,
+                    f,
+                    &app.theme,
+                    &mut app.preset_scroll,
+                )),
+                SheetKind::OAuthPending => {
+                    let title: &'static str = match app.custom_auth {
+                        muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
+                        muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
+                        muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
+                        muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
+                        muta_contracts::ConnectionAuth::ApiKey => "OAuth",
+                    };
+                    Some(render::draw_oauth_pending(
+                        title,
+                        &app.oauth_pending_message,
+                        &app.oauth_pending_url,
+                        &app.oauth_pending_user_code,
+                        app.oauth_pending_error.as_deref(),
+                        app.oauth_selected_item,
+                        f,
+                        &app.theme,
+                        &mut app.oauth_scroll,
+                        Some(&mut ui),
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
+                SheetKind::CustomProvider => {
+                    let editing = app.custom_is_editing();
+                    let title = if editing {
+                        format!("Edit — {}", app.custom_name)
+                    } else {
+                        crate::provider_label_for(app.custom_provider_id.as_deref())
+                    };
+                    Some(render::draw_custom_provider_editor(
+                        render::CustomEditorProps {
+                            fields: &app.custom_fields,
+                            field: app.custom_field,
+                            editing,
+                            custom: app.custom_provider_id.as_deref()
+                                == Some(crate::providers::CUSTOM_TEMPLATE.id),
+                            title: &title,
+                            name_buf: &app.custom_name,
+                            base_url_buf: &app.custom_base_url,
+                            token_buf: &app.custom_token,
+                            model_buf: &app.custom_model,
+                            protocol_display: &app.custom_protocol_wire,
+                            identity_display: app.custom_client_identity.label(),
+                            url_hint: &app.custom_url_hint,
+                            input: &app.input,
+                            cursor_position: app.cursor_position,
+                        },
+                        f,
+                        &app.theme,
+                        &mut app.custom_scroll,
+                    ))
+                }
+                _ => None,
+            },
         }
-        Modal::Queue => Some(render::draw_queue_modal(
-            f,
-            render::QueueModalProps {
-                items: &queue_modal_items,
-                blocked: app.pending_count(viewed_session_id) > 0
-                    && app.is_queue_blocked(viewed_session_id),
-            },
-            app.modal_index,
-            &mut app.queue_scroll,
-            app.queue_modal_follow,
-            &app.theme,
-        )),
-        Modal::Btw => Some(render::draw_btw_modal(
-            f,
-            render::BtwModalProps {
-                asides: &app.btw_list,
-                // Derived from the per-session running set (live via
-                // HarnessState) rather than the list snapshot, so a round
-                // finishing updates the badge without a list refetch.
-                running: &app
-                    .btw_list
-                    .iter()
-                    .map(|row| app.running_sessions.contains(row.id.as_str()))
-                    .collect::<Vec<bool>>(),
-                active_id: app.side_session_id.as_deref(),
-            },
-            app.modal_index,
-            &mut app.btw_scroll,
-            app.btw_modal_follow,
-            &app.theme,
-            &app.selection,
-            &mut layout_map,
-        )),
-        Modal::Tree => Some(render::draw_tree_modal(
-            f,
-            &app.session_tree,
-            app.modal_index,
-            &mut app.tree_scroll,
-            app.tree_modal_follow,
-            &app.theme,
-        )),
-        // Global unified command palette (Ctrl+L)
-        Modal::ViewSwitcher => {
-            let app_ctx = crate::keymap::AppContext {
-                active_view: app.current_view(),
-                active_modal: app.active_modal(),
-                is_responding: viewed_running,
-                has_input: !app.input.is_empty(),
-                has_selection: !matches!(
-                    app.selection,
-                    crate::model::selection::SelectionState::None
-                ),
-                has_running_task: viewed_running,
-                in_subagent_view: app.in_subagent_view(),
-                in_side_view: app.in_side_view,
-                queue_count: app.pending_dispatch.len(),
-                has_focused_target: app.focused_target.is_some(),
-            };
-            let entries = crate::overlays::command_palette::filter_palette_commands(
-                &app.command_palette_query,
-                &app.command_catalog,
-                &app.recent_commands,
-                &app_ctx,
-            );
-            Some(crate::overlays::draw_command_palette(
-                f,
-                crate::overlays::command_palette::CommandPaletteProps {
-                    query: &app.command_palette_query,
-                    entries: &entries,
-                    selected_index: app.command_palette_selected,
-                    scroll: &mut app.command_palette_scroll,
-                },
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
+    } else {
+        match app.current_scene() {
+            SceneKind::Dashboard => {
+                let rects = render::draw_dashboard(
+                    f,
+                    crate::overlays::dashboard::DashboardProps {
+                        rows: &app.host_sessions,
+                        selected: app
+                            .modal_index
+                            .min(app.host_sessions.len().saturating_sub(1)),
+                        focus: app.host_focus,
+                        list_scroll: &mut app.host_scroll,
+                        list_follow: app.host_modal_follow,
+                        detail_scroll: &mut app.host_detail_scroll,
+                        log: &app.host_console_log,
+                        prompting: app.host_prompting,
+                        prompt_create_new: app.host_prompt_new,
+                        prompt_text: &app.input,
+                        current_session_id: viewed_session_id,
+                    },
+                    &app.theme,
+                );
+                dashboard_list_body_height = Some(rects.list_body.height);
+                if let Some(preview_id) = &app.host_preview {
+                    let row = app.host_sessions.iter().find(|r| &r.id == preview_id);
+                    render::draw_session_preview(f, row, &mut app.host_preview_scroll, &app.theme);
+                }
+                Some(rects.area)
+            }
+            SceneKind::Settings => {
+                let breadcrumbs_str = if app.in_side_view {
+                    "Main › Aside › Settings"
+                } else if app.in_subagent_view() {
+                    "Main › Subagent › Settings"
+                } else {
+                    "Main › Settings"
+                };
+                let rects = render::draw_settings_view(
+                    f,
+                    render::SettingsProps {
+                        category_index: app.config_category,
+                        detail_index: app.config_detail_index,
+                        focus: app.config_focus,
+                        color_scheme: &app.color_scheme,
+                        custom_color_scheme: &app.custom_color_scheme,
+                        transcript_layout: app.transcript_layout,
+                        expand_auto_scroll: app.expand_auto_scroll,
+                        click_outside_dismiss: app.click_outside_dismiss,
+                        websearch: app.websearch_config.as_ref(),
+                        workspace: &app.current_workspace,
+                        category_scroll: &mut app.config_scroll,
+                        detail_scroll: &mut app.config_detail_scroll,
+                        breadcrumbs: Some(breadcrumbs_str),
+                        theme: &app.theme,
+                    },
+                );
+                app.config_selected_rect = rects.selected_row_rect;
+                if let Some(row_rect) = rects.selected_row_rect {
+                    ui.mount(UiKey::SettingsOption(app.config_detail_index), row_rect);
+                }
+                if let Some((ref mut state, ref mut anchor)) = app.config_dropdown {
+                    if let Some(target_rect) = app.config_selected_rect
+                        && anchor.placement
+                            != crate::components::dropdown::DropdownPlacement::CenterScreen
+                    {
+                        anchor.target_rect = target_rect;
+                    }
+                    let popup_area = crate::components::dropdown::draw_dropdown(
+                        f,
+                        state,
+                        anchor,
+                        &app.theme,
+                        f.area(),
+                    );
+                    ui.mount(UiKey::ConfigDropdown, popup_area);
+                }
+                Some(rects.area)
+            }
+            SceneKind::Conversation | SceneKind::TaskInspection | SceneKind::Aside => None,
         }
     };
 
@@ -1323,7 +1305,7 @@ fn compose_frame(
     // overpaints its own dimmed backdrop + centered panel, leaving
     // the list visible (dimmed) behind it. Only present while a
     // deletion is staged from `Shift+D`.
-    if app.active_modal() == Modal::Connections
+    if app.active_dialog() == Some(DialogKind::Connections)
         && let Some(ref pending_id) = app.pending_provider_delete
     {
         let provider_name = app
@@ -1404,7 +1386,7 @@ fn compose_frame(
     // dismissable) so a click on the backdrop outside it can close it.
     // The rect comes from the renderer that just painted the panel, so
     // dynamic-height modals and click hit-tests cannot drift apart.
-    if let Some(rect) = drawn_modal_rect {
-        ui.mount(UiKey::Modal(app.active_modal()), rect);
+    if let (Some(rect), Some(overlay)) = (drawn_modal_rect, app.surfaces.active_overlay()) {
+        ui.mount(UiKey::Overlay(overlay), rect);
     }
 }

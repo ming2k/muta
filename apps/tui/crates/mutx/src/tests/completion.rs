@@ -280,7 +280,7 @@ fn mention_range_handles_multibyte_before_at() {
 #[test]
 fn delete_provider_stages_overlay_without_deleting() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     let custom = |id: &str| muta_contracts::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -323,7 +323,7 @@ fn delete_provider_stages_overlay_without_deleting() {
 #[test]
 fn delete_provider_ignores_builtin() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     let builtin = |id: &str| muta_contracts::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -479,7 +479,7 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     // gate AND the info drill-in are active. Esc must back out to the list,
     // NOT quit.
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
     app.session_info_detail = true;
     app.session_detail = Some(muta_contracts::SessionDetail {
         id: "x".to_string(),
@@ -488,13 +488,15 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Mirror the CloseModal arm's ordering (deepest level wins).
-    let quit = if app.active_modal() == Modal::Sessions && app.session_info_detail {
+    let quit = if app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
+        && app.session_info_detail
+    {
         app.session_info_detail = false;
         app.session_detail = None;
         app.session_info_scroll = 0;
         false
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
@@ -513,10 +515,12 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
 
     // Now the list is showing (still at startup). A second Esc DOES quit, since
     // there is no deeper sub-view left.
-    let quit = if app.active_modal() == Modal::Sessions && app.session_info_detail {
+    let quit = if app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
+        && app.session_info_detail
+    {
         false
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
@@ -539,18 +543,18 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Mirror the CtrlC arm: startup_overlay + Sessions → quit (not modal-close).
     // (Selection copy is skipped — no selection in a modal.)
     let quit = if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
-    } else if app.active_modal() != Modal::None && app.active_sheet().is_none() {
-        app.set_active_modal_for_test(Modal::None);
+    } else if app.surfaces.active_overlay().is_some() && app.active_sheet().is_none() {
+        app.reset_to_conversation();
         false
     } else if app.active_sheet().is_some() {
         app.dismiss_sheet();
@@ -565,7 +569,7 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     );
     // The modal was NOT merely closed (which is what created the empty-session
     // trap): should_quit is set, so the loop exits.
-    assert_ne!(app.active_modal(), Modal::None, "quit path wins over close");
+    assert!(app.active_dialog().is_some(), "quit path wins over close");
 }
 
 /// `mutx dashboard` opens the session dashboard (`Modal::Host`) over a
@@ -587,7 +591,7 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Esc from the dashboard itself (no preview/prompt sub-layer open).
@@ -597,8 +601,8 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
         "Esc from the startup dashboard quits the TUI"
     );
     assert_eq!(
-        app.active_modal(),
-        Modal::Host,
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
         "quit path never demotes the dashboard to a conversation"
     );
 }
@@ -609,14 +613,18 @@ fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // First Ctrl+C: arms the quit window, dashboard stays open.
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.ctrl_c_armed(), "first Ctrl+C arms the quit window");
-    assert_eq!(app.active_modal(), Modal::Host, "dashboard stays open");
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
+        "dashboard stays open"
+    );
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Second Ctrl+C inside the window: quit, not a drop into the chat.
@@ -626,8 +634,8 @@ fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
         "double Ctrl+C exits the whole TUI"
     );
     assert_eq!(
-        app.active_modal(),
-        Modal::Host,
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
         "the exit never demotes the dashboard to the conversation"
     );
 }
@@ -638,7 +646,7 @@ fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -649,7 +657,7 @@ fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
     // A press after the deadline re-arms instead of closing the dashboard.
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.ctrl_c_armed(), "the lapsed window re-arms");
-    assert_eq!(app.active_modal(), Modal::Host);
+    assert_eq!(app.current_scene(), crate::surfaces::SceneKind::Dashboard);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 }
 
@@ -665,7 +673,7 @@ fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.tx = tx;
     app.startup_overlay = crate::StartupOverlay::None;
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -691,7 +699,7 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     app.host_prompting = true;
     app.host_prompt_new = true;
     app.input = "refactor the parser".to_string();
@@ -707,7 +715,11 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
         "clearing text does not arm the quit window"
     );
     assert_eq!(app.copy_toast_message, "input cleared");
-    assert_eq!(app.active_modal(), Modal::Host, "the dashboard stays open");
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
+        "the dashboard stays open"
+    );
     assert!(app.host_prompting, "the prompt itself stays mounted");
 
     // Second press (input now empty): arms quit window
@@ -721,7 +733,7 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     // Third press: inside armed window quits
     super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.should_quit.load(Ordering::SeqCst));
-    assert_eq!(app.active_modal(), Modal::Host);
+    assert_eq!(app.current_scene(), crate::surfaces::SceneKind::Dashboard);
 }
 
 #[test]

@@ -95,7 +95,6 @@ pub(crate) use render::*;
 // Misc helpers shared with the shell.
 pub(crate) mod fuzzy;
 pub(crate) use crate::phase::Phase;
-pub(crate) mod modal;
 pub(crate) mod providers;
 pub(crate) mod surfaces;
 
@@ -104,7 +103,7 @@ mod snapshot_tests;
 
 pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, SelectionEdge};
 pub(crate) use completion::CompletionKind;
-pub(crate) use modal::{Modal, Recess, TelemetryTab};
+pub(crate) use overlays::telemetry::TelemetryTab;
 pub(crate) use providers::{CustomField, PROVIDER_PRESETS, provider_label_for};
 
 use muta_contracts::{
@@ -1146,6 +1145,8 @@ pub async fn run_tui(
                                 transcript!(E::Append { message });
                             }
                             RoundEvent::HarnessState(snapshot) => {
+                                harness.loop_status = snapshot.loop_status;
+                                harness.round_counter = snapshot.round_counter;
                                 let running = !snapshot.loop_status.is_idle();
                                 // View-scoped chrome: the authoritative
                                 // running/idle transition for this session.
@@ -1765,13 +1766,13 @@ pub async fn run_tui(
 
     let mut app = App {
         last_submit_ms: None,
-        panels: crate::surfaces::PanelRegistry::new(),
+        surface_store: crate::surfaces::SurfaceStore::new(),
         surfaces: match startup_overlay {
             StartupOverlay::SessionsPicker => {
-                crate::surfaces::SurfaceRouter::with_panel(crate::surfaces::PanelId::Sessions)
+                crate::surfaces::SurfaceRouter::with_dialog(crate::surfaces::DialogKind::Sessions)
             }
             StartupOverlay::Settings { .. } => {
-                crate::surfaces::SurfaceRouter::with_view(crate::surfaces::View::Settings)
+                crate::surfaces::SurfaceRouter::with_scene(crate::surfaces::SceneKind::Settings)
             }
             _ => crate::surfaces::SurfaceRouter::new(),
         },
@@ -2048,7 +2049,8 @@ pub async fn run_tui(
     };
 
     if startup_overlay == StartupOverlay::SessionsPicker {
-        app.panels.open(crate::surfaces::PanelId::Sessions);
+        app.surface_store
+            .open(crate::surfaces::DialogKind::Sessions);
     }
     if matches!(startup_overlay, StartupOverlay::Settings { .. }) {
         app.send_intent(AgentRequest::QueryWebSearchConfig);

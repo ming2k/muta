@@ -2,7 +2,14 @@
 //! chrome, and color arithmetic. Kept in one place so the per-component
 //! modules do not need to depend on each other for these primitives.
 
-use crate::modal::Recess;
+/// Background recess policy when rendering an overlay.
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug, Default)]
+pub enum Recess {
+    #[default]
+    None,
+    Dim,
+    Takeover,
+}
 use mutx_engine::{
     Alignment, Constraint, Direction, Frame, Layout, Line, Rect,
     {Block as RtBlock, Clear, Paragraph}, {Color, Style},

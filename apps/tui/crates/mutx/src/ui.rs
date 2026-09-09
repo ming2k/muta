@@ -4,9 +4,9 @@
 use mutx_engine::Rect;
 use mutx_engine::ui::{Component, InputPolicy, LayoutBox, PointerPolicy, Scene, UiRuntime};
 
-use crate::Modal;
 use crate::model::layout::{LayoutMap, PermissionActionHit, QuestionOptionHit};
 use crate::sheet::SheetKind;
+use crate::surfaces::{DialogKind, OverlaySurface, SheetKind as SurfaceSheetKind};
 
 /// Keyboard event families (ADR-0197 §D2). Scene components claim the
 /// families they own at mount time; keyboard routing resolves the foreground
@@ -41,7 +41,7 @@ pub enum UiKey {
     PermissionAction(usize),
     Completion,
     CompletionItem(usize),
-    Modal(Modal),
+    Overlay(OverlaySurface),
     ConfigDropdown,
     ProviderDelete,
     OauthUrl,
@@ -133,7 +133,7 @@ impl ComponentTree {
         self.scene()
             .paint_order()
             .rev()
-            .find_map(|(key, layout)| matches!(key, UiKey::Modal(_)).then_some(layout.bounds))
+            .find_map(|(key, layout)| matches!(key, UiKey::Overlay(_)).then_some(layout.bounds))
     }
 
     pub fn mount(&mut self, key: UiKey, rect: Rect) {
@@ -238,7 +238,7 @@ impl ComponentTree {
                 InputPolicy::Bubble,
                 false,
             ),
-            UiKey::Modal(_) => (
+            UiKey::Overlay(_) => (
                 Some(UiKey::Root),
                 30,
                 PointerPolicy::Barrier,
@@ -253,14 +253,18 @@ impl ComponentTree {
                 true,
             ),
             UiKey::OauthUrl | UiKey::OauthCode => (
-                Some(UiKey::Modal(Modal::OauthPending)),
+                Some(UiKey::Overlay(OverlaySurface::Sheet(
+                    SurfaceSheetKind::OAuthPending,
+                ))),
                 31,
                 PointerPolicy::Target,
                 InputPolicy::None,
                 false,
             ),
             UiKey::ProviderDelete => (
-                Some(UiKey::Modal(Modal::Connections)),
+                Some(UiKey::Overlay(OverlaySurface::Dialog(
+                    DialogKind::Connections,
+                ))),
                 40,
                 PointerPolicy::Barrier,
                 InputPolicy::Modal,
@@ -281,7 +285,7 @@ impl ComponentTree {
                 true,
             ),
             UiKey::SettingsOption(_) => (
-                Some(UiKey::Modal(Modal::Config)),
+                Some(UiKey::Root),
                 31,
                 PointerPolicy::Target,
                 InputPolicy::Bubble,
@@ -349,7 +353,10 @@ impl ComponentTree {
         self.mount(UiKey::OauthCode, rect);
     }
     pub fn mount_oauth_modal(&mut self, rect: Rect) {
-        self.mount(UiKey::Modal(Modal::OauthPending), rect);
+        self.mount(
+            UiKey::Overlay(OverlaySurface::Sheet(SurfaceSheetKind::OAuthPending)),
+            rect,
+        );
     }
 
     pub fn completion_item_at(&self, x: u16, y: u16) -> Option<usize> {
@@ -365,7 +372,11 @@ impl ComponentTree {
         self.contains(UiKey::Sheet(SheetKind::Permission), x, y)
     }
     pub fn oauth_modal_contains(&self, x: u16, y: u16) -> bool {
-        self.contains(UiKey::Modal(Modal::OauthPending), x, y)
+        self.contains(
+            UiKey::Overlay(OverlaySurface::Sheet(SurfaceSheetKind::OAuthPending)),
+            x,
+            y,
+        )
     }
     pub fn question_option_at(&self, x: u16, y: u16) -> Option<QuestionOptionHit> {
         match self.target(x, y) {

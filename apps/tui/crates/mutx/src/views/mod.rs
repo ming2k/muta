@@ -1,7 +1,8 @@
-//! Full-screen view destinations (ADR-0141).
+//! Full-screen scene destinations (ADR-0205).
 //!
-//! A **view** is an independent, full-screen destination (`Session`, `Dashboard`, `Settings`, `Subagent`, `Side`).
-//! Modals and overlays float over views and never own the full screen.
+//! A **scene** is an independent, full-screen destination (`Conversation`, `Dashboard`,
+//! `Settings`, `TaskInspection`, `Aside`). Dialogs and sheets float over scenes and
+//! never own the full screen.
 
 pub mod settings;
 

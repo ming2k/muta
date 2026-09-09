@@ -19,21 +19,17 @@ use super::readline::{
 /// the caller; the fields it needs are exactly these — nothing else.
 #[derive(Debug, Default, Clone)]
 pub struct Dispatch {
-    /// The scene foreground modal (ADR-0197 §D2).
-    pub modal: crate::Modal,
+    /// Active overlay on top of the scene (ADR-0205).
+    pub overlay: Option<crate::surfaces::OverlaySurface>,
     /// The AI-initiated sheet occupying the composer slot, if any (ADR-0173
-    /// §3). Mutually exclusive with a non-`None` `modal`: a sheet is
-    /// not a modal, and `modal` is `None` while one is up.
+    /// §3).
     pub sheet: Option<crate::sheet::SheetKind>,
     /// ADR-0175: `true` while the PreAttach interstitial surface owns
     /// the terminal. Mirrors `App::pre_attach.is_some()` so `route_event`
     /// can route keyboard events to PreAttach without inspecting `App`.
     pub pre_attach: bool,
-    /// The full-screen view the user stands in (ADR-0141). Surface dispatch
-    /// (ADR-0172) keys off this: a key is offered to the current view's
-    /// scheme before the shared/modal layers, and "no modal" never silently
-    /// means "session view" for Dashboard or Settings.
-    pub view: crate::surfaces::View,
+    /// The root scene the user stands in (ADR-0205).
+    pub view: crate::surfaces::SceneKind,
     /// User remaps of the global chords (`[keybindings]` config, ADR-0172).
     /// Global resolution and the keycap hints both consult it.
     pub key_overrides: crate::keymap::GlobalOverrides,
@@ -132,7 +128,7 @@ pub fn event_family(
 /// "Esc closes the modal" and "Esc rejects the permission" never fire in one
 /// press.
 fn sheet_foreground(dispatch: &Dispatch) -> bool {
-    dispatch.sheet.is_some() && dispatch.modal == crate::Modal::None
+    dispatch.sheet.is_some() && dispatch.overlay.is_none()
 }
 
 /// Whether the permission sheet occupies the composer slot and is the
@@ -140,13 +136,12 @@ fn sheet_foreground(dispatch: &Dispatch) -> bool {
 /// and scrolling stay live behind it (ADR-0173 §2) — a coexisting modal
 /// covers it and suspends the pass-through.
 fn permission_sheet_foreground(dispatch: &Dispatch) -> bool {
-    dispatch.sheet == Some(crate::sheet::SheetKind::Permission)
-        && dispatch.modal == crate::Modal::None
+    dispatch.sheet == Some(crate::sheet::SheetKind::Permission) && dispatch.overlay.is_none()
 }
 
 /// Whether no overlay is up at all — no modal, no sheet: the chat surface.
 fn bare_chat_surface(dispatch: &Dispatch) -> bool {
-    dispatch.modal == crate::Modal::None && dispatch.sheet.is_none()
+    dispatch.overlay.is_none() && dispatch.sheet.is_none()
 }
 
 /// Whether clicks, drags and hover reach the live transcript: on the bare
@@ -157,56 +152,47 @@ fn transcript_interactive(dispatch: &Dispatch) -> bool {
 }
 
 /// Whether the foreground surface (sheet or modal) pages its own body on the
-/// scroll keys — the claims-driven mirror of `App::modal_scroll_field`
-/// (ADR-0173 §2). A coexisting modal outranks the sheet (visual order).
+/// scroll keys.
 fn foreground_scrolls_own_body(dispatch: &Dispatch) -> bool {
     if sheet_foreground(dispatch) {
         return dispatch
             .sheet
             .is_some_and(|kind| kind.keyboard_claims().body_scroll);
     }
-    dispatch.modal.keyboard_claims().body_scroll
+    scrolls_own_body(dispatch.overlay, dispatch.view)
 }
 
 /// Whether the composer line is being edited on the foreground surface.
-/// The focused target/transcript navigation facts veto it first, the sheet
-/// arbitration decides whether the injection sheet's borrowed line is live,
-/// and the modal's own claim (via [`crate::modal_keys::modal_claims_composer_line`])
-/// decides the rest.
 fn edits_input_field(dispatch: &Dispatch, modal_keys: &crate::modal_keys::ModalKeys) -> bool {
     if dispatch.focused_target || dispatch.transcript_focused {
         return false;
     }
-    // Sheet foreground: only the injection sheet borrows the composer line;
-    // the permission and question sheets never edit the shared draft. A
-    // coexisting modal outranks the sheet — a text-entry modal keeps its
-    // borrowed field and the injection sheet's line is inert until the
-    // modal closes.
-    if dispatch.sheet.is_some() {
-        if dispatch.modal != crate::Modal::None {
-            // Modal foreground: fall through to the modal's own claim
-            // below (ModelEditor's key field, the picker filters, …).
-        } else {
-            return dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection);
-        }
+    if dispatch.sheet.is_some() && dispatch.overlay.is_none() {
+        return dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection);
     }
-    // The static column comes from the modal's declared `text_entry` claim
-    // (modal.rs, ADR-0173 §2); the live gate (which field, which sub-mode)
-    // stays here beside the resolver. Also the modal-foreground path when a
-    // sheet coexists.
-    if !dispatch.modal.keyboard_claims().text_entry {
-        return false;
-    }
-    crate::modal_keys::modal_claims_composer_line(dispatch.modal, modal_keys)
+    crate::modal_keys::modal_claims_composer_line(dispatch.overlay, dispatch.view, modal_keys)
 }
 
-/// Whether the active modal paints its own scrollable body — derived from the
-/// modal's declared `Claims::body_scroll` (modal.rs, ADR-0173 §2): the
-/// scroll keys page a modal body exactly when the modal declares the family,
-/// so the key→action mirror of `App::modal_scroll_field` can never drift from
-/// the declaration.
-fn scrolls_own_body(modal: crate::Modal) -> bool {
-    modal.keyboard_claims().body_scroll
+fn scrolls_own_body(
+    overlay: Option<crate::surfaces::OverlaySurface>,
+    scene: crate::surfaces::SceneKind,
+) -> bool {
+    if let Some(overlay) = overlay {
+        matches!(
+            overlay,
+            crate::surfaces::OverlaySurface::Dialog(_)
+                | crate::surfaces::OverlaySurface::Sheet(
+                    crate::surfaces::SheetKind::OAuthPending
+                        | crate::surfaces::SheetKind::ProviderPreset
+                        | crate::surfaces::SheetKind::CustomProvider,
+                )
+        )
+    } else {
+        matches!(
+            scene,
+            crate::surfaces::SceneKind::Dashboard | crate::surfaces::SceneKind::Settings
+        )
+    }
 }
 
 /// Process a crossterm event into a high-level action.
@@ -250,20 +236,8 @@ pub fn route_event(
                         drag.start(SemanticCursor::new(0, 0, 0));
                         InputAction::SelectionStart { x, y }
                     } else if dispatch.sheet == Some(crate::sheet::SheetKind::Question)
-                        || dispatch.modal == crate::Modal::OauthPending
+                        || dispatch.overlay.is_some()
                     {
-                        InputAction::SelectionStart { x, y }
-                    } else if dispatch.modal.dismissable_by_outside_click() {
-                        // A dismissable modal owns this click — forward it as
-                        // a SelectionStart without arming a drag; the event
-                        // loop's SelectionStart handler closes the modal when
-                        // the press lands outside the panel (and consumes it
-                        // either way so it never reaches the transcript
-                        // behind the backdrop). Entry modals keep swallowing.
-                        // Modals whose body is a selectable document (the
-                        // `render_selectable_body` family) arm a drag when the
-                        // press lands on registered text, so their content is
-                        // copyable the same way the transcript is.
                         InputAction::SelectionStart { x, y }
                     } else {
                         InputAction::None
@@ -272,7 +246,10 @@ pub fn route_event(
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if drag.active
                         && (transcript_interactive(&dispatch)
-                            || dispatch.modal == crate::Modal::OauthPending)
+                            || dispatch.overlay
+                                == Some(crate::surfaces::OverlaySurface::Sheet(
+                                    crate::surfaces::SheetKind::OAuthPending,
+                                )))
                     {
                         InputAction::SelectionUpdate { x, y }
                     } else if drag.active {
@@ -347,8 +324,11 @@ pub fn route_event(
                     crate::keymap::CommandId::CommandPalette => {
                         // Ctrl+P / Ctrl+L toggle the palette: open it at the
                         // top level, and close it while it is already open.
-                        if dispatch.modal == crate::Modal::ViewSwitcher
-                            || dispatch.modal == crate::Modal::None
+                        if dispatch.overlay
+                            == Some(crate::surfaces::OverlaySurface::Dialog(
+                                crate::surfaces::DialogKind::Switcher,
+                            ))
+                            || dispatch.overlay.is_none()
                         {
                             return InputAction::ViewSwitcherToggle;
                         }
@@ -362,16 +342,14 @@ pub fn route_event(
                             return InputAction::None;
                         }
                     }
-                    crate::keymap::CommandId::OpenTelemetry
-                        if dispatch.modal == crate::Modal::None =>
-                    {
+                    crate::keymap::CommandId::OpenTelemetry if dispatch.overlay.is_none() => {
                         // Ctrl+O (model-bar telemetry keycap). Top level only:
                         // the model bar is session chrome, never visible
                         // behind a modal.
                         return InputAction::OpenTelemetry;
                     }
                     crate::keymap::CommandId::OpenActiveConnectionDetail
-                        if dispatch.modal == crate::Modal::None =>
+                        if dispatch.overlay.is_none() =>
                     {
                         // Ctrl+N (model-bar connection keycap). Top level only,
                         // matching the telemetry binding above.
@@ -441,16 +419,21 @@ pub fn route_event(
             // arbitration rule): the modal renders above it (visual order),
             // so with both up the modal's own scheme is consulted first and
             // the sheet's verbs are suspended until the modal closes.
-            if dispatch.modal == crate::Modal::None
+            if dispatch.overlay.is_none()
                 && let Some(kind) = dispatch.sheet
                 && let Some(action) =
                     crate::sheet::resolve_sheet_key(kind, physical_key, sheet_keys)
             {
                 return action;
             }
-            if dispatch.modal != crate::Modal::None
+            if (dispatch.overlay.is_some()
+                || matches!(
+                    dispatch.view,
+                    crate::surfaces::SceneKind::Dashboard | crate::surfaces::SceneKind::Settings
+                ))
                 && let Some(action) = crate::modal_keys::resolve_modal_key(
-                    dispatch.modal,
+                    dispatch.overlay,
+                    dispatch.view,
                     physical_key,
                     modal_keys,
                     input,
@@ -462,90 +445,38 @@ pub fn route_event(
 
             match key.code {
                 KeyCode::Esc => {
-                    // Chat-surface Esc (close completion / exit side or subagent
-                    // / clear step focus / interrupt) is resolved by the
-                    // Session view's own scheme (ADR-0172) before this match.
-                    // This arm is modal-only.
-                    //
-                    // Foreground order (visual order, ADR-0173 §3 as revised):
-                    // a coexisting modal renders above the bottom-slot sheet,
-                    // so every modal arm is checked BEFORE any sheet arm —
-                    // Esc closes the modal and only a later press reaches the
-                    // sheet's own Esc semantics. A sheet decision key pressed
-                    // over a modal would otherwise punch through to the
-                    // layer beneath (a stray Esc rejecting the pending
-                    // permission outright).
-                    if dispatch.modal != crate::Modal::None && dispatch.sheet.is_some() {
-                        // Modal over sheet: fall through to the modal arms
-                        // below; the sheet is keyboard-inert.
-                        if dispatch.modal == crate::Modal::ProviderPreset {
-                            InputAction::CancelPresetChooser
-                        } else if dispatch.modal == crate::Modal::OauthPending {
-                            InputAction::CancelOauthPending
-                        } else if dispatch.modal == crate::Modal::CustomProvider {
-                            InputAction::CancelCustomProvider
-                        } else if matches!(
-                            dispatch.modal,
-                            crate::Modal::Models | crate::Modal::Connections
-                        ) && modal_keys.model_searching
-                        {
-                            // Same two-stage Esc as the history modal: the
-                            // first Esc drops the picker's search sub-layer
-                            // back to the browse list; the next Esc (browse
-                            // mode) closes.
-                            InputAction::ModelExitSearch
-                        } else if dispatch.modal == crate::Modal::Config {
-                            InputAction::ConfigBack
-                        } else {
-                            // For every other surface — the retained browse
-                            // views and the quick switcher included
-                            // (ADR-0133) — Esc is the shared dismiss verb;
-                            // the dispatcher decides hide (state saved) vs
-                            // cancel-to-origin there.
-                            InputAction::CloseModal
+                    if let Some(overlay) = dispatch.overlay {
+                        match overlay {
+                            crate::surfaces::OverlaySurface::Sheet(
+                                crate::surfaces::SheetKind::ProviderPreset,
+                            ) => InputAction::CancelPresetChooser,
+                            crate::surfaces::OverlaySurface::Sheet(
+                                crate::surfaces::SheetKind::OAuthPending,
+                            ) => InputAction::CancelOauthPending,
+                            crate::surfaces::OverlaySurface::Sheet(
+                                crate::surfaces::SheetKind::CustomProvider,
+                            ) => InputAction::CancelCustomProvider,
+                            crate::surfaces::OverlaySurface::Dialog(
+                                crate::surfaces::DialogKind::Models
+                                | crate::surfaces::DialogKind::Connections,
+                            ) if modal_keys.model_searching => InputAction::ModelExitSearch,
+                            _ => InputAction::CloseModal,
                         }
                     } else if permission_sheet_foreground(&dispatch) {
                         if sheet_keys.permission_confirm_always {
                             InputAction::PermissionBack
                         } else if dispatch.focused_target {
-                            // A step is focused behind the permission sheet:
-                            // Esc clears the focus and returns to the sheet
-                            // rather than rejecting outright — a second Esc
-                            // decides it.
                             InputAction::ClearFocusedTarget
                         } else {
                             InputAction::PermissionReject
                         }
                     } else if dispatch.sheet == Some(crate::sheet::SheetKind::Question) {
                         InputAction::QuestionCancel
-                    } else if dispatch.modal == crate::Modal::ProviderPreset {
-                        // Esc cancels the preset chooser back to the provider
-                        // picker it was opened from.
-                        InputAction::CancelPresetChooser
-                    } else if dispatch.modal == crate::Modal::OauthPending {
-                        InputAction::CancelOauthPending
-                    } else if dispatch.modal == crate::Modal::CustomProvider {
-                        // Esc cancels the custom-provider editor and returns to the
-                        // provider picker it was opened from.
-                        InputAction::CancelCustomProvider
                     } else if dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection) {
                         InputAction::InputCancel
-                    } else if matches!(
-                        dispatch.modal,
-                        crate::Modal::Models | crate::Modal::Connections
-                    ) && modal_keys.model_searching
-                    {
-                        // Same two-stage Esc as the history modal: the first Esc
-                        // drops the picker's search sub-layer back to the
-                        // browse list; the next Esc (browse mode) closes.
-                        InputAction::ModelExitSearch
-                    } else if dispatch.modal == crate::Modal::Config {
+                    } else if dispatch.view == crate::surfaces::SceneKind::Settings {
                         InputAction::ConfigBack
-                    } else if dispatch.modal != crate::Modal::None {
-                        // For every other surface — the retained browse views
-                        // and the quick switcher included (ADR-0133) — Esc is
-                        // the shared dismiss verb; the dispatcher decides
-                        // hide (state saved) vs cancel-to-origin there.
+                    } else if dispatch.view == crate::surfaces::SceneKind::Dashboard {
                         InputAction::CloseModal
                     } else {
                         InputAction::None
@@ -563,7 +494,11 @@ pub fn route_event(
                 // resolution), so this arm only ever fires while the Queue
                 // modal is active. Inside any other modal it is a no-op.
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if dispatch.modal == crate::Modal::Queue {
+                    if dispatch.overlay
+                        == Some(crate::surfaces::OverlaySurface::Dialog(
+                            crate::surfaces::DialogKind::Queue,
+                        ))
+                    {
                         InputAction::QueueToggleBlock
                     } else {
                         InputAction::None
@@ -575,7 +510,11 @@ pub fn route_event(
                 // refresh) rather than toggling the modal closed; inside any
                 // other modal it is a no-op.
                 KeyCode::F(5) => {
-                    if dispatch.modal == crate::Modal::Btw {
+                    if dispatch.overlay
+                        == Some(crate::surfaces::OverlaySurface::Dialog(
+                            crate::surfaces::DialogKind::Asides,
+                        ))
+                    {
                         InputAction::OpenBtwList
                     } else {
                         InputAction::None
@@ -592,7 +531,7 @@ pub fn route_event(
                 // the registry because it needs the Kitty protocol; the Help
                 // modal documents it via its description.
                 KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if dispatch.modal == crate::Modal::None {
+                    if dispatch.overlay.is_none() {
                         InputAction::OpenHelp
                     } else {
                         InputAction::None
@@ -611,7 +550,7 @@ pub fn route_event(
                 // box supports multi-line drafting. Plain Enter sends the
                 // message, so these are the only multi-line entry paths.
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
-                    insert_newline(input, cursor_position, dispatch.modal);
+                    insert_newline(input, cursor_position, dispatch.overlay.is_none());
                     InputAction::None
                 }
                 KeyCode::Enter => {
@@ -642,7 +581,7 @@ pub fn route_event(
                 }
                 // Ctrl+J: alias for Alt+Enter — insert a literal newline.
                 KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    insert_newline(input, cursor_position, dispatch.modal);
+                    insert_newline(input, cursor_position, dispatch.overlay.is_none());
                     InputAction::None
                 }
                 // Ctrl+V: paste from the system clipboard. Active on the
@@ -828,7 +767,10 @@ pub fn route_event(
                     // and the question sheet's printable verbs are resolved
                     // by its own scheme above — never reaching here.
                     if edits_input_field(&dispatch, modal_keys)
-                        && !crate::modal_keys::modal_swallows_printable(dispatch.modal, modal_keys)
+                        && !crate::modal_keys::modal_swallows_printable(
+                            dispatch.overlay,
+                            modal_keys,
+                        )
                     {
                         // The key editor's thinking field (2) is a toggle, not
                         // a text field — don't let printable chars mutate the
@@ -1000,13 +942,13 @@ pub fn route_event(
                 // Page keys). Routed through the shared `Scroll*` actions.
                 KeyCode::Up
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && scrolls_own_body(dispatch.modal) =>
+                        && scrolls_own_body(dispatch.overlay, dispatch.view) =>
                 {
                     InputAction::ScrollPageUp
                 }
                 KeyCode::Down
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && scrolls_own_body(dispatch.modal) =>
+                        && scrolls_own_body(dispatch.overlay, dispatch.view) =>
                 {
                     InputAction::ScrollPageDown
                 }
@@ -1016,7 +958,11 @@ pub fn route_event(
                     // above. The palette's ↑/↓ stay here: its scheme
                     // resolves the arrows to None (they are shared list-walk
                     // affordances), so the router keeps them.
-                    if dispatch.modal == crate::Modal::ViewSwitcher {
+                    if dispatch.overlay
+                        == Some(crate::surfaces::OverlaySurface::Dialog(
+                            crate::surfaces::DialogKind::Switcher,
+                        ))
+                    {
                         InputAction::ModalUp
                     } else {
                         // Chat-surface ↑ (walk focused steps / completion
@@ -1030,7 +976,11 @@ pub fn route_event(
                     // Sheet ↓ and the modal list-walk verbs are owned by the
                     // surface schemes, resolved above; the palette's ↓ stays
                     // here for the same reason as ↑.
-                    if dispatch.modal == crate::Modal::ViewSwitcher {
+                    if dispatch.overlay
+                        == Some(crate::surfaces::OverlaySurface::Dialog(
+                            crate::surfaces::DialogKind::Switcher,
+                        ))
+                    {
                         InputAction::ModalDown
                     } else {
                         // Chat-surface ↓ is resolved by the Session view's

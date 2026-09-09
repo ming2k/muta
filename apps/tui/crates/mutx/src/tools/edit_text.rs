@@ -20,12 +20,9 @@ impl ToolPresenter for EditPresenter {
         let mut line = SemanticLine::new()
             .push_fixed("Edit ")
             .push_path(PathView::from_str(raw_path).maybe_base_dir(view.workspace_root));
-        match (view.str("old_string"), view.str("new_string")) {
-            (Some(old), Some(new)) => {
-                let (added, removed) = line_diff_counts(old, new);
-                line = line.push_fixed(format!(" +{} -{}", added, removed));
-            }
-            _ => {}
+        if let (Some(old), Some(new)) = (view.str("old_string"), view.str("new_string")) {
+            let (added, removed) = line_diff_counts(old, new);
+            line = line.push_fixed(format!(" +{} -{}", added, removed));
         }
         line
     }

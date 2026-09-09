@@ -9,11 +9,8 @@ impl App {
     /// stashed it on open); the chooser is a pure list, so the composer line
     /// stays clear.
     pub fn open_preset_chooser(&mut self) {
-        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
-            self.push_transient_surface(Modal::ProviderPreset);
-        } else {
-            self.replace_transient_surface(Modal::ProviderPreset);
-        }
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::ProviderPreset);
         self.preset_choice = 0;
         self.preset_scroll = 0;
         self.input.clear();
@@ -26,11 +23,8 @@ impl App {
     /// transient navigation stack.
     pub fn open_custom_connection_editor(&mut self) {
         self.seed_custom_provider_from_template(&crate::providers::CUSTOM_TEMPLATE);
-        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
-            self.push_transient_surface(Modal::CustomProvider);
-        } else {
-            self.replace_transient_surface(Modal::CustomProvider);
-        }
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::CustomProvider);
         self.input.clear();
         self.set_cursor(0);
     }
@@ -73,7 +67,8 @@ impl App {
     /// field. The composer line is borrowed for the focused Name field.
     pub fn open_custom_provider_editor(&mut self, template: &ConnectionTemplate) {
         self.seed_custom_provider_from_template(template);
-        self.replace_transient_surface(Modal::CustomProvider);
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::CustomProvider);
         self.input.clear();
         self.set_cursor(0);
     }
@@ -101,7 +96,8 @@ impl App {
         self.oauth_pending_user_code.clear();
         self.oauth_pending_error = None;
         self.oauth_scroll = 0;
-        self.replace_transient_surface(Modal::OauthPending);
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::OAuthPending);
         self.input.clear();
         self.set_cursor(0);
     }
@@ -116,7 +112,8 @@ impl App {
         self.oauth_pending_message.clear();
         self.oauth_pending_error = None;
         self.oauth_scroll = 0;
-        self.replace_transient_surface(Modal::CustomProvider);
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::CustomProvider);
         self.custom_fields = vec![CustomField::Name];
         self.custom_field = 0;
         self.custom_edit_id = None;
@@ -181,11 +178,8 @@ impl App {
         curated: bool,
         client_identity: muta_contracts::ClientIdentity,
     ) {
-        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
-            self.push_transient_surface(Modal::CustomProvider);
-        } else {
-            self.replace_transient_surface(Modal::CustomProvider);
-        }
+        self.surfaces
+            .present_sheet(crate::surfaces::SheetKind::CustomProvider);
         self.custom_edit_id = Some(key);
         self.custom_fields = edit_fields(curated, auth);
         self.custom_field = 0;
@@ -408,9 +402,9 @@ impl App {
     /// synthetic list row); Models counts the flat (provider, model) rows. Used
     /// to clamp the ↑/↓ selection cursor. Returns 0 when no picker is open.
     pub fn picker_row_count(&self) -> usize {
-        match self.active_modal() {
-            Modal::Connections => self.providers_filtered().len(),
-            Modal::Models => self.models_flat_filtered().len(),
+        match self.active_dialog() {
+            Some(crate::surfaces::DialogKind::Connections) => self.providers_filtered().len(),
+            Some(crate::surfaces::DialogKind::Models) => self.models_flat_filtered().len(),
             _ => 0,
         }
     }
@@ -421,7 +415,9 @@ impl App {
     /// an overlay is already open (prevents re-staging). Driven by the `Shift+D`
     /// → `DeleteProvider` input action.
     pub fn stage_provider_delete(&mut self) {
-        if self.active_modal() != Modal::Connections || self.pending_provider_delete.is_some() {
+        if self.active_dialog() != Some(crate::surfaces::DialogKind::Connections)
+            || self.pending_provider_delete.is_some()
+        {
             return;
         }
         let ranked = self.providers_filtered();

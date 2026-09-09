@@ -12,7 +12,17 @@
 //! interaction requests are sheets; user-invoked tools are modals;
 //! user-invoked spaces are full-screen views.
 
-use crate::modal::Claims;
+/// Keyboard claims for action surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Claims {
+    pub text_entry: bool,
+    pub list_nav: bool,
+    pub body_scroll: bool,
+    pub decide: bool,
+    pub opaque: bool,
+    pub composer_line: bool,
+    pub transcript_nav: bool,
+}
 
 /// The sheet handlers' own sub-state (ADR-0197 M2): which sheet row/sub-view
 /// is live and whether the transcript navigation facts pass through. Built
@@ -69,6 +79,8 @@ impl SheetKind {
                 body_scroll: false,
                 decide: true,
                 opaque: false,
+                composer_line: false,
+                transcript_nav: true,
             },
             Question => Claims {
                 text_entry: false,
@@ -76,6 +88,8 @@ impl SheetKind {
                 body_scroll: true,
                 decide: true,
                 opaque: true,
+                composer_line: false,
+                transcript_nav: false,
             },
             // The injection sheet borrows the composer line itself: full
             // text entry, no scrollable body.
@@ -85,6 +99,8 @@ impl SheetKind {
                 body_scroll: false,
                 decide: true,
                 opaque: true,
+                composer_line: true,
+                transcript_nav: false,
             },
         }
     }

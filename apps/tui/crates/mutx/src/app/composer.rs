@@ -436,7 +436,8 @@ impl App {
     /// cursor state represent both an inactive surface and a hidden selection
     /// caret without a second physical-cursor writer.
     pub fn caret_owner(&self) -> CaretOwner {
-        if self.active_modal() != Modal::None || self.active_sheet().is_some() {
+        use crate::surfaces::{DialogKind, SheetKind};
+        if self.surfaces.active_overlay().is_some() || self.active_sheet().is_some() {
             // The provider-delete confirm overlay is a keyboard-only sub-layer
             // (no text input): suppress the caret while it is open so the host
             // IME does not anchor to the provider-search input behind the
@@ -447,8 +448,7 @@ impl App {
             }
             // The history panel floats above a fully-live composer: the
             // composer IS its filter input, so the composer (not a modal
-            // field) owns the caret while this surface is open. This is why
-            // `HistorySearch` is deliberately absent from `Modal::owns_caret`.
+            // field) owns the caret while this surface is open.
             if self.active_composer_extension()
                 == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
             {
@@ -461,7 +461,10 @@ impl App {
             // Models and Connections are editable only while their search
             // row is open. Browse mode renders no text field and therefore
             // must not claim a terminal/IME caret.
-            if matches!(self.active_modal(), Modal::Models | Modal::Connections) {
+            if matches!(
+                self.active_dialog(),
+                Some(DialogKind::Models | DialogKind::Connections)
+            ) {
                 return if self.model_search {
                     CaretOwner::Modal
                 } else {
@@ -470,7 +473,7 @@ impl App {
             }
             // The provider-key form has one text field. Per-model settings
             // contain only effort/thinking controls and render no caret.
-            if self.active_modal() == Modal::ModelEditor {
+            if self.surfaces.contains_sheet(SheetKind::ModelEditor) {
                 return if !self.editor_model_settings_only && self.editor_field == 0 {
                     CaretOwner::Modal
                 } else {
@@ -478,38 +481,36 @@ impl App {
                 };
             }
             if self.active_sheet() == Some(crate::sheet::SheetKind::InputInjection)
-                && self.active_modal() == Modal::None
+                && self.surfaces.active_overlay().is_none()
             {
                 return CaretOwner::Modal;
             }
-            return if self.active_modal().owns_caret() {
-                CaretOwner::Modal
-            } else if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
-                && self.active_modal() == Modal::None
+            if matches!(self.active_dialog(), Some(DialogKind::Switcher))
+                || self.surfaces.contains_sheet(SheetKind::CustomProvider)
+            {
+                return CaretOwner::Modal;
+            }
+            if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
+                && self.surfaces.active_overlay().is_none()
                 && self
                     .question
                     .as_ref()
                     .is_some_and(|q| q.is_other_highlighted())
             {
-                // The Question modal is normally a decision sheet (no caret).
-                // But when the synthetic "Other" free-text row is highlighted
-                // it becomes a real text-input surface, so it must own the
-                // terminal cursor for that one state — otherwise the host IME
-                // has no coordinate to anchor its composition window to. This
-                // Like picker search and the provider-key editor above, this
-                // ownership is resolved from live modal state rather than the
-                // unconditional `Modal::owns_caret` classification.
-                CaretOwner::Modal
-            } else {
-                CaretOwner::None
-            };
+                return CaretOwner::Modal;
+            }
+            return CaretOwner::None;
         }
         // No modal: the composer owns the caret unless a transcript step has
         // keyboard focus, the pointer parked attention on the transcript
         // (ADR-0174 browse focus), or we are zoomed into a subagent task
         // (which has no input line at all — its footer collapses to zero
         // height).
-        if self.focused_target.is_some() || self.transcript_focused || self.in_subagent_view() {
+        if self.current_scene() != crate::surfaces::SceneKind::Conversation
+            || self.focused_target.is_some()
+            || self.transcript_focused
+            || self.in_subagent_view()
+        {
             CaretOwner::None
         } else {
             CaretOwner::Composer
@@ -593,10 +594,10 @@ impl App {
     pub fn active_composer_extension(
         &self,
     ) -> Option<crate::composer_extension::ComposerExtensionKind> {
-        if self.active_modal() == Modal::HistorySearch {
+        if self.active_dialog() == Some(crate::surfaces::DialogKind::HistorySearch) {
             return Some(crate::composer_extension::ComposerExtensionKind::HistorySearch);
         }
-        if self.active_modal() == Modal::None && !self.completion_dismissed {
+        if self.surfaces.active_overlay().is_none() && !self.completion_dismissed {
             match self.completion_kind() {
                 crate::completion::CompletionKind::Slash => {
                     let completions = self.completions();
@@ -634,19 +635,19 @@ impl App {
     /// Whether this view borrows the composer line and therefore owns a
     /// per-view draft slot (Models / Connections / HistorySearch — the
     /// surfaces whose filter field *is* the composer).
-    pub(super) fn owns_composer_draft(&self, id: crate::surfaces::PanelId) -> bool {
+    pub(super) fn owns_composer_draft(&self, id: crate::surfaces::DialogKind) -> bool {
         matches!(
             id,
-            crate::surfaces::PanelId::Models
-                | crate::surfaces::PanelId::Connections
-                | crate::surfaces::PanelId::HistorySearch
+            crate::surfaces::DialogKind::Models
+                | crate::surfaces::DialogKind::Connections
+                | crate::surfaces::DialogKind::HistorySearch
         )
     }
 
     /// Park the live composer draft into a view's own slot,
     /// clearing the borrowed line for the view's filter/entry use.
-    pub(super) fn park_draft_into(&mut self, id: crate::surfaces::PanelId) {
-        if let Some(state) = self.panels.states_mut(&id) {
+    pub(super) fn park_draft_into(&mut self, id: crate::surfaces::DialogKind) {
+        if let Some(state) = self.surface_store.state_mut(&id) {
             state.draft = Some(std::mem::take(&mut self.input));
         }
         self.set_cursor(0);
@@ -656,9 +657,11 @@ impl App {
 
     /// Hand a view's parked draft back to the composer and clear its slot
     /// (the view is leaving the borrowed-line state for chat).
-    pub(super) fn restore_draft_from(&mut self, id: crate::surfaces::PanelId) {
-        if let Some(state) = self.panels.states_mut(&id) {
-            self.input = state.draft.take().unwrap_or_default();
+    pub(super) fn restore_draft_from(&mut self, id: crate::surfaces::DialogKind) {
+        if let Some(state) = self.surface_store.state_mut(&id)
+            && let Some(draft) = state.draft.take()
+        {
+            self.input = draft;
         }
         self.set_cursor_end();
         self.input_scroll = 0;
@@ -671,16 +674,16 @@ impl App {
     /// user resumes typing what they were typing before Ctrl+M. The stack
     /// is cleared: nothing between chat and here is reachable via Esc.
     pub(crate) fn restore_chat_after_editor_chain(&mut self) {
-        while self.active_panel().is_none() && self.transient_return_modal() != Modal::None {
+        while self.active_dialog().is_none() && self.surfaces.active_overlay().is_some() {
             self.pop_transient_surface();
         }
-        if let Some(id) = self.active_panel() {
-            self.deactivate_panel(id);
+        if let Some(id) = self.active_dialog() {
+            self.deactivate_dialog(id);
         }
-        // The editor chain ends at the panel it started from; if even that
-        // is gone, reveal the full-screen view beneath (ADR-0141).
-        if self.active_panel().is_none() && self.surfaces.active_panel().is_none() {
-            self.surfaces.hide_panel();
+        // The editor chain ends at the dialog it started from; if even that
+        // is gone, reveal the full-screen scene beneath (ADR-0205).
+        if self.active_dialog().is_none() && self.surfaces.active_dialog().is_none() {
+            self.surfaces.dismiss_all_overlays();
         }
     }
 

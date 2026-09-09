@@ -182,24 +182,15 @@ pub(super) struct ScrollOp {
     saved_rows: usize,
 }
 
-/// Whether two cells match for scroll-detection purposes.
-fn cells_equal(a: Option<&crate::cell::Cell>, b: Option<&crate::cell::Cell>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a == b,
+/// Full-row equality across the grid width. Blank-vs-None mismatches are
+/// tolerated (out-of-range cells don't exist in either grid).
+#[inline]
+fn rows_equal(back: &Grid, front: &Grid, back_y: u16, front_y: u16, _w: u16) -> bool {
+    match (back.row_slice(back_y), front.row_slice(front_y)) {
+        (Some(b), Some(f)) => b == f,
         (None, None) => true,
         _ => false,
     }
-}
-
-/// Full-row equality across the grid width. Blank-vs-None mismatches are
-/// tolerated (out-of-range cells don't exist in either grid).
-fn rows_equal(back: &Grid, front: &Grid, back_y: u16, front_y: u16, w: u16) -> bool {
-    for x in 0..w {
-        if !cells_equal(back.get(x, back_y), front.get(x, front_y)) {
-            return false;
-        }
-    }
-    true
 }
 
 /// Detect a whole-band vertical translation between the front and back grids
@@ -262,7 +253,15 @@ fn detect_scroll_direction(
     };
 
     let mut best: Option<(usize, u16)> = None;
+    let anchor_y = if up { lo } else { hi };
     for k in 1..=max_shift {
+        // Fast anchor check: the first row in the shift direction MUST match its shifted source
+        if let Some(anchor_src) = source_row(anchor_y, k)
+            && !rows_equal(back, front, anchor_y, anchor_src, w)
+        {
+            continue;
+        }
+
         let mut ok = true;
         let mut saved_changed_rows = 0usize;
         for y in lo..=hi {
@@ -277,7 +276,9 @@ fn detect_scroll_direction(
                     // blank row with a panel background is not equivalent:
                     // SU/SD exposes terminal-default cells, not styled ones.
                     let terminal_blank = crate::cell::Cell::blank();
-                    let blank = (0..w).all(|x| back.get(x, y).is_none_or(|c| c == &terminal_blank));
+                    let blank = back
+                        .row_slice(y)
+                        .is_none_or(|row| row.iter().all(|c| c == &terminal_blank));
                     if !blank {
                         ok = false;
                         break;

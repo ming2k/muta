@@ -367,6 +367,56 @@ fn search_text_expanded_renders_grouped_matches() {
 }
 
 #[test]
+fn search_web_expanded_renders_semantic_cards() {
+    let structured = muta_contracts::ToolOutput::WebSearch {
+        query: "rust 1.85 release notes".into(),
+        provider: "DuckDuckGo".into(),
+        results: vec![
+            muta_contracts::WebSearchHit {
+                title: "Rust 1.85.0 released | Rust Blog".into(),
+                url: "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html".into(),
+                domain: "blog.rust-lang.org".into(),
+                snippet: "The Rust team is happy to announce a new version of Rust, 1.85.0. Rust 2024 edition is now stable!".into(),
+            },
+            muta_contracts::WebSearchHit {
+                title: "What is new in Rust 1.85? - GitHub Discussions".into(),
+                url: "https://github.com/rust-lang/rust/discussions/134900".into(),
+                domain: "github.com".into(),
+                snippet: "A summary of major additions including async closures and standard library improvements.".into(),
+            },
+        ],
+        truncated: false,
+    };
+    let m = tool_step_structured(
+        "search_web",
+        r#"{"query":"rust 1.85 release notes"}"#,
+        structured,
+        true,
+    );
+    insta::assert_snapshot!(render_grid(&m, 80, 20));
+}
+
+#[test]
+fn read_url_expanded_renders_article_reader() {
+    let structured = muta_contracts::ToolOutput::WebArticle {
+        url: "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html".into(),
+        title: Some("Announcing Rust 1.85.0 and Rust 2024".into()),
+        domain: "blog.rust-lang.org".into(),
+        markdown: "# Announcing Rust 1.85.0 and Rust 2024\n\nThe Rust team is happy to announce a new version of Rust, 1.85.0.\n\n## Stabilized Features\n\n- Async closures (`async || { ... }`)\n- Naked functions\n\n```rust\nasync fn test() {}\n```".into(),
+        reader: "Jina".into(),
+        tokens: 1840,
+        truncated: false,
+    };
+    let m = tool_step_structured(
+        "read_url",
+        r#"{"url":"https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html"}"#,
+        structured,
+        true,
+    );
+    insta::assert_snapshot!(render_grid(&m, 80, 20));
+}
+
+#[test]
 fn edit_text_expanded_renders_diff() {
     let m = tool_step(
         "edit_text",
@@ -1687,14 +1737,16 @@ fn user_prompt_sending_and_cancelled_render_clean_headers() {
         "must render sending prompt with sending status chip:\n{grid_sending}"
     );
 
-    // Cancelled prompt
-    let cancelled_msg = TranscriptMessage::new(muta_contracts::Role::User, "Cancelled prompt")
-        .with_sent_at_ms(epoch_ms)
-        .cancelled();
+    // Cancelled prompt with round provenance
+    let cancelled_round_msg =
+        TranscriptMessage::new(muta_contracts::Role::User, "Cancelled round prompt")
+            .with_sent_at_ms(epoch_ms)
+            .with_round(1)
+            .cancelled();
 
-    let grid_cancelled = render_transcript_grid(&[cancelled_msg], 72, 18);
+    let grid_cancelled_round = render_transcript_grid(&[cancelled_round_msg], 72, 18);
     assert!(
-        grid_cancelled.contains("< prompt  cancelled"),
-        "must render cancelled prompt with cancelled chip:\n{grid_cancelled}"
+        grid_cancelled_round.contains("< round 1  cancelled"),
+        "must render cancelled prompt with round provenance:\n{grid_cancelled_round}"
     );
 }

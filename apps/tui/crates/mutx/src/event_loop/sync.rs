@@ -113,17 +113,20 @@ pub(crate) fn sync_request_surfaces(app: &mut App, runtime: &UiRuntime) {
     }
 }
 
-pub(crate) fn tick_toast_timers(app: &mut App) {
+pub(crate) fn tick_toast_timers(app: &mut App) -> bool {
+    let mut changed = false;
     if let Some(until) = app.copy_toast_until
         && std::time::Instant::now() >= until
     {
         app.copy_toast_until = None;
+        changed = true;
     }
 
     if let Some(until) = app.notice_toast_until
         && std::time::Instant::now() >= until
     {
         app.notice_toast_until = None;
+        changed = true;
     }
 
     if !app.pending_images.is_empty() && !app.ctrl_c_armed() {
@@ -137,9 +140,16 @@ pub(crate) fn tick_toast_timers(app: &mut App) {
             false,
             std::time::Duration::from_millis(600),
         );
+        changed = true;
     }
 
+    let before_esc = app.esc_armed();
     app.tick_esc_arm();
+    if before_esc != app.esc_armed() {
+        changed = true;
+    }
+
+    changed
 }
 
 pub(crate) fn show_local_toast(

@@ -116,7 +116,7 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
     // row, so `picker_row_count()` for Connections equals the provider count
     // exactly (no +1).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     // Seed a few snapshot rows so providers_filtered() renders the full list
     // (the picker is snapshot-driven).
     let row = |id: &str| muta_contracts::ProviderPickerRow {
@@ -613,7 +613,8 @@ fn modal_paste_splices_text_inline_stripping_newlines() {
     // matching the single-line semantics the modal already enforces. No
     // chip is inserted and no attachment is staged.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::ModelEditor);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.editor_field = 0;
     app.input = "sk-".to_string();
     app.cursor_position = app.input.chars().count();
@@ -641,7 +642,8 @@ fn modal_paste_inserts_at_cursor_not_at_end() {
     // an existing field inserts between the surrounding characters rather
     // than appending.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::ModelEditor);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.editor_field = 1;
     app.input = "gpt-4omini".to_string();
     app.cursor_position = "gpt-4o".chars().count();
@@ -664,9 +666,12 @@ fn modal_paste_applies_to_provider_picker_and_history_search() {
     // The inline paste path is shared by every free-text modal that borrows
     // the input line, so the model picker filter and the history search
     // query paste the same way as the editor.
-    for modal in [Modal::Models, Modal::HistorySearch] {
+    for dialog in [
+        crate::surfaces::DialogKind::Models,
+        crate::surfaces::DialogKind::HistorySearch,
+    ] {
         let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-        app.set_active_modal_for_test(modal);
+        app.open_dialog(dialog);
         app.input = String::new();
         app.cursor_position = 0;
 
@@ -690,7 +695,8 @@ fn modal_paste_drops_image_with_failure_toast() {
     // is dropped with a failure toast rather than silently lost or staged
     // as an attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::ModelEditor);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.input = String::new();
     app.cursor_position = 0;
 
@@ -717,19 +723,22 @@ fn modal_paste_drops_image_with_failure_toast() {
 #[test]
 fn picker_caret_owner_exists_only_in_search_mode() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    for modal in [Modal::Models, Modal::Connections] {
-        app.set_active_modal_for_test(modal);
+    for dialog in [
+        crate::surfaces::DialogKind::Models,
+        crate::surfaces::DialogKind::Connections,
+    ] {
+        app.open_dialog(dialog);
         app.model_search = false;
         assert_eq!(
             app.caret_owner(),
             CaretOwner::None,
-            "{modal:?} browse mode has no editable field"
+            "{dialog:?} browse mode has no editable field"
         );
         app.model_search = true;
         assert_eq!(
             app.caret_owner(),
             CaretOwner::Modal,
-            "{modal:?} search mode owns the visible query field"
+            "{dialog:?} search mode owns the visible query field"
         );
     }
 }
@@ -750,27 +759,16 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
     // live composer that IS the filter field, so the composer (not the modal)
     // owns the caret — handled state-dependently in `App::caret_owner`. It
     // appears in `not_owns` below and is exercised by the caret-owner tests.
-    let owns = [Modal::CustomProvider];
-    for m in owns {
-        assert!(m.owns_caret(), "{m:?} must own the caret");
-    }
-    let not_owns = [
-        Modal::None,
-        Modal::Help,
-        Modal::Sessions,
-        Modal::Tools,
-        Modal::Mcp,
-        Modal::Permissions,
-        Modal::Config,
-        Modal::ProviderPreset,
-        Modal::HistorySearch,
-        Modal::Models,
-        Modal::Connections,
-        Modal::ModelEditor,
-    ];
-    for m in not_owns {
-        assert!(!m.owns_caret(), "{m:?} must not own the caret");
-    }
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::CustomProvider);
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::Modal,
+        "CustomProvider owns the caret"
+    );
+    app.surfaces.dismiss_all_overlays();
+    assert_eq!(app.caret_owner(), CaretOwner::Composer);
 }
 
 /// `modal_scroll_field` is the single source of truth that every `Scroll*`
@@ -792,7 +790,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     app.question_modal_follow = true;
 
     // List modals return a follow-flag; clearing it must hit the right field.
-    app.set_active_modal_for_test(Modal::Queue);
+    app.open_dialog(crate::surfaces::DialogKind::Queue);
     {
         let (scroll, follow) = app.modal_scroll_field().expect("queue scrolls");
         *scroll = 5;
@@ -806,7 +804,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         "queue follow cleared through helper"
     );
 
-    app.set_active_modal_for_test(Modal::Tools);
+    app.open_dialog(crate::surfaces::DialogKind::Tools);
     {
         let (_, follow) = app.modal_scroll_field().expect("tools scrolls");
         if let Some(f) = follow {
@@ -818,34 +816,38 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         "tools reuses session follow flag"
     );
 
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
     {
         let (_, follow) = app.modal_scroll_field().expect("sessions scrolls");
         assert!(follow.is_some(), "sessions shares the session follow flag");
     }
 
-    // Pure-content modals return a scroll ref but no follow flag.
-    for m in [Modal::Help, Modal::Permissions, Modal::Config] {
-        app.set_active_modal_for_test(m);
-        let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
-        assert!(f.is_none(), "{m:?} has no selection-follow flag");
-        // Mutating must hit a distinct field per modal (not all the same slot).
-        *s = 7;
-    }
+    // Pure-content dialogs/scenes return a scroll ref but no follow flag.
+    app.open_dialog(crate::surfaces::DialogKind::Help);
+    let (s, f) = app.modal_scroll_field().expect("help scrolls");
+    assert!(f.is_none(), "help has no selection-follow flag");
+    *s = 7;
+
+    app.open_dialog(crate::surfaces::DialogKind::Permissions);
+    let (s, f) = app.modal_scroll_field().expect("permissions scrolls");
+    assert!(f.is_none(), "permissions has no selection-follow flag");
+    *s = 7;
+
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
+    let (s, f) = app.modal_scroll_field().expect("settings scrolls");
+    assert!(f.is_none(), "settings has no selection-follow flag");
+    *s = 7;
+
     assert_eq!(app.help_scroll, 7);
     assert_eq!(app.permissions_scroll, 7);
 
-    // The non-scrolling modals resolve to None so the action falls through to
-    // the transcript / caret handling. (The question sheet's body scroll is
-    // routed through `App::modal_scroll_field`'s sheet preamble, and the
-    // permission sheet scrolls the transcript behind it.)
-    for m in [Modal::None, Modal::ModelEditor] {
-        app.set_active_modal_for_test(m);
-        assert!(
-            app.modal_scroll_field().is_none(),
-            "{m:?} must not scroll its own body"
-        );
-    }
+    // Conversation and ModelEditor do not scroll their own body.
+    app.reset_to_conversation();
+    assert!(app.modal_scroll_field().is_none());
+
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
+    assert!(app.modal_scroll_field().is_none());
 }
 
 /// The page step follows the captured modal body height (when known) and
@@ -900,10 +902,10 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     // Simulate the startup path (`mutx attach` with no id): the picker
     // opens and `startup_overlay` is armed. Closing it must quit.
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
     assert!(
         app.startup_overlay == crate::StartupOverlay::SessionsPicker
-            && app.active_modal() == Modal::Sessions
+            && app.active_dialog() == Some(crate::surfaces::DialogKind::Sessions)
     );
     // The quit gate is `should_quit`; it is still clear until a close happens.
     assert!(!app.should_quit.load(Ordering::SeqCst));
@@ -911,7 +913,7 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     // Open a session from the picker: the overlay clears so a later `/sessions`
     // modal behaves as a normal transient overlay.
     app.startup_overlay = crate::StartupOverlay::None;
-    app.set_active_modal_for_test(Modal::None);
+    app.reset_to_conversation();
     assert_eq!(
         app.startup_overlay,
         crate::StartupOverlay::None,
@@ -1250,17 +1252,20 @@ fn config_view_reopen_keeps_pane_and_category() {
     // the user left. Esc's three-step back (editor → detail → categories →
     // hide) ends in the shared dismiss verb.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.show_view_surface(crate::surfaces::View::Settings);
-    assert_eq!(app.active_modal(), Modal::Config);
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
+    assert_eq!(app.current_scene(), crate::surfaces::SceneKind::Settings);
 
     // The user walks into a category and the Detail pane, then hides.
     app.config_category = 2;
     app.config_focus = crate::overlays::ConfigFocus::Detail;
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_modal(), Modal::None);
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
+    );
 
     // Reopen: the pane/category survived.
-    app.show_view_surface(crate::surfaces::View::Settings);
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
     assert_eq!(app.config_category, 2, "category retained across hide");
     assert_eq!(
         app.config_focus,
@@ -1272,8 +1277,8 @@ fn config_view_reopen_keeps_pane_and_category() {
 #[test]
 fn config_view_navigation_and_theme_preview() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.show_view_surface(crate::surfaces::View::Settings);
-    assert_eq!(app.active_modal(), Modal::Config);
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
+    assert_eq!(app.current_scene(), crate::surfaces::SceneKind::Settings);
     assert_eq!(app.config_focus, crate::overlays::ConfigFocus::Categories);
     assert_eq!(app.config_category, 0);
 
@@ -1309,24 +1314,27 @@ fn config_view_navigation_and_theme_preview() {
 
     // Dismissing surface from Categories closes the settings view
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_modal(), Modal::None);
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
+    );
 }
 
 #[test]
 fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "unsent chat".to_string();
-    app.open_panel(crate::surfaces::PanelId::Models);
+    app.open_dialog(crate::surfaces::DialogKind::Models);
     app.model_search = true;
     app.input = "claude".to_string();
 
-    app.open_panel(crate::surfaces::PanelId::Help);
+    app.open_dialog(crate::surfaces::DialogKind::Help);
     assert_eq!(
         app.input, "unsent chat",
         "switch restores the chat composer"
     );
 
-    app.open_panel(crate::surfaces::PanelId::Models);
+    app.open_dialog(crate::surfaces::DialogKind::Models);
     assert_eq!(
         app.input, "claude",
         "picker query is retained independently"
@@ -1339,13 +1347,19 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
 #[test]
 fn sheet_mounting_leaves_the_panel_stack_untouched() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Tools);
+    app.open_dialog(crate::surfaces::DialogKind::Tools);
     // A sheet is slot state, not a router layer: mounting it must leave the
     // panel stack untouched, and dismissing it hands the slot straight back.
     app.push_sheet_surface(crate::sheet::SheetKind::Question);
-    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Tools));
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Tools)
+    );
     app.dismiss_sheet();
-    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Tools));
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Tools)
+    );
 }
 
 #[test]
@@ -1353,8 +1367,9 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     assert!(app.can_accept_navigation_signal(), "chat is safe");
 
-    app.open_panel(crate::surfaces::PanelId::Models);
-    app.push_transient_surface(Modal::ModelEditor);
+    app.open_dialog(crate::surfaces::DialogKind::Models);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     assert!(
         !app.can_accept_navigation_signal(),
         "an editor must not be preempted"
@@ -1362,7 +1377,7 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
     app.pop_transient_surface();
     assert!(app.can_accept_navigation_signal());
 
-    app.show_view_surface(crate::surfaces::View::Settings);
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
     app.config_focus = crate::overlays::ConfigFocus::Detail;
     assert!(
         !app.can_accept_navigation_signal(),
@@ -1373,25 +1388,29 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
 #[test]
 fn explicit_view_close_discards_retained_state_and_payload() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::UsageStats);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
     app.usage_stats_scroll = 17;
-    app.close_panel(crate::surfaces::PanelId::UsageStats);
+    app.close_dialog(crate::surfaces::DialogKind::UsageStats);
 
-    assert!(!app.panels.is_open(crate::surfaces::PanelId::UsageStats));
-    assert_eq!(app.active_modal(), Modal::None);
+    assert!(
+        app.surface_store
+            .state(&crate::surfaces::DialogKind::UsageStats)
+            .is_none()
+    );
+    assert!(app.surfaces.active_overlay().is_none());
     assert_eq!(app.usage_stats_scroll, 0);
-    assert!(app.open_panel(crate::surfaces::PanelId::UsageStats));
+    assert!(app.open_dialog(crate::surfaces::DialogKind::UsageStats));
 }
 
 #[test]
 fn switching_away_from_queue_runs_exit_hook() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let sid = "queue-session";
-    app.open_panel(crate::surfaces::PanelId::Queue);
+    app.open_dialog(crate::surfaces::DialogKind::Queue);
     app.block_queue(sid);
     app.queue_exit_session = Some(sid.to_string());
 
-    app.open_panel(crate::surfaces::PanelId::Help);
+    app.open_dialog(crate::surfaces::DialogKind::Help);
 
     assert!(!app.is_queue_blocked(sid));
     assert!(app.queue_exit_session.is_none());
@@ -1402,7 +1421,7 @@ fn queue_view_hide_releases_the_auto_block() {
     // Phase 4: the open-time auto-block is released by EVERY hide path
     // (the exit hook in hide_active_panel), not just the Esc arm.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Queue);
+    app.open_dialog(crate::surfaces::DialogKind::Queue);
     app.block_queue("sess");
     app.queue_exit_session = Some("sess".to_string());
     assert!(app.is_queue_blocked("sess"));
@@ -1419,16 +1438,20 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     // The shared one-step-back (phase 4): Esc's deepest-first chain and the
     // outside-click mirror both route through here.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(crate::Modal::Telemetry);
+    app.open_dialog(crate::surfaces::DialogKind::Telemetry);
     app.telemetry_detail = true;
     assert!(app.pop_sublayer());
     assert!(!app.telemetry_detail, "drill-in closed");
-    assert_eq!(app.active_modal(), crate::Modal::Telemetry, "view stays up");
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Telemetry),
+        "view stays up"
+    );
     assert!(!app.pop_sublayer(), "no sub-layer left");
 
     // Host: preview is the deepest layer (painted over the prompting
     // state), so it pops first; prompting next; then the view itself.
-    app.set_active_modal_for_test(crate::Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     app.host_preview = Some("transcript".to_string());
     app.host_prompting = true;
     assert!(app.pop_sublayer());
@@ -1439,15 +1462,15 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     assert!(!app.pop_sublayer());
 
     // Connections: detail view pops back to connections list
-    app.set_active_modal_for_test(crate::Modal::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     app.connection_info_detail = true;
     app.connection_detail = Some(Default::default());
     assert!(app.pop_sublayer());
     assert!(!app.connection_info_detail, "connection detail closed");
     assert!(app.connection_detail.is_none());
     assert_eq!(
-        app.active_modal(),
-        crate::Modal::Connections,
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Connections),
         "connections modal stays up"
     );
     assert!(!app.pop_sublayer(), "no sub-layer left");
@@ -1458,7 +1481,7 @@ fn pop_sublayer_pops_telemetry_turn_page_before_round_detail() {
     // Session Telemetry has three levels (round list -> round detail -> attempt inspector):
     // Esc walks back one level at a time, attempt inspector first.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(crate::Modal::Telemetry);
+    app.open_dialog(crate::surfaces::DialogKind::Telemetry);
     app.telemetry_detail = true;
     app.telemetry_turn = Some((2, 1));
     app.telemetry_turn_cursor = 1;
@@ -1474,7 +1497,11 @@ fn pop_sublayer_pops_telemetry_turn_page_before_round_detail() {
     assert!(app.pop_sublayer());
     assert!(!app.telemetry_detail, "round detail closed next");
     assert_eq!(app.telemetry_turn_cursor, 0, "cursor reset");
-    assert_eq!(app.active_modal(), crate::Modal::Telemetry, "view stays up");
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Telemetry),
+        "view stays up"
+    );
     assert!(!app.pop_sublayer(), "no sub-layer left");
 }
 
@@ -1483,7 +1510,7 @@ fn dashboard_reopen_keeps_selection_and_log() {
     // The dashboard is a full-screen view (ADR-0141) whose dock selection
     // and cockpit log persist natively on `App` across hide.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.show_view_surface(crate::surfaces::View::Dashboard);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     app.host_console_log
         .push(crate::overlays::ConsoleLine::Receipt {
             ok: true,
@@ -1493,7 +1520,7 @@ fn dashboard_reopen_keeps_selection_and_log() {
     app.modal_index = 3;
     assert!(app.dismiss_surface());
 
-    app.show_view_surface(crate::surfaces::View::Dashboard);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     assert_eq!(app.modal_index, 3, "dock selection retained");
     assert_eq!(app.host_console_log.len(), 1, "cockpit log retained");
 }

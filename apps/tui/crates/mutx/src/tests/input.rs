@@ -32,7 +32,7 @@ fn paste_in_readonly_modal_is_dropped_silently() {
     // Read-only / non-text modals (Help, Sessions, Permission, ...) drop a
     // paste silently — no insertion, no toast, no attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::Help);
+    app.open_dialog(crate::surfaces::DialogKind::Help);
     app.input = String::new();
     app.cursor_position = 0;
 
@@ -91,7 +91,8 @@ fn caret_owner_none_in_subagent_view() {
 #[test]
 fn caret_owner_modal_for_caret_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::CustomProvider);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::CustomProvider);
     assert_eq!(
         app.caret_owner(),
         CaretOwner::Modal,
@@ -118,28 +119,27 @@ fn caret_owner_modal_for_caret_modals() {
 #[test]
 fn caret_owner_none_for_read_only_and_decision_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    for modal in [
-        Modal::Help,
-        Modal::Sessions,
-        Modal::Tools,
-        Modal::Mcp,
-        Modal::Permissions,
-        // `Question` is listed here to cover the *default* state — any option
-        // but "Other" highlighted (or no question model at all). Its caret
-        // ownership is conditional: see `caret_owner_question_owns_caret_only_on_other`.
-        Modal::Config,
+    for dialog in [
+        crate::surfaces::DialogKind::Help,
+        crate::surfaces::DialogKind::Sessions,
+        crate::surfaces::DialogKind::Tools,
+        crate::surfaces::DialogKind::Mcp,
+        crate::surfaces::DialogKind::Permissions,
     ] {
-        app.set_active_modal_for_test(modal);
+        app.open_dialog(dialog);
         assert_eq!(
             app.caret_owner(),
             CaretOwner::None,
-            "{modal:?} renders no caret → cursor must hide so the IME has no stale anchor",
+            "{dialog:?} renders no caret → cursor must hide so the IME has no stale anchor",
         );
         assert!(
             !app.caret_visible(),
-            "{modal:?} must hide the terminal cursor",
+            "{dialog:?} must hide the terminal cursor",
         );
     }
+    app.switch_scene(crate::surfaces::SceneKind::Settings);
+    assert_eq!(app.caret_owner(), CaretOwner::None);
+    assert!(!app.caret_visible());
     // The permission and question sheets cover the same default state: no
     // caret unless the question's "Other" row is highlighted.
     for kind in [

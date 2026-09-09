@@ -252,11 +252,7 @@ fn distribute_slack(
 
     if path_count == 0 {
         // Only flexible texts: divide evenly
-        let per_flex = if flex_count > 0 {
-            available / flex_count
-        } else {
-            0
-        };
+        let per_flex = available.checked_div(flex_count).unwrap_or(0);
         let budgets = vec![per_flex; flex_count];
         return (budgets, 0);
     }

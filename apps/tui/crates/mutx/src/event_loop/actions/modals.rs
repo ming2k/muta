@@ -8,15 +8,16 @@ use std::sync::atomic::Ordering;
 
 use muta_contracts::AgentRequest;
 
+use crate::App;
 use crate::overlays;
-use crate::{App, Modal};
+use crate::surfaces::{DialogKind, SceneKind, SheetKind};
 
 use super::ActionFlow;
 
 /// Loop stage (input dispatch): the `SubmitCustomProvider` arm.
 #[allow(clippy::expect_used)] // The editor only exposes registered protocol choices.
 pub(crate) fn handle_submit_custom_provider(app: &mut App) {
-    if app.active_modal() == Modal::CustomProvider {
+    if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
         // Commit the focused text field's live value first.
         app.stash_custom_field();
         let name = app.custom_name.trim().to_string();
@@ -137,7 +138,7 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
 
 /// Loop stage (input dispatch): the `OpenModelEditor` arm.
 pub(super) fn handle_open_model_editor(app: &mut App) {
-    if app.active_modal() == Modal::Models {
+    if app.active_dialog() == Some(DialogKind::Models) {
         // `e` on a flat model row. The per-model settings popup
         // opens for any model that exposes effort and/or a
         // separate thinking switch.
@@ -148,7 +149,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             let is_builtin = !app.provider_is_custom(&row.provider_id);
             // Phase 3 (ADR-0133): the picker that opened this editor goes on
             // the navigation stack; its Esc/submit pops back to it.
-            app.push_transient_surface(Modal::ModelEditor);
+            app.surfaces.present_sheet(SheetKind::ModelEditor);
             app.editor_target = Some(row.provider_id.clone());
             app.editor_model = row.model.clone();
             app.editor_model_settings_only = true;
@@ -186,7 +187,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             app.set_cursor_end();
             app.model_search = false;
         }
-    } else if app.active_modal() == Modal::Connections {
+    } else if app.active_dialog() == Some(DialogKind::Connections) {
         // `e` in the Connections list. A built-in provider opens
         // the API-key editor (only its auth changes; the model is
         // chosen from the Models picker). A user-defined provider
@@ -200,7 +201,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             .map(|row| (row.id.clone(), row.model.clone(), row.builtin));
         if let Some((id, model, builtin)) = target {
             if builtin {
-                app.push_transient_surface(Modal::ModelEditor);
+                app.surfaces.present_sheet(SheetKind::ModelEditor);
                 app.editor_target = Some(id);
                 app.editor_field = 0;
                 app.editor_key.clear();
@@ -259,7 +260,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
 
 /// Loop stage (input dispatch): the `SubmitModelEditor` arm.
 pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
-    if app.active_modal() == Modal::ModelEditor
+    if app.surfaces.contains_sheet(SheetKind::ModelEditor)
         && let Some(target) = app.editor_target.clone()
     {
         if let Some(payload) = target.strip_prefix("web_credential:") {
@@ -417,7 +418,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
     if app.pop_sublayer() {
         // Sub-layer closed; the parent view keeps the surface.
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(DialogKind::Sessions)
     {
         // `mutx attach` (no id) opened the picker at startup
         // instead of loading any session: there is no real
@@ -427,7 +428,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else if app.startup_overlay == crate::StartupOverlay::Dashboard
-        && app.active_modal() == Modal::Host
+        && app.current_scene() == SceneKind::Dashboard
     {
         // `mutx dashboard` opened the dashboard over a carrier
         // session the user never asked to converse with: Esc
@@ -436,35 +437,20 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else if matches!(app.startup_overlay, crate::StartupOverlay::Settings { .. })
-        && (app.active_modal() == Modal::Config
-            || app.current_view() == crate::surfaces::View::Settings)
+        && app.current_scene() == SceneKind::Settings
     {
         // `mutx settings` (or MUTX_STARTUP_VIEW=settings) opened the settings
         // view directly: Esc here quits rather than dropping into chat.
         tracing::info!(reason = "startup_settings_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else {
-        // Retained browse views hide instead of closing (ADR-0139), and the
+        // Retained browse dialogs hide instead of closing (ADR-0205), and the
         // quick switcher cancels back to its origin surface — both via the
-        // shared dismiss verb. State saved / origin restored, surface
-        // dismissed; the next open restores exactly where the user was.
-        // Handled before the modal-specific close logic below, which is for
-        // surfaces that have not migrated (or are not views).
+        // shared dismiss verb.
         if app.dismiss_surface() {
             return;
         }
-        // Most modals close straight to chat. The model editor
-        // and the custom-provider editor instead step back to
-        // the picker they were opened from, so a key entry is
-        // recoverable with Esc.
-        // HistorySearch / Connections / Models no longer need branches here:
-        // `dismiss_surface` (checked above) hides them with the per-view
-        // draft handed back (ADR-0139).
-        if app.active_modal() == Modal::ModelEditor {
-            // Cancel the editor: discard its fields and return to
-            // the picker it was opened from in browse mode. The
-            // original chat draft stays in stashed_input for when
-            // that picker itself closes.
+        if app.surfaces.contains_sheet(SheetKind::ModelEditor) {
             app.editor_target = None;
             app.editor_model_settings_only = false;
             app.editor_target_is_builtin = false;
@@ -473,10 +459,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.model_search = false;
             app.model_modal_follow = true;
             app.pop_transient_surface();
-        } else if app.active_modal() == Modal::CustomProvider {
-            // Same as Esc: discard the editor fields and step back
-            // to the Connections list; the chat draft stays parked
-            // in stashed_input.
+        } else if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
             app.input.clear();
             app.set_cursor(0);
             app.custom_field = 0;
@@ -485,67 +468,24 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.modal_index = 0;
             app.pop_transient_surface();
         }
-        // Queue's exit hook (the open-time auto-block release) now lives in
-        // `hide_active_panel` — every hide path releases it, not just this
-        // one (ADR-0139).
-        if !matches!(app.active_modal(), Modal::Models | Modal::Connections) {
-            app.show_chat_surface();
+        if !matches!(
+            app.active_dialog(),
+            Some(DialogKind::Models | DialogKind::Connections)
+        ) {
+            app.reset_to_conversation();
         }
     }
 }
 
 /// Loop stage (input dispatch): the `ModalUp` arm (per-modal ↑ navigation).
 pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
-    match app.active_modal() {
-        Modal::Connections if app.connection_info_detail => {
-            app.connection_info_scroll = app.connection_info_scroll.saturating_sub(1);
-        }
-        Modal::Connections | Modal::Models => {
-            // Walk the fuzzy-filtered rows of the *active picker*
-            // (providers in Connections, flat (provider, model)
-            // pairs in Models), so the cursor never lands on a
-            // hidden row (same rule as the history-search modal).
-            let count = app.picker_row_count();
-            app.modal_index = if count == 0 {
-                0
-            } else if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
-            app.model_modal_follow = true;
-        }
-        Modal::HistorySearch => {
-            // Up/Down walk the fuzzy-filtered list, not the raw
-            // history, so the cursor never lands on an entry the
-            // user cannot actually see or select.
-            let count = app.history_rows().len();
-            app.modal_index = if count == 0 {
-                0
-            } else if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
-            app.history_modal_follow = true;
-        }
-        Modal::Sessions => {
-            let count = app.sessions_overview.len();
-            app.modal_index = if count == 0 {
-                0
-            } else if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
-            app.session_modal_follow = true;
-        }
-        Modal::Host => {
-            if app.host_focus == crate::overlays::DashboardFocus::List {
-                // Moving the dock selection cancels an armed kill confirm:
-                // the target of the confirm is the session, not the key.
-                super::super::actions::host::cancel_kill_confirm(app);
-                let count = app.host_sessions.len();
+    if let Some(dialog) = app.active_dialog() {
+        match dialog {
+            DialogKind::Connections if app.connection_info_detail => {
+                app.connection_info_scroll = app.connection_info_scroll.saturating_sub(1);
+            }
+            DialogKind::Connections | DialogKind::Models => {
+                let count = app.picker_row_count();
                 app.modal_index = if count == 0 {
                     0
                 } else if app.modal_index == 0 {
@@ -553,302 +493,309 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 } else {
                     app.modal_index - 1
                 };
-                app.host_modal_follow = true;
-                // Re-engage body-follow so the moved selection stays on
-                // screen (cleared again on manual page/wheel scroll).
-                app.session_modal_follow = true;
-            } else {
-                app.host_detail_scroll = app.host_detail_scroll.saturating_sub(1);
+                app.model_modal_follow = true;
             }
-        }
-        Modal::Permissions => {
-            let count = app
-                .session_context
-                .as_ref()
-                .map(|s| s.permissions.len())
-                .unwrap_or(0);
-            app.modal_index = if count == 0 {
-                0
-            } else if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
-        }
-        Modal::Config => match app.config_focus {
-            crate::overlays::ConfigFocus::Categories => {
-                let count = crate::overlays::ConfigCategory::ALL.len();
-                app.config_category = (app.config_category + count - 1) % count;
-                app.config_detail_index = 0;
-                app.config_detail_scroll = 0;
-            }
-            crate::overlays::ConfigFocus::Detail => {
-                let ws_path = if app.current_workspace.is_empty() {
-                    None
+            DialogKind::HistorySearch => {
+                let count = app.history_rows().len();
+                app.modal_index = if count == 0 {
+                    0
+                } else if app.modal_index == 0 {
+                    count - 1
                 } else {
-                    Some(std::path::Path::new(&app.current_workspace))
+                    app.modal_index - 1
                 };
-                let count = match app.config_category {
-                    0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
-                        .len()
-                        .max(1),
-                    1 => 5usize,
-                    2 => 1usize,
-                    3 => crate::views::settings::web::search_item_count(
-                        app.websearch_config.as_ref(),
-                    ),
-                    4 => crate::views::settings::web::reader_item_count(
-                        app.websearch_config.as_ref(),
-                    ),
-                    _ => 4usize,
+                app.history_modal_follow = true;
+            }
+            DialogKind::Sessions => {
+                let count = app.sessions_overview.len();
+                app.modal_index = if count == 0 {
+                    0
+                } else if app.modal_index == 0 {
+                    count - 1
+                } else {
+                    app.modal_index - 1
                 };
-                if count > 0 {
-                    app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                app.session_modal_follow = true;
+            }
+            DialogKind::Permissions => {
+                let count = app
+                    .session_context
+                    .as_ref()
+                    .map(|s| s.permissions.len())
+                    .unwrap_or(0);
+                app.modal_index = if count == 0 {
+                    0
+                } else if app.modal_index == 0 {
+                    count - 1
+                } else {
+                    app.modal_index - 1
+                };
+            }
+            DialogKind::Telemetry => {
+                if app.telemetry_tab == crate::overlays::telemetry::TelemetryTab::Overview
+                    || app.telemetry_turn.is_some()
+                {
+                    app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
+                } else if app.telemetry_detail {
+                    let report = app.token_source_report(viewed_session_id);
+                    let round_index = app.modal_index.min(
+                        report
+                            .as_ref()
+                            .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
+                            .unwrap_or(0),
+                    );
+                    let count = report
+                        .as_ref()
+                        .map(|report| overlays::telemetry_attempt_count(report, round_index))
+                        .unwrap_or(0)
+                        .max(1);
+                    app.telemetry_turn_cursor = (app.telemetry_turn_cursor + count - 1) % count;
+                } else {
+                    let count = app
+                        .token_source_report(viewed_session_id)
+                        .map(|report| overlays::telemetry_round_count(&report))
+                        .unwrap_or(0)
+                        .max(1);
+                    app.modal_index = (app.modal_index + count - 1) % count;
                 }
-                if app.config_category == 0 {
-                    let schemes =
-                        crate::render::Theme::available_color_schemes_with_workspace(ws_path);
-                    if let Some(scheme) =
-                        schemes.get(app.config_detail_index % schemes.len().max(1))
-                    {
-                        app.theme = crate::render::Theme::from_color_scheme_with_workspace(
-                            &scheme.id,
-                            &app.custom_color_scheme,
-                            ws_path,
-                        );
+            }
+            DialogKind::UsageStats => {
+                app.usage_stats_scroll = app.usage_stats_scroll.saturating_sub(1);
+            }
+            DialogKind::Queue => {
+                app.queue_scroll = app.queue_scroll.saturating_sub(1);
+                app.queue_modal_follow = false;
+            }
+            DialogKind::Asides => {
+                app.btw_scroll = app.btw_scroll.saturating_sub(1);
+                app.btw_modal_follow = false;
+            }
+            DialogKind::SessionTree => {
+                let count = crate::overlays::tree::flatten_tree(&app.session_tree).len();
+                app.modal_index = if count == 0 {
+                    0
+                } else if app.modal_index == 0 {
+                    count - 1
+                } else {
+                    app.modal_index - 1
+                };
+                app.tree_modal_follow = true;
+            }
+            DialogKind::Switcher => {
+                app.command_palette_selected = app.command_palette_selected.saturating_sub(1);
+            }
+            DialogKind::Help | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
+        }
+    } else {
+        match app.current_scene() {
+            SceneKind::Dashboard => {
+                if app.host_focus == crate::overlays::DashboardFocus::List {
+                    super::super::actions::host::cancel_kill_confirm(app);
+                    let count = app.host_sessions.len();
+                    app.modal_index = if count == 0 {
+                        0
+                    } else if app.modal_index == 0 {
+                        count - 1
+                    } else {
+                        app.modal_index - 1
+                    };
+                    app.host_modal_follow = true;
+                    app.session_modal_follow = true;
+                } else {
+                    app.host_detail_scroll = app.host_detail_scroll.saturating_sub(1);
+                }
+            }
+            SceneKind::Settings => match app.config_focus {
+                crate::overlays::ConfigFocus::Categories => {
+                    let count = crate::overlays::ConfigCategory::ALL.len();
+                    app.config_category = (app.config_category + count - 1) % count;
+                    app.config_detail_index = 0;
+                    app.config_detail_scroll = 0;
+                }
+                crate::overlays::ConfigFocus::Detail => {
+                    let ws_path = if app.current_workspace.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&app.current_workspace))
+                    };
+                    let count = match app.config_category {
+                        0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
+                            .len()
+                            .max(1),
+                        1 => 5usize,
+                        2 => 1usize,
+                        3 => crate::views::settings::web::search_item_count(
+                            app.websearch_config.as_ref(),
+                        ),
+                        4 => crate::views::settings::web::reader_item_count(
+                            app.websearch_config.as_ref(),
+                        ),
+                        _ => 4usize,
+                    };
+                    if count > 0 {
+                        app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                    }
+                    if app.config_category == 0 {
+                        let schemes =
+                            crate::render::Theme::available_color_schemes_with_workspace(ws_path);
+                        if let Some(scheme) =
+                            schemes.get(app.config_detail_index % schemes.len().max(1))
+                        {
+                            app.theme = crate::render::Theme::from_color_scheme_with_workspace(
+                                &scheme.id,
+                                &app.custom_color_scheme,
+                                ws_path,
+                            );
+                        }
                     }
                 }
-            }
-        },
-        Modal::Telemetry => {
-            if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
-                app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
-            } else if app.telemetry_turn.is_some() {
-                // Attempt inspector: a documentary body, arrows scroll.
-                app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
-            } else if app.telemetry_detail {
-                // Round detail (turns list): arrows move the turn cursor.
-                let report = app.token_source_report(viewed_session_id);
-                let round_index = app.modal_index.min(
-                    report
-                        .as_ref()
-                        .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
-                        .unwrap_or(0),
-                );
-                let count = report
-                    .as_ref()
-                    .map(|report| overlays::telemetry_attempt_count(report, round_index))
-                    .unwrap_or(0)
-                    .max(1);
-                app.telemetry_turn_cursor = (app.telemetry_turn_cursor + count - 1) % count;
-            } else {
-                let count = app
-                    .token_source_report(viewed_session_id)
-                    .map(|report| overlays::telemetry_round_count(&report))
-                    .unwrap_or(0)
-                    .max(1);
-                app.modal_index = (app.modal_index + count - 1) % count;
-            }
+            },
+            SceneKind::Conversation | SceneKind::TaskInspection | SceneKind::Aside => {}
         }
-        Modal::UsageStats => {
-            // The usage overlay scrolls as one body (no per-row selection).
-            app.usage_stats_scroll = app.usage_stats_scroll.saturating_sub(1);
-        }
-        Modal::Queue => {
-            // Wheel/PageUp: scroll the queue body. Clearing the
-            // follow flag lets the user browse freely until they
-            // navigate with ↑/↓ again.
-            app.queue_scroll = app.queue_scroll.saturating_sub(1);
-            app.queue_modal_follow = false;
-        }
-        Modal::Btw => {
-            // Asides list (ADR-0103 §5): wheel/PageUp scrolls the
-            // body; ↑/↓ navigation is handled by the shared
-            // SessionSelect path.
-            app.btw_scroll = app.btw_scroll.saturating_sub(1);
-            app.btw_modal_follow = false;
-        }
-        Modal::Tree => {
-            let count = crate::overlays::tree::flatten_tree(&app.session_tree).len();
-            app.modal_index = if count == 0 {
-                0
-            } else if app.modal_index == 0 {
-                count - 1
-            } else {
-                app.modal_index - 1
-            };
-            app.tree_modal_follow = true;
-        }
-        Modal::ViewSwitcher => {
-            app.command_palette_selected = app.command_palette_selected.saturating_sub(1);
-        }
-        Modal::Help
-        | Modal::ModelEditor
-        | Modal::ProviderPreset
-        | Modal::OauthPending
-        | Modal::CustomProvider
-        | Modal::Tools
-        | Modal::Mcp
-        | Modal::Skills
-        | Modal::None => {}
     }
 }
 
 /// Loop stage (input dispatch): the `ModalDown` arm (per-modal ↓ navigation).
 pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
-    match app.active_modal() {
-        Modal::Connections if app.connection_info_detail => {
-            app.connection_info_scroll = app.connection_info_scroll.saturating_add(1);
-        }
-        Modal::Connections | Modal::Models => {
-            let count = app.picker_row_count().max(1);
-            app.modal_index = (app.modal_index + 1) % count;
-            app.model_modal_follow = true;
-        }
-        Modal::HistorySearch => {
-            let count = app.history_rows().len().max(1);
-            app.modal_index = (app.modal_index + 1) % count;
-            app.history_modal_follow = true;
-        }
-        Modal::Sessions => {
-            let count = app.sessions_overview.len().max(1);
-            app.modal_index = (app.modal_index + 1) % count;
-            // Re-engage body-follow so the moved selection stays on
-            // screen (cleared again on manual page/wheel scroll).
-            app.session_modal_follow = true;
-        }
-        Modal::Host => {
-            if app.host_focus == crate::overlays::DashboardFocus::List {
-                // Same as ModalUp: a selection move cancels the confirm.
-                super::super::actions::host::cancel_kill_confirm(app);
-                let count = app.host_sessions.len().max(1);
+    if let Some(dialog) = app.active_dialog() {
+        match dialog {
+            DialogKind::Connections if app.connection_info_detail => {
+                app.connection_info_scroll = app.connection_info_scroll.saturating_add(1);
+            }
+            DialogKind::Connections | DialogKind::Models => {
+                let count = app.picker_row_count().max(1);
                 app.modal_index = (app.modal_index + 1) % count;
-                app.host_modal_follow = true;
-            } else {
-                app.host_detail_scroll = app.host_detail_scroll.saturating_add(1);
+                app.model_modal_follow = true;
             }
-        }
-        Modal::Permissions => {
-            let count = app
-                .session_context
-                .as_ref()
-                .map(|s| s.permissions.len())
-                .unwrap_or(0)
-                .max(1);
-            app.modal_index = (app.modal_index + 1) % count;
-        }
-        Modal::Config => match app.config_focus {
-            crate::overlays::ConfigFocus::Categories => {
-                let count = crate::overlays::ConfigCategory::ALL.len();
-                app.config_category = (app.config_category + 1) % count;
-                app.config_detail_index = 0;
-                app.config_detail_scroll = 0;
+            DialogKind::HistorySearch => {
+                let count = app.history_rows().len().max(1);
+                app.modal_index = (app.modal_index + 1) % count;
+                app.history_modal_follow = true;
             }
-            crate::overlays::ConfigFocus::Detail => {
-                let ws_path = if app.current_workspace.is_empty() {
-                    None
+            DialogKind::Sessions => {
+                let count = app.sessions_overview.len().max(1);
+                app.modal_index = (app.modal_index + 1) % count;
+                app.session_modal_follow = true;
+            }
+            DialogKind::Permissions => {
+                let count = app
+                    .session_context
+                    .as_ref()
+                    .map(|s| s.permissions.len())
+                    .unwrap_or(0)
+                    .max(1);
+                app.modal_index = (app.modal_index + 1) % count;
+            }
+            DialogKind::Telemetry => {
+                if app.telemetry_tab == crate::overlays::telemetry::TelemetryTab::Overview
+                    || app.telemetry_turn.is_some()
+                {
+                    app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
+                } else if app.telemetry_detail {
+                    let report = app.token_source_report(viewed_session_id);
+                    let round_index = app.modal_index.min(
+                        report
+                            .as_ref()
+                            .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
+                            .unwrap_or(0),
+                    );
+                    let count = report
+                        .as_ref()
+                        .map(|report| overlays::telemetry_attempt_count(report, round_index))
+                        .unwrap_or(0)
+                        .max(1);
+                    app.telemetry_turn_cursor = (app.telemetry_turn_cursor + 1) % count;
                 } else {
-                    Some(std::path::Path::new(&app.current_workspace))
-                };
-                let count = match app.config_category {
-                    0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
-                        .len()
-                        .max(1),
-                    1 => 5usize,
-                    2 => 1usize,
-                    3 => crate::views::settings::web::search_item_count(
-                        app.websearch_config.as_ref(),
-                    ),
-                    4 => crate::views::settings::web::reader_item_count(
-                        app.websearch_config.as_ref(),
-                    ),
-                    _ => 4usize,
-                };
-                if count > 0 {
-                    app.config_detail_index = (app.config_detail_index + 1) % count;
+                    let count = app
+                        .token_source_report(viewed_session_id)
+                        .map(|report| overlays::telemetry_round_count(&report))
+                        .unwrap_or(0)
+                        .max(1);
+                    app.modal_index = (app.modal_index + 1) % count;
                 }
-                if app.config_category == 0 {
-                    let schemes =
-                        crate::render::Theme::available_color_schemes_with_workspace(ws_path);
-                    if let Some(scheme) =
-                        schemes.get(app.config_detail_index % schemes.len().max(1))
-                    {
-                        app.theme = crate::render::Theme::from_color_scheme_with_workspace(
-                            &scheme.id,
-                            &app.custom_color_scheme,
-                            ws_path,
-                        );
+            }
+            DialogKind::UsageStats => {
+                app.usage_stats_scroll = app.usage_stats_scroll.saturating_add(1);
+            }
+            DialogKind::Queue => {
+                app.queue_scroll = app.queue_scroll.saturating_add(1);
+                app.queue_modal_follow = false;
+            }
+            DialogKind::Asides => {
+                app.btw_scroll = app.btw_scroll.saturating_add(1);
+                app.btw_modal_follow = false;
+            }
+            DialogKind::SessionTree => {
+                let count = crate::overlays::tree::flatten_tree(&app.session_tree)
+                    .len()
+                    .max(1);
+                app.modal_index = (app.modal_index + 1) % count;
+                app.tree_modal_follow = true;
+            }
+            DialogKind::Switcher => {
+                app.command_palette_selected = app.command_palette_selected.saturating_add(1);
+            }
+            DialogKind::Help | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
+        }
+    } else {
+        match app.current_scene() {
+            SceneKind::Dashboard => {
+                if app.host_focus == crate::overlays::DashboardFocus::List {
+                    super::super::actions::host::cancel_kill_confirm(app);
+                    let count = app.host_sessions.len().max(1);
+                    app.modal_index = (app.modal_index + 1) % count;
+                    app.host_modal_follow = true;
+                } else {
+                    app.host_detail_scroll = app.host_detail_scroll.saturating_add(1);
+                }
+            }
+            SceneKind::Settings => match app.config_focus {
+                crate::overlays::ConfigFocus::Categories => {
+                    let count = crate::overlays::ConfigCategory::ALL.len();
+                    app.config_category = (app.config_category + 1) % count;
+                    app.config_detail_index = 0;
+                    app.config_detail_scroll = 0;
+                }
+                crate::overlays::ConfigFocus::Detail => {
+                    let ws_path = if app.current_workspace.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&app.current_workspace))
+                    };
+                    let count = match app.config_category {
+                        0 => crate::render::Theme::available_color_schemes_with_workspace(ws_path)
+                            .len()
+                            .max(1),
+                        1 => 5usize,
+                        2 => 1usize,
+                        3 => crate::views::settings::web::search_item_count(
+                            app.websearch_config.as_ref(),
+                        ),
+                        4 => crate::views::settings::web::reader_item_count(
+                            app.websearch_config.as_ref(),
+                        ),
+                        _ => 4usize,
+                    };
+                    if count > 0 {
+                        app.config_detail_index = (app.config_detail_index + 1) % count;
+                    }
+                    if app.config_category == 0 {
+                        let schemes =
+                            crate::render::Theme::available_color_schemes_with_workspace(ws_path);
+                        if let Some(scheme) =
+                            schemes.get(app.config_detail_index % schemes.len().max(1))
+                        {
+                            app.theme = crate::render::Theme::from_color_scheme_with_workspace(
+                                &scheme.id,
+                                &app.custom_color_scheme,
+                                ws_path,
+                            );
+                        }
                     }
                 }
-            }
-        },
-        Modal::Telemetry => {
-            if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
-                app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
-            } else if app.telemetry_turn.is_some() {
-                // Attempt inspector: a documentary body, arrows scroll.
-                app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
-            } else if app.telemetry_detail {
-                // Round detail (turns list): arrows move the turn cursor.
-                let report = app.token_source_report(viewed_session_id);
-                let round_index = app.modal_index.min(
-                    report
-                        .as_ref()
-                        .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
-                        .unwrap_or(0),
-                );
-                let count = report
-                    .as_ref()
-                    .map(|report| overlays::telemetry_attempt_count(report, round_index))
-                    .unwrap_or(0)
-                    .max(1);
-                app.telemetry_turn_cursor = (app.telemetry_turn_cursor + 1) % count;
-            } else {
-                let count = app
-                    .token_source_report(viewed_session_id)
-                    .map(|report| overlays::telemetry_round_count(&report))
-                    .unwrap_or(0)
-                    .max(1);
-                app.modal_index = (app.modal_index + 1) % count;
-            }
+            },
+            SceneKind::Conversation | SceneKind::TaskInspection | SceneKind::Aside => {}
         }
-        Modal::UsageStats => {
-            // The usage overlay scrolls as one body (no per-row selection).
-            app.usage_stats_scroll = app.usage_stats_scroll.saturating_add(1);
-        }
-        Modal::Queue => {
-            // Wheel/PageDown: scroll the queue body. Clearing the
-            // follow flag lets the user browse freely until they
-            // navigate with ↑/↓ again.
-            app.queue_scroll = app.queue_scroll.saturating_add(1);
-            app.queue_modal_follow = false;
-        }
-        Modal::Btw => {
-            // Asides list (ADR-0103 §5): wheel/PageDown scrolls the
-            // body; ↑/↓ navigation is handled by the shared
-            // SessionSelect path.
-            app.btw_scroll = app.btw_scroll.saturating_add(1);
-            app.btw_modal_follow = false;
-        }
-        Modal::Tree => {
-            let count = crate::overlays::tree::flatten_tree(&app.session_tree)
-                .len()
-                .max(1);
-            app.modal_index = (app.modal_index + 1) % count;
-            app.tree_modal_follow = true;
-        }
-        Modal::ViewSwitcher => {
-            app.command_palette_selected = app.command_palette_selected.saturating_add(1);
-        }
-        Modal::Help
-        | Modal::ModelEditor
-        | Modal::ProviderPreset
-        | Modal::OauthPending
-        | Modal::CustomProvider
-        | Modal::Tools
-        | Modal::Mcp
-        | Modal::Skills
-        | Modal::None => {}
     }
 }
 
@@ -894,7 +841,7 @@ pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, ke
         app.send_intent(AgentRequest::ConnectConnection { name: id, method });
         app.dismiss_surface();
     } else {
-        app.push_transient_surface(Modal::ModelEditor);
+        app.surfaces.present_sheet(SheetKind::ModelEditor);
         app.editor_target = Some(id);
         app.editor_field = 0;
         app.editor_key.clear();
@@ -1143,9 +1090,9 @@ mod tests {
             "sheet must unmount so the composer slot is handed back"
         );
         assert_eq!(
-            app.active_modal(),
-            crate::modal::Modal::None,
-            "the session view must stay mounted underneath"
+            app.surfaces.active_overlay(),
+            None,
+            "the session scene must stay mounted underneath"
         );
         assert_eq!(
             app.caret_owner(),

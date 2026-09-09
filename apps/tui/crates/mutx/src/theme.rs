@@ -155,7 +155,7 @@ pub struct Theme {
     /// Dim overlay drawn behind modals to fake alpha.
     pub backdrop: Color,
     /// Brightness multiplier (0.0–1.0) applied to every cell of the live
-    /// surface while a [`Recess::Dim`](crate::modal::Recess) modal is open.
+    /// surface while a [`Recess::Dim`](crate::primitives::Recess) modal is open.
     /// The terminal cannot alpha-blend, so a dim-recess modal darkens the
     /// transcript/chrome in place by scaling each color by this factor — lower
     /// is darker. This is the single knob for how strongly an open modal

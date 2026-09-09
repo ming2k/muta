@@ -402,25 +402,16 @@ fn history_rows_lists_newest_first_then_ranks_search() {
 
 #[test]
 fn history_modal_is_click_dismissable_and_restores_draft() {
-    use crate::Modal;
-    // The history modal and the two pickers join the click-outside-to-
-    // dismiss set (their filter is ephemeral, the draft is parked); entry modals
-    // that hold precious input (the editor) stay non-dismissable.
-    assert!(Modal::HistorySearch.dismissable_by_outside_click());
-    assert!(Modal::Models.dismissable_by_outside_click());
-    assert!(Modal::Connections.dismissable_by_outside_click());
-    assert!(!Modal::ModelEditor.dismissable_by_outside_click());
-
     // Phase 3 (ADR-0133): the per-view draft contract. Parking the draft on
     // the HistorySearch view's own slot, then dismissing the view, hands it
     // back to the composer — the same Esc/outside-click teardown.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::HistorySearch);
-    // Simulate the parked draft (open_panel parked the live composer, which
+    app.open_dialog(crate::surfaces::DialogKind::HistorySearch);
+    // Simulate the parked draft (open_dialog parked the live composer, which
     // started empty) and the live filter state.
     if let Some(st) = app
-        .panels
-        .states_mut(&crate::surfaces::PanelId::HistorySearch)
+        .surface_store
+        .state_mut(&crate::surfaces::DialogKind::HistorySearch)
     {
         st.draft = Some("my draft".to_string());
     }
@@ -434,13 +425,13 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     assert_eq!(app.input, "my draft", "draft restored from the view's slot");
     assert_eq!(app.cursor_position, "my draft".chars().count());
     assert!(
-        app.panels
-            .states(&crate::surfaces::PanelId::HistorySearch)
+        app.surface_store
+            .state(&crate::surfaces::DialogKind::HistorySearch)
             .is_none_or(|st| st.draft.is_none()),
         "slot emptied"
     );
     assert!(!app.history_search);
-    assert_eq!(app.active_modal(), crate::Modal::None);
+    assert!(app.surfaces.active_overlay().is_none());
 }
 
 #[test]
@@ -460,9 +451,9 @@ fn history_insert_clears_search_query_buffer_and_places_entry() {
     ));
 
     app.input = "draft before search".to_string();
-    app.open_panel(crate::surfaces::PanelId::HistorySearch);
+    app.open_dialog(crate::surfaces::DialogKind::HistorySearch);
     app.input = "row".to_string();
-    app.save_panel_state(crate::surfaces::PanelId::HistorySearch);
+    app.save_dialog_state(crate::surfaces::DialogKind::HistorySearch);
 
     // Simulate HistoryInsert action (Tab / Enter accept)
     let ranked = app.history_rows();
@@ -472,20 +463,22 @@ fn history_insert_clears_search_query_buffer_and_places_entry() {
     let text = app.input_history[orig_idx].text.clone();
     app.adopt_as_draft(text, vec![], vec![], crate::app::DraftAdoption::Replace);
     if let Some(state) = app
-        .panels
-        .states_mut(&crate::surfaces::PanelId::HistorySearch)
+        .surface_store
+        .state_mut(&crate::surfaces::DialogKind::HistorySearch)
     {
         state.draft = None;
         state.query.clear();
         state.index = 0;
     }
-    app.panels.hide(crate::surfaces::PanelId::HistorySearch);
+    app.surfaces.dismiss_all_overlays();
     app.history_search = false;
 
     // Composer now holds the selected history entry, not the search query or old draft
     assert_eq!(app.input, "history row 2");
     // Search query in state is cleared
-    let search_state = app.panels.states(&crate::surfaces::PanelId::HistorySearch);
+    let search_state = app
+        .surface_store
+        .state(&crate::surfaces::DialogKind::HistorySearch);
     assert_eq!(search_state.map(|s| s.query.as_str()), Some(""));
 }
 
@@ -1207,7 +1200,10 @@ fn test_shift_delete_and_bare_delete_dispatch() {
     // Shift+Delete in HistorySearch resolves to HistoryDeleteSelected
     let shift_del = Key::SHIFT_DELETE;
     let action = resolve_modal_key(
-        crate::Modal::HistorySearch,
+        Some(crate::surfaces::OverlaySurface::Dialog(
+            crate::surfaces::DialogKind::HistorySearch,
+        )),
+        crate::surfaces::SceneKind::Conversation,
         shift_del,
         &c,
         &mut String::new(),
@@ -1224,7 +1220,10 @@ fn test_shift_delete_and_bare_delete_dispatch() {
         code: KeyCode::Delete,
     };
     let action = resolve_modal_key(
-        crate::Modal::HistorySearch,
+        Some(crate::surfaces::OverlaySurface::Dialog(
+            crate::surfaces::DialogKind::HistorySearch,
+        )),
+        crate::surfaces::SceneKind::Conversation,
         bare_del,
         &c,
         &mut String::new(),
@@ -1301,8 +1300,11 @@ async fn test_ctrl_c_in_history_search() {
     use tokio::sync::mpsc;
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::HistorySearch);
-    assert_eq!(app.active_modal(), crate::Modal::HistorySearch);
+    app.open_dialog(crate::surfaces::DialogKind::HistorySearch);
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::HistorySearch)
+    );
 
     // Case 1: Filter query is non-empty -> Ctrl+C clears the filter and resets cursor
     app.input = "my search query".to_string();
@@ -1314,16 +1316,22 @@ async fn test_ctrl_c_in_history_search() {
 
     crate::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
 
-    // Modal remains open, input cleared, modal_index reset
-    assert_eq!(app.active_modal(), crate::Modal::HistorySearch);
+    // Dialog remains open, input cleared, modal_index reset
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::HistorySearch)
+    );
     assert_eq!(app.input, "");
     assert_eq!(app.modal_index, 0);
 
-    // Case 2: Filter query is empty -> Ctrl+C dismisses history modal
+    // Case 2: Filter query is empty -> Ctrl+C dismisses history dialog
     crate::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
 
-    // Modal dismissed
-    assert_ne!(app.active_modal(), crate::Modal::HistorySearch);
+    // Dialog dismissed
+    assert_ne!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::HistorySearch)
+    );
 }
 
 #[test]

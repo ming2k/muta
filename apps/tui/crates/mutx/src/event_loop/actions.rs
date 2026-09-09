@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use muta_contracts::{AgentRequest, PermissionDecision, PermissionRequest};
 
+use crate::App;
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::input;
@@ -18,7 +19,7 @@ use crate::model::layout::InteractiveTargetKind;
 use crate::model::selection::SelectionState;
 use crate::render;
 use crate::render::Theme;
-use crate::{App, Modal};
+use crate::surfaces::{DialogKind, SceneKind, SheetKind};
 
 use super::runtime::UiRuntime;
 use super::sync::show_local_toast;
@@ -130,7 +131,7 @@ fn scroll_transcript_to_edge(app: &mut App, bottom: bool) {
 }
 
 fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts::LoginMethod>) {
-    if app.active_modal() != Modal::ProviderPreset {
+    if !app.surfaces.contains_sheet(SheetKind::ProviderPreset) {
         return;
     }
     let Some(preset) = crate::PROVIDER_PRESETS.get(app.preset_choice) else {
@@ -226,7 +227,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
     // alive: any other action — navigation, prompt, focus toggle, Esc —
     // disarms it. The armed state lives exactly one keystroke.
     if app.host_kill_confirm.is_some()
-        && app.active_modal() == Modal::Host
+        && app.current_scene() == SceneKind::Dashboard
         && !matches!(
             action,
             input::InputAction::HostKillSelected | input::InputAction::None
@@ -291,7 +292,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // and the key editor share one activation path (key-ready /
             // OAuth / key editor) via `activate_picked_model`.
             let key_ready = |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
-            let target = if app.active_modal() == Modal::Models {
+            let target = if app.active_dialog() == Some(DialogKind::Models) {
                 let rows = app.models_flat_filtered();
                 rows.get(app.modal_index)
                     .or_else(|| rows.first())
@@ -305,27 +306,27 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::CustomProviderNextField => {
-            if app.active_modal() == Modal::CustomProvider {
+            if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
                 app.cycle_custom_field(true);
             }
         }
         input::InputAction::CustomProviderPrevField => {
-            if app.active_modal() == Modal::CustomProvider {
+            if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
                 app.cycle_custom_field(false);
             }
         }
         input::InputAction::ScrollCustomProvider { forward } => {
-            if app.active_modal() == Modal::CustomProvider {
+            if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
                 app.scroll_custom_provider(forward);
             }
         }
         input::InputAction::CycleCustomProviderChoice { forward } => {
-            if app.active_modal() == Modal::CustomProvider {
+            if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
                 app.cycle_custom_choice(forward);
             }
         }
         input::InputAction::MovePresetChoice { forward } => {
-            if app.active_modal() == Modal::ProviderPreset {
+            if app.surfaces.contains_sheet(SheetKind::ProviderPreset) {
                 app.move_preset_choice(forward);
             }
         }
@@ -336,7 +337,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             select_connection_preset(app, Some(method));
         }
         input::InputAction::CancelOauthPending => {
-            if app.active_modal() == Modal::OauthPending {
+            if app.surfaces.contains_sheet(SheetKind::OAuthPending) {
                 app.send_intent(AgentRequest::CancelAuthorizeOAuth);
                 app.awaiting_oauth_add = false;
                 app.oauth_pending_url.clear();
@@ -347,7 +348,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::CycleOauthSelection => {
-            if app.active_modal() == Modal::OauthPending {
+            if app.surfaces.contains_sheet(SheetKind::OAuthPending) {
                 app.cycle_oauth_selection();
             }
         }
@@ -394,7 +395,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::CancelPresetChooser => {
             // Return to the Connections list the chooser was opened
             // from; the chat draft stays parked in stashed_input.
-            if app.active_modal() == Modal::ProviderPreset {
+            if app.surfaces.contains_sheet(SheetKind::ProviderPreset) {
                 app.input.clear();
                 app.set_cursor(0);
                 app.pop_transient_surface();
@@ -431,7 +432,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::CancelCustomProvider => {
             // Return to the Connections list the editor was opened
             // from; the chat draft stays parked in stashed_input.
-            if app.active_modal() == Modal::CustomProvider {
+            if app.surfaces.contains_sheet(SheetKind::CustomProvider) {
                 app.input.clear();
                 app.set_cursor(0);
                 app.custom_field = 0;
@@ -451,7 +452,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // line is already empty (held in `stashed_input`); typing now
             // builds the fuzzy query and re-ranks the active picker's
             // rows. Shared by the Connections and Models pickers.
-            if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
+            if matches!(
+                app.active_dialog(),
+                Some(DialogKind::Connections | DialogKind::Models)
+            ) {
                 app.model_search = true;
                 app.modal_index = 0;
                 app.model_scroll = 0;
@@ -462,7 +466,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // First Esc while searching: drop the query and return to the
             // full browse list. The chat draft stays parked in
             // `stashed_input` until the modal closes for real.
-            if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
+            if matches!(
+                app.active_dialog(),
+                Some(DialogKind::Connections | DialogKind::Models)
+            ) {
                 app.model_search = false;
                 app.input.clear();
                 app.set_cursor(0);
@@ -479,7 +486,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // Favorite is model-level (ADR-0046), so the id is the
             // model wire id. Sending the request is enough; the backend
             // pushes a fresh snapshot that flips the ★ next frame.
-            if app.active_modal() == Modal::Models {
+            if app.active_dialog() == Some(DialogKind::Models) {
                 let ranked = app.models_flat_filtered();
                 if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
                     app.send_intent(AgentRequest::ToggleFavorite {
@@ -490,11 +497,13 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::ProviderPickerBlockModel => {
             // ADR-0203 §10: 'x' blocks/intercepts the highlighted model from the connection pipe.
-            if app.active_modal() == Modal::Models {
+            if app.active_dialog() == Some(DialogKind::Models) {
                 let ranked = app.models_flat_filtered();
                 if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
                     app.send_intent(AgentRequest::ExcludeModel {
-                        scope: muta_contracts::model::ModelTargetScope::Connection(row.provider_id.clone()),
+                        scope: muta_contracts::model::ModelTargetScope::Connection(
+                            row.provider_id.clone(),
+                        ),
                         model_id: row.model.clone(),
                     });
                 }
@@ -648,19 +657,19 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenPresetChooser => {
             // `a` in Connections opens the curated preset branch.
             // Only meaningful from Connections; ignored otherwise.
-            if app.active_modal() == Modal::Connections {
+            if app.active_dialog() == Some(DialogKind::Connections) {
                 app.open_preset_chooser();
             }
         }
         input::InputAction::OpenCustomConnection => {
             // `c` in Connections opens the custom branch directly. Custom is
             // deliberately not one of the curated preset rows.
-            if app.active_modal() == Modal::Connections {
+            if app.active_dialog() == Some(DialogKind::Connections) {
                 app.open_custom_connection_editor();
             }
         }
         input::InputAction::RefreshProviderModels => {
-            if app.active_modal() == Modal::Connections && app.connection_info_detail {
+            if app.active_dialog() == Some(DialogKind::Connections) && app.connection_info_detail {
                 let id = app
                     .connection_detail
                     .as_ref()
@@ -677,7 +686,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     }
                     app.send_intent(AgentRequest::QueryConnectionDetail { id });
                 }
-            } else if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
+            } else if matches!(
+                app.active_dialog(),
+                Some(DialogKind::Models | DialogKind::Connections)
+            ) {
                 app.send_intent(AgentRequest::RefreshProviderModels {
                     user_initiated: true,
                 });
@@ -808,7 +820,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             enter_view(app, crate::surfaces::SceneKind::Settings, runtime);
         }
         input::InputAction::ConfigFocusToggle => {
-            if app.active_modal() == Modal::Config {
+            if app.current_scene() == SceneKind::Settings {
                 app.config_focus = match app.config_focus {
                     crate::overlays::ConfigFocus::Categories => {
                         crate::overlays::ConfigFocus::Detail
@@ -820,7 +832,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ConfigActivate => {
-            if app.active_modal() == Modal::Config {
+            if app.current_scene() == SceneKind::Settings {
                 let ws_path = if app.current_workspace.is_empty() {
                     None
                 } else {
@@ -966,7 +978,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                             Some((target, capability.display_name.clone(), initial))
                                         });
                                         if let Some((target, display_name, initial)) = editor {
-                                            app.push_transient_surface(Modal::ModelEditor);
+                                            app.surfaces.present_sheet(SheetKind::ModelEditor);
                                             app.editor_target = Some(target);
                                             app.editor_model = display_name;
                                             app.editor_key.clear();
@@ -985,21 +997,21 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ConfigSegmentPrev => {
-            if app.active_modal() == Modal::Config && app.config_category == 4 {
+            if app.current_scene() == SceneKind::Settings && app.config_category == 4 {
                 app.config_category = 3;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }
         }
         input::InputAction::ConfigSegmentNext => {
-            if app.active_modal() == Modal::Config && app.config_category == 3 {
+            if app.current_scene() == SceneKind::Settings && app.config_category == 3 {
                 app.config_category = 4;
                 app.config_detail_index = 0;
                 app.config_detail_scroll = 0;
             }
         }
         input::InputAction::ConfigBack => {
-            if app.active_modal() == Modal::Config {
+            if app.current_scene() == SceneKind::Settings {
                 if app.config_dropdown.is_some() {
                     app.config_dropdown = None;
                 } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
@@ -1076,22 +1088,22 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // where it is the configured-server list. When empty (still
             // loading / none), Up/Down scrolls the body directly so the
             // other content stays reachable.
-            let list_len = if app.active_modal() == Modal::Mcp {
+            let list_len = if app.active_dialog() == Some(DialogKind::Mcp) {
                 app.session_context
                     .as_ref()
                     .map(|s| s.mcp.len())
                     .unwrap_or(0)
-            } else if app.active_modal() == Modal::Skills {
+            } else if app.active_dialog() == Some(DialogKind::Skills) {
                 app.session_context
                     .as_ref()
                     .map(|s| s.skills.len())
                     .unwrap_or(0)
-            } else if app.active_modal() == Modal::Queue {
+            } else if app.active_dialog() == Some(DialogKind::Queue) {
                 app.pending_dispatch
                     .iter()
                     .filter(|item| item.session_id == viewed_session_id)
                     .count()
-            } else if app.active_modal() == Modal::Btw {
+            } else if app.active_dialog() == Some(DialogKind::Asides) {
                 app.btw_list.len()
             } else {
                 app.session_tools_len()
@@ -1107,14 +1119,17 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 // The queue modal tracks its own follow flag so it can
                 // be scrolled independently of the shared session
                 // scroll the other list modals reuse.
-                if app.active_modal() == Modal::Queue || app.active_modal() == Modal::Btw {
+                if matches!(
+                    app.active_dialog(),
+                    Some(DialogKind::Queue | DialogKind::Asides)
+                ) {
                     app.queue_modal_follow = true;
                 } else {
                     app.session_modal_follow = true;
                 }
-            } else if app.active_modal() == Modal::Queue {
+            } else if app.active_dialog() == Some(DialogKind::Queue) {
                 // Empty queue: Up/Down is inert.
-            } else if app.active_modal() == Modal::Btw {
+            } else if app.active_dialog() == Some(DialogKind::Asides) {
                 // Empty asides list: Up/Down is inert.
             } else {
                 app.session_scroll = if forward {
@@ -1306,9 +1321,9 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             modals::handle_close_modal(app, viewed_session_id);
         }
         input::InputAction::TelemetryActivate => {
-            if app.active_modal() == Modal::Telemetry {
-                if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
-                    app.telemetry_tab = crate::modal::TelemetryTab::Activity;
+            if app.active_dialog() == Some(DialogKind::Telemetry) {
+                if app.telemetry_tab == crate::overlays::telemetry::TelemetryTab::Overview {
+                    app.telemetry_tab = crate::overlays::telemetry::TelemetryTab::Activity;
                     app.telemetry_scroll = 0;
                 } else if !app.telemetry_detail {
                     let has_rounds = app
@@ -1342,25 +1357,33 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::TelemetryNextTab => {
-            if app.active_modal() == Modal::Telemetry {
+            if app.active_dialog() == Some(DialogKind::Telemetry) {
                 app.telemetry_tab = match app.telemetry_tab {
-                    crate::modal::TelemetryTab::Overview => crate::modal::TelemetryTab::Activity,
-                    crate::modal::TelemetryTab::Activity => crate::modal::TelemetryTab::Overview,
+                    crate::overlays::telemetry::TelemetryTab::Overview => {
+                        crate::overlays::telemetry::TelemetryTab::Activity
+                    }
+                    crate::overlays::telemetry::TelemetryTab::Activity => {
+                        crate::overlays::telemetry::TelemetryTab::Overview
+                    }
                 };
                 app.telemetry_scroll = 0;
             }
         }
         input::InputAction::TelemetryPrevTab => {
-            if app.active_modal() == Modal::Telemetry {
+            if app.active_dialog() == Some(DialogKind::Telemetry) {
                 app.telemetry_tab = match app.telemetry_tab {
-                    crate::modal::TelemetryTab::Overview => crate::modal::TelemetryTab::Activity,
-                    crate::modal::TelemetryTab::Activity => crate::modal::TelemetryTab::Overview,
+                    crate::overlays::telemetry::TelemetryTab::Overview => {
+                        crate::overlays::telemetry::TelemetryTab::Activity
+                    }
+                    crate::overlays::telemetry::TelemetryTab::Activity => {
+                        crate::overlays::telemetry::TelemetryTab::Overview
+                    }
                 };
                 app.telemetry_scroll = 0;
             }
         }
         input::InputAction::TelemetrySetTab(tab) => {
-            if app.active_modal() == Modal::Telemetry && app.telemetry_tab != tab {
+            if app.active_dialog() == Some(DialogKind::Telemetry) && app.telemetry_tab != tab {
                 app.telemetry_tab = tab;
                 app.telemetry_scroll = 0;
             }
@@ -1608,7 +1631,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             );
         }
         input::InputAction::ViewSwitcherFilter { ch } => {
-            if app.active_modal() == Modal::ViewSwitcher {
+            if app.active_dialog() == Some(DialogKind::Switcher) {
                 app.command_palette_query.push(ch);
                 app.command_palette_selected = 0;
                 app.command_palette_scroll = 0;
@@ -1617,7 +1640,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ViewSwitcherBackspace => {
-            if app.active_modal() == Modal::ViewSwitcher {
+            if app.active_dialog() == Some(DialogKind::Switcher) {
                 if !app.command_palette_query.is_empty() {
                     let start = mutx_engine::text::floor_grapheme_boundary(
                         &app.command_palette_query,
@@ -1632,10 +1655,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ViewSwitcherToggle => {
-            if app.active_modal() == Modal::ViewSwitcher {
+            if app.active_dialog() == Some(DialogKind::Switcher) {
                 app.dismiss_surface();
             } else if app.can_open_view_switcher() {
-                app.push_transient_surface(Modal::ViewSwitcher);
+                app.open_dialog(DialogKind::Switcher);
                 app.command_palette_query.clear();
                 app.command_palette_selected = 0;
                 app.command_palette_scroll = 0;
@@ -1644,13 +1667,13 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ViewSwitchActivate => {
-            if app.active_modal() != Modal::ViewSwitcher {
+            if app.active_dialog() != Some(DialogKind::Switcher) {
                 return ActionFlow::Handled;
             }
             let is_busy = app.running_sessions.contains(viewed_session_id);
             let app_ctx = crate::keymap::AppContext {
                 active_scene: app.current_scene(),
-                active_modal: app.active_modal(),
+                has_overlay: app.surfaces.active_overlay().is_some(),
                 is_responding: is_busy,
                 has_input: !app.input.is_empty(),
                 has_selection: !matches!(
@@ -1707,7 +1730,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::ViewCloseSelected => {
-            if app.active_modal() != Modal::ViewSwitcher {
+            if app.active_dialog() != Some(DialogKind::Switcher) {
                 return ActionFlow::Handled;
             }
         }
@@ -1902,7 +1925,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // item outright. The queue is auto-blocked on open, so the
             // index can't drift under us. Clamp the selection to the
             // now-shorter list.
-            if app.active_modal() == Modal::Queue {
+            if app.active_dialog() == Some(DialogKind::Queue) {
                 let idx = app.modal_index;
                 let _removed = app.remove_queued_at(viewed_session_id, idx);
                 let count = app.pending_count(viewed_session_id);
@@ -1919,7 +1942,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // toward the front (next to pop) or the tail. Clamp at the
             // session slice boundaries so it can't escape into another
             // session's items.
-            if app.active_modal() == Modal::Queue {
+            if app.active_dialog() == Some(DialogKind::Queue) {
                 let idx = app.modal_index;
                 if let Some(item) = app.queued_at(viewed_session_id, idx) {
                     app.send_intent(AgentRequest::QueueReorder {
@@ -2411,7 +2434,7 @@ pub(super) fn enter_view(
 pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
     use crate::ui::UiKey;
     match app.ui.scene().hit_test(x, y).copied() {
-        Some(UiKey::Modal(modal)) if app.ui.contains(UiKey::Modal(modal), x, y) => {
+        Some(UiKey::Overlay(overlay)) if app.ui.contains(UiKey::Overlay(overlay), x, y) => {
             scroll_tick(app, !up);
         }
         Some(UiKey::OauthUrl | UiKey::OauthCode | UiKey::SettingsOption(_)) => {
@@ -2555,10 +2578,12 @@ mod transcript_scroll_tests {
     #[test]
     fn wheel_spatial_routing_under_overlay_modal_isolates_backdrop() {
         let mut app = scrollable_app();
-        app.set_active_modal_for_test(Modal::Help);
+        app.open_dialog(crate::surfaces::DialogKind::Help);
         app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24));
         app.ui.mount(
-            crate::ui::UiKey::Modal(Modal::Help),
+            crate::ui::UiKey::Overlay(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::Help,
+            )),
             mutx_engine::Rect::new(10, 5, 60, 10),
         );
         app.ui.commit();
@@ -2636,12 +2661,22 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        enter_panel(&mut app, crate::surfaces::DialogKind::Sessions, &runtime, "s1");
+        enter_panel(
+            &mut app,
+            crate::surfaces::DialogKind::Sessions,
+            &runtime,
+            "s1",
+        );
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionsOverview)
         ));
-        enter_panel(&mut app, crate::surfaces::DialogKind::Skills, &runtime, "s1");
+        enter_panel(
+            &mut app,
+            crate::surfaces::DialogKind::Skills,
+            &runtime,
+            "s1",
+        );
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionContext)
@@ -2735,7 +2770,9 @@ async fn execute_command_by_id(
         }
         CommandId::CommandPalette => {}
         CommandId::CancelOrBack => {
-            if app.active_modal() != Modal::None {
+            if app.surfaces.active_overlay().is_some()
+                || app.current_scene() != SceneKind::Conversation
+            {
                 modals::handle_close_modal(app, viewed_session_id);
             } else if app.focused_target.is_some() {
                 app.focused_target = None;

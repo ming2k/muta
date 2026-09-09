@@ -404,10 +404,11 @@ fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// One selectable row in the **flat model picker** ([`crate::modal::Modal::Models`]
-/// equivalent): a single (provider, model) pair drawn from anywhere in the
-/// snapshot. Built by [`models_flat_filtered_from`]; the picker browses,
-/// searches, and activates these directly — there is no drill-in stage.
+/// One selectable row in the **flat model picker** (the `Models` dialog,
+/// ADR-0205; equivalent): a single (provider, model) pair drawn from anywhere
+/// in the snapshot. Built by [`models_flat_filtered_from`]; the picker
+/// browses, searches, and activates these directly — there is no drill-in
+/// stage.
 #[derive(Clone, Debug)]
 pub struct RankedModel {
     /// The section this row belongs to (Favorites, Recent, or All).

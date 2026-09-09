@@ -1,6 +1,7 @@
 //! Modal input routing tests: models/connections modals, fuzzy filters, question modals, queue/oauth editors, focus.
 
 use super::*;
+use crate::surfaces::{DialogKind, OverlaySurface};
 
 #[test]
 fn star_in_models_modal_toggles_model_favorite() {
@@ -12,7 +13,7 @@ fn star_in_models_modal_toggles_model_favorite() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Models,
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -33,7 +34,7 @@ fn x_in_models_modal_blocks_model() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Models,
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -54,7 +55,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Connections,
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Connections)),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -75,7 +76,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Models,
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
             ..Default::default()
         },
         &ModalKeys {
@@ -96,7 +97,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
     let ctx = || Dispatch {
-        modal: crate::Modal::Models,
+        overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
         ..Default::default()
     };
     let letter = route_event(
@@ -134,7 +135,7 @@ fn q_while_focused_in_transcript_is_inert() {
         &mut cursor,
         KeyCode::Char('q'),
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         true,
     );
     assert_eq!(action, InputAction::None);

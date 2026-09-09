@@ -20,8 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::modal::Modal;
-use crate::surfaces::View;
+use crate::surfaces::SceneKind;
 
 // Canonical key vocabulary and display formatting
 
@@ -293,7 +292,6 @@ impl Key {
     pub const CTRL_M: Key = Key::ctrl('m');
     pub const CTRL_S: Key = Key::ctrl('s');
     pub const CTRL_G: Key = Key::ctrl('g');
-    pub const CTRL_X: Key = Key::ctrl('x');
     pub const CTRL_J: Key = Key::ctrl('j');
     pub const CTRL_U: Key = Key::ctrl('u');
     pub const CTRL_A: Key = Key::ctrl('a');
@@ -714,8 +712,8 @@ pub enum Availability {
 /// Snapshot of application state passed to availability predicates.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AppContext {
-    pub active_view: View,
-    pub active_modal: Modal,
+    pub active_scene: SceneKind,
+    pub has_overlay: bool,
     pub is_responding: bool,
     pub has_input: bool,
     pub has_selection: bool,
@@ -757,8 +755,8 @@ fn avail_running(ctx: &AppContext) -> Availability {
 }
 
 fn avail_idle_composer(ctx: &AppContext) -> Availability {
-    if ctx.active_modal != Modal::None {
-        Availability::Unavailable("modal active")
+    if ctx.has_overlay {
+        Availability::Unavailable("overlay active")
     } else if ctx.is_responding {
         Availability::Unavailable("currently running")
     } else {

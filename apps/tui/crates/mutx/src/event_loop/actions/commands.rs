@@ -13,7 +13,8 @@ use muta_contracts::{AgentRequest, Role};
 
 use crate::model::document::{DeliveryStatus, TranscriptMessage};
 use crate::model::selection::SelectionState;
-use crate::{App, Modal, clipboard, clipboard_ops, composer_attachments};
+use crate::surfaces::{DialogKind, SceneKind, SheetKind};
+use crate::{App, clipboard, clipboard_ops, composer_attachments};
 
 use super::super::runtime::{UiRuntime, now_epoch_ms};
 use super::super::sync::show_local_toast;
@@ -158,8 +159,10 @@ pub(super) async fn handle_send_chat(
             }
             app.running_sessions.insert(viewed_session_id.to_string());
             let sent_at_ms = now_epoch_ms();
+            let target_round = app.round_count.saturating_add(1);
             let sent = TranscriptMessage::new(Role::User, text.clone())
                 .with_sent_at_ms(sent_at_ms)
+                .with_round(target_round)
                 .sending();
             if !app.in_side_view {
                 app.messages.push(sent);
@@ -317,7 +320,7 @@ pub(crate) fn handle_ctrl_c(
             app.dismiss_surface();
         }
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal() == Modal::Sessions
+        && app.active_dialog() == Some(DialogKind::Sessions)
     {
         // `mutx attach` (no id) opened the picker at startup:
         // there is no conversation behind it, so Ctrl+C — like
@@ -328,7 +331,7 @@ pub(crate) fn handle_ctrl_c(
         // as an empty-session file).
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
-    } else if app.active_modal() == Modal::OauthPending {
+    } else if app.surfaces.contains_sheet(SheetKind::OAuthPending) {
         let text = if !app.oauth_pending_url.is_empty() {
             app.oauth_pending_url.clone()
         } else if !app.oauth_pending_user_code.is_empty() {
@@ -345,7 +348,7 @@ pub(crate) fn handle_ctrl_c(
                 std::time::Duration::from_millis(2000),
             );
         }
-    } else if app.active_modal() == Modal::Host {
+    } else if app.current_scene() == SceneKind::Dashboard {
         // The session dashboard owns Ctrl+C: it is a first-class
         // screen, not a transient modal, so Ctrl+C never closes
         // it into the conversation behind it. The gesture is the
@@ -385,7 +388,7 @@ pub(crate) fn handle_ctrl_c(
             app.copy_toast_until = None;
             app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         }
-    } else if app.active_modal() != Modal::None {
+    } else if app.surfaces.active_overlay().is_some() {
         // Ctrl+C over a surface is the same dismiss as Esc (ADR-0139):
         // retained browse views hide with state saved, the quick switcher
         // cancels to its origin, everything else falls to plain close.
@@ -467,6 +470,9 @@ pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) -> bool {
         m.role == Role::User
             && (m.is_sending() || (m.delivery == DeliveryStatus::Delivered && m.round.is_none()))
     }) {
+        if msg.round.is_none() {
+            msg.round = Some(app.round_count.saturating_add(1));
+        }
         msg.cancel_prompt();
     }
     if side {
@@ -500,6 +506,9 @@ pub(crate) async fn handle_esc_interrupt_with_runtime(
         m.role == Role::User
             && (m.is_sending() || (m.delivery == DeliveryStatus::Delivered && m.round.is_none()))
     }) {
+        if m.round.is_none() {
+            m.round = Some(app.round_count.saturating_add(1));
+        }
         m.cancel_prompt();
     }
 }

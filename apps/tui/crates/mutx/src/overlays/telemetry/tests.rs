@@ -1,6 +1,6 @@
+use super::TelemetryTab;
 use super::draw::*;
 use super::model::*;
-use crate::modal::TelemetryTab;
 use crate::render::Theme;
 use muta_contracts::{
     RequestPerformance, RequestUsageKey, RequestUsageRecord, RequestUsageSource,

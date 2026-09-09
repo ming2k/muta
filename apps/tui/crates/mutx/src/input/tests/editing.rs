@@ -16,7 +16,7 @@ fn typing_in_compose_returns_insert_char() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -45,7 +45,7 @@ fn backspace_in_compose_returns_backspace_action() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -169,7 +169,9 @@ fn single_key_shortcuts_in_connections_modal() {
             &mut input,
             &mut cursor,
             Dispatch {
-                modal: crate::Modal::Connections,
+                overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                    crate::surfaces::DialogKind::Connections,
+                )),
                 ..Default::default()
             },
             &ModalKeys::default(),
@@ -193,7 +195,9 @@ fn arrows_cycle_custom_provider_selectors_without_editing_text() {
             &mut cursor,
             Dispatch {
                 // `None` while Protocol or Client Identity is focused.
-                modal: crate::Modal::CustomProvider,
+                overlay: Some(crate::surfaces::OverlaySurface::Sheet(
+                    crate::surfaces::SheetKind::CustomProvider,
+                )),
                 ..Default::default()
             },
             &ModalKeys {
@@ -219,7 +223,9 @@ fn custom_provider_model_field_accepts_plain_text() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::CustomProvider,
+            overlay: Some(crate::surfaces::OverlaySurface::Sheet(
+                crate::surfaces::SheetKind::CustomProvider,
+            )),
             ..Default::default()
         },
         &ModalKeys {
@@ -252,7 +258,9 @@ fn b_and_d_in_preset_chooser_pick_the_login_method() {
             &mut input,
             &mut cursor,
             Dispatch {
-                modal: crate::Modal::ProviderPreset,
+                overlay: Some(crate::surfaces::OverlaySurface::Sheet(
+                    crate::surfaces::SheetKind::ProviderPreset,
+                )),
                 ..Default::default()
             },
             &ModalKeys::default(),
@@ -279,7 +287,7 @@ fn ctrl_b_moves_caret_back_one_char() {
         &mut cursor,
         KeyCode::Char('b'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -296,7 +304,7 @@ fn alt_arrows_drive_step_selection() {
             &mut cursor,
             KeyCode::Up,
             KeyModifiers::ALT,
-            crate::Modal::None,
+            SurfaceFixture::None,
             false,
         ),
         InputAction::FocusPrevTarget
@@ -307,7 +315,7 @@ fn alt_arrows_drive_step_selection() {
             &mut cursor,
             KeyCode::Down,
             KeyModifiers::ALT,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true,
         ),
         InputAction::FocusNextTarget
@@ -327,17 +335,17 @@ fn typing_while_focused_is_inert() {
 #[test]
 fn ctrl_arrows_page_scroll_modal_body() {
     let scrollable = [
-        crate::Modal::Help,
-        crate::Modal::Config,
-        crate::Modal::Telemetry,
-        crate::Modal::Sessions,
-        crate::Modal::Queue,
-        crate::Modal::HistorySearch,
-        crate::Modal::Models,
-        crate::Modal::Connections,
-        crate::Modal::Skills,
+        SurfaceFixture::Help,
+        SurfaceFixture::Config,
+        SurfaceFixture::Telemetry,
+        SurfaceFixture::Sessions,
+        SurfaceFixture::Queue,
+        SurfaceFixture::HistorySearch,
+        SurfaceFixture::Models,
+        SurfaceFixture::Connections,
+        SurfaceFixture::Skills,
     ];
-    for modal in scrollable {
+    for fixture in scrollable {
         let mut input = String::new();
         let mut cursor = 0;
         assert_eq!(
@@ -346,11 +354,11 @@ fn ctrl_arrows_page_scroll_modal_body() {
                 &mut cursor,
                 KeyCode::Up,
                 KeyModifiers::CONTROL,
-                modal,
+                fixture,
                 false
             ),
             InputAction::ScrollPageUp,
-            "Ctrl+Up should page-scroll the {modal:?} modal body"
+            "Ctrl+Up should page-scroll the {fixture:?} modal body"
         );
         assert_eq!(
             run_key(
@@ -358,11 +366,11 @@ fn ctrl_arrows_page_scroll_modal_body() {
                 &mut cursor,
                 KeyCode::Down,
                 KeyModifiers::CONTROL,
-                modal,
+                fixture,
                 false
             ),
             InputAction::ScrollPageDown,
-            "Ctrl+Down should page-scroll the {modal:?} modal body"
+            "Ctrl+Down should page-scroll the {fixture:?} modal body"
         );
     }
 }
@@ -379,7 +387,7 @@ fn alt_arrows_drive_transcript_focus_on_no_modal() {
             &mut cursor,
             KeyCode::Up,
             KeyModifiers::ALT,
-            crate::Modal::None,
+            SurfaceFixture::None,
             false
         ),
         InputAction::FocusPrevTarget
@@ -390,7 +398,7 @@ fn alt_arrows_drive_transcript_focus_on_no_modal() {
             &mut cursor,
             KeyCode::Down,
             KeyModifiers::ALT,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true
         ),
         InputAction::FocusNextTarget
@@ -407,7 +415,7 @@ fn ctrl_a_and_ctrl_e_move_caret_in_compose_zone() {
         &mut cursor,
         KeyCode::Char('a'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -419,7 +427,7 @@ fn ctrl_a_and_ctrl_e_move_caret_in_compose_zone() {
         &mut cursor,
         KeyCode::Char('e'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -439,7 +447,7 @@ fn ctrl_a_and_ctrl_e_are_noop_in_browse_zone() {
             &mut cursor,
             KeyCode::Char('a'),
             KeyModifiers::CONTROL,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true
         ),
         InputAction::None
@@ -450,7 +458,7 @@ fn ctrl_a_and_ctrl_e_are_noop_in_browse_zone() {
             &mut cursor,
             KeyCode::Char('e'),
             KeyModifiers::CONTROL,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true
         ),
         InputAction::None
@@ -467,7 +475,7 @@ fn ctrl_w_deletes_previous_word() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -487,7 +495,7 @@ fn ctrl_w_eats_trailing_whitespace_and_previous_word() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "hello ");
@@ -503,7 +511,7 @@ fn ctrl_w_is_noop_at_line_start() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -522,7 +530,7 @@ fn ctrl_w_crosses_newline() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "line1\n");
@@ -534,7 +542,7 @@ fn ctrl_w_crosses_newline() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "");
@@ -569,7 +577,7 @@ fn ctrl_u_deletes_to_line_start() {
         &mut cursor,
         KeyCode::Char('u'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -588,7 +596,7 @@ fn ctrl_u_keeps_other_lines_in_multiline_draft() {
         &mut cursor,
         KeyCode::Char('u'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "keep me\n");
@@ -604,7 +612,7 @@ fn ctrl_k_deletes_to_line_end() {
         &mut cursor,
         KeyCode::Char('k'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -621,7 +629,7 @@ fn ctrl_k_does_not_eat_next_line_on_first_press() {
         &mut cursor,
         KeyCode::Char('k'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "fir\nsecond");
@@ -637,7 +645,7 @@ fn ctrl_k_eats_newline_when_already_at_line_end() {
         &mut cursor,
         KeyCode::Char('k'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -654,7 +662,7 @@ fn ctrl_k_at_buffer_end_is_noop() {
         &mut cursor,
         KeyCode::Char('k'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -672,7 +680,7 @@ fn alt_d_deletes_next_word() {
         &mut cursor,
         KeyCode::Char('d'),
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -689,7 +697,7 @@ fn alt_b_jumps_back_one_word() {
         &mut cursor,
         KeyCode::Char('b'),
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 10);
@@ -698,7 +706,7 @@ fn alt_b_jumps_back_one_word() {
         &mut cursor,
         KeyCode::Char('b'),
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 4);
@@ -713,7 +721,7 @@ fn alt_f_jumps_forward_one_word() {
         &mut cursor,
         KeyCode::Char('f'),
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 3);
@@ -722,7 +730,7 @@ fn alt_f_jumps_forward_one_word() {
         &mut cursor,
         KeyCode::Char('f'),
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 9);
@@ -739,7 +747,7 @@ fn ctrl_left_right_move_word_by_word() {
         &mut cursor,
         KeyCode::Left,
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 12, "Ctrl+Left snaps to the start of 'charlie'");
@@ -748,7 +756,7 @@ fn ctrl_left_right_move_word_by_word() {
         &mut cursor,
         KeyCode::Left,
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 6, "Ctrl+Left snaps to the start of 'bravo'");
@@ -757,7 +765,7 @@ fn ctrl_left_right_move_word_by_word() {
         &mut cursor,
         KeyCode::Right,
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 11, "Ctrl+Right snaps to the end of 'bravo'");
@@ -772,7 +780,7 @@ fn alt_backspace_deletes_previous_word() {
         &mut cursor,
         KeyCode::Backspace,
         KeyModifiers::ALT,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -791,7 +799,7 @@ fn ctrl_backspace_deletes_previous_word() {
         &mut cursor,
         KeyCode::Backspace,
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(input, "foo bar ");
@@ -811,7 +819,7 @@ fn f1_opens_help() {
         &mut cursor,
         KeyCode::F(1),
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::OpenHelp);
@@ -829,7 +837,7 @@ fn ctrl_w_works_in_history_modal() {
         &mut cursor,
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
-        crate::Modal::HistorySearch,
+        SurfaceFixture::HistorySearch,
         false,
     );
     assert_eq!(input, "fuzzy ");
@@ -856,7 +864,7 @@ fn ctrl_keys_do_not_insert_literal_chars() {
             &mut cursor,
             code,
             mods,
-            crate::Modal::None,
+            SurfaceFixture::None,
             false,
         );
         assert_eq!(action, InputAction::None);
@@ -969,7 +977,9 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::HistorySearch,
+            overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::HistorySearch,
+            )),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -987,11 +997,11 @@ fn ctrl_v_returns_paste_in_free_text_modals() {
     // history search). Other modals drop it so a paste never leaks into
     // a read-only overlay or the permission sheet.
     let free_text_modals = [
-        crate::Modal::None,
-        crate::Modal::ModelEditor,
-        crate::Modal::Models,
-        crate::Modal::Connections,
-        crate::Modal::HistorySearch,
+        SurfaceFixture::None,
+        SurfaceFixture::ModelEditor,
+        SurfaceFixture::Models,
+        SurfaceFixture::Connections,
+        SurfaceFixture::HistorySearch,
     ];
     for modal in free_text_modals {
         let mut input = String::new();
@@ -1012,7 +1022,7 @@ fn ctrl_v_returns_paste_in_free_text_modals() {
         assert!(input.is_empty(), "Ctrl+V must not mutate the buffer itself");
     }
 
-    for modal in [crate::Modal::Help, crate::Modal::Sessions] {
+    for modal in [SurfaceFixture::Help, SurfaceFixture::Sessions] {
         let mut input = String::new();
         let mut cursor = 0;
         let action = run_key(
@@ -1269,7 +1279,7 @@ fn sessions_modal_n_key_triggers_create_new_session() {
         &mut cursor,
         KeyCode::Char('n'),
         KeyModifiers::NONE,
-        crate::Modal::Sessions,
+        SurfaceFixture::Sessions,
         false,
     );
     assert_eq!(action_n, InputAction::CreateNewSession);
@@ -1279,7 +1289,7 @@ fn sessions_modal_n_key_triggers_create_new_session() {
         &mut cursor,
         KeyCode::Char('N'),
         KeyModifiers::NONE,
-        crate::Modal::Sessions,
+        SurfaceFixture::Sessions,
         false,
     );
     assert_eq!(action_big_n, InputAction::CreateNewSession);
@@ -1439,7 +1449,9 @@ fn delete_key_inert_outside_free_text() {
             &mut input,
             &mut cursor,
             Dispatch {
-                modal: crate::Modal::Help,
+                overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                    crate::surfaces::DialogKind::Help
+                )),
                 ..Default::default()
             },
             &ModalKeys::default(),
@@ -1463,7 +1475,9 @@ fn delete_key_closes_selected_view_in_switcher() {
             &mut input,
             &mut cursor,
             Dispatch {
-                modal: crate::Modal::ViewSwitcher,
+                overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                    crate::surfaces::DialogKind::Switcher
+                )),
                 ..Default::default()
             },
             &ModalKeys::default(),
@@ -1489,7 +1503,7 @@ fn host_prompt_delete_key_removes_forward_char() {
             &mut input,
             &mut cursor,
             Dispatch {
-                modal: crate::Modal::Host,
+                view: crate::surfaces::SceneKind::Dashboard,
                 ..Default::default()
             },
             &ModalKeys {

@@ -10,8 +10,13 @@ use tokio::sync::mpsc;
 use crate::input::{self, Feed};
 
 pub(crate) struct InputReader {
-    #[allow(dead_code)]
     shutdown: Arc<AtomicBool>,
+}
+
+impl Drop for InputReader {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
 }
 
 impl InputReader {
@@ -22,7 +27,7 @@ impl InputReader {
             .name("mutx-engine-input".into())
             .spawn(move || {
                 let mut sink = SgrReassemblySink::new(tx);
-                while !thread_shutdown.load(Ordering::Relaxed) {
+                while !thread_shutdown.load(Ordering::Acquire) {
                     match event::poll(std::time::Duration::from_millis(200)) {
                         Ok(true) => match event::read() {
                             Ok(ev) => {

@@ -11,7 +11,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::fuzzy::fuzzy_match;
 use crate::keymap::{AppContext, Availability, COMMAND_REGISTRY, CommandId, DangerLevel};
-use crate::modal::Modal;
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
@@ -151,8 +150,8 @@ pub(crate) fn filter_palette_commands(
             cmd.usage.is_empty() || cmd.usage.iter().any(|u| u.trim() == cmd.name.trim());
         let requires_args = !can_run_bare;
 
-        let avail = if ctx.active_modal != Modal::None {
-            Availability::Unavailable("modal active")
+        let avail = if ctx.has_overlay {
+            Availability::Unavailable("overlay active")
         } else {
             Availability::Available
         };

@@ -278,18 +278,20 @@ pub(crate) fn resolve_side_key(
 /// Settings do not own keyboard state yet and return `None`, so the router
 /// falls through to the shared affordance library.
 pub(crate) fn resolve_view_key(
-    view: crate::surfaces::View,
+    scene: impl Into<crate::surfaces::SceneKind>,
     key: crate::keymap::Key,
     keys: &ViewKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    match view {
-        crate::surfaces::View::Session => {
+    match scene.into() {
+        crate::surfaces::SceneKind::Conversation => {
             resolve_chat_surface_key(key, keys, input, cursor_position)
         }
-        crate::surfaces::View::Subagent => resolve_subagent_key(key, keys, input, cursor_position),
-        crate::surfaces::View::Side => resolve_side_key(key, keys, input, cursor_position),
+        crate::surfaces::SceneKind::TaskInspection => {
+            resolve_subagent_key(key, keys, input, cursor_position)
+        }
+        crate::surfaces::SceneKind::Aside => resolve_side_key(key, keys, input, cursor_position),
         _ => None,
     }
 }
@@ -482,7 +484,7 @@ fn resolve_printable(
 mod tests {
     use super::*;
     use crate::input::route_event;
-    use crate::surfaces::View;
+    use crate::surfaces::SceneKind;
     use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
 
     /// Run states used to build a context for resolver tests. Test-local so
@@ -519,23 +521,28 @@ mod tests {
 
     /// The view a Mode stands in (surface dispatch keys off the explicit
     /// view, ADR-0172).
-    fn view_of(mode: Mode) -> View {
+    fn view_of(mode: Mode) -> SceneKind {
         match mode {
-            Mode::Subagent => View::Subagent,
-            Mode::Side => View::Side,
-            _ => View::Session,
+            Mode::Subagent => SceneKind::TaskInspection,
+            Mode::Side => SceneKind::Aside,
+            _ => SceneKind::Conversation,
         }
     }
 
     /// Route a chord through the real `route_event` pipeline to confirm the
     /// resolver is reached for the chat surface (ADR-0172 layer wiring).
-    fn process(view: View, code: KeyCode, modifiers: KeyModifiers, mode: Mode) -> InputAction {
+    fn process(
+        scene: SceneKind,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        mode: Mode,
+    ) -> InputAction {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = crate::model::selection::SelectionDrag::default();
         let keys = ctx(mode, |_| {});
         let dispatch = crate::input::Dispatch {
-            view,
+            view: scene,
             ..Default::default()
         };
         route_event(
@@ -832,18 +839,28 @@ mod tests {
         // Tab on the Session view without a completion is inert (ADR-0173:
         // the chord belongs to completion, not to plane switching).
         assert_eq!(
-            process(View::Session, KeyCode::Tab, KeyModifiers::NONE, Mode::Idle),
+            process(
+                SceneKind::Conversation,
+                KeyCode::Tab,
+                KeyModifiers::NONE,
+                Mode::Idle
+            ),
             InputAction::None
         );
         // On the Settings view the resolver is never consulted: Tab is inert.
         assert_eq!(
-            process(View::Settings, KeyCode::Tab, KeyModifiers::NONE, Mode::Idle),
+            process(
+                SceneKind::Settings,
+                KeyCode::Tab,
+                KeyModifiers::NONE,
+                Mode::Idle
+            ),
             InputAction::None
         );
         // A subagent step's Enter still activates through the shared path.
         assert_eq!(
             process(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 KeyCode::Enter,
                 KeyModifiers::NONE,
                 Mode::FocusedTarget
@@ -933,7 +950,7 @@ mod tests {
         let rc = ctx(Mode::Subagent, |c| c.surface_overrides = ov);
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 Key::ALT_BRACKET_LEFT,
                 &rc,
                 &mut String::new(),
@@ -943,7 +960,7 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 Key::BRACKET_LEFT,
                 &rc,
                 &mut String::new(),
@@ -961,7 +978,7 @@ mod tests {
         // Subagent: Esc exits the zoom — even while a step is focused.
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 Key::ESC,
                 &ctx(Mode::Subagent, |_| {}),
                 &mut String::new(),
@@ -971,7 +988,7 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 Key::ESC,
                 &ctx(Mode::Subagent, |c| c.focused_target = true),
                 &mut String::new(),
@@ -988,7 +1005,7 @@ mod tests {
         };
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 bracket,
                 &ctx(Mode::Subagent, |_| {}),
                 &mut String::new(),
@@ -998,7 +1015,7 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Subagent,
+                SceneKind::TaskInspection,
                 bracket,
                 &ctx(Mode::Subagent, |c| c.focused_target = true),
                 &mut String::new(),
@@ -1011,7 +1028,7 @@ mod tests {
         // Side: Esc returns to the main session, unless a completion is up.
         assert_eq!(
             resolve_view_key(
-                View::Side,
+                SceneKind::Aside,
                 Key::ESC,
                 &ctx(Mode::Side, |_| {}),
                 &mut String::new(),
@@ -1021,7 +1038,7 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Side,
+                SceneKind::Aside,
                 Key::ESC,
                 &ctx(Mode::Side, |c| {
                     c.completion_kind = crate::completion::CompletionKind::Slash;
@@ -1036,7 +1053,13 @@ mod tests {
 
         // The Session view never emits the subagent/side exits.
         let c = ctx(Mode::FocusedTarget, |_| {});
-        let action = resolve_view_key(View::Session, Key::ESC, &c, &mut String::new(), &mut 0);
+        let action = resolve_view_key(
+            SceneKind::Conversation,
+            Key::ESC,
+            &c,
+            &mut String::new(),
+            &mut 0,
+        );
         assert_ne!(action, Some(InputAction::ExitSubagent));
         assert_ne!(action, Some(InputAction::ExitSideView));
     }
@@ -1172,8 +1195,9 @@ mod tests {
 
     #[test]
     fn central_match_no_longer_owns_chat_enter_on_settings() {
-        // Enter on Settings (non-chat) with a draft must NOT send it — the
-        // send path is chat-surface-owned.
+        // Enter on the Settings scene (a full-screen destination, ADR-0205)
+        // is owned by that scene's own scheme (ConfigActivate), NOT the chat
+        // surface's send path — the draft must never be shipped from Settings.
         let mut input = String::from("draft");
         let mut cursor = 5;
         let mut drag = crate::model::selection::SelectionDrag::default();
@@ -1187,7 +1211,7 @@ mod tests {
             &mut input,
             &mut cursor,
             crate::input::Dispatch {
-                view: View::Settings,
+                view: SceneKind::Settings,
                 ..Default::default()
             },
             &crate::modal_keys::ModalKeys::default(),
@@ -1195,6 +1219,11 @@ mod tests {
             &crate::session::ViewKeys::default(),
             &mut drag,
         );
-        assert_eq!(action, InputAction::None);
+        assert_eq!(
+            action,
+            InputAction::ConfigActivate,
+            "Enter on the Settings scene activates its focused item, never ships the draft"
+        );
+        assert_eq!(input, "draft", "the draft is never sent or mutated");
     }
 }

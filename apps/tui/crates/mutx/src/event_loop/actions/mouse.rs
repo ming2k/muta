@@ -68,8 +68,7 @@ pub(super) async fn handle_selection_start(
             app.config_focus = crate::overlays::ConfigFocus::Detail;
             app.config_detail_index = index;
         }
-        Some(UiKey::Modal(_) | UiKey::OauthUrl | UiKey::OauthCode) => {
-            let modal = app.active_modal();
+        Some(UiKey::Overlay(_) | UiKey::OauthUrl | UiKey::OauthCode) => {
             if let Some(cursor) = app
                 .ui
                 .document
@@ -79,9 +78,9 @@ pub(super) async fn handle_selection_start(
                 app.drag.begin_range(&mut app.selection, cursor);
                 return;
             }
-            if modal.dismissable_by_outside_click()
+            if let Some(active_overlay) = app.surfaces.active_overlay()
                 && app.click_outside_dismiss
-                && !app.ui.contains(UiKey::Modal(modal), x, y)
+                && !app.ui.contains(UiKey::Overlay(active_overlay), x, y)
             {
                 super::modals::handle_close_modal(app, viewed_session_id);
             }
@@ -94,7 +93,7 @@ pub(super) async fn handle_selection_start(
         Some(UiKey::Queue) => {
             super::enter_panel(
                 app,
-                crate::surfaces::PanelId::Queue,
+                crate::surfaces::DialogKind::Queue,
                 runtime,
                 viewed_session_id,
             );
@@ -102,7 +101,7 @@ pub(super) async fn handle_selection_start(
         Some(UiKey::Context | UiKey::Performance) => {
             super::enter_panel(
                 app,
-                crate::surfaces::PanelId::Telemetry,
+                crate::surfaces::DialogKind::Telemetry,
                 runtime,
                 viewed_session_id,
             );

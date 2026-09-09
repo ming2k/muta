@@ -11,7 +11,6 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::sync::mpsc;
 
-use crate::Modal;
 use crate::app::{App, CaretOwner, QueuedDispatch, QueuedDispatchState, RecallQueued};
 use crate::completion::CompletionKind;
 use crate::completion::{completion_anchor_x, mention_range_at, resolved_slash_command_len};
@@ -88,7 +87,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     }
     let cwd = tmp.path().to_path_buf();
     let app = App {
-        panels: crate::surfaces::PanelRegistry::new(),
+        surface_store: crate::surfaces::SurfaceStore::new(),
         surfaces: crate::surfaces::SurfaceRouter::new(),
         queue_exit_session: None,
         command_palette_query: String::new(),
@@ -451,7 +450,7 @@ fn console_host_rows(app: &mut App) {
         digest: None,
     };
     app.host_sessions = vec![row("aaa", 100), row("bbb", 200)];
-    app.set_active_modal_for_test(Modal::Host);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     // Selection on the first creation-order entry = `#1`.
     app.modal_index = 0;
 }

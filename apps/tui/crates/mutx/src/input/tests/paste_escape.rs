@@ -17,7 +17,7 @@ fn esc_closes_slash_completion_menu() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -48,7 +48,7 @@ fn esc_closes_path_completion_menu() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -129,7 +129,9 @@ fn esc_in_models_browse_closes_the_modal() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Models,
+            overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::Models,
+            )),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -150,7 +152,9 @@ fn esc_in_connections_browse_closes_the_modal() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Connections,
+            overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::Connections,
+            )),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -204,7 +208,9 @@ fn escape_in_btw_modal_closes_the_modal() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::Btw,
+            overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::Asides,
+            )),
             ..Default::default()
         },
         &ModalKeys::default(),
@@ -247,16 +253,16 @@ fn esc_in_history_panel_closes_modal_directly() {
 #[test]
 fn bracketed_paste_routes_in_free_text_modals() {
     let payload = "sk-test-1234";
-    for modal in [
-        crate::Modal::None,
-        crate::Modal::ModelEditor,
-        crate::Modal::Models,
-        crate::Modal::Connections,
-        crate::Modal::HistorySearch,
+    for fixture in [
+        SurfaceFixture::None,
+        SurfaceFixture::ModelEditor,
+        SurfaceFixture::Models,
+        SurfaceFixture::Connections,
+        SurfaceFixture::HistorySearch,
     ] {
         let mut input = String::new();
         let mut cursor = 0;
-        let action = run_paste(payload, &mut input, &mut cursor, modal);
+        let action = run_paste(payload, &mut input, &mut cursor, fixture);
         match action {
             InputAction::BracketedPaste(text) => assert_eq!(
                 text, payload,
@@ -272,7 +278,7 @@ fn bracketed_paste_routes_in_free_text_modals() {
 
     let mut input = String::new();
     let mut cursor = 0;
-    let action = run_paste(payload, &mut input, &mut cursor, crate::Modal::Help);
+    let action = run_paste(payload, &mut input, &mut cursor, SurfaceFixture::Help);
     assert_eq!(
         action,
         InputAction::None,
@@ -280,7 +286,7 @@ fn bracketed_paste_routes_in_free_text_modals() {
     );
 
     let config_context = Dispatch {
-        modal: crate::Modal::Config,
+        view: crate::surfaces::SceneKind::Settings,
         ..Default::default()
     };
     let mut input = String::new();

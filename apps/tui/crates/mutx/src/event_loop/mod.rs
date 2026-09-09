@@ -42,7 +42,6 @@ use crate::App;
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::input::{self};
-use crate::modal::Modal;
 use crate::model::document::TranscriptMessage;
 
 use input_reader::InputReader;
@@ -131,6 +130,7 @@ pub async fn run_app_loop(
 
     let mut input_redraw_pending = true;
     let mut was_animating = true;
+    let mut last_carousel_index = 0usize;
     let mut mutation_rx = mutation_rx;
 
     loop {
@@ -165,7 +165,9 @@ pub async fn run_app_loop(
 
         sync_request_surfaces(app, &runtime);
 
-        tick_toast_timers(app);
+        if tick_toast_timers(app) {
+            frame_dirty = true;
+        }
 
         if app.step_input_drag_scroll() {
             frame_dirty = true;
@@ -178,7 +180,7 @@ pub async fn run_app_loop(
         if open_sessions {
             crate::event_loop::actions::enter_panel(
                 app,
-                crate::surfaces::PanelId::Sessions,
+                crate::surfaces::DialogKind::Sessions,
                 &runtime,
                 &viewed_session_id,
             );
@@ -186,13 +188,17 @@ pub async fn run_app_loop(
         if open_tree {
             crate::event_loop::actions::enter_panel(
                 app,
-                crate::surfaces::PanelId::Tree,
+                crate::surfaces::DialogKind::SessionTree,
                 &runtime,
                 &viewed_session_id,
             );
         }
         if open_host {
-            crate::event_loop::actions::enter_view(app, crate::surfaces::View::Dashboard, &runtime);
+            crate::event_loop::actions::enter_view(
+                app,
+                crate::surfaces::SceneKind::Dashboard,
+                &runtime,
+            );
         }
 
         if consume_completion_signal(app) {
@@ -212,18 +218,21 @@ pub async fn run_app_loop(
 
         let empty_state_showing =
             app.focused_messages().is_empty() && app.focus_stack.is_empty() && !app.in_side_view;
+        if empty_state_showing {
+            let current_carousel_index =
+                crate::empty_state::carousel_page_for(app.carousel_epoch.elapsed().as_millis());
+            if current_carousel_index != last_carousel_index {
+                last_carousel_index = current_carousel_index;
+                frame_dirty = true;
+            }
+        }
+
         let viewed_animating = app.viewed_chrome().responding;
         let animating = viewed_animating
             || app.provider_retry.is_some()
-            || app.copy_toast_until.is_some()
-            || app.notice_toast_until.is_some()
-            || app.ctrl_c_armed()
-            || app.esc_armed()
             || !app.pending_images.is_empty()
             || app.effort_ignition_epoch.is_some()
-            || empty_state_showing
-            || app.input_drag_scroll.is_some()
-            || copy_pending.load(Ordering::SeqCst) > 0;
+            || app.input_drag_scroll.is_some();
 
         let is_typing_active = app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
         let animation_draw = animating && !is_typing_active;
@@ -301,15 +310,45 @@ pub async fn run_app_loop(
         app.retain_visible_focused_target();
 
         let poll_interval = if animating {
-            if copy_pending.load(Ordering::SeqCst) > 0 {
-                std::time::Duration::from_millis(16)
-            } else if viewed_animating {
-                std::time::Duration::from_millis(50)
-            } else {
-                std::time::Duration::from_millis(100)
-            }
+            // Heartbeat aligned with spinner updates (100ms) and coalesced streaming deltas
+            std::time::Duration::from_millis(100)
         } else {
-            std::time::Duration::from_millis(1000)
+            let mut next_timeout = std::time::Duration::from_millis(1000);
+
+            // Toast / armed timeouts to wake exactly when state needs to clear
+            let now = std::time::Instant::now();
+            if let Some(until) = app.copy_toast_until {
+                next_timeout = next_timeout.min(
+                    until
+                        .saturating_duration_since(now)
+                        .max(std::time::Duration::from_millis(10)),
+                );
+            }
+            if let Some(until) = app.notice_toast_until {
+                next_timeout = next_timeout.min(
+                    until
+                        .saturating_duration_since(now)
+                        .max(std::time::Duration::from_millis(10)),
+                );
+            }
+            if let Some(until) = app.esc_armed_until {
+                next_timeout = next_timeout.min(
+                    until
+                        .saturating_duration_since(now)
+                        .max(std::time::Duration::from_millis(10)),
+                );
+            }
+
+            // Empty-state carousel: sleep until the next slide boundary (up to CAROUSEL_SLIDE_SECS)
+            if empty_state_showing {
+                let slide_ms = (crate::empty_state::CAROUSEL_SLIDE_SECS as u128) * 1000;
+                let elapsed_ms = app.carousel_epoch.elapsed().as_millis();
+                let rem_ms = slide_ms.saturating_sub(elapsed_ms % slide_ms);
+                next_timeout =
+                    next_timeout.min(std::time::Duration::from_millis((rem_ms as u64).max(50)));
+            }
+
+            next_timeout
         };
 
         tokio::select! {
@@ -338,6 +377,16 @@ pub async fn run_app_loop(
                         return Ok(());
                     }
                 }
+            }
+            Some(copy_result) = copy_rx.recv() => {
+                clipboard_ops::set_copy_feedback(app, copy_result);
+                app.copy_toast_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(1800));
+                input_redraw_pending = true;
+            }
+            Some(read) = paste_rx.recv() => {
+                clipboard_ops::apply_clipboard_paste(app, read);
+                input_redraw_pending = true;
             }
             _ = runtime.dirty_notify.notified() => {
                 input_redraw_pending = true;
@@ -381,10 +430,12 @@ async fn process_one_event(
     let transcript_focused = app.transcript_focused;
     let event_family = input::event_family(event, &app.ui, has_focused_target, transcript_focused);
     let keyboard_path = app.ui.keyboard_path_for(event_family);
-    let active_modal = match keyboard_path.first().copied() {
-        Some(crate::ui::UiKey::Modal(modal)) => modal,
-        Some(crate::ui::UiKey::ProviderDelete) => Modal::Connections,
-        _ => Modal::None,
+    let active_overlay = match keyboard_path.first().copied() {
+        Some(crate::ui::UiKey::Overlay(overlay)) => Some(overlay),
+        Some(crate::ui::UiKey::ProviderDelete) => Some(crate::surfaces::OverlaySurface::Dialog(
+            crate::surfaces::DialogKind::Connections,
+        )),
+        _ => app.surfaces.active_overlay(),
     };
     let is_responding = app.viewed_chrome().responding;
     let completion_kind = app.completion_kind();
@@ -392,8 +443,10 @@ async fn process_one_event(
         crate::ui::UiKey::Sheet(kind) => Some(*kind),
         _ => None,
     });
-    let suppress_completions =
-        matches!(active_modal, Modal::Help | Modal::ViewSwitcher) || active_sheet.is_some();
+    let suppress_completions = matches!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Help | crate::surfaces::DialogKind::Switcher)
+    ) || active_sheet.is_some();
     let completions = if suppress_completions {
         Vec::new()
     } else {
@@ -411,13 +464,19 @@ async fn process_one_event(
     let in_history_recall = app.history_index.is_some();
     let history_searching = app.history_search;
     let model_searching = app.model_search;
-    let custom_provider_field =
-        if active_modal == Modal::CustomProvider && app.custom_text_field_focused() {
-            Some(app.custom_field)
-        } else {
-            None
-        };
-    let editor_field = if active_modal == Modal::ModelEditor {
+    let custom_provider_field = if app
+        .surfaces
+        .contains_sheet(crate::surfaces::SheetKind::CustomProvider)
+        && app.custom_text_field_focused()
+    {
+        Some(app.custom_field)
+    } else {
+        None
+    };
+    let editor_field = if app
+        .surfaces
+        .contains_sheet(crate::surfaces::SheetKind::ModelEditor)
+    {
         Some(app.editor_field)
     } else {
         None
@@ -431,7 +490,7 @@ async fn process_one_event(
     let connection_info_detail = app.connection_info_detail;
 
     let modal_cmd_history: Option<String> = if matches!(event, Event::Key(k) if k.code == crossterm::event::KeyCode::Enter)
-        && active_modal == Modal::None
+        && app.surfaces.active_overlay().is_none()
         && app.input.starts_with('/')
     {
         Some(app.input.clone())
@@ -460,7 +519,7 @@ async fn process_one_event(
             &mut app.input,
             &mut app.cursor_position,
             input::Dispatch {
-                modal: active_modal,
+                overlay: active_overlay,
                 sheet: active_sheet,
                 pre_attach: app.pre_attach.is_some(),
                 view: current_view,

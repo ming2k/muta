@@ -424,7 +424,8 @@ fn apply_oauth(app: &mut App, signal: crate::app::OauthAddSignal) {
                 app.oauth_pending_user_code = user_code;
                 app.oauth_pending_message = message;
                 app.oauth_pending_error = None;
-                app.replace_transient_surface(crate::modal::Modal::OauthPending);
+                app.surfaces
+                    .present_sheet(crate::surfaces::SheetKind::OAuthPending);
             }
         }
         Signal::Done => {
@@ -435,7 +436,8 @@ fn apply_oauth(app: &mut App, signal: crate::app::OauthAddSignal) {
         Signal::Failed { message } => {
             if app.awaiting_oauth_add {
                 app.oauth_pending_error = Some(message);
-                app.replace_transient_surface(crate::modal::Modal::OauthPending);
+                app.surfaces
+                    .present_sheet(crate::surfaces::SheetKind::OAuthPending);
             }
         }
     }
@@ -710,6 +712,9 @@ fn apply_transcript(app: &mut App, buffer: Buffer, edit: TranscriptEdit) -> bool
                             || (record.round.is_some() && m.round == record.round)
                             || (record.round.is_none() && m.round.is_none()))
                 }) {
+                    if user_msg.round.is_none() && record.round.is_some() {
+                        user_msg.round = record.round;
+                    }
                     user_msg.cancel_prompt();
                 }
                 messages.push(TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms));

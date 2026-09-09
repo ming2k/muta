@@ -4,10 +4,10 @@ use muta_contracts::TokenSourceReport;
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};
 
 use super::super::common::placeholder;
+use super::TelemetryTab;
 use super::model::*;
 use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
-use crate::modal::TelemetryTab;
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{

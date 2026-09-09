@@ -200,7 +200,7 @@ impl App {
     }
 
     pub(crate) fn retain_visible_focused_target(&mut self) {
-        if self.active_modal() != Modal::None || self.active_sheet().is_some() {
+        if self.surfaces.active_overlay().is_some() || self.active_sheet().is_some() {
             self.focused_target = None;
             return;
         }
@@ -267,7 +267,7 @@ impl App {
     /// from the router (ADR-0141), not from zoom-stack emptiness: a
     /// dashboard opened over the zoom keeps the zoom alive underneath.
     pub fn in_subagent_view(&self) -> bool {
-        self.current_view() == crate::surfaces::View::Subagent
+        self.current_scene() == crate::surfaces::SceneKind::TaskInspection
     }
 
     /// The message slice currently in view: the `/btw` side transcript when
@@ -296,7 +296,7 @@ impl App {
 
     /// Zoom into a subagent task's child messages. The zoom frame (call id +
     /// saved scroll) stays on `App` as data; the surface is the router's
-    /// `View::Subagent` (ADR-0141).
+    /// `SceneKind::TaskInspection` (ADR-0205).
     pub fn enter_subagent(&mut self, call_id: String) {
         let saved_scroll = ScrollSnapshot {
             offset: self.scroll,
@@ -306,23 +306,25 @@ impl App {
             call_id,
             saved_scroll,
         });
-        if self.current_view() != crate::surfaces::View::Subagent {
-            self.surfaces.show_view(crate::surfaces::View::Subagent);
+        if self.current_scene() != crate::surfaces::SceneKind::TaskInspection {
+            self.surfaces
+                .switch_scene(crate::surfaces::SceneKind::TaskInspection);
         }
         self.reset_view_state();
     }
 
     /// Return from the current subagent view to its parent. Returns true if a
-    /// view was actually popped. When the last frame pops, the surface
-    /// leaves `View::Subagent` through the router's return path (which also
-    /// drains a destination view opened over the zoom, e.g. the dashboard).
+    /// frame was actually popped. When the last frame pops, the surface
+    /// leaves `SceneKind::TaskInspection` through the router's return path
+    /// (which also drains a destination scene opened over the zoom, e.g. the
+    /// dashboard).
     pub fn exit_subagent(&mut self) -> bool {
         if let Some(frame) = self.focus_stack.pop() {
             self.reset_view_state();
             self.scroll = frame.saved_scroll.offset;
             self.follow_bottom = frame.saved_scroll.follow_bottom;
             if self.focus_stack.is_empty() && self.in_subagent_view() {
-                self.surfaces.back_view();
+                self.surfaces.back_scene();
             }
             true
         } else {
@@ -334,16 +336,18 @@ impl App {
     /// ([`App::side_messages`]) becomes the viewed stream and the aside page
     /// header reports the primary session's coarse status. The buffer itself
     /// was already back-filled from `SideViewOpened`'s payload by the
-    /// listener (ADR-0103 §6), so entering never clears it. Reuses the subagent
-    /// zoom's `reset_view_state` so the swap feels identical to focusing a
-    /// task step.
+    /// listener (ADR-0103 §6), so entering never clears it. Reuses the
+    /// subagent zoom's `reset_view_state` so the swap feels identical to
+    /// focusing a task step.
     pub fn enter_side_view(&mut self, side_id: String) {
         self.side_session_id = Some(side_id.clone());
-        // The surface is the router's `View::Side` (ADR-0141); the flag
-        // below remains as cheap payload for the input context and tests.
+        // The surface is the router's `SceneKind::Aside` (ADR-0205); the
+        // flag below remains as cheap payload for the input context and
+        // tests.
         self.in_side_view = true;
-        if self.current_view() != crate::surfaces::View::Side {
-            self.surfaces.show_view(crate::surfaces::View::Side);
+        if self.current_scene() != crate::surfaces::SceneKind::Aside {
+            self.surfaces
+                .switch_scene(crate::surfaces::SceneKind::Aside);
         }
         self.parent_status = ParentStatus::Idle;
         // An armed Esc confirmation is view-scoped: entering the aside must
@@ -413,8 +417,8 @@ impl App {
         }
         self.in_side_view = false;
         self.side_session_id = None;
-        if self.current_view() == crate::surfaces::View::Side {
-            self.surfaces.show_session_view();
+        if self.current_scene() == crate::surfaces::SceneKind::Aside {
+            self.surfaces.reset_to_conversation();
         }
         // Dropping any armed Esc confirmation is part of leaving: the arm
         // targeted the aside's round, and a carried arm would fire the

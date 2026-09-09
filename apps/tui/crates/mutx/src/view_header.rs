@@ -367,7 +367,7 @@ pub(crate) fn draw_view_header_hints(
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
         let affordance =
-            crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::CTRL_X, "menu");
+            crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back");
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
@@ -411,10 +411,7 @@ pub(crate) fn draw_view_header_hints(
         }
         ViewKind::Btw => {
             let mut pairs = vec![
-                crate::components::keycap::KeyAffordance::from_key(
-                    crate::keymap::Key::CTRL_C,
-                    "back",
-                ),
+                crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back"),
                 crate::components::keycap::KeyAffordance::from_key(
                     crate::keymap::Key::F5,
                     "asides",
@@ -422,16 +419,16 @@ pub(crate) fn draw_view_header_hints(
             ];
             if hints.interruptible {
                 pairs.push(crate::components::keycap::KeyAffordance::from_key(
-                    crate::keymap::Key::ESC,
-                    "interrupt aside",
+                    crate::keymap::Key::CTRL_C,
+                    "interrupt",
                 ));
             }
             pairs
         }
         ViewKind::Subagent => Vec::new(),
         ViewKind::Settings => vec![crate::components::keycap::KeyAffordance::from_key(
-            crate::keymap::Key::CTRL_X,
-            "menu",
+            crate::keymap::Key::ESC,
+            "back",
         )],
     };
 
@@ -682,7 +679,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            row.contains("Ctrl-c"),
+            row.contains("Esc"),
             "legend must lead with the exit pair: {row}"
         );
         assert!(
@@ -690,7 +687,7 @@ mod tests {
             "legend must offer the asides modal: {row}"
         );
         assert!(
-            row.contains("interrupt aside"),
+            row.contains("Ctrl-c"),
             "legend must offer the aside interrupt: {row}"
         );
         assert!(
@@ -801,8 +798,8 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(row.contains("Main › Subagent[explore]"));
-        assert!(row.contains("Ctrl-x menu"));
-        assert!(!row.contains("Esc"));
+        assert!(row.contains("Esc back"));
+        assert!(!row.contains("Ctrl-x"));
         assert!(!row.contains("C-x"));
     }
 

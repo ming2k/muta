@@ -10,9 +10,11 @@ use crate::sheet::SheetKind;
 
 /// Build a Dispatch with a modal and a sheet mounted at once — the
 /// "opened a picker while a permission is pending" state.
-fn overlaid(modal: crate::Modal, sheet: SheetKind) -> Dispatch {
+fn overlaid(fixture: SurfaceFixture, sheet: SheetKind) -> Dispatch {
+    let (overlay, scene) = fixture.to_dispatch();
     Dispatch {
-        modal,
+        overlay,
+        view: scene,
         sheet: Some(sheet),
         ..Default::default()
     }
@@ -40,30 +42,30 @@ fn route(dispatch: Dispatch, code: KeyCode) -> InputAction {
 
 #[test]
 fn esc_over_modal_never_rejects_the_permission_beneath() {
-    for modal in [
-        crate::Modal::Help,
-        crate::Modal::Models,
-        crate::Modal::Tools,
-        crate::Modal::Queue,
-        crate::Modal::Telemetry,
-        crate::Modal::Sessions,
+    for fixture in [
+        SurfaceFixture::Help,
+        SurfaceFixture::Models,
+        SurfaceFixture::Tools,
+        SurfaceFixture::Queue,
+        SurfaceFixture::Telemetry,
+        SurfaceFixture::Sessions,
     ] {
-        let action = route(overlaid(modal, SheetKind::Permission), KeyCode::Esc);
+        let action = route(overlaid(fixture, SheetKind::Permission), KeyCode::Esc);
         assert_ne!(
             action,
             InputAction::PermissionReject,
-            "Esc over {modal:?} must not punch through to the permission sheet"
+            "Esc over {fixture:?} must not punch through to the permission sheet"
         );
         assert_ne!(
             action,
             InputAction::PermissionSubmit,
-            "Esc over {modal:?} must not submit the permission sheet either"
+            "Esc over {fixture:?} must not submit the permission sheet either"
         );
     }
     // The canonical case: a plain dismissable browse modal — Esc closes it.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Help, SheetKind::Permission),
+            overlaid(SurfaceFixture::Help, SheetKind::Permission),
             KeyCode::Esc
         ),
         InputAction::CloseModal
@@ -76,7 +78,7 @@ fn esc_rejects_permission_only_while_it_is_the_foreground() {
     // original contract, unchanged).
     assert_eq!(
         route(
-            overlaid(crate::Modal::None, SheetKind::Permission),
+            overlaid(SurfaceFixture::None, SheetKind::Permission),
             KeyCode::Esc
         ),
         InputAction::PermissionReject
@@ -90,7 +92,7 @@ fn enter_over_modal_never_submits_the_permission_beneath() {
     // the Help keymap would otherwise grant the tool call.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Help, SheetKind::Permission),
+            overlaid(SurfaceFixture::Help, SheetKind::Permission),
             KeyCode::Enter
         ),
         InputAction::CloseModal
@@ -98,7 +100,7 @@ fn enter_over_modal_never_submits_the_permission_beneath() {
     // Foreground sheet: Enter submits, as before.
     assert_eq!(
         route(
-            overlaid(crate::Modal::None, SheetKind::Permission),
+            overlaid(SurfaceFixture::None, SheetKind::Permission),
             KeyCode::Enter
         ),
         InputAction::PermissionSubmit
@@ -111,14 +113,14 @@ fn arrows_navigate_the_modal_not_the_sheet_beneath() {
     // never the sheet's decision cursor or the transcript behind it.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Tools, SheetKind::Permission),
+            overlaid(SurfaceFixture::Tools, SheetKind::Permission),
             KeyCode::Up
         ),
         InputAction::SessionSelect { forward: false }
     );
     assert_eq!(
         route(
-            overlaid(crate::Modal::Tools, SheetKind::Permission),
+            overlaid(SurfaceFixture::Tools, SheetKind::Permission),
             KeyCode::Down
         ),
         InputAction::SessionSelect { forward: true }
@@ -126,7 +128,7 @@ fn arrows_navigate_the_modal_not_the_sheet_beneath() {
     // Foreground sheet: ↑ scrolls the transcript (the pass-through claim).
     assert_eq!(
         route(
-            overlaid(crate::Modal::None, SheetKind::Permission),
+            overlaid(SurfaceFixture::None, SheetKind::Permission),
             KeyCode::Up
         ),
         InputAction::ScrollUp
@@ -140,7 +142,7 @@ fn sheet_verbs_suspend_while_a_modal_is_open() {
     // (they fall through to the shared layers, which no-op them here).
     for code in [KeyCode::Left, KeyCode::Right, KeyCode::Tab] {
         assert_eq!(
-            route(overlaid(crate::Modal::Help, SheetKind::Permission), code),
+            route(overlaid(SurfaceFixture::Help, SheetKind::Permission), code),
             InputAction::None,
             "sheet verb {code:?} must not fire through a coexisting modal"
         );
@@ -148,7 +150,7 @@ fn sheet_verbs_suspend_while_a_modal_is_open() {
     // Foreground sheet: the verbs fire.
     assert_eq!(
         route(
-            overlaid(crate::Modal::None, SheetKind::Permission),
+            overlaid(SurfaceFixture::None, SheetKind::Permission),
             KeyCode::Tab
         ),
         InputAction::PermissionNextOption
@@ -160,14 +162,14 @@ fn question_sheet_esc_and_printables_suspend_over_a_modal() {
     // Esc over a modal must not cancel the question beneath.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Help, SheetKind::Question),
+            overlaid(SurfaceFixture::Help, SheetKind::Question),
             KeyCode::Esc
         ),
         InputAction::CloseModal
     );
     assert_eq!(
         route(
-            overlaid(crate::Modal::None, SheetKind::Question),
+            overlaid(SurfaceFixture::None, SheetKind::Question),
             KeyCode::Esc
         ),
         InputAction::QuestionCancel
@@ -176,7 +178,7 @@ fn question_sheet_esc_and_printables_suspend_over_a_modal() {
     // char arm is inert with no editable field.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Help, SheetKind::Question),
+            overlaid(SurfaceFixture::Help, SheetKind::Question),
             KeyCode::Char(' ')
         ),
         InputAction::None
@@ -189,7 +191,7 @@ fn modal_verbs_still_reach_the_modal_over_a_sheet() {
     // manager's `r` reconnect fires normally above a pending permission.
     assert_eq!(
         route(
-            overlaid(crate::Modal::Mcp, SheetKind::Permission),
+            overlaid(SurfaceFixture::Mcp, SheetKind::Permission),
             KeyCode::Char('r')
         ),
         InputAction::McpReconnect
@@ -208,7 +210,7 @@ fn injection_sheet_input_suspends_over_a_text_modal() {
         Event::Key(key(KeyCode::Char('x'))),
         &mut input,
         &mut cursor,
-        overlaid(crate::Modal::ModelEditor, SheetKind::InputInjection),
+        overlaid(SurfaceFixture::ModelEditor, SheetKind::InputInjection),
         &ModalKeys {
             editor_field: Some(0),
             ..Default::default()

@@ -1,8 +1,8 @@
-# 0205. Unified TUI Surface Architecture and Spatial-Modality Taxonomy
+# 0205. Radical Clean-Break: Stage-Scene-Overlay Architecture and Eradication of Modal Monolith
 
 - Status: Accepted
 - Date: 2026-09-12
-- Scope: tui/shell
+- Scope: apps/tui/mutx
 - Deciders: ming
 - Consulted: —
 - Informed: —
@@ -12,235 +12,208 @@
 
 ## Context and Problem Statement
 
-ADR-0139 established unified surface routing and buffer-like state retention, and ADR-0141 attempted to correct the semantic confusion where centered overlays were called "views". However, ADR-0141 left significant structural ambiguities:
+The TUI shell architecture has suffered from chronic conceptual and structural compromises. ADR-0139 and ADR-0141 attempted incremental taxonomy corrections but explicitly compromised on the underlying implementation ("Delete Modal ... Rejected for now"). 
 
-1. **Semantic Drift of `View`**: The term `View` remained overloaded. In general software engineering, `View` can mean any UI rendering unit or widget; using `View` exclusively for full-screen destinations (`Session`, `Dashboard`, `Settings`) caused cognitive friction and constant misattribution.
-2. **The "Modal" As Noun Antipattern**: `Modal` was used as a concrete presentation noun rather than an interaction modifier (*modality*). This caused centered floating panels (`PanelId`), transient action sheets (`Permission`, `Question`), and context popovers to be crammed into a single flattened `Modal` enumeration.
-3. **Flawed Single-Slot Overlay Router**: `SurfaceRouter` only tracked a single foreground surface over a base view (`active_view` + `Option<Overlay>`). It could not natively express layered interactions—such as an asynchronous permission request sheet popping up while the user was already inside the Model Picker dialog, or an autocomplete popover appearing over an input sheet.
-4. **Coupled Retention and Geometry**: State retention (cursor, search queries, scroll offsets) was baked into the geometric identity of `PanelId` (managed by `PanelRegistry`), while transient sheets could not declare retention policies cleanly.
-5. **Compromise Stubs and Alias Pollution**: The codebase accumulated residual compatibility aliases (`type ViewId = View;`, `type ModalId = PanelId;`, `active_modal`), obscuring boundaries for new contributors and AI assistants.
+This compromise entrenched architectural absurdities across the codebase:
+1. **The Inverted Reality of `Modal::Host` & `Recess::Takeover`**: Full-screen destinations like `/dashboard` and `/config` are modeled as modals that "take over" the screen (`Recess::Takeover`), while the primary conversation view is reduced to `Modal::None`.
+2. **The `Modal` God-Enum Anti-pattern**: `src/modal.rs` conflated full-screen scenes, floating browse panels, transient prompt sheets, multi-step configuration wizards, and quick-switchers into a single discriminant.
+3. **Double-Identity Pathology**: Surfaces required dual representations—a routing identity (`View`/`PanelId`) and a presentation projection (`Modal`), glued together by fallible boilerplate mappings.
+4. **Single-Slot Overlay Blocking**: The router supported at most one overlay over a view, causing nested interactions (e.g. an asynchronous permission sheet appearing while inside the model picker) to either overwrite state or bypass the router entirely via side-channels (`App::focus_stack`, `App::in_side_view`).
+5. **Pollution by Alias Stubs**: Dead aliases (`ViewId = View`, `ModalId = PanelId`) remained active in production code.
 
-A clean break is required. This decision establishes an uncompromising, mathematically precise taxonomy and runtime type architecture across the entire TUI subsystem, covering all code, comments, tests, and documentation.
+We reject incremental patching. This decision executes a radical, uncompromised, clean-break overhaul of the entire UI architecture, eliminating every trace of the legacy modal monolith.
 
 ---
 
 ## Decision Drivers
 
-- **Zero Semantic Ambiguity**: Terminology must directly mirror human-computer interaction (HCI) standards and physical geometry. A full-screen destination is a scene; a centered popup is a dialog; an edge-anchored action prompt is a sheet; an anchor-attached float is a popover.
-- **True Stacking Modality**: The router must support a bounded, strictly-ordered overlay stack (`Vec<OverlaySurface>`) to handle multi-layer nested interruptions without losing background context.
-- **Orthogonal Retention**: Geometry (Dialog vs. Sheet) must be completely decoupled from state lifetime (`RetentionPolicy`: Retained vs. Ephemeral vs. Transactional).
-- **Uncompromising Replacement**: Hard break. Zero compatibility aliases (`ViewId`, `ModalId`, `PanelId`, `active_modal`). Stale types and documentation are deleted entirely.
-
----
-
-## Considered Options
-
-- **Option 1: Retain ADR-0141 and patch multi-layer overlays ad-hoc**. Add secondary stack channels on `App` for sheets while keeping `View` and `PanelId`.
-- **Option 2: Fold everything back into a monolithic window tree**. Implement a heavy desktop-style Window/Widget manager.
-- **Option 3: Unified Stage-Scene-Overlay Taxonomy with Orthogonal Modality & Retention**. Clean separation into Stage (physical screen), Scene (root destination), Overlay (Dialog / Sheet / Popover), and explicit Retention Policies.
+- **First-Principles Correctness**: Concepts must match physical reality. The screen is a Stage; destinations are Scenes; floating components are Overlays. Modality is an input behavior, never an object.
+- **Zero Legacy Baggage**: Delete `src/modal.rs`, `enum Modal`, and `enum Recess` completely. No backward-compatibility type aliases, no deprecated fallback branches, no bridge functions.
+- **Native Multi-Layer Compositing**: The router must manage a true LIFO stack (`Vec<Box<dyn OverlaySurface>>`), enabling arbitrary clean nesting of sheets and popovers.
+- **Strict Decoupling of Retention and Geometry**: State preservation (`RetentionPolicy`) is an orthogonal contract declared per component, not an accidental property of where it floats.
+- **Trait-Driven Dispatch**: Replace monolithic multi-thousand-line `match` statements in `render.rs` and `input/router.rs` with component-level contracts.
 
 ---
 
 ## Decision Outcome
 
-Chosen option: **Option 3**, because it provides unambiguous cognitive clarity, matches terminal spatial geometry, natively supports multi-layer overlay nesting, and eradicates historical legacy baggage without compromise.
-
----
-
-### 1. The Three-Tier Spatial Hierarchy
+Execute a hard architectural clean break: replace the entire surface routing, presentation, and dispatch system with the **Stage-Scene-Overlay Architecture**.
 
 ```text
        ┌────────────────────────────────────────────────────────┐
-       │                 Stage (Terminal Viewport)              │
+       │                STAGE (Physical Terminal)               │
        └───────────────────────────┬────────────────────────────┘
                                    │ hosts
        ┌───────────────────────────▼────────────────────────────┐
-       │              Scene (Root Full-screen Canvas)           │
-       │         [Conversation | Dashboard | Settings]          │
+       │            SCENE (Full-screen Root Canvas)             │
+       │    [ ConversationScene | DashboardScene | ConfigScene ] │
        └───────────────────────────┬────────────────────────────┘
-                                   │ mounts
+                                   │ mounts (0..N)
        ┌───────────────────────────▼────────────────────────────┐
-       │            Overlay Surface (Stacked Over Scene)         │
-       │  ┌──────────────────┬──────────────────┬────────────┐  │
-       │  │  Dialog (Center) │   Sheet (Edge)   │  Popover   │  │
-       │  │(Inspect/Manage)  │(Resolve/Decision)│(Completion)│  │
-       │  └──────────────────┴──────────────────┴────────────┘  │
+       │             OVERLAY STACK (Composite Layers)           │
+       │                                                        │
+       │  Layer 2: [Sheet: PermissionRequest]  ◄── Active Focus │
+       │  Layer 1: [Dialog: ModelPicker]      ◄── Suspended     │
+       │  Layer 0: ──── DIMMER MASK ─────────────────────────── │
        └────────────────────────────────────────────────────────┘
 ```
 
-1. **`Stage`**: The physical terminal grid allocated to `mutx` ($W \times H$ cells). Owns raw terminal double-buffering, mouse capture, and color profile capabilities.
-2. **`Surface`**: The overarching domain primitive. Any interactive or visual UI layer that can receive events or present layout is a `Surface`.
-3. **`Scene`**: An independent, full-screen root workspace. A Scene owns the entire Stage viewport. The set is closed:
-   - `Conversation` (live transcript + composer, the default root scene);
-   - `Dashboard` (`/dashboard`, session and cluster management overview);
-   - `Settings` (`/config`, full-screen preferences center);
-   - `TaskInspection` (deep dive into a subagent/envoy task transcript).
-4. **`OverlaySurface`**: Any bounded surface rendered above the active Scene. Overlays recess (dim) underlying content and trap or arbitrate input:
-   - **`Dialog`**: Centered, bounded modal panel (e.g. Tools, MCP, Models, Connections, History, Queue, Tree, Help).
-   - **`Sheet`**: Edge-anchored (bottom or side) action-oriented surface driven by reactive requests or workflows (e.g. Permission approval, User Question prompt, OAuth pending).
-   - **`Popover`**: Coordinate-anchored floating micro-surface attached to a cursor or visual element (e.g. slash command completion, mention picker).
+### 1. Spatial Primitives
+
+1. **`Stage`**: The physical terminal grid ($W \times H$ cells). Owns alternate screen buffers, raw SGR rendering, and terminal capability detection.
+2. **`Scene`**: An independent, full-screen primary workspace. Exactly one Scene is mounted at any instant. Scenes are peers and do not have parents. Esc does not dismiss a Scene.
+   - `ConversationScene`: Live transcript stream and composer.
+   - `DashboardScene`: Session and daemon telemetry console (`/dashboard`).
+   - `SettingsScene`: Interactive global configuration environment (`/config`).
+   - `TaskInspectionScene`: Deep-dive inspection into subagent and envoy execution.
+3. **`Overlay`**: Any bounded visual element floating above the active Scene:
+   - **`Dialog`**: Centered, bounded floating workspace with structured tabs/lists (e.g. Tools, MCP, Models, Connections, Queue).
+   - **`Sheet`**: Edge-anchored (bottom or lateral) prompt bound to a specific decision or asynchronous request (e.g. Permission approval, User Question, Action Confirm).
+   - **`Popover`**: Coordinate-anchored floating flyout attached to an active cursor or key anchor (e.g. autocomplete menu, inline tooltip).
 
 ---
 
-### 2. Rust Type Architecture
+### 2. Core Type Architecture
 
-The core routing and identity model in `apps/tui/crates/mutx/src/surfaces/mod.rs` is restructured as follows:
+`apps/tui/crates/mutx/src/surfaces/` is rewritten from scratch:
 
 ```rust
-/// Unified authority over active TUI navigation and overlay stacking.
-#[derive(Debug, Default)]
+/// The single source of navigation truth.
 pub struct SurfaceRouter {
-    /// The currently active root scene.
-    active_scene: SceneId,
-
-    /// Stack of active overlays in bottom-to-top paint order.
-    /// The top of the stack holds primary input focus.
-    overlay_stack: Vec<OverlaySurface>,
-
-    /// Bounded history of visited scenes for bidirectional scene navigation.
-    scene_history: Vec<SceneId>,
+    /// Active root scene.
+    active_scene: Box<dyn SceneSurface>,
+    /// Active overlay stack (bottom to top). Top owns input.
+    overlay_stack: Vec<Box<dyn OverlaySurface>>,
+    /// Bounded historical trace of scenes for explicit back-navigation.
+    scene_history: Vec<SceneKind>,
 }
 
-/// Root full-screen scene identifier (closed set).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SceneId {
-    #[default]
+/// Identifiers for closed root scenes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SceneKind {
     Conversation,
     Dashboard,
     Settings,
     TaskInspection,
 }
 
-/// Category of overlay floating above the active scene.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OverlaySurface {
-    Dialog(DialogId),
-    Sheet(SheetId),
-    Popover(PopoverKind),
-}
-
-/// Identity of centered, reference and management dialogs.
+/// Identifiers for centered dialogs (retrievable via Quick Switcher).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DialogId {
+pub enum DialogKind {
     Help,
     Tools,
     Mcp,
     Skills,
-    PermissionsManager,
+    Permissions,
     UsageStats,
     Telemetry,
     Asides,
     Models,
     Connections,
-    HistorySearch,
+    History,
     Queue,
     Sessions,
     SessionTree,
 }
 
-/// Identity of edge-anchored, task-driven action sheets.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SheetId {
-    PermissionApproval(PermissionRequestPayload),
-    UserQuestion(QuestionRequestPayload),
-    OAuthPending(ProviderId),
-    ActionConfirm(ConfirmActionPayload),
-    ModelEditor(ModelEditorState),
+/// Identifiers for edge action sheets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SheetKind {
+    PermissionApproval,
+    UserQuestion,
+    OAuthWait,
+    ActionConfirm,
+    ModelConfigEditor,
 }
 ```
 
 ---
 
-### 3. Orthogonal State Retention Policies
+### 3. Component Contracts and Input Arbitration
 
-Whether a surface retains its state across dismissal is an orthogonal attribute (`RetentionPolicy`), decoupled from its visual shape:
+Instead of central match statements, surfaces implement cohesive traits:
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetentionPolicy {
-    /// State is preserved in `SurfaceStore` across dismissal (scroll offset, search filter, cursor).
-    Retained,
-    /// State is discarded immediately upon dismissal or pop.
-    Ephemeral,
-    /// State is scoped to the active session id and purged on session switch.
-    SessionScoped,
+pub trait Surface: Send {
+    fn render(&self, frame: &mut Frame, area: Rect);
+    fn handle_key(&mut self, key: KeyEvent) -> EventOutcome;
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> EventOutcome;
+}
+
+pub trait SceneSurface: Surface {
+    fn kind(&self) -> SceneKind;
+    fn on_enter(&mut self);
+    fn on_leave(&mut self);
+}
+
+pub trait OverlaySurface: Surface {
+    fn geometry(&self, stage_bounds: Rect) -> Rect;
+    fn retention_policy(&self) -> RetentionPolicy;
+    fn blocks_input(&self) -> bool { true }
+    fn dismisses_on_outside_click(&self) -> bool { true }
+    fn on_dismiss(&mut self);
 }
 ```
 
-- Most `DialogId` variants declare `RetentionPolicy::Retained`.
-- `SheetId` action prompts declare `RetentionPolicy::Ephemeral` or rely on backend task channels.
+#### Event Dispatch Loop:
+1. Deliver events to `overlay_stack.last_mut()`.
+2. If unhandled and event is `Esc` or outside-bounds click: invoke `dismiss()` on the top overlay.
+3. If unhandled and top overlay has `blocks_input() == false`: bubble event to next overlay down, down to `active_scene`.
+4. If unhandled by `active_scene`: dispatch to global application shortcuts.
 
 ---
 
-### 4. Lifecycle Verbs and Modality Contract
+### 4. Zero-Tolerance Eradication Matrix (Files & Types to Delete)
 
-The navigation verbs are strictly standardized:
+The following files, types, and fields are slated for **unconditional deletion with zero backward compatibility**:
 
-| Verb | Target | Operational Semantics |
+| Target to Delete | Replacement | Rationale |
 | :--- | :--- | :--- |
-| **`switch_scene(target)`** | `SceneId` | Suspends active scene, clears non-sticky overlays, switches root rendering to `target`, records origin in `scene_history`. |
-| **`present(overlay)`** | `OverlaySurface` | Pushes overlay to top of `overlay_stack`. Background dims; input focus shifts to top overlay. |
-| **`dismiss()`** | `OverlaySurface` | Pops the top overlay. If `Retained`, writes state snapshot to `SurfaceStore`. Input focus restores to previous layer. |
-| **`resolve(payload)`** | `SheetId` | Specialization of `dismiss()` for sheets: returns decision payload to caller channel and closes the sheet. |
-
-#### Input Arbitration (Reverse Stack Traversal)
-Keyboard and mouse events hit the top of `overlay_stack` first:
-1. If the top overlay consumes the event, processing stops.
-2. If `Esc` or an outside mouse click occurs, the top overlay is dismissed.
-3. If no overlay is present, events are delivered directly to the active `SceneId`.
-
----
-
-### 5. Breaking Replacements and Deprecation Matrix
-
-No transitional shims or backward-compatibility aliases are permitted:
-
-| Obsolete Identifier | Replacement Identifier | Rationale |
-| :--- | :--- | :--- |
-| `View` (enum) | **`SceneId`** | Clarifies that it is a root, full-screen canvas. |
-| `ViewId` (type alias) | **DELETED** | Eradicated. |
-| `PanelId` (enum) | **`DialogId`** | A centered floating box is a Dialog, not a VS Code-style panel. |
-| `PanelRegistry` | **`SurfaceStore`** | Manages retention across all surfaces uniformly. |
-| `Modal` (presentation enum) | **`OverlayPresentation` / `DialogKind`** | `Modal` is an adjective describing input blocking, not an object. |
-| `active_modal` | **DELETED** | Router's `overlay_stack` is the sole source of truth. |
-| `Surface::Chat` | **`SceneId::Conversation`** | The main session is a first-class scene. |
-| `Surface::Transient` | **`OverlaySurface::Sheet` / `Popover`** | Replaced with explicit geometric overlay types. |
+| `apps/tui/crates/mutx/src/modal.rs` | **FILE DELETED** | The core monolith is eradicated. |
+| `enum Modal` | **DELETED** | Conflated scenes, dialogs, and sheets. |
+| `enum Recess` | **`DimmerPass` (Render pipeline)** | Rendering detail, not a surface property. |
+| `type ViewId` & `type ModalId` | **DELETED** | Misleading aliases removed. |
+| `enum View` | **`enum SceneKind`** | "View" is permanently decommissioned. |
+| `enum PanelId` | **`enum DialogKind`** | Centered boxes are dialogs, not panels. |
+| `struct PanelRegistry` | **`struct SurfaceStore`** | Manages `RetentionPolicy` across all surfaces. |
+| `App::active_modal` | **DELETED** | Router's `overlay_stack` is sole authority. |
+| `App::focus_stack` | **`TaskInspectionScene`** | Integrated as a first-class Scene. |
+| `App::in_side_view` | **`SceneKind::Conversation` aside context** | Side channels eliminated. |
 
 ---
 
 ## Invariants & Behavioral Boundaries
 
-- **`[INV-TUI-SURF-01]` Zero Alias Tolerance**: The identifiers `ViewId`, `PanelId`, and `active_modal` must not appear anywhere in source code, type definitions, or active documentation.
-- **`[INV-TUI-SURF-02]` Sole Navigation Authority**: All spatial transitions must execute through `SurfaceRouter`. No component, command, or background handler may manipulate modal visibility via raw booleans or sidecar stacks on `App`.
-- **`[INV-TUI-SURF-03]` Scene Invariance**: Exactly one `SceneId` must be active at any given instant. A Scene cannot be dismissed via `Esc`; `Esc` on a root scene without overlays executes the designated root action (e.g. defocus composer / clear selection).
-- **`[INV-TUI-SURF-04]` Strict Stacking Order**: New overlays must push to the top of `overlay_stack`. Event routing is strictly top-down; rendering composition is strictly bottom-up (`Scene` $\to$ `Dimmer` $\to$ `Overlays` $\to$ `Popovers` $\to$ `Toasts`).
+- **`[INV-TUI-CLEAN-01]` Zero Mention of Modal as a Type**: The word `Modal` may only appear in documentation as an adjective describing input blocking behavior. It must never be the name of a `struct`, `enum`, or module.
+- **`[INV-TUI-CLEAN-02]` Strict Scene Cardinality**: Exactly one `Scene` exists in the active slot at all times. A Scene cannot be pushed into `overlay_stack` or closed via `Esc`.
+- **`[INV-TUI-CLEAN-03]` No Sidecar Visibility Channels**: No boolean flags (`is_open`, `in_view`) or parallel stacks (`focus_stack`) may dictate visibility on `App`.
+- **`[INV-TUI-CLEAN-04]` LIFO Overlay Invariance**: `overlay_stack` enforces strict LIFO order. An overlay dismissal must restore input focus to the immediately preceding layer without side effects.
+- **`[INV-TUI-CLEAN-05]` No Transitional Compatibility Layers**: Re-exporting deleted types under old names or introducing deprecation shims is an automatic build failure.
 
 ---
 
-## Positive Consequences
+## Negative Consequences & Migration Strategy
 
-- **Cognitive Clarity**: Developers and AI agents have unambiguous terms: `Scene` for destinations, `Dialog` for browse panels, `Sheet` for action prompts, `Popover` for anchored flyouts.
-- **Support for Nested Overlays**: An urgent permission or question sheet can preemptively appear over an open model dialog without corrupting the dialog's state or losing navigation history.
-- **Deterministic Testing**: Testing overlay sequences becomes pure state-machine assertions on `SurfaceRouter::overlay_stack`.
-
----
-
-## Negative Consequences & Trade-offs
-
-- **Extensive Refactoring Blast Radius**: Requires touch points across `apps/tui/crates/mutx/src/surfaces/`, `app/`, `render/`, `input/`, `chrome/`, tests, and documentation.
-- **Mitigation**: Execute refactoring in phased, compile-gated milestones: Core Types $\to$ Router State Machine $\to$ Input & Render Dispatch $\to$ Test Suite & Snapshots $\to$ Documentation.
+- **Large Refactoring Surface**: High blast radius across the TUI binary crate.
+- **Execution Strategy**:
+  1. Create new primitives in `surfaces/` alongside clean contracts.
+  2. Implement composite rendering pipeline in `render/` with explicit `DimmerPass`.
+  3. Migrate scene implementations (`Conversation`, `Dashboard`, `Settings`).
+  4. Migrate dialogs and sheets into self-contained `OverlaySurface` components.
+  5. Delete `src/modal.rs` and all historical references.
+  6. Fix tests and refresh golden snapshots.
 
 ---
 
 ## Rejected Alternatives & Negative Knowledge
 
-### Option 1: Retain `View` and `PanelId` and patch multi-layer overlays
-- *Why considered*: Minimal immediate code churn.
-- *Why rejected*: Perpetuated the five-way overload of `View` and the misnomer of `Panel`. Technical debt would continue compounding with each new overlay requirement.
+### Retaining `Modal` for rendering dispatch
+- *Why considered*: Avoided rewriting the `match` arms in `render.rs`.
+- *Why rejected*: Preserving `Modal` would perpetuate the entire root cause of structural confusion and prevent true multi-layer overlay nesting.
 
-### Option 2: Monolithic Desktop-style Window Manager
-- *Why considered*: Maximally generic abstraction supporting arbitrary windows, docks, and tiling.
-- *Why rejected*: Extreme over-engineering for a terminal interface. Terminal UX relies on predictable, focused modal sheets and scenes, not floating overlapping movable desktop windows.
+### Keeping `View` for full-screen destinations
+- *Why considered*: Familiarity from ADR-0141.
+- *Why rejected*: `View` is the most overloaded term in GUI/TUI programming. `Scene` is crisp, cinematic, distinct, and carries no ambiguous historical baggage in terminal programming.
 
 ---
 

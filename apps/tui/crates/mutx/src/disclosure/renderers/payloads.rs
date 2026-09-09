@@ -127,6 +127,7 @@ pub(crate) fn semantic_tool_summary_line(
 }
 
 /// Render the shared summary of an expandable step with semantic inline flex layout (ADR-0206).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_semantic_step_summary(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,

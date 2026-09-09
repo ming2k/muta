@@ -361,11 +361,7 @@ pub fn draw_message_body(
                                     ))
                                 )
                             };
-                            let gutter_tone = if is_cancelled {
-                                MetaTone::Warn
-                            } else {
-                                MetaTone::Accent
-                            };
+                            let gutter_tone = MetaTone::Accent;
                             let mut strip = MetaStrip::new()
                                 .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
                                 .lead(round_gutter, gutter_tone)

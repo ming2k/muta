@@ -154,6 +154,17 @@ impl Grid {
         self.content.get(self.index_of(x, y))
     }
 
+    /// Read an entire row as a slice of cells in row-major order.
+    #[inline]
+    pub fn row_slice(&self, y: u16) -> Option<&[Cell]> {
+        if y >= self.height || self.width == 0 {
+            return None;
+        }
+        let start = (y as usize) * (self.width as usize);
+        let end = start + (self.width as usize);
+        self.content.get(start..end)
+    }
+
     /// Mutably access a cell without marking it dirty. Use when the caller
     /// intends to read-modify-write and will call a marking helper, or for
     /// internal diff machinery.

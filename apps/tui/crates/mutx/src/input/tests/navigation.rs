@@ -22,7 +22,7 @@ fn home_and_end_navigate_line_in_composer_and_scroll_in_focus() {
         &mut cursor,
         KeyCode::Home,
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -33,7 +33,7 @@ fn home_and_end_navigate_line_in_composer_and_scroll_in_focus() {
         &mut cursor,
         KeyCode::End,
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(action, InputAction::None);
@@ -45,7 +45,7 @@ fn home_and_end_navigate_line_in_composer_and_scroll_in_focus() {
         &mut cursor,
         KeyCode::Home,
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         true,
     );
     assert_eq!(action, InputAction::ScrollTop);
@@ -55,7 +55,7 @@ fn home_and_end_navigate_line_in_composer_and_scroll_in_focus() {
         &mut cursor,
         KeyCode::End,
         KeyModifiers::NONE,
-        crate::Modal::None,
+        SurfaceFixture::None,
         true,
     );
     assert_eq!(action, InputAction::ScrollBottom);
@@ -73,7 +73,7 @@ fn home_and_end_scroll_in_browse_zone() {
             &mut cursor,
             KeyCode::Home,
             KeyModifiers::NONE,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true
         ),
         InputAction::ScrollTop
@@ -85,7 +85,7 @@ fn home_and_end_scroll_in_browse_zone() {
             &mut cursor,
             KeyCode::End,
             KeyModifiers::NONE,
-            crate::Modal::None,
+            SurfaceFixture::None,
             true
         ),
         InputAction::ScrollBottom
@@ -231,7 +231,7 @@ fn ctrl_home_and_end_scroll_regardless_of_focus() {
             &mut cursor,
             KeyCode::Home,
             KeyModifiers::CONTROL,
-            crate::Modal::None,
+            SurfaceFixture::None,
             false
         ),
         InputAction::ScrollTop
@@ -243,7 +243,7 @@ fn ctrl_home_and_end_scroll_regardless_of_focus() {
             &mut cursor,
             KeyCode::End,
             KeyModifiers::CONTROL,
-            crate::Modal::None,
+            SurfaceFixture::None,
             false
         ),
         InputAction::ScrollBottom
@@ -286,23 +286,23 @@ fn page_keys_scroll_question_modal_body() {
 #[test]
 fn page_keys_scroll_every_scrollable_modal_body() {
     let scrollable = [
-        crate::Modal::Help,
-        crate::Modal::Permissions,
-        crate::Modal::Config,
-        crate::Modal::Telemetry,
-        crate::Modal::OauthPending,
-        crate::Modal::ProviderPreset,
-        crate::Modal::CustomProvider,
-        crate::Modal::Tools,
-        crate::Modal::Mcp,
-        crate::Modal::Skills,
-        crate::Modal::Sessions,
-        crate::Modal::Queue,
-        crate::Modal::HistorySearch,
-        crate::Modal::Connections,
-        crate::Modal::Models,
+        SurfaceFixture::Help,
+        SurfaceFixture::Permissions,
+        SurfaceFixture::Config,
+        SurfaceFixture::Telemetry,
+        SurfaceFixture::OauthPending,
+        SurfaceFixture::ProviderPreset,
+        SurfaceFixture::CustomProvider,
+        SurfaceFixture::Tools,
+        SurfaceFixture::Mcp,
+        SurfaceFixture::Skills,
+        SurfaceFixture::Sessions,
+        SurfaceFixture::Queue,
+        SurfaceFixture::HistorySearch,
+        SurfaceFixture::Connections,
+        SurfaceFixture::Models,
     ];
-    for modal in scrollable {
+    for fixture in scrollable {
         let mut input = String::new();
         let mut cursor = 0;
         assert_eq!(
@@ -311,11 +311,11 @@ fn page_keys_scroll_every_scrollable_modal_body() {
                 &mut cursor,
                 KeyCode::PageUp,
                 KeyModifiers::NONE,
-                modal,
+                fixture,
                 false
             ),
             InputAction::ScrollPageUp,
-            "PageUp should page-scroll the {modal:?} modal body"
+            "PageUp should page-scroll the {fixture:?} modal body"
         );
         assert_eq!(
             run_key(
@@ -323,11 +323,11 @@ fn page_keys_scroll_every_scrollable_modal_body() {
                 &mut cursor,
                 KeyCode::PageDown,
                 KeyModifiers::NONE,
-                modal,
+                fixture,
                 false
             ),
             InputAction::ScrollPageDown,
-            "PageDown should page-scroll the {modal:?} modal body"
+            "PageDown should page-scroll the {fixture:?} modal body"
         );
     }
 }
@@ -346,7 +346,7 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::PageUp,
                 KeyModifiers::NONE,
-                crate::Modal::ModelEditor,
+                SurfaceFixture::ModelEditor,
                 false
             ),
             InputAction::None,
@@ -358,7 +358,7 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::PageDown,
                 KeyModifiers::NONE,
-                crate::Modal::ModelEditor,
+                SurfaceFixture::ModelEditor,
                 false
             ),
             InputAction::None,
@@ -370,7 +370,7 @@ fn page_keys_are_inert_in_caret_editors() {
                 &mut cursor,
                 KeyCode::Up,
                 KeyModifiers::CONTROL,
-                crate::Modal::ModelEditor,
+                SurfaceFixture::ModelEditor,
                 false
             ),
             InputAction::None,
@@ -383,7 +383,7 @@ fn page_keys_are_inert_in_caret_editors() {
 fn home_and_end_move_caret_in_free_text_modals() {
     // The unified provider editor borrows the input line for one field at a
     // time; Home/End should edit there too, not be swallowed.
-    for modal in [crate::Modal::ModelEditor, crate::Modal::HistorySearch] {
+    for fixture in [SurfaceFixture::ModelEditor, SurfaceFixture::HistorySearch] {
         let mut input = "abc".to_string();
         let mut cursor = 2;
         let action = run_key(
@@ -391,7 +391,7 @@ fn home_and_end_move_caret_in_free_text_modals() {
             &mut cursor,
             KeyCode::Home,
             KeyModifiers::NONE,
-            modal,
+            fixture,
             false,
         );
         assert_eq!(action, InputAction::None);
@@ -402,7 +402,7 @@ fn home_and_end_move_caret_in_free_text_modals() {
             &mut cursor,
             KeyCode::End,
             KeyModifiers::NONE,
-            modal,
+            fixture,
             false,
         );
         assert_eq!(action, InputAction::None);
@@ -425,7 +425,7 @@ fn line_aware_movement_respects_newlines() {
         &mut cursor,
         KeyCode::Char('a'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 6, "Ctrl+A should land at start of current line");
@@ -436,7 +436,7 @@ fn line_aware_movement_respects_newlines() {
         &mut cursor,
         KeyCode::Char('e'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 11, "Ctrl+E should land at end of current line");
@@ -447,7 +447,7 @@ fn line_aware_movement_respects_newlines() {
         &mut cursor,
         KeyCode::Char('a'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 6);
@@ -457,7 +457,7 @@ fn line_aware_movement_respects_newlines() {
         &mut cursor,
         KeyCode::Char('e'),
         KeyModifiers::CONTROL,
-        crate::Modal::None,
+        SurfaceFixture::None,
         false,
     );
     assert_eq!(cursor, 11);
@@ -521,7 +521,7 @@ fn up_arrow_in_browse_hands_off_to_history() {
         &mut input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             focused_target: false,
             ..Default::default()
         },

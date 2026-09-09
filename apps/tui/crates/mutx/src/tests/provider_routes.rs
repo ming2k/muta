@@ -271,7 +271,10 @@ fn completions_expose_only_canonical_trust_subcommands() {
 fn add_connection_row_opens_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_preset_chooser();
-    assert!(app.active_modal() == Modal::ProviderPreset);
+    assert_eq!(
+        app.surfaces.active_sheet(),
+        Some(crate::surfaces::SheetKind::ProviderPreset)
+    );
     assert_eq!(app.preset_choice, 0);
     // `↑/↓` wrap across the template list.
     let n = crate::PROVIDER_PRESETS.len();
@@ -285,7 +288,10 @@ fn add_connection_row_opens_the_template_chooser() {
 fn custom_connection_opens_as_a_sibling_of_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_connection_editor();
-    assert!(app.active_modal() == Modal::CustomProvider);
+    assert_eq!(
+        app.surfaces.active_sheet(),
+        Some(crate::surfaces::SheetKind::CustomProvider)
+    );
     assert_eq!(app.custom_provider_id.as_deref(), Some("custom"));
     assert_eq!(
         app.custom_fields,
@@ -305,7 +311,10 @@ fn custom_provider_editor_opens_empty_on_name_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.custom_name = "stale".to_string();
     app.open_custom_provider_editor(openai_template());
-    assert!(app.active_modal() == Modal::CustomProvider);
+    assert_eq!(
+        app.surfaces.active_sheet(),
+        Some(crate::surfaces::SheetKind::CustomProvider)
+    );
     assert_eq!(app.custom_field, 0, "opens on the Name field");
     assert!(app.custom_name.is_empty(), "buffers reset on open");
     assert!(
@@ -564,7 +573,8 @@ fn completions_path_skips_dotgit_directory() {
 #[test]
 fn model_editor_owns_caret_only_for_provider_key_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(Modal::ModelEditor);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.editor_model_settings_only = false;
     app.editor_field = 0;
     assert_eq!(app.caret_owner(), CaretOwner::Modal);
@@ -586,7 +596,7 @@ fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
     app.sessions_overview = (0..5)
         .map(|i| overview_row(&format!("s{i}")))
         .collect::<Vec<_>>();
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
 
     // Delete the row at index 2 (mid-list). The cursor must stay at 2 — now
     // pointing at "s3", which slid into the freed slot.
@@ -622,21 +632,19 @@ fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
 /// modal is already open, resetting only on a genuine open (closed → open).
 #[test]
 fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
-    // This mirrors the event-loop branch exactly: `opening` is true only when
-    // the modal is not already Sessions.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.sessions_overview = (0..5)
         .map(|i| overview_row(&format!("s{i}")))
         .collect::<Vec<_>>();
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
     app.modal_index = 3;
     app.session_scroll = 2;
 
     // Simulate the refresh path (open_sessions signal + fresh overview) with
-    // the modal ALREADY open: cursor and scroll must be preserved.
-    let opening = app.active_modal() != Modal::Sessions; // false
-    app.set_active_modal_for_test(Modal::Sessions);
+    // the dialog ALREADY open: cursor and scroll must be preserved.
+    let opening = app.active_dialog() != Some(crate::surfaces::DialogKind::Sessions); // false
     if opening {
+        app.open_dialog(crate::surfaces::DialogKind::Sessions);
         app.modal_index = 0;
         app.session_scroll = 0;
         app.session_modal_follow = true;
@@ -644,12 +652,12 @@ fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
     assert_eq!(app.modal_index, 3, "refresh while open keeps the cursor");
     assert_eq!(app.session_scroll, 2, "refresh while open keeps the scroll");
 
-    // Now simulate opening from a different modal (the genuine-open case):
+    // Now simulate opening from a different scene/dialog (the genuine-open case):
     // cursor and scroll reset to the top.
-    app.set_active_modal_for_test(Modal::None);
-    let opening = app.active_modal() != Modal::Sessions; // true
-    app.set_active_modal_for_test(Modal::Sessions);
+    app.reset_to_conversation();
+    let opening = app.active_dialog() != Some(crate::surfaces::DialogKind::Sessions); // true
     if opening {
+        app.open_dialog(crate::surfaces::DialogKind::Sessions);
         app.modal_index = 0;
         app.session_scroll = 0;
         app.session_modal_follow = true;
@@ -667,18 +675,24 @@ fn model_editor_esc_pops_back_to_its_picker() {
     // Models returns to Models; one opened from Connections returns to
     // Connections — the same editor, two parents, no hard-coding.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Models);
-    app.push_transient_surface(crate::Modal::ModelEditor);
-    app.pop_transient_surface();
-    assert_eq!(app.active_modal(), crate::Modal::Models, "pops to Models");
-
-    // From Connections: the same editor, a different pushed parent.
-    app.open_panel(crate::surfaces::PanelId::Connections);
-    app.push_transient_surface(crate::Modal::ModelEditor);
+    app.open_dialog(crate::surfaces::DialogKind::Models);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.pop_transient_surface();
     assert_eq!(
-        app.active_modal(),
-        crate::Modal::Connections,
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Models),
+        "pops to Models"
+    );
+
+    // From Connections: the same editor, a different pushed parent.
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
+    app.surfaces
+        .present_sheet(crate::surfaces::SheetKind::ModelEditor);
+    app.pop_transient_surface();
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Connections),
         "pops to Connections"
     );
 }
@@ -687,9 +701,12 @@ fn model_editor_esc_pops_back_to_its_picker() {
 fn custom_connection_submits_with_multiple_comma_separated_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let template = &crate::providers::CUSTOM_TEMPLATE;
-    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     app.open_custom_provider_editor(template);
-    assert_eq!(app.active_modal(), Modal::CustomProvider);
+    assert_eq!(
+        app.surfaces.active_sheet(),
+        Some(crate::surfaces::SheetKind::CustomProvider)
+    );
     app.custom_name = "WeChat Multi".to_string();
     app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
     app.custom_token = "tok".to_string();
@@ -727,7 +744,7 @@ fn curated_template_submits_the_provider_id_without_a_protocol_override() {
     // A curated provider owns its wire: the create request carries the provider
     // id (the template's id) and no protocol/base-url override.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     app.open_custom_provider_editor(openai_template());
     // The focused Name field owns the composer line.
     app.input = "OpenAI Work".to_string();
@@ -764,7 +781,7 @@ fn editor_rename_sends_the_rename_transaction_then_the_metadata_edit() {
     // own atomic request. The editor emits it first (the metadata edit is keyed
     // by the new name) and then the `EditConnection` metadata update.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     app.provider_picker
         .rows
         .push(muta_contracts::ProviderPickerRow {
@@ -841,7 +858,10 @@ async fn open_active_connection_detail_opens_standalone_and_closes_to_none() {
 
     crate::event_loop::open_active_connection_detail(&mut app, &runtime, "s1");
 
-    assert_eq!(app.active_modal(), Modal::Connections);
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Connections)
+    );
     assert!(app.connection_info_detail);
     assert!(app.connection_info_standalone);
 
@@ -855,7 +875,7 @@ async fn open_active_connection_detail_opens_standalone_and_closes_to_none() {
 
     // Esc in standalone connection detail closes directly to None (no drill-down backout)
     crate::event_loop::handle_close_modal(&mut app, "s1");
-    assert_eq!(app.active_modal(), Modal::None);
+    assert!(app.surfaces.active_overlay().is_none());
     assert!(!app.connection_info_detail);
     assert!(!app.connection_info_standalone);
 }
@@ -924,7 +944,7 @@ async fn connection_detail_refresh_action_queries_active_detail_id() {
     app.tx = tx;
     let runtime = crate::event_loop::UiRuntime::minimal_for_test();
 
-    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_dialog(crate::surfaces::DialogKind::Connections);
     app.connection_info_detail = true;
     app.connection_detail = Some(muta_contracts::ConnectionDetail {
         name: "custom-relay".to_string(),

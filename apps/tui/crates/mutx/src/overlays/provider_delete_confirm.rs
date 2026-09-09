@@ -17,7 +17,7 @@ use mutx_engine::{
     Modifier, Paragraph, Rect, Span, Style,
 };
 
-use crate::modal::Recess;
+use crate::primitives::Recess;
 use crate::primitives::{centered_rect_h, modal_frame, recess_backdrop};
 use crate::render::Theme;
 

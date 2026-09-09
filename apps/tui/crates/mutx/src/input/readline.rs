@@ -1,12 +1,14 @@
 //! The shared readline engine: caret motion, word boundaries, grapheme
 //! deletion, and line walking used by the composer and the inline prompts.
 
-use crate::Modal;
-
 /// accept free-text input. Used by the Alt+Enter and Ctrl+J multi-line
 /// entry bindings (plain Enter sends the message).
-pub(crate) fn insert_newline(input: &mut String, cursor_position: &mut usize, active_modal: Modal) {
-    if matches!(active_modal, Modal::None) {
+pub(crate) fn insert_newline(
+    input: &mut String,
+    cursor_position: &mut usize,
+    allow_multiline: bool,
+) {
+    if allow_multiline {
         let byte_pos = normalized_cursor_byte(input, *cursor_position);
         *cursor_position = input[..byte_pos].chars().count();
         input.insert(byte_pos, '\n');

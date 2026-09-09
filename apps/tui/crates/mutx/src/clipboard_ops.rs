@@ -11,9 +11,10 @@ use tokio::sync::mpsc;
 
 use muta_contracts::ImagePart;
 
+use crate::App;
 use crate::clipboard::{self, ClipboardRead, CopyOutcome};
 use crate::composer_attachments::{image_chip, paste_chip, paste_line_count, should_chip_paste};
-use crate::{App, Modal};
+use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
 
 /// Whether the currently active model route accepts image input.
 ///
@@ -75,19 +76,26 @@ pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
     // is the keyboard foreground — a coexisting modal renders above it and
     // its paste lands in the modal's own borrowed field (or is dropped).
     if app.active_sheet() == Some(crate::sheet::SheetKind::Question)
-        && app.active_modal() == Modal::None
+        && app.active_dialog().is_none()
     {
         return apply_question_other_paste(app, read);
     }
-    match app.active_modal() {
-        Modal::None => apply_composer_paste(app, read),
-        Modal::HistorySearch
-        | Modal::Models
-        | Modal::Connections
-        | Modal::ModelEditor
-        | Modal::CustomProvider
-        | Modal::Config => apply_modal_field_paste(app, read),
-        _ => {}
+    if let Some(overlay) = app.surfaces.active_overlay() {
+        match overlay {
+            OverlaySurface::Dialog(
+                DialogKind::HistorySearch | DialogKind::Models | DialogKind::Connections,
+            ) => {
+                apply_modal_field_paste(app, read);
+            }
+            OverlaySurface::Sheet(SheetKind::ModelEditor | SheetKind::CustomProvider) => {
+                apply_modal_field_paste(app, read);
+            }
+            _ => {}
+        }
+    } else if app.current_scene() == SceneKind::Settings {
+        apply_modal_field_paste(app, read);
+    } else {
+        apply_composer_paste(app, read);
     }
 }
 

@@ -62,289 +62,379 @@ pub struct ModalKeys {
     pub host_prompting: bool,
 }
 
-/// Whether `modal` currently treats the composer line as an editable free-text
-/// field — the surfaces where printable keys, Backspace, and the readline
-/// editing family (Ctrl+A/E/W/U/K, Alt+B/F/D, …) act on the input buffer. The
-/// history and model-picker modals only qualify while their search sub-layer is
-/// active (`history_searching` / `model_searching`); in browse mode those keys
-/// are inert so `/` can open search and stray letters never mutate a buffer the
-/// user isn't editing.
-pub fn modal_claims_composer_line(modal: crate::Modal, keys: &ModalKeys) -> bool {
-    match modal {
-        // No modal: the chat surface's own composer is the text field.
-        crate::Modal::None | crate::Modal::ModelEditor => true,
-        crate::Modal::Models | crate::Modal::Connections => keys.model_searching,
-        crate::Modal::HistorySearch => keys.history_searching,
-        // The provider editor's four basic string fields borrow the composer;
-        // Protocol and Client Identity are inline selectors.
-        crate::Modal::CustomProvider => keys.custom_provider_field.is_some(),
+use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
+
+fn has_body_scroll(overlay: Option<OverlaySurface>, scene: SceneKind) -> bool {
+    if let Some(overlay) = overlay {
+        matches!(
+            overlay,
+            OverlaySurface::Dialog(_)
+                | OverlaySurface::Sheet(
+                    SheetKind::OAuthPending | SheetKind::ProviderPreset | SheetKind::CustomProvider,
+                )
+        )
+    } else {
+        matches!(scene, SceneKind::Dashboard | SceneKind::Settings)
+    }
+}
+
+/// Whether the overlay or scene currently treats the composer line as an editable free-text field.
+/// Only the chat-like scenes (`Conversation`/`TaskInspection`/`Aside`) own the composer when no
+/// overlay is up; the full-screen `Dashboard`/`Settings` scenes never borrow it.
+pub fn modal_claims_composer_line(
+    overlay: Option<OverlaySurface>,
+    scene: SceneKind,
+    keys: &ModalKeys,
+) -> bool {
+    match overlay {
+        None => matches!(
+            scene,
+            SceneKind::Conversation | SceneKind::TaskInspection | SceneKind::Aside
+        ),
+        Some(OverlaySurface::Sheet(SheetKind::ModelEditor)) => true,
+        Some(OverlaySurface::Dialog(DialogKind::Models | DialogKind::Connections)) => {
+            keys.model_searching
+        }
+        Some(OverlaySurface::Dialog(DialogKind::HistorySearch)) => keys.history_searching,
+        Some(OverlaySurface::Sheet(SheetKind::CustomProvider)) => {
+            keys.custom_provider_field.is_some()
+        }
         _ => false,
     }
 }
 
-/// Whether the ModelEditor's toggle fields (effort ladder aside) currently
-/// swallow printable characters: the key editor's thinking/vision/tool fields
-/// (`2`..=`4`) are toggles, not text fields — printable chars must not mutate
-/// the borrowed input line while one is focused. Every other modal (and every
-/// other ModelEditor field) leaves printable handling to the shared layer.
-pub fn modal_swallows_printable(modal: crate::Modal, keys: &ModalKeys) -> bool {
-    modal == crate::Modal::ModelEditor && matches!(keys.editor_field, Some(2..=4))
+/// Whether the ModelEditor's toggle fields currently swallow printable characters.
+pub fn modal_swallows_printable(overlay: Option<OverlaySurface>, keys: &ModalKeys) -> bool {
+    overlay == Some(OverlaySurface::Sheet(SheetKind::ModelEditor))
+        && matches!(keys.editor_field, Some(2..=4))
 }
 
-/// Resolve a key a modal owns. `None` falls through to the shared layer
-/// (which handles Esc, readline editing, paste, scrolling). `input` and
-/// `cursor_position` are the borrowed composer line — the dashboard's inline
-/// prompt edits it in place.
+/// Resolve a key an overlay or scene owns.
 pub(crate) fn resolve_modal_key(
-    modal: crate::Modal,
+    overlay: Option<OverlaySurface>,
+    scene: SceneKind,
     key: crate::keymap::Key,
     keys: &ModalKeys,
     input: &mut String,
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
-    // These two modals own families that span key codes (not just printables).
-    match modal {
-        crate::Modal::HistorySearch => return resolve_history_search_key(key),
-        crate::Modal::ViewSwitcher => return resolve_view_switcher_key(key),
-        _ => {}
-    }
-    // The dashboard's inline prompt borrows the composer line and owns the
-    // whole keyboard while it is open: printable keys and Backspace edit the
-    // prompt text, Enter submits, Esc falls through to CloseModal (the event
-    // loop turns that into a prompt-cancel when `host_prompting` is set),
-    // and every other key is swallowed. This branch must precede the verb
-    // families below — a prompt open means no row navigation is live.
-    if modal == crate::Modal::Host && keys.host_prompting {
+    if let Some(overlay) = overlay {
+        match overlay {
+            OverlaySurface::Dialog(DialogKind::HistorySearch) => {
+                return resolve_history_search_key(key);
+            }
+            OverlaySurface::Dialog(DialogKind::Switcher) => return resolve_view_switcher_key(key),
+            _ => {}
+        }
+    } else if scene == SceneKind::Dashboard && keys.host_prompting {
         return Some(resolve_host_prompt_key(key, input, cursor_position));
     }
-    // Enter / arrow / Tab verb families moved from the router's fallback
-    // arms (ADR-0172): each modal owns its own activation, list-walk and
-    // focus keys here, ahead of the shared affordance layer. Guards mirror
-    // the router's arm ordering: Alt+Enter stays the multi-line newline
-    // chord, and Ctrl+↑/↓ keep paging a body-scrolling modal (the shared
-    // layer's pager) ahead of the plain list walk.
+
     match key.code {
         KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
-            return Some(match modal {
-                crate::Modal::Models => InputAction::ProviderPickerActivate,
-                crate::Modal::Connections if keys.connection_info_detail => return None,
-                crate::Modal::Connections => InputAction::OpenConnectionDetail,
-                crate::Modal::ModelEditor => InputAction::SubmitModelEditor,
-                crate::Modal::ProviderPreset => InputAction::SelectPreset,
-                crate::Modal::OauthPending => InputAction::CopyOauthContent {
-                    target: OauthCopyTarget::Selected,
-                },
-                crate::Modal::CustomProvider => InputAction::SubmitCustomProvider,
-                crate::Modal::Sessions if keys.session_info_detail => return None,
-                crate::Modal::Sessions => InputAction::OpenSelectedSession,
-                // Without the inline prompt open, Enter previews the
-                // highlighted session. (Attach moved to `a`; Enter previews,
-                // ADR-0097 §3.)
-                crate::Modal::Host => InputAction::HostPreviewSelected,
-                crate::Modal::Help
-                | crate::Modal::Tools
-                | crate::Modal::Mcp
-                | crate::Modal::Permissions
-                | crate::Modal::Tree
-                | crate::Modal::UsageStats => InputAction::CloseModal,
-                crate::Modal::Skills => InputAction::SkillsToggleDetail,
-                crate::Modal::Queue => InputAction::RecallQueuedSelected,
-                crate::Modal::Btw => InputAction::BtwFocusSelected,
-                crate::Modal::Config => InputAction::ConfigActivate,
-                crate::Modal::Telemetry => InputAction::TelemetryActivate,
-                // HistorySearch and ViewSwitcher own their Enter verbs in
-                // their schemes above; ModelEditor and the rest fall through
-                // to the shared layer.
-                _ => return None,
+            return Some(if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Dialog(DialogKind::Models) => {
+                        InputAction::ProviderPickerActivate
+                    }
+                    OverlaySurface::Dialog(DialogKind::Connections)
+                        if keys.connection_info_detail =>
+                    {
+                        return None;
+                    }
+                    OverlaySurface::Dialog(DialogKind::Connections) => {
+                        InputAction::OpenConnectionDetail
+                    }
+                    OverlaySurface::Sheet(SheetKind::ModelEditor) => InputAction::SubmitModelEditor,
+                    OverlaySurface::Sheet(SheetKind::ProviderPreset) => InputAction::SelectPreset,
+                    OverlaySurface::Sheet(SheetKind::OAuthPending) => {
+                        InputAction::CopyOauthContent {
+                            target: OauthCopyTarget::Selected,
+                        }
+                    }
+                    OverlaySurface::Sheet(SheetKind::CustomProvider) => {
+                        InputAction::SubmitCustomProvider
+                    }
+                    OverlaySurface::Dialog(DialogKind::Sessions) if keys.session_info_detail => {
+                        return None;
+                    }
+                    OverlaySurface::Dialog(DialogKind::Sessions) => {
+                        InputAction::OpenSelectedSession
+                    }
+                    OverlaySurface::Dialog(
+                        DialogKind::Help
+                        | DialogKind::Tools
+                        | DialogKind::Mcp
+                        | DialogKind::Permissions
+                        | DialogKind::SessionTree
+                        | DialogKind::UsageStats,
+                    ) => InputAction::CloseModal,
+                    OverlaySurface::Dialog(DialogKind::Skills) => InputAction::SkillsToggleDetail,
+                    OverlaySurface::Dialog(DialogKind::Queue) => InputAction::RecallQueuedSelected,
+                    OverlaySurface::Dialog(DialogKind::Asides) => InputAction::BtwFocusSelected,
+                    OverlaySurface::Dialog(DialogKind::Telemetry) => InputAction::TelemetryActivate,
+                    _ => return None,
+                }
+            } else {
+                match scene {
+                    SceneKind::Dashboard => InputAction::HostPreviewSelected,
+                    SceneKind::Settings => InputAction::ConfigActivate,
+                    _ => return None,
+                }
             });
         }
         KeyCode::Up
             if !(key.modifiers.contains(KeyModifiers::CONTROL)
-                && modal.keyboard_claims().body_scroll) =>
+                && has_body_scroll(overlay, scene)) =>
         {
-            return Some(match modal {
-                crate::Modal::Models
-                | crate::Modal::Connections
-                | crate::Modal::Sessions
-                | crate::Modal::Host
-                | crate::Modal::Permissions
-                | crate::Modal::Config
-                | crate::Modal::Tree
-                | crate::Modal::Telemetry => InputAction::ModalUp,
-                crate::Modal::Tools
-                | crate::Modal::Mcp
-                | crate::Modal::Skills
-                | crate::Modal::Queue
-                | crate::Modal::Btw => InputAction::SessionSelect { forward: false },
-                crate::Modal::ProviderPreset => InputAction::MovePresetChoice { forward: false },
-                crate::Modal::OauthPending => InputAction::ScrollUp,
-                crate::Modal::CustomProvider => {
-                    InputAction::ScrollCustomProvider { forward: false }
+            return Some(if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Dialog(
+                        DialogKind::Models
+                        | DialogKind::Connections
+                        | DialogKind::Sessions
+                        | DialogKind::Permissions
+                        | DialogKind::SessionTree
+                        | DialogKind::Telemetry,
+                    ) => InputAction::ModalUp,
+                    OverlaySurface::Dialog(
+                        DialogKind::Tools
+                        | DialogKind::Mcp
+                        | DialogKind::Skills
+                        | DialogKind::Queue
+                        | DialogKind::Asides,
+                    ) => InputAction::SessionSelect { forward: false },
+                    OverlaySurface::Sheet(SheetKind::ProviderPreset) => {
+                        InputAction::MovePresetChoice { forward: false }
+                    }
+                    OverlaySurface::Sheet(SheetKind::OAuthPending) => InputAction::ScrollUp,
+                    OverlaySurface::Sheet(SheetKind::CustomProvider) => {
+                        InputAction::ScrollCustomProvider { forward: false }
+                    }
+                    OverlaySurface::Dialog(DialogKind::Help | DialogKind::UsageStats) => {
+                        InputAction::ScrollUp
+                    }
+                    _ => return None,
                 }
-                crate::Modal::Help | crate::Modal::UsageStats => InputAction::ScrollUp,
-                // ModelEditor and the rest fall through to the shared layer.
-                _ => return None,
+            } else {
+                match scene {
+                    SceneKind::Dashboard | SceneKind::Settings => InputAction::ModalUp,
+                    _ => return None,
+                }
             });
         }
         KeyCode::Down
             if !(key.modifiers.contains(KeyModifiers::CONTROL)
-                && modal.keyboard_claims().body_scroll) =>
+                && has_body_scroll(overlay, scene)) =>
         {
-            return Some(match modal {
-                crate::Modal::Models
-                | crate::Modal::Connections
-                | crate::Modal::Sessions
-                | crate::Modal::Host
-                | crate::Modal::Permissions
-                | crate::Modal::Config
-                | crate::Modal::Tree
-                | crate::Modal::Telemetry => InputAction::ModalDown,
-                crate::Modal::Tools
-                | crate::Modal::Mcp
-                | crate::Modal::Skills
-                | crate::Modal::Queue
-                | crate::Modal::Btw => InputAction::SessionSelect { forward: true },
-                crate::Modal::ProviderPreset => InputAction::MovePresetChoice { forward: true },
-                crate::Modal::OauthPending => InputAction::ScrollDown,
-                crate::Modal::CustomProvider => InputAction::ScrollCustomProvider { forward: true },
-                crate::Modal::Help | crate::Modal::UsageStats => InputAction::ScrollDown,
-                _ => return None,
+            return Some(if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Dialog(
+                        DialogKind::Models
+                        | DialogKind::Connections
+                        | DialogKind::Sessions
+                        | DialogKind::Permissions
+                        | DialogKind::SessionTree
+                        | DialogKind::Telemetry,
+                    ) => InputAction::ModalDown,
+                    OverlaySurface::Dialog(
+                        DialogKind::Tools
+                        | DialogKind::Mcp
+                        | DialogKind::Skills
+                        | DialogKind::Queue
+                        | DialogKind::Asides,
+                    ) => InputAction::SessionSelect { forward: true },
+                    OverlaySurface::Sheet(SheetKind::ProviderPreset) => {
+                        InputAction::MovePresetChoice { forward: true }
+                    }
+                    OverlaySurface::Sheet(SheetKind::OAuthPending) => InputAction::ScrollDown,
+                    OverlaySurface::Sheet(SheetKind::CustomProvider) => {
+                        InputAction::ScrollCustomProvider { forward: true }
+                    }
+                    OverlaySurface::Dialog(DialogKind::Help | DialogKind::UsageStats) => {
+                        InputAction::ScrollDown
+                    }
+                    _ => return None,
+                }
+            } else {
+                match scene {
+                    SceneKind::Dashboard | SceneKind::Settings => InputAction::ModalDown,
+                    _ => return None,
+                }
             });
         }
-        KeyCode::Left => match modal {
-            crate::Modal::Telemetry => return Some(InputAction::TelemetryPrevTab),
-            crate::Modal::Config if keys.config_focus == crate::overlays::ConfigFocus::Detail => {
+        KeyCode::Left => {
+            if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Dialog(DialogKind::Telemetry) => {
+                        return Some(InputAction::TelemetryPrevTab);
+                    }
+                    OverlaySurface::Sheet(SheetKind::ModelEditor)
+                        if keys.editor_field == Some(1) =>
+                    {
+                        return Some(InputAction::ModelEditorEffortCycle { delta: -1 });
+                    }
+                    OverlaySurface::Sheet(SheetKind::CustomProvider)
+                        if keys.custom_provider_field.is_none() =>
+                    {
+                        return Some(InputAction::CycleCustomProviderChoice { forward: false });
+                    }
+                    _ => {}
+                }
+            } else if scene == SceneKind::Settings
+                && keys.config_focus == crate::overlays::ConfigFocus::Detail
+            {
                 return Some(InputAction::ConfigSegmentPrev);
             }
-            // In the model editor's effort field, ← cycles the effort level
-            // down (wrapping). Only when field 1 is focused.
-            crate::Modal::ModelEditor if keys.editor_field == Some(1) => {
-                return Some(InputAction::ModelEditorEffortCycle { delta: -1 });
-            }
-            crate::Modal::CustomProvider if keys.custom_provider_field.is_none() => {
-                return Some(InputAction::CycleCustomProviderChoice { forward: false });
-            }
-            _ => {}
-        },
-        KeyCode::Right => match modal {
-            crate::Modal::Telemetry => return Some(InputAction::TelemetryNextTab),
-            crate::Modal::Config if keys.config_focus == crate::overlays::ConfigFocus::Detail => {
+        }
+        KeyCode::Right => {
+            if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Dialog(DialogKind::Telemetry) => {
+                        return Some(InputAction::TelemetryNextTab);
+                    }
+                    OverlaySurface::Sheet(SheetKind::ModelEditor)
+                        if keys.editor_field == Some(1) =>
+                    {
+                        return Some(InputAction::ModelEditorEffortCycle { delta: 1 });
+                    }
+                    OverlaySurface::Sheet(SheetKind::CustomProvider)
+                        if keys.custom_provider_field.is_none() =>
+                    {
+                        return Some(InputAction::CycleCustomProviderChoice { forward: true });
+                    }
+                    _ => {}
+                }
+            } else if scene == SceneKind::Settings
+                && keys.config_focus == crate::overlays::ConfigFocus::Detail
+            {
                 return Some(InputAction::ConfigSegmentNext);
             }
-            // Effort field: → cycles the level up (wrapping).
-            crate::Modal::ModelEditor if keys.editor_field == Some(1) => {
-                return Some(InputAction::ModelEditorEffortCycle { delta: 1 });
-            }
-            crate::Modal::CustomProvider if keys.custom_provider_field.is_none() => {
-                return Some(InputAction::CycleCustomProviderChoice { forward: true });
-            }
-            _ => {}
-        },
+        }
         KeyCode::Tab => {
-            return Some(match modal {
-                crate::Modal::ModelEditor => InputAction::ModelEditorNextField,
-                crate::Modal::CustomProvider => InputAction::CustomProviderNextField,
-                crate::Modal::Host => InputAction::HostFocusToggle,
-                crate::Modal::Telemetry => InputAction::TelemetryNextTab,
-                crate::Modal::OauthPending => InputAction::CycleOauthSelection,
-                _ => return None,
+            return Some(if let Some(overlay) = overlay {
+                match overlay {
+                    OverlaySurface::Sheet(SheetKind::ModelEditor) => {
+                        InputAction::ModelEditorNextField
+                    }
+                    OverlaySurface::Sheet(SheetKind::CustomProvider) => {
+                        InputAction::CustomProviderNextField
+                    }
+                    OverlaySurface::Dialog(DialogKind::Telemetry) => InputAction::TelemetryNextTab,
+                    OverlaySurface::Sheet(SheetKind::OAuthPending) => {
+                        InputAction::CycleOauthSelection
+                    }
+                    _ => return None,
+                }
+            } else if scene == SceneKind::Dashboard {
+                InputAction::HostFocusToggle
+            } else {
+                return None;
             });
         }
         KeyCode::BackTab => {
-            return Some(match modal {
-                crate::Modal::CustomProvider => InputAction::CustomProviderPrevField,
-                crate::Modal::Telemetry => InputAction::TelemetryPrevTab,
-                crate::Modal::OauthPending => InputAction::CycleOauthSelection,
-                _ => return None,
-            });
+            let overlay = overlay?;
+            return match overlay {
+                OverlaySurface::Sheet(SheetKind::CustomProvider) => {
+                    Some(InputAction::CustomProviderPrevField)
+                }
+                OverlaySurface::Dialog(DialogKind::Telemetry) => {
+                    Some(InputAction::TelemetryPrevTab)
+                }
+                OverlaySurface::Sheet(SheetKind::OAuthPending) => {
+                    Some(InputAction::CycleOauthSelection)
+                }
+                _ => None,
+            };
         }
         _ => {}
     }
+
     let KeyCode::Char(c) = key.code else {
         return None;
     };
-    // Modal verb keys are unmodified (or Shift-capitalized) printables. Every
-    // Control/Alt/Super chord is a shared command chord — readline editing,
-    // paste, scrolling — owned by the router, not by any modal.
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
     {
         return None;
     }
-    match modal {
-        crate::Modal::Tools if c == ' ' => Some(InputAction::SessionActivate),
-        crate::Modal::Mcp => match c {
-            // Space toggles the selected server; `r` reconnects it.
-            ' ' => Some(InputAction::McpToggle),
-            'r' => Some(InputAction::McpReconnect),
+
+    if let Some(overlay) = overlay {
+        match overlay {
+            OverlaySurface::Dialog(DialogKind::Tools) if c == ' ' => {
+                Some(InputAction::SessionActivate)
+            }
+            OverlaySurface::Dialog(DialogKind::Mcp) => match c {
+                ' ' => Some(InputAction::McpToggle),
+                'r' => Some(InputAction::McpReconnect),
+                _ => None,
+            },
+            OverlaySurface::Sheet(SheetKind::OAuthPending) => match c {
+                'c' => Some(InputAction::CopyOauthContent {
+                    target: OauthCopyTarget::UserCode,
+                }),
+                'u' => Some(InputAction::CopyOauthContent {
+                    target: OauthCopyTarget::Url,
+                }),
+                ' ' | 'y' => Some(InputAction::CopyOauthContent {
+                    target: OauthCopyTarget::Selected,
+                }),
+                _ => None,
+            },
+            OverlaySurface::Sheet(SheetKind::ProviderPreset) => match c {
+                'b' => Some(InputAction::SelectPresetWithOauthMethod {
+                    method: muta_contracts::LoginMethod::Browser,
+                }),
+                'd' => Some(InputAction::SelectPresetWithOauthMethod {
+                    method: muta_contracts::LoginMethod::Device,
+                }),
+                _ => None,
+            },
+            OverlaySurface::Dialog(DialogKind::Permissions) => match c {
+                ' ' => Some(InputAction::PermissionsActivate),
+                'c' => Some(InputAction::PermissionsClearAll),
+                _ => None,
+            },
+            OverlaySurface::Dialog(DialogKind::Telemetry) => match c {
+                '1' => Some(InputAction::TelemetrySetTab(
+                    crate::overlays::telemetry::TelemetryTab::Overview,
+                )),
+                '2' => Some(InputAction::TelemetrySetTab(
+                    crate::overlays::telemetry::TelemetryTab::Activity,
+                )),
+                '[' | 'h' => Some(InputAction::TelemetryPrevTab),
+                ']' | 'l' => Some(InputAction::TelemetryNextTab),
+                _ => None,
+            },
+            OverlaySurface::Dialog(DialogKind::Models) => resolve_picker_key(c, true, keys),
+            OverlaySurface::Dialog(DialogKind::Connections) if !keys.connection_info_detail => {
+                resolve_picker_key(c, false, keys)
+            }
+            OverlaySurface::Dialog(DialogKind::Sessions) if !keys.session_info_detail => match c {
+                'd' => Some(InputAction::DeleteSelectedSession),
+                'n' | 'N' => Some(InputAction::CreateNewSession),
+                'i' => Some(InputAction::OpenSessionInfo),
+                _ => None,
+            },
+            OverlaySurface::Dialog(DialogKind::Queue) => match c {
+                'D' => Some(InputAction::QueueDelete),
+                'K' => Some(InputAction::QueueMoveItem { delta: -1 }),
+                'J' => Some(InputAction::QueueMoveItem { delta: 1 }),
+                _ => None,
+            },
+            OverlaySurface::Dialog(DialogKind::Asides) if c == 'D' => {
+                Some(InputAction::BtwCloseSelected)
+            }
+            OverlaySurface::Sheet(SheetKind::ModelEditor) => resolve_model_editor_key(c, keys),
             _ => None,
-        },
-        crate::Modal::OauthPending => match c {
-            // The OAuth pending sheet copies its primary content: `c` copies
-            // the device code, `u` the verification URL, `space`/`y` the
-            // selected target. Mouse drag-select never reaches modal body
-            // text, so these keys are the copy path.
-            'c' => Some(InputAction::CopyOauthContent {
-                target: OauthCopyTarget::UserCode,
-            }),
-            'u' => Some(InputAction::CopyOauthContent {
-                target: OauthCopyTarget::Url,
-            }),
-            ' ' | 'y' => Some(InputAction::CopyOauthContent {
-                target: OauthCopyTarget::Selected,
-            }),
-            _ => None,
-        },
-        crate::Modal::ProviderPreset => match c {
-            'b' => Some(InputAction::SelectPresetWithOauthMethod {
-                method: muta_contracts::LoginMethod::Browser,
-            }),
-            'd' => Some(InputAction::SelectPresetWithOauthMethod {
-                method: muta_contracts::LoginMethod::Device,
-            }),
-            _ => None,
-        },
-        crate::Modal::Permissions => match c {
-            ' ' => Some(InputAction::PermissionsActivate),
-            'c' => Some(InputAction::PermissionsClearAll),
-            _ => None,
-        },
-        crate::Modal::Telemetry => match c {
-            '1' => Some(InputAction::TelemetrySetTab(
-                crate::modal::TelemetryTab::Overview,
-            )),
-            '2' => Some(InputAction::TelemetrySetTab(
-                crate::modal::TelemetryTab::Activity,
-            )),
-            '[' | 'h' => Some(InputAction::TelemetryPrevTab),
-            ']' | 'l' => Some(InputAction::TelemetryNextTab),
-            _ => None,
-        },
-        crate::Modal::Config => resolve_config_key(c, keys),
-        crate::Modal::Models => resolve_picker_key(c, true, keys),
-        crate::Modal::Connections if !keys.connection_info_detail => {
-            resolve_picker_key(c, false, keys)
         }
-        crate::Modal::Sessions if !keys.session_info_detail => match c {
-            'd' => Some(InputAction::DeleteSelectedSession),
-            'n' | 'N' => Some(InputAction::CreateNewSession),
-            'i' => Some(InputAction::OpenSessionInfo),
+    } else {
+        match scene {
+            SceneKind::Settings => resolve_config_key(c, keys),
+            SceneKind::Dashboard => resolve_host_key(c),
             _ => None,
-        },
-        crate::Modal::Host => resolve_host_key(c),
-        crate::Modal::Queue => match c {
-            // `Shift+D` deletes the highlighted item outright (the queue is
-            // auto-blocked on open, so a mid-delete auto-drain can't race);
-            // `K`/`J` reorder toward the front / tail (vim convention).
-            'D' => Some(InputAction::QueueDelete),
-            'K' => Some(InputAction::QueueMoveItem { delta: -1 }),
-            'J' => Some(InputAction::QueueMoveItem { delta: 1 }),
-            _ => None,
-        },
-        crate::Modal::Btw if c == 'D' => Some(InputAction::BtwCloseSelected),
-        crate::Modal::ModelEditor => resolve_model_editor_key(c, keys),
-        _ => None,
+        }
     }
 }
 
@@ -589,43 +679,73 @@ mod tests {
         }
     }
 
-    /// Test shim: the prompt-editing buffers are only observed by the Host
+    /// Test shims: the prompt-editing buffers are only observed by the Host
     /// inline prompt; every other surface ignores them.
-    fn resolve(
-        modal: crate::Modal,
+    fn resolve_dialog(
+        dialog: DialogKind,
         k: crate::keymap::Key,
         keys: &ModalKeys,
     ) -> Option<InputAction> {
-        resolve_modal_key(modal, k, keys, &mut String::new(), &mut 0)
+        resolve_modal_key(
+            Some(OverlaySurface::Dialog(dialog)),
+            SceneKind::Conversation,
+            k,
+            keys,
+            &mut String::new(),
+            &mut 0,
+        )
+    }
+
+    fn resolve_sheet(
+        sheet: SheetKind,
+        k: crate::keymap::Key,
+        keys: &ModalKeys,
+    ) -> Option<InputAction> {
+        resolve_modal_key(
+            Some(OverlaySurface::Sheet(sheet)),
+            SceneKind::Conversation,
+            k,
+            keys,
+            &mut String::new(),
+            &mut 0,
+        )
+    }
+
+    fn resolve_scene(
+        scene: SceneKind,
+        k: crate::keymap::Key,
+        keys: &ModalKeys,
+    ) -> Option<InputAction> {
+        resolve_modal_key(None, scene, k, keys, &mut String::new(), &mut 0)
     }
 
     #[test]
     fn mcp_owns_space_and_r() {
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::Mcp, key(' '), &c),
+            resolve_dialog(DialogKind::Mcp, key(' '), &c),
             Some(InputAction::McpToggle)
         );
         assert_eq!(
-            resolve(crate::Modal::Mcp, key('r'), &c),
+            resolve_dialog(DialogKind::Mcp, key('r'), &c),
             Some(InputAction::McpReconnect)
         );
-        assert_eq!(resolve(crate::Modal::Mcp, key('z'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Mcp, key('z'), &c), None);
     }
 
     #[test]
     fn queue_owns_delete_and_reorder() {
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::Queue, key('D'), &c),
+            resolve_dialog(DialogKind::Queue, key('D'), &c),
             Some(InputAction::QueueDelete)
         );
         assert_eq!(
-            resolve(crate::Modal::Queue, key('K'), &c),
+            resolve_dialog(DialogKind::Queue, key('K'), &c),
             Some(InputAction::QueueMoveItem { delta: -1 })
         );
         assert_eq!(
-            resolve(crate::Modal::Queue, key('J'), &c),
+            resolve_dialog(DialogKind::Queue, key('J'), &c),
             Some(InputAction::QueueMoveItem { delta: 1 })
         );
     }
@@ -635,16 +755,16 @@ mod tests {
         // In the search sub-layer every printable char is a query — the modal
         // owns nothing and the shared layer inserts it.
         let c = keys(|k| k.model_searching = true);
-        assert_eq!(resolve(crate::Modal::Models, key('/'), &c), None);
-        assert_eq!(resolve(crate::Modal::Models, key('*'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Models, key('/'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Models, key('*'), &c), None);
         // Browse mode owns the verbs.
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::Models, key('*'), &c),
+            resolve_dialog(DialogKind::Models, key('*'), &c),
             Some(InputAction::ProviderPickerToggleFavorite)
         );
         assert_eq!(
-            resolve(crate::Modal::Models, key('/'), &c),
+            resolve_dialog(DialogKind::Models, key('/'), &c),
             Some(InputAction::ModelEnterSearch)
         );
     }
@@ -652,44 +772,44 @@ mod tests {
     #[test]
     fn connections_detail_readout_is_inert() {
         let c = keys(|k| k.connection_info_detail = true);
-        assert_eq!(resolve(crate::Modal::Connections, key('a'), &c), None);
-        assert_eq!(resolve(crate::Modal::Connections, key('c'), &c), None);
-        assert_eq!(resolve(crate::Modal::Connections, key('D'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Connections, key('a'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Connections, key('c'), &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Connections, key('D'), &c), None);
     }
 
     #[test]
     fn dashboard_chars_are_always_actions() {
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::Host, key('a'), &c),
+            resolve_scene(SceneKind::Dashboard, key('a'), &c),
             Some(InputAction::HostSwitchSelected)
         );
         assert_eq!(
-            resolve(crate::Modal::Host, key('i'), &c),
+            resolve_scene(SceneKind::Dashboard, key('i'), &c),
             Some(InputAction::HostInterruptSelected)
         );
         assert_eq!(
-            resolve(crate::Modal::Host, key('q'), &c),
+            resolve_scene(SceneKind::Dashboard, key('q'), &c),
             Some(InputAction::HostPromptSeed('q'))
         );
     }
 
     #[test]
     fn question_space_digit_and_text() {
-        use crate::sheet::{SheetKind, resolve_sheet_key};
+        use crate::sheet::{SheetKind as LegacySheetKind, resolve_sheet_key};
         let c = sheet_keys(|_| {});
         assert_eq!(
-            resolve_sheet_key(SheetKind::Question, key(' '), &c),
+            resolve_sheet_key(LegacySheetKind::Question, key(' '), &c),
             Some(InputAction::QuestionToggle)
         );
         assert_eq!(
-            resolve_sheet_key(SheetKind::Question, key('3'), &c),
+            resolve_sheet_key(LegacySheetKind::Question, key('3'), &c),
             Some(InputAction::QuestionSelect(3))
         );
         // With the "Other" field highlighted, space types into it.
         let c = sheet_keys(|k| k.question_other_highlighted = true);
         assert_eq!(
-            resolve_sheet_key(SheetKind::Question, key(' '), &c),
+            resolve_sheet_key(LegacySheetKind::Question, key(' '), &c),
             Some(InputAction::QuestionInsertChar(' '))
         );
     }
@@ -698,31 +818,34 @@ mod tests {
     fn model_editor_space_and_digits() {
         let c = keys(|k| k.editor_field = Some(2));
         assert_eq!(
-            resolve(crate::Modal::ModelEditor, key(' '), &c),
+            resolve_sheet(SheetKind::ModelEditor, key(' '), &c),
             Some(InputAction::ModelEditorThinkingToggle)
         );
         let c = keys(|k| k.editor_field = Some(1));
         assert_eq!(
-            resolve(crate::Modal::ModelEditor, key('5'), &c),
+            resolve_sheet(SheetKind::ModelEditor, key('5'), &c),
             Some(InputAction::ModelEditorEffortJump { index: 4 })
         );
         // A letter on the API-key field is a query char for the shared layer.
-        assert_eq!(resolve(crate::Modal::ModelEditor, key('x'), &c), None);
+        assert_eq!(resolve_sheet(SheetKind::ModelEditor, key('x'), &c), None);
     }
 
     #[test]
     fn non_printable_and_unowned_modals_fall_through() {
         let c = keys(|_| {});
         let esc = crate::keymap::Key::ESC;
-        assert_eq!(resolve(crate::Modal::Mcp, esc, &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Mcp, esc, &c), None);
         let c = keys(|_| {});
-        assert_eq!(resolve(crate::Modal::HistorySearch, key('q'), &c), None);
+        assert_eq!(
+            resolve_dialog(DialogKind::HistorySearch, key('q'), &c),
+            None
+        );
         // InputInjection is a pure text surface: every key edits via the
         // shared layer, so the sheet scheme owns nothing.
-        use crate::sheet::{SheetKind, resolve_sheet_key};
+        use crate::sheet::{SheetKind as LegacySheetKind, resolve_sheet_key};
         let c = sheet_keys(|_| {});
         assert_eq!(
-            resolve_sheet_key(SheetKind::InputInjection, key('q'), &c),
+            resolve_sheet_key(LegacySheetKind::InputInjection, key('q'), &c),
             None
         );
     }
@@ -732,27 +855,30 @@ mod tests {
         use crate::keymap::Key;
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::HistorySearch, Key::ESC, &c),
+            resolve_dialog(DialogKind::HistorySearch, Key::ESC, &c),
             Some(InputAction::CloseModal)
         );
         assert_eq!(
-            resolve(crate::Modal::HistorySearch, Key::ENTER, &c),
+            resolve_dialog(DialogKind::HistorySearch, Key::ENTER, &c),
             Some(InputAction::HistoryInsert)
         );
         assert_eq!(
-            resolve(crate::Modal::HistorySearch, Key::TAB, &c),
+            resolve_dialog(DialogKind::HistorySearch, Key::TAB, &c),
             Some(InputAction::HistoryInsert)
         );
         assert_eq!(
-            resolve(crate::Modal::HistorySearch, Key::UP, &c),
+            resolve_dialog(DialogKind::HistorySearch, Key::UP, &c),
             Some(InputAction::ModalUp)
         );
         assert_eq!(
-            resolve(crate::Modal::HistorySearch, Key::DOWN, &c),
+            resolve_dialog(DialogKind::HistorySearch, Key::DOWN, &c),
             Some(InputAction::ModalDown)
         );
         // Query chars are not history verbs — they edit via the shared layer.
-        assert_eq!(resolve(crate::Modal::HistorySearch, key('q'), &c), None);
+        assert_eq!(
+            resolve_dialog(DialogKind::HistorySearch, key('q'), &c),
+            None
+        );
     }
 
     #[test]
@@ -760,7 +886,7 @@ mod tests {
         let c = keys(|_| {});
         for h in live_history_hints() {
             assert!(
-                resolve(crate::Modal::HistorySearch, h.key, &c).is_some(),
+                resolve_dialog(DialogKind::HistorySearch, h.key, &c).is_some(),
                 "advertised history chord {h:?} is not handled"
             );
         }
@@ -771,7 +897,7 @@ mod tests {
         use crate::keymap::Key;
         let c = keys(|_| {});
         assert_eq!(
-            resolve(crate::Modal::ViewSwitcher, key('q'), &c),
+            resolve_dialog(DialogKind::Switcher, key('q'), &c),
             Some(InputAction::ViewSwitcherFilter { ch: 'q' })
         );
         let backspace = Key {
@@ -779,7 +905,7 @@ mod tests {
             code: KeyCode::Backspace,
         };
         assert_eq!(
-            resolve(crate::Modal::ViewSwitcher, backspace, &c),
+            resolve_dialog(DialogKind::Switcher, backspace, &c),
             Some(InputAction::ViewSwitcherBackspace)
         );
         let delete = Key {
@@ -787,15 +913,15 @@ mod tests {
             code: KeyCode::Delete,
         };
         assert_eq!(
-            resolve(crate::Modal::ViewSwitcher, delete, &c),
+            resolve_dialog(DialogKind::Switcher, delete, &c),
             Some(InputAction::ViewCloseSelected)
         );
         assert_eq!(
-            resolve(crate::Modal::ViewSwitcher, Key::ENTER, &c),
+            resolve_dialog(DialogKind::Switcher, Key::ENTER, &c),
             Some(InputAction::ViewSwitchActivate)
         );
         // ↑/↓ list walking and Esc-close stay in the shared affordance layer.
-        assert_eq!(resolve(crate::Modal::ViewSwitcher, Key::UP, &c), None);
-        assert_eq!(resolve(crate::Modal::ViewSwitcher, Key::ESC, &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Switcher, Key::UP, &c), None);
+        assert_eq!(resolve_dialog(DialogKind::Switcher, Key::ESC, &c), None);
     }
 }

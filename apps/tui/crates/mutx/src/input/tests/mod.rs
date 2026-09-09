@@ -87,9 +87,9 @@ fn key_in_view(code: KeyCode, in_subagent_view: bool, input: &mut String) -> Inp
         // Surface dispatch keys off the explicit view (ADR-0172), not the
         // legacy flags.
         dispatch.view = if in_subagent_view {
-            crate::surfaces::View::Subagent
+            crate::surfaces::SceneKind::TaskInspection
         } else {
-            crate::surfaces::View::Session
+            crate::surfaces::SceneKind::Conversation
         };
     })
 }
@@ -102,7 +102,7 @@ fn key_in_side_view_with(
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
     let mut dispatch = Dispatch {
-        view: crate::surfaces::View::Side,
+        view: crate::surfaces::SceneKind::Aside,
         ..Default::default()
     };
     tune(&mut dispatch);
@@ -165,14 +165,117 @@ fn key_with_focus(code: KeyCode) -> InputAction {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum SurfaceFixture {
+    None,
+    Help,
+    Config,
+    Telemetry,
+    Sessions,
+    Queue,
+    HistorySearch,
+    Models,
+    Connections,
+    Skills,
+    Tools,
+    Mcp,
+    Btw,
+    ProviderPreset,
+    CustomProvider,
+    OauthPending,
+    ModelEditor,
+    Permissions,
+}
+
+impl SurfaceFixture {
+    pub fn to_dispatch(
+        self,
+    ) -> (
+        Option<crate::surfaces::OverlaySurface>,
+        crate::surfaces::SceneKind,
+    ) {
+        use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
+        match self {
+            Self::None => (None, SceneKind::Conversation),
+            Self::Config => (None, SceneKind::Settings),
+            Self::Help => (
+                Some(OverlaySurface::Dialog(DialogKind::Help)),
+                SceneKind::Conversation,
+            ),
+            Self::Telemetry => (
+                Some(OverlaySurface::Dialog(DialogKind::Telemetry)),
+                SceneKind::Conversation,
+            ),
+            Self::Sessions => (
+                Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+                SceneKind::Conversation,
+            ),
+            Self::Queue => (
+                Some(OverlaySurface::Dialog(DialogKind::Queue)),
+                SceneKind::Conversation,
+            ),
+            Self::HistorySearch => (
+                Some(OverlaySurface::Dialog(DialogKind::HistorySearch)),
+                SceneKind::Conversation,
+            ),
+            Self::Models => (
+                Some(OverlaySurface::Dialog(DialogKind::Models)),
+                SceneKind::Conversation,
+            ),
+            Self::Connections => (
+                Some(OverlaySurface::Dialog(DialogKind::Connections)),
+                SceneKind::Conversation,
+            ),
+            Self::Skills => (
+                Some(OverlaySurface::Dialog(DialogKind::Skills)),
+                SceneKind::Conversation,
+            ),
+            Self::Tools => (
+                Some(OverlaySurface::Dialog(DialogKind::Tools)),
+                SceneKind::Conversation,
+            ),
+            Self::Mcp => (
+                Some(OverlaySurface::Dialog(DialogKind::Mcp)),
+                SceneKind::Conversation,
+            ),
+            Self::Btw => (
+                Some(OverlaySurface::Dialog(DialogKind::Asides)),
+                SceneKind::Conversation,
+            ),
+            Self::Permissions => (
+                Some(OverlaySurface::Dialog(DialogKind::Permissions)),
+                SceneKind::Conversation,
+            ),
+            Self::ProviderPreset => (
+                Some(OverlaySurface::Sheet(SheetKind::ProviderPreset)),
+                SceneKind::Conversation,
+            ),
+            Self::CustomProvider => (
+                Some(OverlaySurface::Sheet(SheetKind::CustomProvider)),
+                SceneKind::Conversation,
+            ),
+            Self::OauthPending => (
+                Some(OverlaySurface::Sheet(SheetKind::OAuthPending)),
+                SceneKind::Conversation,
+            ),
+            Self::ModelEditor => (
+                Some(OverlaySurface::Sheet(SheetKind::ModelEditor)),
+                SceneKind::Conversation,
+            ),
+        }
+    }
+}
+
 fn run_key(
     input: &mut String,
     cursor: &mut usize,
     code: KeyCode,
     modifiers: KeyModifiers,
-    modal: crate::Modal,
+    fixture: SurfaceFixture,
     has_focus: bool,
 ) -> InputAction {
+    let (overlay, scene) = fixture.to_dispatch();
     let mut drag = SelectionDrag::default();
     route_event(
         Event::Key(KeyEvent {
@@ -184,13 +287,17 @@ fn run_key(
         input,
         cursor,
         Dispatch {
-            modal,
+            overlay,
+            view: scene,
             focused_target: has_focus,
             ..Default::default()
         },
         &ModalKeys {
-            history_searching: modal == crate::Modal::HistorySearch,
-            model_searching: matches!(modal, crate::Modal::Models | crate::Modal::Connections),
+            history_searching: fixture == SurfaceFixture::HistorySearch,
+            model_searching: matches!(
+                fixture,
+                SurfaceFixture::Models | SurfaceFixture::Connections
+            ),
             ..Default::default()
         },
         &SheetKeys::default(),
@@ -218,7 +325,7 @@ fn run_sheet_key(
         input,
         cursor,
         Dispatch {
-            modal: crate::Modal::None,
+            overlay: None,
             sheet: Some(kind),
             focused_target: has_focus,
             ..Default::default()
@@ -250,7 +357,9 @@ fn run_history_key(
         input,
         cursor,
         Dispatch {
-            modal: crate::Modal::HistorySearch,
+            overlay: Some(crate::surfaces::OverlaySurface::Dialog(
+                crate::surfaces::DialogKind::HistorySearch,
+            )),
             ..Default::default()
         },
         &ModalKeys {
@@ -271,7 +380,9 @@ fn editor_key(code: KeyCode, field: u8, input: &mut String) -> InputAction {
         input,
         &mut cursor,
         Dispatch {
-            modal: crate::Modal::ModelEditor,
+            overlay: Some(crate::surfaces::OverlaySurface::Sheet(
+                crate::surfaces::SheetKind::ModelEditor,
+            )),
             ..Default::default()
         },
         &ModalKeys {
@@ -354,20 +465,25 @@ fn run_paste(
     text: &str,
     input: &mut String,
     cursor: &mut usize,
-    modal: crate::Modal,
+    fixture: SurfaceFixture,
 ) -> InputAction {
+    let (overlay, scene) = fixture.to_dispatch();
     let mut drag = SelectionDrag::default();
     route_event(
         Event::Paste(text.to_string()),
         input,
         cursor,
         Dispatch {
-            modal,
+            overlay,
+            view: scene,
             ..Default::default()
         },
         &ModalKeys {
-            history_searching: modal == crate::Modal::HistorySearch,
-            model_searching: matches!(modal, crate::Modal::Models | crate::Modal::Connections),
+            history_searching: fixture == SurfaceFixture::HistorySearch,
+            model_searching: matches!(
+                fixture,
+                SurfaceFixture::Models | SurfaceFixture::Connections
+            ),
             ..Default::default()
         },
         &SheetKeys::default(),

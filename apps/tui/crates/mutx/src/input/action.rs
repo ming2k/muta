@@ -257,7 +257,7 @@ pub enum InputAction {
     /// Return to the previous tab in the Telemetry modal (Shift+Tab / Left).
     TelemetryPrevTab,
     /// Switch directly to a specific tab in the Telemetry modal ('1' / '2').
-    TelemetrySetTab(crate::modal::TelemetryTab),
+    TelemetrySetTab(crate::TelemetryTab),
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
     /// Create a brand new session from the sessions picker ('n' / 'N').

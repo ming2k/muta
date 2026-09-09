@@ -19,6 +19,7 @@ use muta_contracts::{
     ProviderPickerSnapshot, SessionOverview, UserQuestionRequest,
 };
 
+use crate::TelemetryTab;
 use crate::completion::CompletionItemKind;
 use crate::composer_attachments;
 use crate::event_loop::resolve_focused_mut;
@@ -31,7 +32,6 @@ use crate::providers::{
     models_flat_filtered_from, providers_filtered_from,
 };
 use crate::render::Theme;
-use crate::{Modal, TelemetryTab};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -506,7 +506,7 @@ pub struct App {
     /// and restores it on every later open — hide/close/switch instead of
     /// the old reset-on-every-open ritual. Full-screen views are not
     /// registered here: their state already persists on `App`.
-    pub(crate) panels: crate::surfaces::PanelRegistry,
+    pub(crate) surface_store: crate::surfaces::SurfaceStore,
     /// The command palette's live fuzzy query (Ctrl+L).
     pub(crate) command_palette_query: String,
     pub(crate) command_palette_selected: usize,
