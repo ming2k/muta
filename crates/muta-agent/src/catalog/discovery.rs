@@ -137,7 +137,10 @@ pub async fn sync_remote_catalog(force: bool) -> DiscoveryOutcome {
 }
 
 /// Synchronize the remote model catalog for one exact connection (ADR-0203 canonical entry point).
-pub async fn sync_connection_remote_catalog(connection_name: &str, force: bool) -> DiscoveryOutcome {
+pub async fn sync_connection_remote_catalog(
+    connection_name: &str,
+    force: bool,
+) -> DiscoveryOutcome {
     discover_connection_models(connection_name, force).await
 }
 
