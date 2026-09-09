@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-09-09
+
+### Added
+
+- **Unified TUI surface architecture and spatial modality taxonomy (ADR-0205).**
+  Refactored mutx interface layers into distinct spatial modalities: Scenes
+  (`Conversation`, `TaskInspection`, `Dashboard`, `Settings`, `Aside`), Dialogs,
+  Sheets, and Overlays. The monolithic `modal.rs` has been eliminated in favor
+  of dedicated surface controllers, clean input event routing, and robust
+  focus and scroll arbitration. Outside-click backdrop dismissal now accurately
+  coordinates with dynamic modal panel viewports.
+
+- **Semantic web tool rendering and typed visual contracts (ADR-0207).**
+  Replaced code-block fallbacks for web tools: `search_web` produces structured,
+  semantic search result cards with clear domains and snippets, and `read_url`
+  renders markdown in a reader layout without artificial code line numbers.
+
+- **Connection prewarming and network performance optimization (ADR-0204).**
+  Introduced `Client::prewarm` to prime DNS, TCP, and TLS handshakes into the
+  idle connection pool in advance. Refined TCP socket sampling cadence to
+  eliminate unnecessary polling overhead during active streams.
+
+### Changed
+
+- **Wire protocol bumped to v9 with remote catalog decoupling (ADR-0203).**
+  Introduced `RemoteCatalogSourceOverride` and `RemoteCatalogEndpoint` to separate
+  model discovery from inference transport endpoints. Connections now feature
+  explicit `inject` and `block` filtering policies. Wire protocol version is
+  bumped to 9.
+
 ## [0.42.3] - 2026-09-09
 
 ### Changed
