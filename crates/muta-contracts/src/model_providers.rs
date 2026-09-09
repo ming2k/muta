@@ -16,9 +16,7 @@ pub const CHATGPT_BUILTIN_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "g
 
 pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
     "deepseek-v4-flash",
-    "deepseek-v4-flash-0731",
     "deepseek-v4-pro",
-    "deepseek-v4-pro-0813",
     "deepseek-v4-flash-vision-exp",
 ];
 

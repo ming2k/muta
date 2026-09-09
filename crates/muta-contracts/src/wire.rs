@@ -39,7 +39,9 @@ use serde::{Deserialize, Serialize};
 /// names are `spawn_agent`, `delegate_code`, and `delegate_mcp`.
 /// v8 (ADR-0202, ADR-0204): typed `ToolOutput::WebSearch` and `ToolOutput::WebArticle`
 /// variants with structured `WebSearchHit` results.
-pub const PROTOCOL_VERSION: u32 = 8;
+/// v9 (ADR-0203): `RemoteCatalogSourceOverride` and `RemoteCatalogEndpoint`
+/// contracts for connection-local catalog source decoupling.
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
 /// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the

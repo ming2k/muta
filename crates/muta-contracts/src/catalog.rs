@@ -294,7 +294,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         // Google hosts the Gemini family as one multi-model provider.
         "google" => ("Google", "Google"),
         // DeepSeek hosts V4 Flash + Pro as one multi-model provider.
-        "deepseek" => ("DeepSeek", "DeepSeek V4 (Flash 0731 + Pro)"),
+        "deepseek" => ("DeepSeek", "DeepSeek V4 (Flash + Pro)"),
         "zai-code" => (
             "ZAI Code (CN)",
             "Zhipu BigModel / Z.AI coding plan (CN, GLM-5.3)",

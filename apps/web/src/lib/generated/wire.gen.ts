@@ -872,11 +872,11 @@ filter?: ConnectionFilterPolicy | null,
 /**
  * Explicitly declared or included/injected models with optional capability facts.
  */
-include?: Array<DeclaredModel>, 
+inject?: Array<DeclaredModel>, 
 /**
  * Explicitly excluded or blocked model ids.
  */
-exclude?: Array<string>, 
+block?: Array<string>, 
 /**
  * Per-model capability overrides keyed by exact model id.
  */
@@ -1425,6 +1425,20 @@ export type RateLimitSpec = { requests: number, interval: string, };
  * How a service task declares itself ready (ADR-0190 §D1).
  */
 export type Readiness = { "readiness": "first_output" } | { "readiness": "after_ms" } & number | { "readiness": "port_probe", port: number, };
+
+/**
+ * Network protocol used to query a first-party remote model catalog.
+ */
+export type RemoteCatalogEndpoint = "open_ai_compatible" | "anthropic" | "google" | "google_cloud_code" | "codex" | "copilot";
+
+/**
+ * A connection-local override for the provider's remote catalog source.
+ *
+ * The transport endpoint and the catalog source are deliberately independent:
+ * a private relay can send inference traffic to its own `base_url` while
+ * sourcing model metadata from a verified models.dev provider entry.
+ */
+export type RemoteCatalogSourceOverride = { endpoint: RemoteCatalogEndpoint, } | { models_dev: string, };
 
 /**
  * Who actually settled a parked human request. The anti-fabrication

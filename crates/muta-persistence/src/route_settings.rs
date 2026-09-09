@@ -3,10 +3,11 @@
 //! This is *not* a cache. `effort` / `thinking` are the user's own per-route
 //! settings (set from the model `e` editor); deleting them loses user
 //! configuration that no endpoint can re-derive. They therefore live in
-//! `$XDG_STATE_HOME/muta/route_settings.json`, separate from
-//! `$XDG_CACHE_HOME/muta/models_discovery.json`, whose contents are all
-//! derived and safe to drop at any time ("reset caches" must not erase the
-//! user's reasoning overrides).
+//! SQLite under the `state:route_settings` key (mirrored from the legacy
+//! `$XDG_STATE_HOME/muta/route_settings.json`), separate from
+//! `$XDG_STATE_HOME/muta/models_discovery.json`, whose contents are program-
+//! generated and re-derivable on the next live `GET /models` ("reset caches"
+//! must not erase the user's reasoning overrides).
 //!
 //! ## Migration
 //!
@@ -31,9 +32,17 @@ use crate::paths;
 /// `models_discovery.json`. Returns an empty map for a missing file, a
 /// post-split file (no such key), or an unparseable file — migration must
 /// never fail startup.
+///
+/// The pre-split file lived at the pre-0.43 cache-dir location
+/// ([`paths::Dirs::legacy_discovery_cache_file`]); adoption into the
+/// current state path drops the unknown `route_settings` key during
+/// deserialization, so this reader prefers the legacy path first and falls
+/// back to the current path for the rare case where adoption ran before this
+/// migration in the same upgrade.
 fn read_legacy_cache_route_settings() -> BTreeMap<String, BTreeMap<String, RouteSettings>> {
-    let path = paths::get().discovery_cache_file();
-    let Ok(content) = fs::read_to_string(&path) else {
+    let content = fs::read_to_string(paths::get().legacy_discovery_cache_file())
+        .or_else(|_| fs::read_to_string(paths::get().discovery_cache_file()));
+    let Ok(content) = content else {
         return BTreeMap::new();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -243,8 +252,9 @@ mod tests {
         }));
 
         // Seed the legacy layout the way a pre-split release wrote it: a raw
-        // cache file carrying a `route_settings` key (the typed struct no
-        // longer has the field — that is the point).
+        // cache file (at the pre-0.43 cache-dir location) carrying a
+        // `route_settings` key (the typed struct no longer has the field —
+        // that is the point).
         let legacy_json = serde_json::json!({
             "route_settings": {
                 "kimi": {
@@ -254,7 +264,7 @@ mod tests {
         });
         std::fs::create_dir_all(root.path().join("cache")).unwrap();
         std::fs::write(
-            crate::paths::get().discovery_cache_file(),
+            crate::paths::get().legacy_discovery_cache_file(),
             serde_json::to_string_pretty(&legacy_json).unwrap(),
         )
         .unwrap();

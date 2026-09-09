@@ -622,7 +622,15 @@ pub fn resolve_web_config(config: &WebConfig, credentials: &Credentials) -> Reso
 }
 
 /// Discovered model lists and fitted capabilities, cached under
-/// `$XDG_CACHE_HOME/muta/models_discovery.json`.
+/// `$XDG_STATE_HOME/muta/models_discovery.json`.
+///
+/// Lives under state (not cache) since the contents — discovered model ids,
+/// ETag revalidation metadata, advertised capability fields — are
+/// program-generated state the user expects to survive restarts rather than
+/// regenerable-from-scratch cache data. A pre-0.43 build wrote this file under
+/// `$XDG_CACHE_HOME/muta/models_discovery.json`; that legacy copy is read once
+/// on first load after upgrade and adopted into the state path (see
+/// [`Self::load`]).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveryCache {
     /// Cached discovered model lists, keyed by connection id:
@@ -660,15 +668,30 @@ impl DiscoveryCache {
     }
 
     /// Read `models_discovery.json`, returning an empty value if missing or unparseable.
+    ///
+    /// On the first load after the 0.43 cache→state migration, the pre-migration
+    /// file at `$XDG_CACHE_HOME/muta/models_discovery.json` (see
+    /// [`paths::Dirs::legacy_discovery_cache_file`]) is adopted into the state
+    /// path: its contents are saved to the new location and the legacy file is
+    /// removed. Subsequent loads read the state path directly.
     pub fn load() -> Self {
         let path = Self::file_path();
-        let Ok(content) = fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&content).unwrap_or_default()
+        if let Ok(content) = fs::read_to_string(&path) {
+            return serde_json::from_str(&content).unwrap_or_default();
+        }
+        let legacy = paths::get().legacy_discovery_cache_file();
+        if let Ok(content) = fs::read_to_string(&legacy)
+            && let Ok(parsed) = serde_json::from_str::<Self>(&content)
+        {
+            let _ = parsed.save();
+            let _ = std::fs::remove_file(&legacy);
+            let _ = std::fs::remove_file(format!("{}.lock", legacy.display()));
+            return parsed;
+        }
+        Self::default()
     }
 
-    /// Persist atomically to `$XDG_CACHE_HOME/muta/models_discovery.json`.
+    /// Persist atomically to `$XDG_STATE_HOME/muta/models_discovery.json`.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let bytes = serde_json::to_vec_pretty(self)?;
         fsutil::atomic_write_bytes(&Self::file_path(), &bytes)?;
@@ -1800,6 +1823,42 @@ deepseek = "new-key"
         assert!(reloaded.model_lists.is_empty());
         reloaded.save().unwrap();
         assert!(DiscoveryCache::load().connection_models.is_empty());
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn discovery_cache_load_adopts_legacy_cache_dir_file_into_state() {
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        // Seed a pre-0.43 cache-dir discovery file.
+        let mut legacy = DiscoveryCache::default();
+        legacy.connection_models.insert(
+            "deepseek".to_string(),
+            vec!["deepseek-v4-flash".to_string()],
+        );
+        let legacy_path = paths::get().legacy_discovery_cache_file();
+        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        // The state path does not exist yet — load() must adopt the legacy file.
+        assert!(!paths::get().discovery_cache_file().exists());
+        let migrated = DiscoveryCache::load();
+        assert_eq!(
+            migrated.connection_models.get("deepseek"),
+            Some(&vec!["deepseek-v4-flash".to_string()])
+        );
+
+        // The contents now live under the state path; the legacy file is gone.
+        assert!(paths::get().discovery_cache_file().exists());
+        assert!(
+            !legacy_path.exists(),
+            "legacy cache file must be removed on adoption"
+        );
+
+        // A second load reads the state path directly — no fallback, no surprises.
+        let reloaded = DiscoveryCache::load();
+        assert_eq!(reloaded, migrated);
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();
