@@ -39,6 +39,8 @@ pub enum InputAction {
     /// Toggle the favorite flag on the highlighted Models row (model-level,
     /// ADR-0046). The Connections list has no favorite concept.
     ProviderPickerToggleFavorite,
+    /// Block/intercept the highlighted model from the connection pipe (`x` in Models modal, ADR-0203 §10).
+    ProviderPickerBlockModel,
     /// Open the unified provider editor (`e`): the per-model settings editor
     /// for the highlighted Models row, or the provider editor (key / meta) for
     /// the highlighted Connections row.

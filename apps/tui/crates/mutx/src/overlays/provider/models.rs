@@ -54,11 +54,12 @@ pub fn draw_models_modal(
 
     let header_rect = f.header;
 
-    let browse_hints: [FooterHint; 7] = [
+    let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
         FooterHint::key_primary(crate::keymap::Key::ENTER, "activate"),
         FooterHint::secondary("*", "favorite"),
+        FooterHint::secondary("x", "block"),
         FooterHint::secondary("e", "settings"),
         FooterHint::secondary("r", "refresh"),
         FooterHint::key_always(crate::keymap::Key::ESC, "close"),

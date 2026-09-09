@@ -24,6 +24,27 @@ fn star_in_models_modal_toggles_model_favorite() {
 }
 
 #[test]
+fn x_in_models_modal_blocks_model() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            modal: crate::Modal::Models,
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ProviderPickerBlockModel);
+}
+
+#[test]
 fn star_in_connections_modal_is_inert_favorite_is_model_level() {
     let mut input = String::new();
     let mut cursor = 0;

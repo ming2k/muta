@@ -488,6 +488,18 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 }
             }
         }
+        input::InputAction::ProviderPickerBlockModel => {
+            // ADR-0203 §10: 'x' blocks/intercepts the highlighted model from the connection pipe.
+            if app.active_modal() == Modal::Models {
+                let ranked = app.models_flat_filtered();
+                if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
+                    app.send_intent(AgentRequest::ExcludeModel {
+                        scope: muta_contracts::model::ModelTargetScope::Connection(row.provider_id.clone()),
+                        model_id: row.model.clone(),
+                    });
+                }
+            }
+        }
         input::InputAction::OpenModelEditor => {
             modals::handle_open_model_editor(app);
         }
@@ -612,7 +624,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenSessions => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Sessions,
+                crate::surfaces::DialogKind::Sessions,
                 runtime,
                 viewed_session_id,
             );
@@ -620,7 +632,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenModels => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Models,
+                crate::surfaces::DialogKind::Models,
                 runtime,
                 viewed_session_id,
             );
@@ -628,7 +640,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenConnections => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Connections,
+                crate::surfaces::DialogKind::Connections,
                 runtime,
                 viewed_session_id,
             );
@@ -674,7 +686,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenHistory => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::HistorySearch,
+                crate::surfaces::DialogKind::HistorySearch,
                 runtime,
                 viewed_session_id,
             );
@@ -684,7 +696,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // of `history_rows` (the filtered matches) and drop it into
             // the input box for further editing / sending. The message
             // is not shipped here — the user hits Enter again to send.
-            app.save_panel_state(crate::surfaces::PanelId::HistorySearch);
+            app.save_panel_state(crate::surfaces::DialogKind::HistorySearch);
             let ranked = app.history_rows();
             let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
             let Some((orig_idx, _)) = pick else {
@@ -709,14 +721,14 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // The selection replaces the in-progress draft, and the search
             // filter query buffer's task is completed, so query and draft are cleared.
             if let Some(state) = app
-                .panels
-                .states_mut(&crate::surfaces::PanelId::HistorySearch)
+                .surface_store
+                .state_mut(&crate::surfaces::DialogKind::HistorySearch)
             {
                 state.draft = None;
                 state.query.clear();
                 state.index = 0;
             }
-            app.panels.hide(crate::surfaces::PanelId::HistorySearch);
+            app.surfaces.dismiss_all_overlays();
             app.history_search = false;
             app.input_scroll = 0;
             app.suggestion_index = None;
@@ -725,7 +737,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // popup until the next real edit.
             app.completion_dismissed = true;
             app.modal_index = 0;
-            app.show_chat_surface();
+            app.reset_to_conversation();
         }
         input::InputAction::HistoryDeleteSelected => {
             if app.active_composer_extension()
@@ -737,7 +749,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenHelp => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Help,
+                crate::surfaces::DialogKind::Help,
                 runtime,
                 viewed_session_id,
             );
@@ -745,7 +757,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenPermissions => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Permissions,
+                crate::surfaces::DialogKind::Permissions,
                 runtime,
                 viewed_session_id,
             );
@@ -753,7 +765,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenTools => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Tools,
+                crate::surfaces::DialogKind::Tools,
                 runtime,
                 viewed_session_id,
             );
@@ -761,7 +773,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenUsage => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::UsageStats,
+                crate::surfaces::DialogKind::UsageStats,
                 runtime,
                 viewed_session_id,
             );
@@ -769,7 +781,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenMcp => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Mcp,
+                crate::surfaces::DialogKind::Mcp,
                 runtime,
                 viewed_session_id,
             );
@@ -777,7 +789,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::OpenSkills => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Skills,
+                crate::surfaces::DialogKind::Skills,
                 runtime,
                 viewed_session_id,
             );
@@ -793,7 +805,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.session_modal_follow = true;
         }
         input::InputAction::OpenConfig => {
-            enter_view(app, crate::surfaces::View::Settings, runtime);
+            enter_view(app, crate::surfaces::SceneKind::Settings, runtime);
         }
         input::InputAction::ConfigFocusToggle => {
             if app.active_modal() == Modal::Config {
@@ -1458,7 +1470,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // Ctrl+P), unaffected here.
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Queue,
+                crate::surfaces::DialogKind::Queue,
                 runtime,
                 viewed_session_id,
             );
@@ -1467,7 +1479,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // Ctrl+O opens the session telemetry report (Context & Performance).
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Telemetry,
+                crate::surfaces::DialogKind::Telemetry,
                 runtime,
                 viewed_session_id,
             );
@@ -1590,7 +1602,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // simply opens with the last known rows and refreshes in place.
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Btw,
+                crate::surfaces::DialogKind::Asides,
                 runtime,
                 viewed_session_id,
             );
@@ -1637,7 +1649,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
             let is_busy = app.running_sessions.contains(viewed_session_id);
             let app_ctx = crate::keymap::AppContext {
-                active_view: app.current_view(),
+                active_scene: app.current_scene(),
                 active_modal: app.active_modal(),
                 is_responding: is_busy,
                 has_input: !app.input.is_empty(),
@@ -2209,7 +2221,7 @@ pub(crate) fn open_active_connection_detail(
 ) {
     enter_panel(
         app,
-        crate::surfaces::PanelId::Connections,
+        crate::surfaces::DialogKind::Connections,
         runtime,
         viewed_session_id,
     );
@@ -2239,20 +2251,21 @@ pub(crate) fn open_active_connection_detail(
 
 pub(super) fn enter_panel(
     app: &mut App,
-    id: crate::surfaces::PanelId,
+    id: impl Into<crate::surfaces::DialogKind>,
     runtime: &UiRuntime,
     viewed_session_id: &str,
 ) -> bool {
-    use crate::surfaces::PanelId;
+    use crate::surfaces::DialogKind;
 
-    let first = app.open_panel(id);
+    let id = id.into();
+    let first = app.open_dialog(id);
     app.selection = SelectionState::None;
     app.focused_target = None;
     app.drag.cancel();
 
     if first {
         match id {
-            PanelId::Models => {
+            DialogKind::Models => {
                 app.model_search = false;
                 app.model_modal_follow = true;
                 let rows = app.models_flat_filtered();
@@ -2264,7 +2277,7 @@ pub(super) fn enter_panel(
                     .unwrap_or(0);
                 app.suggestion_index = None;
             }
-            PanelId::Connections => {
+            DialogKind::Connections => {
                 app.model_search = false;
                 app.model_modal_follow = true;
                 let ranked = app.providers_filtered();
@@ -2279,7 +2292,7 @@ pub(super) fn enter_panel(
                     .unwrap_or(0);
                 app.suggestion_index = None;
             }
-            PanelId::HistorySearch => {
+            DialogKind::HistorySearch => {
                 app.modal_index = 0;
                 app.history_scroll = 0;
                 app.history_modal_follow = true;
@@ -2288,10 +2301,10 @@ pub(super) fn enter_panel(
         }
     }
 
-    if id == PanelId::HistorySearch {
+    if id == DialogKind::HistorySearch {
         app.history_search = true;
     }
-    if id == PanelId::Queue {
+    if id == DialogKind::Queue {
         // ADR-0197 M4: the editing-safety auto-pause is mirrored to the
         // daemon queue authority (resume on close, via `queue_exit_session`).
         app.set_queue_blocked(viewed_session_id, true);
@@ -2303,22 +2316,22 @@ pub(super) fn enter_panel(
     }
 
     let request = match id {
-        PanelId::Permissions | PanelId::Tools | PanelId::Mcp | PanelId::Skills => {
+        DialogKind::Permissions | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {
             Some(AgentRequest::QuerySessionContext)
         }
-        PanelId::UsageStats => {
+        DialogKind::UsageStats => {
             app.usage_stats = None;
             Some(AgentRequest::QueryUsageStats { event_cap: 200 })
         }
-        PanelId::Telemetry if app.token_ledger.is_none() => {
+        DialogKind::Telemetry if app.token_ledger.is_none() => {
             app.token_report = None;
             Some(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),
             })
         }
-        PanelId::Btw => Some(AgentRequest::QueryBtwList),
-        PanelId::Sessions => Some(AgentRequest::QuerySessionsOverview),
-        PanelId::Tree => Some(AgentRequest::QuerySessionTree),
+        DialogKind::Asides => Some(AgentRequest::QueryBtwList),
+        DialogKind::Sessions => Some(AgentRequest::QuerySessionsOverview),
+        DialogKind::SessionTree => Some(AgentRequest::QuerySessionTree),
         _ => None,
     };
     if let Some(request) = request
@@ -2336,24 +2349,27 @@ pub(super) fn enter_panel(
     first
 }
 
-/// Enter a full-screen view (ADR-0141): navigate the router, run the view's
-/// every-show UI refresh, and fire its data-refresh request. Views keep
-/// their retained fields natively on `App` (no registry), so — unlike
-/// panels — there is no first-open distinction.
-pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &UiRuntime) {
-    use crate::surfaces::View;
+/// Enter a full-screen scene (ADR-0205): navigate the router, run the scene's
+/// every-show UI refresh, and fire its data-refresh request.
+pub(super) fn enter_view(
+    app: &mut App,
+    scene: impl Into<crate::surfaces::SceneKind>,
+    runtime: &UiRuntime,
+) {
+    use crate::surfaces::SceneKind;
 
-    let previous = app.current_view();
-    if previous != view {
-        app.leave_view_for_navigation(previous);
+    let scene = scene.into();
+    let previous = app.current_scene();
+    if previous != scene {
+        app.leave_scene_for_navigation(previous);
     }
-    app.show_view_surface(view);
+    app.switch_scene(scene);
     app.selection = SelectionState::None;
     app.focused_target = None;
     app.drag.cancel();
 
-    let request = match view {
-        View::Settings => {
+    let request = match scene {
+        SceneKind::Settings => {
             app.config_focus = crate::overlays::ConfigFocus::Categories;
             app.config_category = 0;
             app.config_detail_index = Theme::color_scheme_index_with_workspace(
@@ -2369,7 +2385,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
             app.config_dropdown = None;
             Some(AgentRequest::QueryWebSearchConfig)
         }
-        View::Dashboard => {
+        SceneKind::Dashboard => {
             app.host_modal_follow = true;
             app.host_focus = crate::overlays::DashboardFocus::Detail;
             app.host_console_log.clear();
@@ -2377,7 +2393,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
             app.host_kill_confirm_id = None;
             None
         }
-        View::Session | View::Subagent | View::Side => None,
+        SceneKind::Conversation | SceneKind::TaskInspection | SceneKind::Aside => None,
     };
     if let Some(request) = request
         && !app.send_intent(request)
@@ -2598,7 +2614,7 @@ mod view_entry_tests {
 
         assert!(enter_panel(
             &mut app,
-            crate::surfaces::PanelId::Tree,
+            crate::surfaces::DialogKind::SessionTree,
             &runtime,
             "s1"
         ));
@@ -2606,7 +2622,7 @@ mod view_entry_tests {
         app.dismiss_surface();
         assert!(!enter_panel(
             &mut app,
-            crate::surfaces::PanelId::Tree,
+            crate::surfaces::DialogKind::SessionTree,
             &runtime,
             "s1"
         ));
@@ -2620,12 +2636,12 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        enter_panel(&mut app, crate::surfaces::PanelId::Sessions, &runtime, "s1");
+        enter_panel(&mut app, crate::surfaces::DialogKind::Sessions, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionsOverview)
         ));
-        enter_panel(&mut app, crate::surfaces::PanelId::Skills, &runtime, "s1");
+        enter_panel(&mut app, crate::surfaces::DialogKind::Skills, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionContext)
@@ -2712,7 +2728,7 @@ async fn execute_command_by_id(
         CommandId::Help => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Help,
+                crate::surfaces::DialogKind::Help,
                 runtime,
                 viewed_session_id,
             );
@@ -2767,24 +2783,24 @@ async fn execute_command_by_id(
         CommandId::HistorySearch => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::HistorySearch,
+                crate::surfaces::DialogKind::HistorySearch,
                 runtime,
                 viewed_session_id,
             );
         }
         CommandId::NavigateSession => {
-            enter_view(app, crate::surfaces::View::Session, runtime);
+            enter_view(app, crate::surfaces::SceneKind::Conversation, runtime);
         }
         CommandId::NavigateDashboard => {
-            enter_view(app, crate::surfaces::View::Dashboard, runtime);
+            enter_view(app, crate::surfaces::SceneKind::Dashboard, runtime);
         }
         CommandId::NavigateSettings => {
-            enter_view(app, crate::surfaces::View::Settings, runtime);
+            enter_view(app, crate::surfaces::SceneKind::Settings, runtime);
         }
         CommandId::OpenQueue => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Queue,
+                crate::surfaces::DialogKind::Queue,
                 runtime,
                 viewed_session_id,
             );
@@ -2792,7 +2808,7 @@ async fn execute_command_by_id(
         CommandId::OpenTelemetry => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Telemetry,
+                crate::surfaces::DialogKind::Telemetry,
                 runtime,
                 viewed_session_id,
             );
@@ -2800,7 +2816,7 @@ async fn execute_command_by_id(
         CommandId::OpenModels => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Models,
+                crate::surfaces::DialogKind::Models,
                 runtime,
                 viewed_session_id,
             );
@@ -2808,7 +2824,7 @@ async fn execute_command_by_id(
         CommandId::OpenConnections => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Connections,
+                crate::surfaces::DialogKind::Connections,
                 runtime,
                 viewed_session_id,
             );
@@ -2819,7 +2835,7 @@ async fn execute_command_by_id(
         CommandId::OpenTools => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Tools,
+                crate::surfaces::DialogKind::Tools,
                 runtime,
                 viewed_session_id,
             );
@@ -2827,7 +2843,7 @@ async fn execute_command_by_id(
         CommandId::OpenMcp => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Mcp,
+                crate::surfaces::DialogKind::Mcp,
                 runtime,
                 viewed_session_id,
             );
@@ -2835,7 +2851,7 @@ async fn execute_command_by_id(
         CommandId::OpenSkills => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Skills,
+                crate::surfaces::DialogKind::Skills,
                 runtime,
                 viewed_session_id,
             );
@@ -2843,7 +2859,7 @@ async fn execute_command_by_id(
         CommandId::OpenPermissions => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Permissions,
+                crate::surfaces::DialogKind::Permissions,
                 runtime,
                 viewed_session_id,
             );
@@ -2851,7 +2867,7 @@ async fn execute_command_by_id(
         CommandId::OpenUsage => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::UsageStats,
+                crate::surfaces::DialogKind::UsageStats,
                 runtime,
                 viewed_session_id,
             );
@@ -2859,7 +2875,7 @@ async fn execute_command_by_id(
         CommandId::OpenTree => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Tree,
+                crate::surfaces::DialogKind::SessionTree,
                 runtime,
                 viewed_session_id,
             );
@@ -2867,7 +2883,7 @@ async fn execute_command_by_id(
         CommandId::OpenBtw => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Btw,
+                crate::surfaces::DialogKind::Asides,
                 runtime,
                 viewed_session_id,
             );
@@ -2875,7 +2891,7 @@ async fn execute_command_by_id(
         CommandId::OpenSessions => {
             enter_panel(
                 app,
-                crate::surfaces::PanelId::Sessions,
+                crate::surfaces::DialogKind::Sessions,
                 runtime,
                 viewed_session_id,
             );

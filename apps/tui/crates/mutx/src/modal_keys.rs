@@ -458,6 +458,10 @@ fn resolve_picker_key(c: char, is_models: bool, keys: &ModalKeys) -> Option<Inpu
         // Models browse mode only: star the highlighted MODEL as a favorite.
         return Some(InputAction::ProviderPickerToggleFavorite);
     }
+    if is_models && c == 'x' {
+        // Models browse mode: 'x' blocks/intercepts the highlighted model from the connection pipe (ADR-0203 §10).
+        return Some(InputAction::ProviderPickerBlockModel);
+    }
     if !is_models && c == 'a' {
         // Connections browse mode: `a` opens the curated preset branch.
         return Some(InputAction::OpenPresetChooser);
