@@ -449,6 +449,9 @@ fn compose_frame(
                     last_turn_tps: viewed_chrome
                         .last_turn_performance
                         .and_then(|sample| sample.stream_tps()),
+                    last_turn_ttft_ms: viewed_chrome
+                        .last_turn_performance
+                        .and_then(|sample| sample.ttft_ms()),
                     ignition_elapsed_ms: app
                         .effort_ignition_epoch
                         .map(|epoch| epoch.elapsed().as_millis()),

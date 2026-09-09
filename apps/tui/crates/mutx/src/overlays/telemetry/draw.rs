@@ -1045,6 +1045,72 @@ pub(crate) fn build_attempt_inspector_body(
         lines.push(Line::from(""));
 
         let perf = att.performance;
+
+        if let Some(p) = perf {
+            let mut wf_spans = Vec::new();
+            wf_spans.push(Span::styled("  ", Style::default()));
+            let is_reused = p.dns_us.is_none() && p.tcp_us.is_none() && p.tls_us.is_none();
+            if is_reused {
+                wf_spans.push(Span::styled(
+                    "[Warm Pool 0ms]",
+                    Style::default().fg(theme.success),
+                ));
+            } else {
+                if let Some(dns) = p.dns_us {
+                    wf_spans.push(Span::styled(
+                        format!("[DNS {}]", fmt_duration_us(dns)),
+                        Style::default().fg(theme.brand()),
+                    ));
+                    wf_spans.push(Span::styled(" ─> ", Style::default().fg(theme.dim())));
+                }
+                if let Some(tcp) = p.tcp_us {
+                    wf_spans.push(Span::styled(
+                        format!("[TCP {}]", fmt_duration_us(tcp)),
+                        Style::default().fg(theme.brand()),
+                    ));
+                    wf_spans.push(Span::styled(" ─> ", Style::default().fg(theme.dim())));
+                }
+                if let Some(tls) = p.tls_us {
+                    wf_spans.push(Span::styled(
+                        format!("[TLS {}]", fmt_duration_us(tls)),
+                        Style::default().fg(theme.brand()),
+                    ));
+                }
+            }
+            if let Some(ttft) = p.ttft_us {
+                wf_spans.push(Span::styled(" ─> ", Style::default().fg(theme.dim())));
+                wf_spans.push(Span::styled(
+                    format!("[TTFT {}]", fmt_duration_us(ttft)),
+                    Style::default().fg(theme.warning),
+                ));
+            }
+            if let Some(stream_us) = p.stream_us {
+                wf_spans.push(Span::styled(" ─> ", Style::default().fg(theme.dim())));
+                let tps_str = p
+                    .stream_tps(att.completion_tokens as i64)
+                    .map(|rate| format!(" @ {rate:.1} tok/s"))
+                    .unwrap_or_default();
+                wf_spans.push(Span::styled(
+                    format!("[Stream {}{}]", fmt_duration_us(stream_us), tps_str),
+                    Style::default().fg(theme.text),
+                ));
+            }
+            lines.push(Line::from(wf_spans));
+
+            let rtt_str = p.rtt_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+            let socket_line = format!(
+                "  Egress: reused={} · RTT={} · retransmits={}",
+                if is_reused { "yes" } else { "no" },
+                rtt_str,
+                p.retransmits
+            );
+            lines.push(Line::from(vec![Span::styled(
+                socket_line,
+                Style::default().fg(theme.text_muted),
+            )]));
+            lines.push(Line::from(""));
+        }
+
         // The TUI knows when Enter was pressed; the ledger knows when the
         // provider was called. Their difference is everything the daemon did
         // before dispatch (queueing, context projection, hooks).
@@ -1109,14 +1175,24 @@ pub(crate) fn build_attempt_inspector_body(
         );
 
         // Connection: the phases we can measure, or the fact that none happened.
-        let connect_detail = match perf {
-            Some(p) if p.stream_ready_us.is_some() => {
-                let dns = p.dns_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
-                let tcp = p.tcp_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
-                let tls = p.tls_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
-                format!("DNS {dns} · TCP {tcp} · TLS {tls}")
-            }
-            _ => "reused pooled connection — no handshake".to_string(),
+        let is_reused = match perf {
+            Some(p) => p.dns_us.is_none() && p.tcp_us.is_none() && p.tls_us.is_none(),
+            None => true,
+        };
+        let (connect_detail, connect_style) = if is_reused {
+            (
+                "reused warm pool connection (0ms handshake)".to_string(),
+                good,
+            )
+        } else {
+            let p = perf.unwrap_or_default();
+            let dns = p.dns_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+            let tcp = p.tcp_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+            let tls = p.tls_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+            (
+                format!("cold start: DNS {dns} · TCP {tcp} · TLS {tls}"),
+                accent,
+            )
         };
         node(
             &mut lines,
@@ -1125,7 +1201,7 @@ pub(crate) fn build_attempt_inspector_body(
             "●",
             "Connection ready",
             connect_detail,
-            accent,
+            connect_style,
         );
 
         // Request upload: from dispatch to the last byte handed to the kernel.

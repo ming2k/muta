@@ -1,6 +1,6 @@
 # 0141. View means full-screen destination; a modal is a modal
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0205](0205-unified-tui-surface-architecture-and-spatial-modality-taxonomy.md)
 - **Date:** 2026-08-25
 
 ## Context

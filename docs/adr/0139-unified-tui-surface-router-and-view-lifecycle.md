@@ -1,6 +1,6 @@
 # 0139. Unified TUI surface router and complete view lifecycle
 
-- **Status:** Accepted (taxonomy superseded by ADR-0141)
+- **Status:** Superseded by [ADR-0205](0205-unified-tui-surface-architecture-and-spatial-modality-taxonomy.md)
 - **Date:** 2026-08-25
 
 ## Context

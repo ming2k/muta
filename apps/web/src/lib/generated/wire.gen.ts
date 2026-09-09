@@ -2161,7 +2161,7 @@ detached_job_id?: string | null, } } | { "Code": { lang: string | null, text: st
  * numerator but its generation time missing from the denominator —
  * inflating the displayed tok/s for any delegating round.
  */
-generation_ms: number, failed: boolean, interrupted: boolean, } } | { "Image": { mime: string, data: string, } };
+generation_ms: number, failed: boolean, interrupted: boolean, } } | { "Image": { mime: string, data: string, } } | { "WebSearch": { query: string, provider: string, results: Array<WebSearchHit>, truncated: boolean, } } | { "WebArticle": { url: string, title?: string | null, domain: string, markdown: string, reader: string, tokens: number, truncated: boolean, } };
 
 /**
  * Detailed, tool-specific payload submitted to the permission handler.
@@ -2362,6 +2362,11 @@ export type WebProviderAxis = "Search" | "Reader";
 export type WebProviderCapability = { axis: WebProviderAxis, id: string, display_name: string, description: string, credential: WebCredentialRequirement, endpoint: WebEndpointRequirement, default_endpoint: string | null, default_env_var: string | null, };
 
 export type WebReaderProvider = "disabled" | "jina";
+
+/**
+ * Single search hit within [`ToolOutput::WebSearch`].
+ */
+export type WebSearchHit = { title: string, url: string, domain: string, snippet: string, };
 
 export type WebSearchProvider = "disabled" | "exa" | "parallel" | "duckduckgo" | "searxng" | "tavily" | "bocha";
 

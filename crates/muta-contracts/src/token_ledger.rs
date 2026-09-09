@@ -374,6 +374,18 @@ impl TurnPerformanceSnapshot {
     pub fn stream_tps(self) -> Option<f64> {
         self.performance.stream_tps(self.completion_tokens as i64)
     }
+
+    /// Time to first output token in milliseconds.
+    pub fn ttft_ms(self) -> Option<f64> {
+        self.performance.ttft_us.map(|us| us as f64 / 1_000.0)
+    }
+
+    /// Whether the network attempt reused a pooled connection.
+    pub fn is_reused(self) -> bool {
+        self.performance.dns_us.is_none()
+            && self.performance.tcp_us.is_none()
+            && self.performance.tls_us.is_none()
+    }
 }
 
 impl RequestUsageRecord {

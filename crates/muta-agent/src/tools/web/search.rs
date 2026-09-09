@@ -125,23 +125,30 @@ impl Tool for WebSearchTool {
         WebSearchArgs::parameters_schema()
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
+        self.call_structured(arguments)
+            .await
+            .map(|out| out.to_text())
+    }
+    async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
         let args: WebSearchArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let query = &args.query;
         let (provider, client) = self.current_provider()?;
 
         let output = provider.search(&client, query).await?;
-        let body = match output {
+        let (results, truncated) = match output {
             crate::tools::search::ProviderOutput::Results(results) => {
-                crate::tools::search::format_results(query, provider.name(), results)
+                crate::tools::search::results_to_hits(results)
             }
             crate::tools::search::ProviderOutput::Blob(text) => {
-                format!(
-                    "Search results for '{query}' (via {}):\n\n{text}",
-                    provider.name()
-                )
+                crate::tools::search::blob_to_hits(query, provider.name(), &text)
             }
         };
-        Ok(crate::tools::search::cap_output(&body))
+        Ok(muta_contracts::ToolOutput::WebSearch {
+            query: query.to_string(),
+            provider: provider.name().to_string(),
+            results,
+            truncated,
+        })
     }
 }

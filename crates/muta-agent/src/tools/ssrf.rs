@@ -53,7 +53,7 @@ pub(crate) use muta_net::is_public_ip;
 ///
 /// Handles `[ipv6]:port`, `host:port`, and bare `host`. Returns `None` if no
 /// host is present (e.g. `http:///path`).
-fn extract_host(url: &str) -> Option<String> {
+pub(crate) fn extract_host(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://")?.1;
     // The authority ends at the first `/`, `?`, or `#`.
     let authority = after_scheme.split(['/', '?', '#']).next()?;

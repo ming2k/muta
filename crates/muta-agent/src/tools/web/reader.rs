@@ -5,7 +5,6 @@ use muta_contracts::{SharedWebConfig, Tool, WebReaderProvider, WebRuntimeConfig}
 use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
-use crate::tools::web::client::{UNTRUSTED_PREFIX, UNTRUSTED_SUFFIX};
 use crate::tools::web::snapshot::{WebSnapshotResult, take_snapshot};
 
 pub const WEB_READER_MAX_TOKENS: usize = 4_000;
@@ -94,6 +93,23 @@ impl Default for WebReaderTool {
     }
 }
 
+fn extract_page_title(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(h1) = trimmed.strip_prefix("# ") {
+            let title = h1.trim().trim_start_matches('#').trim();
+            if !title.is_empty() {
+                return Some(title.to_string());
+            }
+        }
+    }
+    let html_title = crate::tools::web::html::extract_html_title(content);
+    if !html_title.is_empty() {
+        return Some(html_title);
+    }
+    None
+}
+
 #[async_trait]
 impl Tool for WebReaderTool {
     fn name(&self) -> &str {
@@ -110,6 +126,11 @@ impl Tool for WebReaderTool {
         WebReaderArgs::parameters_schema()
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
+        self.call_structured(arguments)
+            .await
+            .map(|out| out.to_text())
+    }
+    async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
         let args: WebReaderArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let url = &args.url;
@@ -124,20 +145,25 @@ impl Tool for WebReaderTool {
         let reader_name = reader.name();
         let output = reader.read(&client, url, raw).await?;
         let body = output.text;
-        let content_type = output.content_type;
+        let domain = crate::tools::ssrf::extract_host(url).unwrap_or_else(|| "web".to_string());
+        let title = extract_page_title(&body);
         let tokens = muta_contracts::tokenizer::count_tokens(&body);
-        if tokens > WEB_READER_MAX_TOKENS {
+        let (markdown, truncated) = if tokens > WEB_READER_MAX_TOKENS {
             let (keep, _kept) =
                 muta_contracts::tokenizer::truncate_to_tokens(&body, WEB_READER_MAX_TOKENS / 2);
-            return Ok(format!(
-                "{UNTRUSTED_PREFIX}[Read {tokens} tokens from {url} (reader: {reader_name}, \
-content-type: {content_type}); kept the first {}/{} tokens — the page is longer than the tool's \
-context budget. Request a more specific URL/anchor or a section link for the part you need.]\n{keep}\
-{UNTRUSTED_SUFFIX}",
-                WEB_READER_MAX_TOKENS / 2,
-                WEB_READER_MAX_TOKENS
-            ));
-        }
-        Ok(format!("{UNTRUSTED_PREFIX}{body}{UNTRUSTED_SUFFIX}"))
+            (keep.to_string(), true)
+        } else {
+            (body, false)
+        };
+
+        Ok(muta_contracts::ToolOutput::WebArticle {
+            url: url.to_string(),
+            title,
+            domain,
+            markdown,
+            reader: reader_name.to_string(),
+            tokens,
+            truncated,
+        })
     }
 }

@@ -117,6 +117,10 @@ pub enum ResultKind {
     Diff,
     /// An interactive checklist (todo / task list) with [✓], [•], [☐], [✕] status glyphs.
     Checklist,
+    /// Interactive search result cards with domain pills and clickable URLs.
+    WebSearch,
+    /// Article reader view for web pages, rendering clean markdown prose without code gutters.
+    WebArticle,
 }
 
 /// How a tool's arguments are rendered in the expanded step body.

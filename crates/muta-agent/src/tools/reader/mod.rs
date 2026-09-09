@@ -66,6 +66,7 @@ pub(crate) struct ReaderOutput {
     pub text: String,
     /// Content type reported by the *underlying* fetch (e.g. from Jina's
     /// target response), used by `read_url` to label the output.
+    #[allow(dead_code)]
     pub content_type: String,
 }
 

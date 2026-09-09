@@ -127,6 +127,7 @@ pub(super) const MOZILLA_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) A
 /// This replaces the old behaviour where a pre-formatted list was simply
 /// chopped at 4 000 tokens — which could cut mid-entry and swallow the URLs
 /// of every result after the cut.
+#[allow(dead_code)]
 pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResult>) -> String {
     if results.is_empty() {
         return format!("No results found for '{query}' (via {source}).");
@@ -169,6 +170,116 @@ pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResul
     out
 }
 
+pub(crate) fn results_to_hits(
+    results: Vec<SearchResult>,
+) -> (Vec<muta_contracts::WebSearchHit>, bool) {
+    let hits = results
+        .into_iter()
+        .map(|r| {
+            let domain =
+                crate::tools::ssrf::extract_host(&r.url).unwrap_or_else(|| "web".to_string());
+            muta_contracts::WebSearchHit {
+                title: r.title,
+                url: r.url,
+                domain,
+                snippet: r.snippet,
+            }
+        })
+        .collect();
+    budget_web_hits(hits)
+}
+
+pub(crate) fn blob_to_hits(
+    query: &str,
+    provider: &str,
+    text: &str,
+) -> (Vec<muta_contracts::WebSearchHit>, bool) {
+    let mut hits = Vec::new();
+    for block in text.split("\n\n") {
+        let trimmed = block.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(pos) = trimmed.find("http://").or_else(|| trimmed.find("https://")) {
+            let rest = &trimmed[pos..];
+            let url_end = rest
+                .find([' ', '\n', '\t', ')', '"', ']'])
+                .unwrap_or(rest.len());
+            let url = rest[..url_end]
+                .trim_end_matches(['.', ',', ';'])
+                .to_string();
+            let domain =
+                crate::tools::ssrf::extract_host(&url).unwrap_or_else(|| "web".to_string());
+            let before = trimmed[..pos].trim();
+            let title = if before.is_empty() {
+                format!("{query} hit")
+            } else {
+                before
+                    .lines()
+                    .last()
+                    .unwrap_or(before)
+                    .trim_start_matches([
+                        '*', '#', '-', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ' ',
+                    ])
+                    .trim()
+                    .to_string()
+            };
+            let snippet = rest[url_end..].trim().to_string();
+            hits.push(muta_contracts::WebSearchHit {
+                title: if title.is_empty() { url.clone() } else { title },
+                url,
+                domain,
+                snippet: if snippet.is_empty() {
+                    trimmed.to_string()
+                } else {
+                    snippet
+                },
+            });
+        }
+    }
+    if hits.is_empty() {
+        hits.push(muta_contracts::WebSearchHit {
+            title: format!("Search results for '{query}'"),
+            url: String::new(),
+            domain: provider.to_lowercase(),
+            snippet: text.to_string(),
+        });
+    }
+    budget_web_hits(hits)
+}
+
+pub(crate) fn budget_web_hits(
+    hits: Vec<muta_contracts::WebSearchHit>,
+) -> (Vec<muta_contracts::WebSearchHit>, bool) {
+    let mut out = Vec::with_capacity(hits.len());
+    let mut remaining = MAX_RESULT_TOKENS;
+    let mut truncated = false;
+    for hit in hits {
+        let head = format!("{}\n{}", hit.title, hit.url);
+        let head_tokens = muta_contracts::tokenizer::count_tokens(&head);
+        if head_tokens + 12 >= remaining {
+            truncated = true;
+            break;
+        }
+        remaining -= head_tokens;
+        let snippet_tokens = muta_contracts::tokenizer::count_tokens(&hit.snippet);
+        let snippet = if snippet_tokens <= remaining {
+            remaining -= snippet_tokens;
+            hit.snippet
+        } else {
+            remaining = remaining.saturating_sub(12);
+            "[snippet omitted to fit the result budget]".to_string()
+        };
+        out.push(muta_contracts::WebSearchHit {
+            title: hit.title,
+            url: hit.url,
+            domain: hit.domain,
+            snippet,
+        });
+    }
+    (out, truncated)
+}
+
 /// Token budget for one `websearch` result (ADR-0120). Shared by the structured
 /// renderer and the blob pass-through.
 pub(super) const MAX_RESULT_TOKENS: usize = 4_000;
@@ -176,6 +287,7 @@ pub(super) const MAX_RESULT_TOKENS: usize = 4_000;
 /// Guard the model's context window against huge provider payloads.
 /// Token-bounded (ADR-0120): the cut lands on an exact token boundary and the
 /// notice reports the context cost in the model's own unit.
+#[allow(dead_code)]
 pub(super) fn cap_output(text: &str) -> String {
     const MAX_TOKENS: usize = 4_000;
     let total = muta_contracts::tokenizer::count_tokens(text);

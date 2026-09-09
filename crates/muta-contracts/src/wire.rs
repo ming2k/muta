@@ -37,7 +37,9 @@ use serde::{Deserialize, Serialize};
 /// opaquely) instead of failing the session. Legacy tool-name aliases
 /// (`spawn_agent`, `delegate_code`, `delegate_mcp`, …) are deleted; the canonical
 /// names are `spawn_agent`, `delegate_code`, and `delegate_mcp`.
-pub const PROTOCOL_VERSION: u32 = 7;
+/// v8 (ADR-0202, ADR-0204): typed `ToolOutput::WebSearch` and `ToolOutput::WebArticle`
+/// variants with structured `WebSearchHit` results.
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
 /// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the

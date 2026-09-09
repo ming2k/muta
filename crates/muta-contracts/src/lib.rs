@@ -59,7 +59,9 @@ pub use completion::{
 };
 
 pub mod tool_output;
-pub use tool_output::{PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream};
+pub use tool_output::{
+    PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream, WebSearchHit,
+};
 
 pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};

@@ -22,6 +22,7 @@ pub struct ModelBarProps<'a> {
     pub context_tokens: Option<usize>,
     pub context_window: usize,
     pub last_turn_tps: Option<f64>,
+    pub last_turn_ttft_ms: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
 }
 
@@ -35,6 +36,7 @@ impl<'a> Default for ModelBarProps<'a> {
             context_tokens: None,
             context_window: 0,
             last_turn_tps: None,
+            last_turn_ttft_ms: None,
             ignition_elapsed_ms: None,
         }
     }
@@ -110,6 +112,7 @@ pub fn draw_model_bar(
         context_tokens,
         context_window,
         last_turn_tps,
+        last_turn_ttft_ms,
         ignition_elapsed_ms,
     } = props;
 
@@ -186,15 +189,27 @@ pub fn draw_model_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    let performance_spans: Vec<Span<'static>> = last_turn_tps
-        .filter(|rate| rate.is_finite() && *rate > 0.0)
-        .map(|rate| {
-            vec![Span::styled(
+    let performance_spans: Vec<Span<'static>> = match (
+        last_turn_tps.filter(|rate| rate.is_finite() && *rate > 0.0),
+        last_turn_ttft_ms.filter(|ttft| ttft.is_finite() && *ttft > 0.0),
+    ) {
+        (Some(rate), Some(ttft)) => vec![
+            Span::styled(
                 format!("{rate:.1} tok/s"),
                 Style::default().fg(theme.muted()).bg(bg),
-            )]
-        })
-        .unwrap_or_default();
+            ),
+            Span::styled(" · ", Style::default().fg(theme.dim()).bg(bg)),
+            Span::styled(
+                format!("{ttft:.0}ms ttft"),
+                Style::default().fg(theme.dim()).bg(bg),
+            ),
+        ],
+        (Some(rate), None) => vec![Span::styled(
+            format!("{rate:.1} tok/s"),
+            Style::default().fg(theme.muted()).bg(bg),
+        )],
+        _ => Vec::new(),
+    };
     let performance_width = performance_spans
         .iter()
         .map(|span| span.content.width())
