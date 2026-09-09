@@ -410,6 +410,8 @@ pub struct Stream<'a, 'f> {
     pub cell_selection: Option<&'a CellDragInfo>,
     pub hovered_step: Option<usize>,
     pub focused_target: Option<InteractiveTarget>,
+    /// Ambient session workspace root (ADR-0206).
+    pub workspace_root: Option<&'a std::path::Path>,
     /// First / exclusive-last message selected by a [`VirtualLayoutIndex`].
     /// The normal path covers the full slice.
     pub message_start: usize,
@@ -510,7 +512,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.current_y,
                 &mut self.content_lines,
                 &mut self.height_cache.wrap,
-            );
+            )
+            .with_workspace_root(self.workspace_root);
             super::disclosure::draw_subagent_inline_step(&mut ctx, msg, mi, hovered, focused_tool);
         } else if msg.is_tool_step() {
             let mut ctx = RenderCtx::from_cursor(
@@ -523,7 +526,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.current_y,
                 &mut self.content_lines,
                 &mut self.height_cache.wrap,
-            );
+            )
+            .with_workspace_root(self.workspace_root);
             super::disclosure::draw_tool_step(
                 &mut ctx,
                 msg,
@@ -546,7 +550,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.current_y,
                 &mut self.content_lines,
                 &mut self.height_cache.wrap,
-            );
+            )
+            .with_workspace_root(self.workspace_root);
             super::disclosure::draw_reasoning_trace(
                 &mut ctx,
                 msg,
@@ -568,7 +573,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.current_y,
                 &mut self.content_lines,
                 &mut self.height_cache.wrap,
-            );
+            )
+            .with_workspace_root(self.workspace_root);
             super::disclosure::draw_command_result(
                 &mut ctx,
                 msg,

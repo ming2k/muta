@@ -922,6 +922,12 @@ pub fn draw_transcript(
         // every layout agrees on scroll semantics. The layout leaves
         // `content_lines` and `sticky_steps` populated for the
         // post-processing below.
+        let workspace_root = session_head
+            .as_ref()
+            .map(|h| h.workspace)
+            .filter(|w| !w.is_empty())
+            .map(std::path::Path::new);
+
         let mut stream = layout::Stream {
             frame,
             band,
@@ -933,6 +939,7 @@ pub fn draw_transcript(
             cell_selection,
             hovered_step,
             focused_target,
+            workspace_root,
             message_start,
             message_end,
             virtual_total_lines,

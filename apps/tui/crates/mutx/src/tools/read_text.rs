@@ -1,40 +1,38 @@
 //! Presenter for `read_text`.
 
 use super::{ToolPresenter, ToolView};
+use crate::components::inline_layout::SemanticLine;
 use crate::components::path::PathView;
 
 pub struct ReadPresenter;
 
 impl ToolPresenter for ReadPresenter {
-    fn summary(&self, view: &ToolView) -> String {
-        let base = view
-            .str("path")
-            .map(|path| format!("Read {}", PathView::from_str(path).format_text()))
-            .unwrap_or_else(|| "Read file".to_string());
-
-        // Annotate the window when an `offset`/`limit` narrows the read, using
-        // Vim ex-command range syntax (`:start,end` / `:start,$`). `offset` is
-        // the 1-based start line; `limit` is a line *count*, so the inclusive
-        // end is `start + limit - 1`. A read with no limit runs to EOF, which
-        // maps to Vim's `$` address. Defaults (`offset == 1`, `limit == 0`) are
-        // omitted, so a plain full-file read stays annotation-free. The body's
-        // line gutter already reflects `offset`; this makes the header
-        // self-describing too.
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
         let offset = view.u64("offset").filter(|&o| o > 1);
         let limit = view.u64("limit").filter(|&l| l > 0);
         let range = match (offset, limit) {
-            // count is >= 1 (filtered above), so end = start + count - 1.
             (Some(start), Some(count)) => Some(format!(":{},{}", start, start + count - 1)),
-            // No limit → reads to EOF, Vim's `$` address.
             (Some(start), None) => Some(format!(":{},$", start)),
-            // No offset → starts at line 1; end = count.
             (None, Some(count)) => Some(format!(":1,{}", count)),
             (None, None) => None,
         };
-        match range {
-            Some(r) => format!("{} {}", base, r),
-            None => base,
+
+        let mut line = SemanticLine::new().push_fixed("Read ");
+        if let Some(path) = view.str("path") {
+            line = line.push_path(PathView::from_str(path).maybe_base_dir(view.workspace_root));
+        } else {
+            line = line.push_fixed("file");
         }
+
+        if let Some(r) = range {
+            line = line.push_fixed(format!(" {}", r));
+        }
+
+        line
+    }
+
+    fn summary(&self, view: &ToolView) -> String {
+        self.render_summary(view).to_plain_text()
     }
 }
 
@@ -54,6 +52,7 @@ mod tests {
             name: "read_text",
             args,
             profile: None,
+            workspace_root: None,
         }
     }
 

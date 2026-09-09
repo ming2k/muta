@@ -139,6 +139,8 @@ pub enum ArgLayout {
     KeyValue,
 }
 
+use crate::components::inline_layout::SemanticLine;
+
 /// A read-only view of a tool step, handed to a [`ToolPresenter`]. Arguments
 /// are pre-parsed into a JSON object by the registry entry points so each
 /// presenter can pull typed fields without re-parsing.
@@ -149,6 +151,9 @@ pub struct ToolView<'a> {
     /// subagent run that has announced its role; `None` otherwise. Lets the
     /// `SubagentPresenter` label the step by role instead of "Subagent".
     pub profile: Option<&'a str>,
+    /// The active session workspace root directory, if known. Used by
+    /// path-aware presenters to resolve absolute paths relative to the project.
+    pub workspace_root: Option<&'a std::path::Path>,
 }
 
 impl ToolView<'_> {
@@ -172,6 +177,12 @@ pub trait ToolPresenter {
     /// truncates the result to the header budget, so implementors only need to
     /// truncate individual interpolated fields where it improves readability.
     fn summary(&self, view: &ToolView) -> String;
+
+    /// Structured, layout-aware semantic summary line evaluated at render time against
+    /// the physical terminal viewport width (ADR-0206).
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
+        SemanticLine::plain(self.summary(view))
+    }
 
     /// Which result renderer the expanded body uses for this tool's output.
     fn result_kind(&self) -> ResultKind {
@@ -247,19 +258,30 @@ const SUMMARY_BUDGET: usize = 72;
 /// or scalar argument payloads). This is the entry point step 2 will call from
 /// `document.rs` in place of `argument_summary`.
 pub fn summary_for(name: &str, arguments: &str, profile: Option<&str>) -> String {
+    let line = semantic_summary_for(name, arguments, profile, None);
+    truncate(&sanitize_single_line(&line.to_plain_text()), SUMMARY_BUDGET)
+}
+
+/// Build the structured semantic summary for a tool step from its raw JSON arguments (ADR-0206).
+pub fn semantic_summary_for(
+    name: &str,
+    arguments: &str,
+    profile: Option<&str>,
+    workspace_root: Option<&std::path::Path>,
+) -> SemanticLine<'static> {
     let parsed: Option<Value> = serde_json::from_str(arguments).ok();
-    let raw = match parsed.as_ref().and_then(Value::as_object) {
+    match parsed.as_ref().and_then(Value::as_object) {
         Some(obj) => {
             let view = ToolView {
                 name,
                 args: obj,
                 profile,
+                workspace_root,
             };
-            presenter_for(name).summary(&view)
+            presenter_for(name).render_summary(&view).into_owned()
         }
-        None => arguments.to_string(),
-    };
-    truncate(&sanitize_single_line(&raw), SUMMARY_BUDGET)
+        None => SemanticLine::plain(arguments.to_string()),
+    }
 }
 
 /// Build explicit renderable hunks from legacy tool arguments. Current

@@ -2353,6 +2353,42 @@ impl TranscriptMessage {
         })
     }
 
+    /// Structured semantic header for the tool step and optional trailing status badge (ADR-0206).
+    pub fn tool_step_semantic_summary(
+        &self,
+        workspace_root: Option<&std::path::Path>,
+    ) -> Option<(
+        crate::components::inline_layout::SemanticLine<'static>,
+        Option<String>,
+    )> {
+        let MessageKind::ToolStep {
+            name,
+            profile,
+            arguments,
+            status,
+            duration_ms,
+            ..
+        } = &self.kind
+        else {
+            return None;
+        };
+        let semantic_line =
+            crate::tools::semantic_summary_for(name, arguments, profile.as_deref(), workspace_root);
+        let suffix = match status {
+            ToolStepStatus::Running => None,
+            ToolStepStatus::Ok => Some(format!(" ({})", duration_text(*duration_ms))),
+            ToolStepStatus::Failed => Some(format!(" (failed {})", duration_text(*duration_ms))),
+            ToolStepStatus::Denied => Some(format!(" (denied {})", duration_text(*duration_ms))),
+            ToolStepStatus::Cancelled => {
+                Some(format!(" (cancelled {})", duration_text(*duration_ms)))
+            }
+            ToolStepStatus::Interrupted => {
+                Some(format!(" (interrupted {})", duration_text(*duration_ms)))
+            }
+        };
+        Some((semantic_line, suffix))
+    }
+
     /// Alias for [`Self::is_tool_step`].
     pub fn is_tool_invocation(&self) -> bool {
         self.is_tool_step()

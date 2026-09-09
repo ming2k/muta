@@ -1,20 +1,32 @@
 //! Presenters for file discovery, text search, and shallow directory listing.
 
 use super::{ResultKind, ToolPresenter, ToolView, truncate};
+use crate::components::inline_layout::SemanticLine;
 use crate::components::path::PathView;
 
 pub struct SearchTextPresenter;
 
 impl ToolPresenter for SearchTextPresenter {
-    fn summary(&self, view: &ToolView) -> String {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
         let query = view.str("query").unwrap_or("...");
         let path = view.str("path").unwrap_or(".");
-        let path_display = if path == "." {
-            ".".to_string()
+        let formatted_query = format!("\"{}\"", query);
+        if path == "." {
+            SemanticLine::new()
+                .push_fixed("Search ")
+                .push_flexible(formatted_query)
+                .push_fixed(" in .")
         } else {
-            PathView::from_str(path).format_text()
-        };
-        format!("Search \"{}\" in {}", truncate(query, 48), path_display)
+            SemanticLine::new()
+                .push_fixed("Search ")
+                .push_flexible(formatted_query)
+                .push_fixed(" in ")
+                .push_path(PathView::from_str(path).maybe_base_dir(view.workspace_root))
+        }
+    }
+
+    fn summary(&self, view: &ToolView) -> String {
+        self.render_summary(view).to_plain_text()
     }
 
     fn result_kind(&self) -> ResultKind {
@@ -25,7 +37,7 @@ impl ToolPresenter for SearchTextPresenter {
 pub struct FindFilesPresenter;
 
 impl ToolPresenter for FindFilesPresenter {
-    fn summary(&self, view: &ToolView) -> String {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
         let val = view
             .args
             .get("patterns")
@@ -47,11 +59,20 @@ impl ToolPresenter for FindFilesPresenter {
         };
         let path = view.str("path").unwrap_or(".");
         if path == "." {
-            format!("Find {selection}")
+            SemanticLine::new()
+                .push_fixed("Find ")
+                .push_flexible(selection)
         } else {
-            let path_display = PathView::from_str(path).format_text();
-            format!("Find {selection} in {path_display}")
+            SemanticLine::new()
+                .push_fixed("Find ")
+                .push_flexible(selection)
+                .push_fixed(" in ")
+                .push_path(PathView::from_str(path).maybe_base_dir(view.workspace_root))
         }
+    }
+
+    fn summary(&self, view: &ToolView) -> String {
+        self.render_summary(view).to_plain_text()
     }
 
     fn result_kind(&self) -> ResultKind {
@@ -62,10 +83,18 @@ impl ToolPresenter for FindFilesPresenter {
 pub struct ListDirPresenter;
 
 impl ToolPresenter for ListDirPresenter {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
+        if let Some(path) = view.str("path") {
+            SemanticLine::new()
+                .push_fixed("List ")
+                .push_path(PathView::from_str(path).maybe_base_dir(view.workspace_root))
+        } else {
+            SemanticLine::plain("List directory")
+        }
+    }
+
     fn summary(&self, view: &ToolView) -> String {
-        view.str("path")
-            .map(|path| format!("List {}", PathView::from_str(path).format_text()))
-            .unwrap_or_else(|| "List directory".to_string())
+        self.render_summary(view).to_plain_text()
     }
 
     fn result_kind(&self) -> ResultKind {

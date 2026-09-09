@@ -1,13 +1,15 @@
 //! Tool step renderer (tool invocation summaries, expanded bodies, diffs, results).
 
 use mutx_engine::{
-    Color, Rect, Style, {Line, Span},
+    Color, Modifier, Rect, Style, {Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
 use super::super::{Disclosure, Interaction, summary_text_color};
 use super::base::{RenderCtx, nonempty_wrapped};
-use super::payloads::{draw_blank_rows, draw_step_summary, draw_tool_result};
+use super::payloads::{
+    draw_blank_rows, draw_semantic_step_summary, draw_step_summary, draw_tool_result,
+};
 use super::sticky::StickyStep;
 use crate::message_body::draw_message_body;
 use crate::model::document::TranscriptMessage;
@@ -99,15 +101,32 @@ pub fn draw_tool_step(
 
     let inner_width = ctx.area.width as usize;
     let summary_line_idx = {
-        draw_step_summary(
-            ctx,
-            mi,
-            usize::MAX,
-            expanded,
-            &summary,
-            summary_color,
-            summary_bg,
-        )
+        if let Some((semantic_line, suffix)) = msg.tool_step_semantic_summary(ctx.workspace_root) {
+            let suffix_style = Style::default()
+                .fg(summary_color)
+                .add_modifier(Modifier::BOLD);
+            let suffix_pair = suffix.as_deref().map(|s| (s, suffix_style));
+            draw_semantic_step_summary(
+                ctx,
+                mi,
+                usize::MAX,
+                expanded,
+                &semantic_line,
+                suffix_pair,
+                summary_color,
+                summary_bg,
+            )
+        } else {
+            draw_step_summary(
+                ctx,
+                mi,
+                usize::MAX,
+                expanded,
+                &summary,
+                summary_color,
+                summary_bg,
+            )
+        }
     };
 
     // Body region (only when expanded). Tool steps are flat — no band, no

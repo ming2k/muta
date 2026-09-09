@@ -7,23 +7,31 @@
 
 use super::diff::line_diff_counts;
 use super::{ResultKind, ToolPresenter, ToolView};
+use crate::components::inline_layout::SemanticLine;
 use crate::components::path::PathView;
 
 pub struct EditPresenter;
 
 impl ToolPresenter for EditPresenter {
-    fn summary(&self, view: &ToolView) -> String {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
         let Some(raw_path) = view.str("path") else {
-            return "Edit text".to_string();
+            return SemanticLine::plain("Edit text");
         };
-        let path = PathView::from_str(raw_path).format_text();
+        let mut line = SemanticLine::new()
+            .push_fixed("Edit ")
+            .push_path(PathView::from_str(raw_path).maybe_base_dir(view.workspace_root));
         match (view.str("old_string"), view.str("new_string")) {
             (Some(old), Some(new)) => {
                 let (added, removed) = line_diff_counts(old, new);
-                format!("Edit {} +{} -{}", path, added, removed)
+                line = line.push_fixed(format!(" +{} -{}", added, removed));
             }
-            _ => format!("Edit {}", path),
+            _ => {}
         }
+        line
+    }
+
+    fn summary(&self, view: &ToolView) -> String {
+        self.render_summary(view).to_plain_text()
     }
 
     fn result_kind(&self) -> ResultKind {
@@ -38,18 +46,22 @@ impl ToolPresenter for EditPresenter {
 pub struct WritePresenter;
 
 impl ToolPresenter for WritePresenter {
-    fn summary(&self, view: &ToolView) -> String {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
         let Some(raw_path) = view.str("path") else {
-            return "Write file".to_string();
+            return SemanticLine::plain("Write file");
         };
-        let path = PathView::from_str(raw_path).format_text();
-        match view.str("content") {
-            Some(content) => {
-                let (added, _) = line_diff_counts("", content);
-                format!("Write {} +{}", path, added)
-            }
-            None => format!("Write {}", path),
+        let mut line = SemanticLine::new()
+            .push_fixed("Write ")
+            .push_path(PathView::from_str(raw_path).maybe_base_dir(view.workspace_root));
+        if let Some(content) = view.str("content") {
+            let (added, _) = line_diff_counts("", content);
+            line = line.push_fixed(format!(" +{}", added));
         }
+        line
+    }
+
+    fn summary(&self, view: &ToolView) -> String {
+        self.render_summary(view).to_plain_text()
     }
 
     fn result_kind(&self) -> ResultKind {

@@ -21,6 +21,8 @@ pub struct RenderCtx<'a, 'f: 'a> {
     pub content_lines: &'a mut usize,
     /// Content-addressed wrap cache (ADR-0184) — see `crate::render::BlockWrapCache`.
     pub wrap: &'a mut crate::render::BlockWrapCache,
+    /// The ambient session workspace root (ADR-0206).
+    pub workspace_root: Option<&'a std::path::Path>,
 }
 
 impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
@@ -46,7 +48,14 @@ impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
             y,
             content_lines,
             wrap,
+            workspace_root: None,
         }
+    }
+
+    /// Attach an optional session workspace root.
+    pub fn with_workspace_root(mut self, root: Option<&'a std::path::Path>) -> Self {
+        self.workspace_root = root;
+        self
     }
 
     pub fn advance_blank_rows(&mut self, rows: usize) {

@@ -1,6 +1,9 @@
 use super::base::truncate_to_width;
-use super::payloads::tool_summary_line;
-use mutx_engine::Color;
+use super::payloads::{semantic_tool_summary_line, tool_summary_line};
+use crate::components::inline_layout::SemanticLine;
+use crate::components::path::PathView;
+use crate::theme::Theme;
+use mutx_engine::{Color, Style};
 
 #[test]
 fn truncate_to_width_stops_at_newline() {
@@ -35,6 +38,43 @@ fn tool_summary_line_produces_single_row_span_without_newline() {
             "span must never contain carriage return"
         );
     }
+}
+
+#[test]
+fn semantic_tool_summary_line_preserves_suffix_under_tight_budget() {
+    let theme = Theme::default();
+    let line = SemanticLine::new()
+        .push_fixed("Search ")
+        .push_flexible("\"draw.rs\"")
+        .push_fixed(" in ")
+        .push_path(PathView::from_str(
+            "apps/tui/crates/mutx/src/overlays/telemetry",
+        ));
+
+    // Tight 45 columns width
+    let rendered = semantic_tool_summary_line(
+        "+",
+        &line,
+        Some((" (3ms)", Style::default())),
+        Color::White,
+        Color::Black,
+        45,
+        &theme,
+    );
+
+    let text: String = rendered.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        text.starts_with("+ "),
+        "Must start with expand marker: {text}"
+    );
+    assert!(
+        text.contains(" (3ms)"),
+        "Must preserve trailing telemetry suffix: {text}"
+    );
+    assert!(
+        text.contains("telemetry"),
+        "Must retain leaf component: {text}"
+    );
 }
 
 #[test]

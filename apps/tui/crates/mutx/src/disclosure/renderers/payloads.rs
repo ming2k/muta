@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use super::base::{
     MARKER_COLLAPSED, MARKER_EXPANDED, RenderCtx, nonempty_wrapped, truncate_to_width,
 };
+use crate::components::inline_layout::SemanticLine;
 use crate::model::layout::{BlockRegion, LinkHit};
 use crate::model::selection::SelectionState;
 use crate::render::{
@@ -78,6 +79,80 @@ pub(crate) fn draw_step_summary(
     let summary_line_idx = *ctx.content_lines;
 
     let line = tool_summary_line(expand, summary, summary_color, bg, ctx.full_width);
+    if let Some(rect) = ctx.paint(line) {
+        ctx.layout_map.push(BlockRegion {
+            message_idx: mi,
+            block_idx,
+            start_byte: 0,
+            end_byte: 0,
+            text: String::new(),
+            prefix_cols: 0,
+            rect,
+            hidden_ranges: Vec::new(),
+        });
+    }
+
+    summary_line_idx
+}
+
+/// Build the summary line for a tool/subagent step using semantic inline flex layout (ADR-0206).
+pub(crate) fn semantic_tool_summary_line(
+    expand: &str,
+    semantic_line: &SemanticLine<'_>,
+    suffix: Option<(&str, Style)>,
+    fg: Color,
+    bg: Color,
+    full_width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let base = Style::default().bg(bg);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+
+    if !expand.is_empty() {
+        let s = format!("{} ", expand);
+        used += s.width();
+        spans.push(Span::styled(s, base.fg(fg).add_modifier(Modifier::BOLD)));
+    }
+
+    let summary_budget = full_width.saturating_sub(used);
+    let base_style = base.fg(fg).add_modifier(Modifier::BOLD);
+    let resolved_spans = semantic_line.resolve(summary_budget, theme, base_style, suffix);
+    for span in resolved_spans {
+        used += span.content.width();
+        spans.push(span);
+    }
+    spans.push(Span::styled(padded_tail(full_width, used), base));
+    Line::from(spans)
+}
+
+/// Render the shared summary of an expandable step with semantic inline flex layout (ADR-0206).
+pub(crate) fn draw_semantic_step_summary(
+    ctx: &mut RenderCtx<'_, '_>,
+    mi: usize,
+    block_idx: usize,
+    expanded: bool,
+    semantic_line: &SemanticLine<'_>,
+    suffix: Option<(&str, Style)>,
+    summary_color: Color,
+    bg: Color,
+) -> usize {
+    let expand = if expanded {
+        MARKER_EXPANDED
+    } else {
+        MARKER_COLLAPSED
+    };
+    let summary_line_idx = *ctx.content_lines;
+
+    let line = semantic_tool_summary_line(
+        expand,
+        semantic_line,
+        suffix,
+        summary_color,
+        bg,
+        ctx.full_width,
+        ctx.theme,
+    );
     if let Some(rect) = ctx.paint(line) {
         ctx.layout_map.push(BlockRegion {
             message_idx: mi,
@@ -259,7 +334,10 @@ pub(crate) fn draw_listing_content(
         let is_dir = logical_line.ends_with('/');
         let fg = if is_dir { dir_fg } else { file_fg };
         let base = Style::default().bg(code_bg).fg(fg);
-        let wrapped = nonempty_wrapped(wrap_text(logical_line, wrap_w));
+        let normalized = crate::components::path::PathView::from_str(logical_line)
+            .maybe_base_dir(ctx.workspace_root)
+            .format_text();
+        let wrapped = nonempty_wrapped(wrap_text(&normalized, wrap_w));
         for wl in &wrapped {
             let block_wl = WrappedLine {
                 text: wl.text.clone(),
@@ -1125,12 +1203,15 @@ pub(crate) fn draw_matches_content(
             Some(parsed) => {
                 if current_path != Some(parsed.path) {
                     current_path = Some(parsed.path);
+                    let normalized = crate::components::path::PathView::from_str(parsed.path)
+                        .maybe_base_dir(ctx.workspace_root)
+                        .format_text();
                     emit_simple_rows(
                         ctx,
                         mi,
                         block_idx,
                         indent,
-                        parsed.path,
+                        &normalized,
                         *line_start_byte,
                         pad,
                         header_style,

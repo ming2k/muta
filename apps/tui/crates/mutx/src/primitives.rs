@@ -14,6 +14,8 @@ pub(crate) use super::components::footer::{
     render_modal_footer_with_more,
 };
 #[allow(unused_imports)]
+pub use super::components::inline_layout::{InlineSlot, SemanticLine};
+#[allow(unused_imports)]
 pub use super::components::path::{
     PathFormatStrategy, PathStyle, PathView, format_path_str, tilde_shorten,
 };

@@ -1,15 +1,24 @@
 //! Presenter for `read_image`.
 
 use super::{ToolPresenter, ToolView};
+use crate::components::inline_layout::SemanticLine;
 use crate::components::path::PathView;
 
 pub struct ReadImagePresenter;
 
 impl ToolPresenter for ReadImagePresenter {
+    fn render_summary<'a>(&self, view: &'a ToolView) -> SemanticLine<'a> {
+        if let Some(path) = view.str("path") {
+            SemanticLine::new()
+                .push_fixed("Read image ")
+                .push_path(PathView::from_str(path).maybe_base_dir(view.workspace_root))
+        } else {
+            SemanticLine::plain("Read image")
+        }
+    }
+
     fn summary(&self, view: &ToolView) -> String {
-        view.str("path")
-            .map(|path| format!("Read image {}", PathView::from_str(path).format_text()))
-            .unwrap_or_else(|| "Read image".to_string())
+        self.render_summary(view).to_plain_text()
     }
     // `result_kind` defaults to `Code`, which renders the model-facing
     // placeholder text ("[image: image/png]") in a code block. The actual
@@ -33,6 +42,7 @@ mod tests {
             name: "read_image",
             args,
             profile: None,
+            workspace_root: None,
         }
     }
 

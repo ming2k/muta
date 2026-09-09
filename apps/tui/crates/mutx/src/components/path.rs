@@ -60,7 +60,7 @@ pub enum PathStyle {
 #[derive(Clone, Debug)]
 pub struct PathView<'a> {
     raw: Cow<'a, str>,
-    base_dir: Option<&'a Path>,
+    base_dir: Option<PathBuf>,
     max_width: Option<usize>,
     strategy: PathFormatStrategy,
     style: PathStyle,
@@ -97,15 +97,27 @@ impl<'a> PathView<'a> {
 
     /// Set the base directory (e.g. workspace root / current working directory)
     /// against which absolute paths are made relative.
-    pub fn base_dir(mut self, base: &'a Path) -> Self {
-        self.base_dir = Some(base);
+    pub fn base_dir(mut self, base: &Path) -> Self {
+        self.base_dir = Some(base.to_path_buf());
         self
     }
 
     /// Set the base directory if provided as an `Option`.
-    pub fn maybe_base_dir(mut self, base: Option<&'a Path>) -> Self {
-        self.base_dir = base;
+    pub fn maybe_base_dir(mut self, base: Option<&Path>) -> Self {
+        self.base_dir = base.map(Path::to_path_buf);
         self
+    }
+
+    /// Convert into an owned [`PathView<'static>`].
+    pub fn into_owned(self) -> PathView<'static> {
+        PathView {
+            raw: Cow::Owned(self.raw.into_owned()),
+            base_dir: self.base_dir,
+            max_width: self.max_width,
+            strategy: self.strategy,
+            style: self.style,
+            normalize_slash: self.normalize_slash,
+        }
     }
 
     /// Set the maximum display column width budget.
@@ -143,7 +155,7 @@ impl<'a> PathView<'a> {
     pub fn format_text(&self) -> String {
         format_path_str(
             &self.raw,
-            self.base_dir,
+            self.base_dir.as_deref(),
             self.max_width,
             self.strategy,
             self.normalize_slash,

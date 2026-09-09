@@ -109,6 +109,7 @@ mod tests {
             name: "write_todos",
             args: args_map,
             profile: None,
+            workspace_root: None,
         };
         assert_eq!(presenter.summary(&view), "Todo: \"Step 2\" (1/3 done)");
 
@@ -123,6 +124,7 @@ mod tests {
             name: "write_todos",
             args: args_done_map,
             profile: None,
+            workspace_root: None,
         };
         assert_eq!(presenter.summary(&view_done), "Todos: all 2 completed");
     }
