@@ -145,7 +145,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     // the account's plan actually offers; if it is ever unreachable/empty, the
     // models.dev entry for zai covers the gap so a plan refresh does not blank
     // the picker. Baselines stay the single source of capability truth either
-    // way (fitting is off).
+    // way (capability overlay is unavailable here).
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::ZCode,
     client_profile_sensitive: false,

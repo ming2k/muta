@@ -21,7 +21,8 @@ pub use muta_models_dev::ModelsDevError;
 /// model's registered protocol (see `route_for_model` / wire-override table),
 /// so the discovery layer must not override it. Capability hints (family,
 /// context, reasoning, effort, vision) are carried as `Option`s so the
-/// reconciler can trust/persist them per preset (fitting).
+/// catalog folds them into the remote-catalog overlay per preset
+/// (ADR-0203).
 fn from_dev_model(m: DevModel) -> DiscoveredModel {
     let modalities_in = &m.modalities.input;
     let reasoning = Some(m.reasoning);

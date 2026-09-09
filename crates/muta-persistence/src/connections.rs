@@ -168,8 +168,18 @@ struct RawConnections {
 }
 
 impl RawConnection {
+    fn needs_catalog_policy_migration(&self) -> bool {
+        self.models.filter.is_none()
+    }
+
     /// Migrate to the current shape, resolving the provider id and folding the
     /// legacy `extra_models` list into `models.include`.
+    ///
+    /// Before ADR-0203, curated connections persisted the provider's entire
+    /// materialized model snapshot in `models`. A missing filter is the
+    /// unambiguous legacy marker: migrate that connection to the official
+    /// remote-catalog policy and discard the materialized snapshot. Explicit
+    /// `extra_models` remain user-owned injections and are restored afterward.
     fn migrate(self) -> Result<Connection, String> {
         let name = self
             .name
@@ -188,6 +198,12 @@ impl RawConnection {
         };
 
         let mut models = self.models;
+        if models.filter.is_none() {
+            models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All));
+            if provider != CUSTOM_PROVIDER {
+                models.include.clear();
+            }
+        }
         for extra in self.extra_models {
             if !models.include.iter().any(|m| m.id == extra.id) {
                 models.include.push(extra);
@@ -264,7 +280,10 @@ impl Connections {
             }
         };
         let mut connections: Vec<Connection> = Vec::with_capacity(raw.connections.len());
+        let mut catalog_policy_migrated = false;
+        let mut lossless = true;
         for raw in raw.connections {
+            catalog_policy_migrated |= raw.needs_catalog_policy_migration();
             match raw.migrate() {
                 Ok(conn) => {
                     if connections
@@ -275,11 +294,13 @@ impl Connections {
                             name = %conn.name,
                             "duplicate connection name in connections.toml; dropping the later entry",
                         );
+                        lossless = false;
                         continue;
                     }
                     connections.push(conn);
                 }
                 Err(reason) => {
+                    lossless = false;
                     tracing::error!(
                         path = %path.display(),
                         reason = %reason,
@@ -288,7 +309,18 @@ impl Connections {
                 }
             }
         }
-        Self { connections }
+        let migrated = Self { connections };
+        if catalog_policy_migrated
+            && lossless
+            && let Err(error) = migrated.save()
+        {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "could not persist remote-catalog connection migration",
+            );
+        }
+        migrated
     }
 
     /// Persist atomically. Errors propagate to the caller.
@@ -377,6 +409,35 @@ mod tests {
     use super::*;
     use muta_contracts::reasoning::ReasoningSupport;
 
+    struct PathsSandbox {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl Drop for PathsSandbox {
+        fn drop(&mut self) {
+            paths::set_test_default(None);
+        }
+    }
+
+    fn sandboxed_paths() -> PathsSandbox {
+        let guard = paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_test_default(Some(paths::Dirs {
+            config_dir: tmp.path().join("config"),
+            data_dir: tmp.path().join("data"),
+            state_dir: tmp.path().join("state"),
+            cache_dir: tmp.path().join("cache"),
+            runtime_dir: None,
+        }));
+        PathsSandbox {
+            _guard: guard,
+            _tmp: tmp,
+        }
+    }
+
     fn deepseek_with_extras() -> Connection {
         Connection {
             name: "deepseek-personal".into(),
@@ -445,6 +506,99 @@ context_window = 500000
         assert_eq!(conn.models.include.len(), 1);
         assert_eq!(conn.models.include[0].id, "legacy-preview");
         assert_eq!(conn.models.include[0].context_window, Some(500000));
+        assert_eq!(
+            conn.models.filter,
+            Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All))
+        );
+    }
+
+    #[test]
+    fn legacy_curated_snapshot_is_not_promoted_to_user_injections() {
+        let raw: RawConnections = toml::from_str(
+            r#"
+[[connections]]
+name = "ds"
+provider = "deepseek"
+models = ["deepseek-v4-flash", "deepseek-v4-flash-0731"]
+
+[[connections.extra_models]]
+id = "deepseek-v4-preview"
+context_window = 500000
+"#,
+        )
+        .unwrap();
+        let conn = raw
+            .connections
+            .into_iter()
+            .next()
+            .unwrap()
+            .migrate()
+            .unwrap();
+
+        assert_eq!(
+            conn.models.filter,
+            Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All))
+        );
+        assert_eq!(conn.models.include.len(), 1);
+        assert_eq!(conn.models.include[0].id, "deepseek-v4-preview");
+    }
+
+    #[test]
+    fn explicit_filter_preserves_sovereign_injections() {
+        let raw: RawConnections = toml::from_str(
+            r#"
+[[connections]]
+name = "ds"
+provider = "deepseek"
+
+[connections.models]
+filter = "all"
+
+[[connections.models.inject]]
+id = "deepseek-v4-preview"
+"#,
+        )
+        .unwrap();
+        let conn = raw
+            .connections
+            .into_iter()
+            .next()
+            .unwrap()
+            .migrate()
+            .unwrap();
+
+        assert_eq!(conn.models.include.len(), 1);
+        assert_eq!(conn.models.include[0].id, "deepseek-v4-preview");
+    }
+
+    #[test]
+    fn load_persists_catalog_policy_migration() {
+        let _sandbox = sandboxed_paths();
+        std::fs::create_dir_all(paths::get().state_dir.clone()).unwrap();
+        std::fs::write(
+            Connections::path(),
+            r#"
+[[connections]]
+name = "ds"
+provider = "deepseek"
+
+[[connections.models.inject]]
+id = "deepseek-v4-flash-0731"
+"#,
+        )
+        .unwrap();
+
+        let loaded = Connections::load();
+        let connection = loaded.get("ds").unwrap();
+        assert_eq!(
+            connection.models.filter,
+            Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All))
+        );
+        assert!(connection.models.include.is_empty());
+
+        let canonical = std::fs::read_to_string(Connections::path()).unwrap();
+        assert!(canonical.contains("filter = \"all\""));
+        assert!(!canonical.contains("deepseek-v4-flash-0731"));
     }
 
     #[test]

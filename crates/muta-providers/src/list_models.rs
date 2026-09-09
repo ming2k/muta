@@ -16,13 +16,12 @@
 //! The catalog reconciliation layer decides which instances use live
 //! discovery via a `ModelSource` flag on `UserProviderConfig` (see
 //! `muta-persistence::config` and `muta_agent::catalog::reconcile_provider_models`).
-//! For `ModelSource::Api`, the catalog either intersects the live result with
-//! its protocol-compatible model registry (the default) or — for
-//! fitting-enabled trusted templates — materializes every advertised id and
-//! persists the capability hints of registry-unknown ones (ADR-0065). On an
-//! error or empty result it retains the last valid subset either way.
-//! `ModelSource::Fixed` skips the network entirely and uses the template
-//! snapshot.
+//! For `ModelSource::Api`, advertised capability fields ride on
+//! [`DiscoveredModel`] as `Option`s and the catalog folds them into the
+//! remote-catalog overlay (ADR-0203) per preset. Transport, status, and schema
+//! failures retain the last valid subset; a structurally valid empty catalog
+//! authoritatively clears it. `ModelSource::Fixed` skips the network entirely
+//! and uses the template snapshot.
 //!
 //! ## Protocol details
 //!
@@ -146,11 +145,6 @@ pub enum ModelListError {
     /// The response body could not be parsed into a model list (missing
     /// `data`/`models`, wrong types). Carries a short description.
     Parse(String),
-    /// The list parsed but contained zero usable model ids. Treated as a
-    /// failure so the catalog keeps the snapshot rather than blanking the
-    /// instance — an empty live list is almost always an auth/parsing issue,
-    /// never a genuinely model-less provider.
-    Empty,
 }
 
 impl std::fmt::Display for ModelListError {
@@ -163,7 +157,6 @@ impl std::fmt::Display for ModelListError {
                 write!(f, "model-list request returned HTTP {code}: {snippet}")
             }
             Self::Parse(msg) => write!(f, "could not parse model list: {msg}"),
-            Self::Empty => write!(f, "model list parsed but contained no models"),
         }
     }
 }
@@ -189,8 +182,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// `supports_reasoning` / `supports_image_in` / `think_efforts` fields per
 /// entry, and GitHub Copilot (`api.githubcopilot.com`), advertising the same
 /// information nested under `capabilities.{limits,supports}` (see
-/// `discovered_model_from_entry`). Consumers decide per template whether
-/// these hints may be trusted (see `ModelProviderSpec::fitting`).
+/// `discovered_model_from_entry`). The catalog decides per preset — via
+/// `RemoteCatalogSource` (ADR-0203) — whether these hints are trusted and
+/// overlaid onto the baseline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveredModel {
     pub id: String,
@@ -349,8 +343,9 @@ pub fn models_endpoint_for(
 /// decision lives in the caller. Sorted + de-duplicated by id so the
 /// resulting channel set is stable across runs regardless of API ordering.
 ///
-/// Empty results are reported as [`ModelListError::Empty`] (never an empty
-/// `Ok`) so a broken endpoint can never blank out a working instance.
+/// A structurally valid empty catalog is returned as an empty `Ok`: the remote
+/// source is authoritative and may legitimately report that an account has no
+/// currently available models. Malformed shapes remain parse errors.
 pub async fn list_models(
     req: ModelDiscoveryRequest<'_>,
 ) -> Result<Vec<DiscoveredModel>, ModelListError> {
@@ -496,10 +491,8 @@ pub async fn discover_models(
     let json: Value = serde_json::from_str(&body)
         .map_err(|e| ModelListError::Parse(format!("response is not valid JSON: {e}")))?;
 
+    validate_catalog_shape(req.protocol, &json)?;
     let mut models = parse_models(req.protocol, &json);
-    if models.is_empty() {
-        return Err(ModelListError::Empty);
-    }
     if req.protocol == DiscoveryProtocol::Codex {
         // Codex's order is semantic (the endpoint's `priority` order), so
         // preserve it while discarding duplicate slugs.
@@ -532,6 +525,32 @@ fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredMode
         DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => parse_google_models(json),
         DiscoveryProtocol::Codex => parse_codex_models(json),
     }
+}
+
+fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(), ModelListError> {
+    let valid = match protocol {
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Anthropic => {
+            json.get("data").is_some_and(Value::is_array)
+        }
+        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => json
+            .get("models")
+            .is_some_and(|models| models.is_array() || models.is_object()),
+        DiscoveryProtocol::Codex => json.get("models").is_some_and(Value::is_array),
+    };
+    valid.then_some(()).ok_or_else(|| {
+        ModelListError::Parse(
+            match protocol {
+                DiscoveryProtocol::OpenAi | DiscoveryProtocol::Anthropic => {
+                    "response is missing the required data array"
+                }
+                DiscoveryProtocol::Google | DiscoveryProtocol::Codex => {
+                    "response is missing the required models collection"
+                }
+                DiscoveryProtocol::GoogleCloudCode => "response is missing the required models map",
+            }
+            .to_string(),
+        )
+    })
 }
 
 /// Extract the ChatGPT Codex `{models:[...]}` catalog. The endpoint assigns a
@@ -1114,6 +1133,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_visible_astra_from_codex_catalog() {
+        let json = serde_json::json!({
+            "models": [{
+                "slug": "gpt-6-astra",
+                "priority": 1,
+                "visibility": "list",
+                "supported_in_api": true,
+                "supported_reasoning_levels": [
+                    {"effort": "low"},
+                    {"effort": "medium"},
+                    {"effort": "high"},
+                    {"effort": "xhigh"},
+                    {"effort": "max"},
+                    {"effort": "ultra"}
+                ],
+                "context_window": 272000,
+                "input_modalities": ["text", "image"]
+            }]
+        });
+
+        let models = parse_models(DiscoveryProtocol::Codex, &json);
+        let astra = models.first().unwrap();
+        assert_eq!(astra.id, "gpt-6-astra");
+        assert_eq!(astra.picker_enabled, Some(true));
+        assert_eq!(astra.context_window, Some(272_000));
+        assert_eq!(
+            astra
+                .effort_levels
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+    }
+
+    #[test]
     fn parses_kimi_platform_capability_fields() {
         // The Kimi Code platform's live response shape (recorded 2026-07 from
         // GET https://api.kimi.com/coding/v1/models): every entry advertises
@@ -1387,23 +1444,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_returns_empty_when_shape_is_wrong() {
-        // No `data` array → empty (the caller reports Empty as a discovery failure).
+    fn catalog_shape_validation_distinguishes_empty_from_malformed() {
         assert!(
-            parse_models(
+            validate_catalog_shape(
+                DiscoveryProtocol::OpenAi,
+                &serde_json::json!({ "data": [] })
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_catalog_shape(
                 DiscoveryProtocol::OpenAi,
                 &serde_json::json!({ "error": "unauthorized" })
-            )
-            .is_empty()
-        );
-        // No `models` array → empty.
-        assert!(
-            parse_models(
+            ),
+            Err(ModelListError::Parse(_))
+        ));
+        assert!(matches!(
+            validate_catalog_shape(
                 DiscoveryProtocol::Google,
                 &serde_json::json!({ "error": "bad key" })
-            )
-            .is_empty()
-        );
+            ),
+            Err(ModelListError::Parse(_))
+        ));
     }
 
     #[test]

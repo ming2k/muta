@@ -1,12 +1,12 @@
 //! Live model discovery and the fitted-model overlay.
 //!
 //! Discovery fetches each discovery-capable connection's `GET /models` list
-//! live, intersects it against the client registry (or, for trusted fitting
-//! providers, materializes every advertised id), and records the result in the
+//! live and folds it into the catalog's remote-catalog overlay (ADR-0203):
+//! advertised capability fields are trusted per preset and recorded in the
 //! per-connection discovery cache. Routes are *derived* from that cache at
 //! catalog-build time — nothing here mutates config or the connection store.
-//! On an error or empty result the last valid subset is retained, so a broken
-//! endpoint never regresses a working connection.
+//! Transport, status, and schema failures retain the last valid subset. A
+//! structurally valid empty result is authoritative and clears the connection.
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
@@ -18,6 +18,7 @@ use muta_providers::{
     DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
     ModelProviderSpec, RemoteCatalogSource, model_provider_spec, route_for_model,
 };
+use sha2::{Digest, Sha256};
 
 const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,6 +39,63 @@ enum DiscoverySource {
     ModelsDev { provider: String },
 }
 
+impl DiscoverySource {
+    /// Fingerprint every request attribute that may select a different catalog
+    /// representation. Validators and TTLs must never cross this boundary.
+    fn identity(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"remote-catalog-request-v1\0");
+        match self {
+            Self::ModelsDev { provider } => {
+                digest.update(b"models-dev\0");
+                digest.update(provider.as_bytes());
+            }
+            Self::FirstParty {
+                protocol,
+                base_url,
+                client_profile,
+                ..
+            } => {
+                digest.update(b"first-party\0");
+                digest.update(discovery_protocol_id(*protocol).as_bytes());
+                digest.update(b"\0");
+                if *protocol == DiscoveryProtocol::Codex {
+                    digest.update(muta_contracts::client_identity::CODEX_VERSION.as_bytes());
+                    digest.update(b"\0");
+                }
+                digest.update(base_url.as_bytes());
+                digest.update(b"\0");
+                digest.update(client_profile.user_agent().as_bytes());
+                let mut headers = client_profile.headers();
+                headers.sort_unstable();
+                for (name, value) in headers {
+                    digest.update(b"\0");
+                    digest.update(name.as_bytes());
+                    digest.update(b"\0");
+                    digest.update(value.as_bytes());
+                }
+            }
+        }
+        format!("sha256:{:x}", digest.finalize())
+    }
+
+    fn discard_validator(&mut self) {
+        if let Self::FirstParty { cached_etag, .. } = self {
+            *cached_etag = None;
+        }
+    }
+}
+
+const fn discovery_protocol_id(protocol: DiscoveryProtocol) -> &'static str {
+    match protocol {
+        DiscoveryProtocol::OpenAi => "openai",
+        DiscoveryProtocol::Anthropic => "anthropic",
+        DiscoveryProtocol::Google => "google",
+        DiscoveryProtocol::GoogleCloudCode => "google-cloud-code",
+        DiscoveryProtocol::Codex => "codex",
+    }
+}
+
 struct DiscoveryJob {
     connection: muta_persistence::connections::Connection,
     spec: &'static ModelProviderSpec,
@@ -48,16 +106,19 @@ struct DiscoveryJob {
 struct DiscoveryFetch {
     connection: muta_persistence::connections::Connection,
     spec: &'static ModelProviderSpec,
+    source_identity: String,
     update: Result<ModelDiscoveryUpdate, String>,
 }
 
 async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
+    let source_identity = job.source.identity();
     match job.source {
         DiscoverySource::ModelsDev { provider } => {
             let update = fetch_models_dev(&provider).await;
             DiscoveryFetch {
                 connection: job.connection,
                 spec: job.spec,
+                source_identity,
                 update,
             }
         }
@@ -78,6 +139,7 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
                         return DiscoveryFetch {
                             connection: job.connection,
                             spec: job.spec,
+                            source_identity,
                             update: Err(error),
                         };
                     }
@@ -103,6 +165,7 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
             DiscoveryFetch {
                 connection: job.connection,
                 spec: job.spec,
+                source_identity,
                 update,
             }
         }
@@ -161,10 +224,24 @@ pub async fn refresh_connection_models_for_etag(
     advertised_etag: &str,
 ) -> DiscoveryOutcome {
     let cached = DiscoveryCache::load();
+    let connections = Connections::load();
+    let Some(connection) = connections.get(connection_name) else {
+        return DiscoveryOutcome::default();
+    };
+    let Some(spec) = model_provider_spec(&connection.provider) else {
+        return DiscoveryOutcome::default();
+    };
+    let Some(source) = discovery_source(connection, &cached, spec) else {
+        return DiscoveryOutcome::default();
+    };
+    let expected_source_identity = source.identity();
     let Some(state) = cached.model_lists.get(connection_name) else {
         return discover_connection_models(connection_name, true).await;
     };
-    if state.etag.as_deref() != Some(advertised_etag) {
+    if state.etag.as_deref() != Some(advertised_etag)
+        || state.client_version != CLIENT_VERSION
+        || state.source_identity != expected_source_identity
+    {
         return discover_connection_models(connection_name, true).await;
     }
 
@@ -185,12 +262,14 @@ pub async fn refresh_connection_models_for_etag(
         drop(locked);
         return discover_connection_models(connection_name, true).await;
     };
-    if current.etag.as_deref() != Some(advertised_etag) {
+    if current.etag.as_deref() != Some(advertised_etag)
+        || current.client_version != CLIENT_VERSION
+        || current.source_identity != expected_source_identity
+    {
         drop(locked);
         return discover_connection_models(connection_name, true).await;
     }
     current.refreshed_at_ms = now_ms;
-    current.client_version = CLIENT_VERSION.to_string();
     match locked.save() {
         Ok(()) => DiscoveryOutcome::default(),
         Err(error) => DiscoveryOutcome {
@@ -213,15 +292,27 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
         let Some(spec) = model_provider_spec(&connection.provider) else {
             continue;
         };
-        let catalog_source = spec.catalog_source;
-        if !force
-            && stores
+        let Some(mut source) = discovery_source(connection, &stores.cache, spec) else {
+            continue;
+        };
+        let source_identity = source.identity();
+        let cache_identity_matches =
+            stores
                 .cache
                 .model_lists
                 .get(&connection.name)
                 .is_some_and(|state| {
                     state.client_version == CLIENT_VERSION
-                        && now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS
+                        && state.source_identity == source_identity
+                });
+        if !force
+            && cache_identity_matches
+            && stores
+                .cache
+                .model_lists
+                .get(&connection.name)
+                .is_some_and(|state| {
+                    now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS
                 })
             && stores
                 .cache
@@ -231,50 +322,9 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
         {
             continue;
         }
-        let source = match connection.catalog_source.as_ref() {
-            Some(RemoteCatalogSourceOverride::ModelsDev { models_dev }) => {
-                DiscoverySource::ModelsDev {
-                    provider: models_dev.clone(),
-                }
-            }
-            Some(RemoteCatalogSourceOverride::Endpoint { endpoint }) => {
-                let discovery_protocol = match endpoint {
-                    RemoteCatalogEndpoint::OpenAiCompatible | RemoteCatalogEndpoint::Copilot => {
-                        DiscoveryProtocol::OpenAi
-                    }
-                    RemoteCatalogEndpoint::Anthropic => DiscoveryProtocol::Anthropic,
-                    RemoteCatalogEndpoint::Google => DiscoveryProtocol::Google,
-                    RemoteCatalogEndpoint::GoogleCloudCode => DiscoveryProtocol::GoogleCloudCode,
-                    RemoteCatalogEndpoint::Codex => DiscoveryProtocol::Codex,
-                };
-                let Some(first_party) = build_first_party_source(
-                    connection,
-                    &stores.cache,
-                    &connection.provider,
-                    discovery_protocol,
-                ) else {
-                    continue;
-                };
-                first_party
-            }
-            None => match catalog_source {
-                RemoteCatalogSource::ModelsDev { provider } => DiscoverySource::ModelsDev {
-                    provider: provider.to_string(),
-                },
-                RemoteCatalogSource::Endpoint(discovery_protocol) => {
-                    let Some(first_party) = build_first_party_source(
-                        connection,
-                        &stores.cache,
-                        &connection.provider,
-                        discovery_protocol,
-                    ) else {
-                        continue;
-                    };
-                    first_party
-                }
-                RemoteCatalogSource::None => continue,
-            },
-        };
+        if force || !cache_identity_matches {
+            source.discard_validator();
+        }
         jobs.push(DiscoveryJob {
             connection: connection.clone(),
             spec,
@@ -336,14 +386,6 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
                     .filter(|model| model.picker_enabled != Some(false))
                     .map(|model| model.id.clone())
                     .collect();
-                if supported.is_empty() {
-                    tracing::warn!(
-                        connection = %connection.name,
-                        discovered_count = models.len(),
-                        "live model discovery had no supported intersection; keeping previous models"
-                    );
-                    continue;
-                }
                 let remote_metadata: std::collections::BTreeMap<String, _> = models
                     .iter()
                     .filter(|model| model.picker_enabled != Some(false))
@@ -369,6 +411,7 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
                 let state = ModelListCacheState {
                     etag,
                     client_version: CLIENT_VERSION.to_string(),
+                    source_identity: fetched.source_identity.clone(),
                     refreshed_at_ms: now_ms,
                 };
                 if locked_cache.model_lists.get(&connection.name) != Some(&state) {
@@ -393,6 +436,7 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
                     ModelListCacheState {
                         etag,
                         client_version: CLIENT_VERSION.to_string(),
+                        source_identity: fetched.source_identity.clone(),
                         refreshed_at_ms: now_ms,
                     },
                 );
@@ -422,6 +466,50 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
     DiscoveryOutcome { changed, failures }
 }
 
+fn discovery_source(
+    connection: &muta_persistence::connections::Connection,
+    cache: &DiscoveryCache,
+    spec: &'static ModelProviderSpec,
+) -> Option<DiscoverySource> {
+    match connection.catalog_source.as_ref() {
+        Some(RemoteCatalogSourceOverride::ModelsDev { models_dev }) => {
+            Some(DiscoverySource::ModelsDev {
+                provider: models_dev.clone(),
+            })
+        }
+        Some(RemoteCatalogSourceOverride::Endpoint { endpoint }) => {
+            let protocol = match endpoint {
+                RemoteCatalogEndpoint::OpenAiCompatible | RemoteCatalogEndpoint::Copilot => {
+                    DiscoveryProtocol::OpenAi
+                }
+                RemoteCatalogEndpoint::Anthropic => DiscoveryProtocol::Anthropic,
+                RemoteCatalogEndpoint::Google => DiscoveryProtocol::Google,
+                RemoteCatalogEndpoint::GoogleCloudCode => DiscoveryProtocol::GoogleCloudCode,
+                RemoteCatalogEndpoint::Codex => DiscoveryProtocol::Codex,
+            };
+            build_first_party_source(connection, cache, spec, protocol)
+        }
+        None => match spec.catalog_source {
+            RemoteCatalogSource::ModelsDev { provider } => Some(DiscoverySource::ModelsDev {
+                provider: provider.to_string(),
+            }),
+            RemoteCatalogSource::Endpoint(protocol) => {
+                build_first_party_source(connection, cache, spec, protocol)
+            }
+            RemoteCatalogSource::None => None,
+        },
+    }
+}
+
+#[cfg(test)]
+pub(super) fn source_identity_for_connection(
+    connection: &muta_persistence::connections::Connection,
+    cache: &DiscoveryCache,
+) -> Option<String> {
+    let spec = model_provider_spec(&connection.provider)?;
+    discovery_source(connection, cache, spec).map(|source| source.identity())
+}
+
 /// Build the [`DiscoverySource::FirstParty`] variant for a connection,
 /// Returns `None` only when the
 /// connection's first route cannot be derived (unknown provider or an empty
@@ -432,20 +520,19 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
 fn build_first_party_source(
     connection: &muta_persistence::connections::Connection,
     cache: &DiscoveryCache,
-    provider: &str,
+    spec: &'static ModelProviderSpec,
     protocol: DiscoveryProtocol,
 ) -> Option<DiscoverySource> {
     let first_model = route_models(connection, cache)
         .into_iter()
         .next()
         .unwrap_or_default();
-    let (_wire, provider_base, provider_ua) = route_for_model(provider, &first_model)?;
+    let (_wire, provider_base, provider_ua) = route_for_model(&connection.provider, &first_model)?;
     let base_url = connection
         .base_url
         .clone()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| provider_base.to_string());
-    let spec = model_provider_spec(provider)?;
     let client_profile = if let Some(user_agent) = connection.user_agent.as_deref() {
         muta_contracts::ClientProfile::from_user_agent(user_agent)
     } else if connection.client_identity != muta_contracts::ClientIdentity::Native {

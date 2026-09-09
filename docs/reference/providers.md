@@ -151,6 +151,23 @@ Discovery facts are scoped to the connection. Remote protocol metadata may
 override a model's baseline route only for that connection, which is how
 Copilot can serve the same model id over different APIs on different plans.
 
+Official providers with a remote catalog use open admission: every visible
+model returned for that connection is eligible for the picker, including model
+ids unknown to the installed binary. Compiled models provide startup seeds and
+capability fallbacks; they do not retain a model that a successful remote
+catalog no longer returns. Explicit `inject` entries remain the only way to
+keep an unlisted model.
+
+A successful, structurally valid empty catalog means the connection currently
+has no available models and clears its prior list. Network, authorization,
+HTTP status, and schema failures preserve the last valid result instead.
+
+Catalog freshness and ETag validators are scoped to the complete request
+identity. Changing the source, endpoint, discovery protocol, or client
+emulation profile invalidates the old validator and triggers an unconditional
+fetch. This prevents a catalog selected for an older client profile from being
+treated as current after the profile changes.
+
 ## Adding a provider
 
 A new model provider must declare:

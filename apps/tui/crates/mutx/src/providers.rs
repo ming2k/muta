@@ -1467,8 +1467,8 @@ mod tests {
         assert_eq!(openai.protocol, WireProtocol::OpenAiChatCompletions);
         assert_eq!(chatgpt.protocol, WireProtocol::OpenAiResponses);
         assert!(
-            chatgpt.models.contains(&"gpt-5.6-sol"),
-            "the subscription template must expose the Sol model seed"
+            chatgpt.models.is_empty(),
+            "the subscription template must not hardcode a seed — Codex /backend-api/codex/models is authoritative"
         );
     }
 

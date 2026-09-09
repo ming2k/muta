@@ -560,7 +560,8 @@ impl ModelCapabilities {
     ///                      (per provider-instance + model id, applied last
     ///                      by the catalog derivation, see ADR-0149)
     /// 2. remote metadata — the `remote` argument here: fields a trusted
-    ///                      endpoint advertised (`fitting: true` templates)
+    ///                      endpoint advertised (presets whose
+    ///                      `RemoteCatalogSource` carries capability fields)
     /// 3. local baseline  — the static registry entry for the model id
     /// ```
     ///

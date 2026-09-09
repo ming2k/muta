@@ -49,10 +49,10 @@ thinking on, and turning thinking on does not set a depth. See
 ## How a model's ladder is resolved
 
 A model honors only a subset of the rungs above — its *ladder*. The effective
-ladder for a channel is resolved through one precedence chain (ADR-0065):
+ladder for a channel is resolved through one precedence chain (ADR-0203):
 
 ```
-live discovery (a fitting-enabled provider's GET /models)
+live discovery (a preset whose RemoteCatalogSource carries effort tiers)
        │   only Kimi K3 and Copilot advertise tiers here
        ▼
 static baseline   ←   the EFFORT_* consts, the compiled-in fallback

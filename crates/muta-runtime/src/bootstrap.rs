@@ -204,10 +204,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Live model-list discovery for API-sourced instances. Runs in the
     // BACKGROUND so slow/unreachable providers never delay the first frame:
     // every instance already has either its fixed snapshot or last known valid
-    // subset. The live `GET /models` result is intersected with the client's
-    // protocol-compatible model registry (or, for fitting-enabled trusted
-    // templates, materialized wholesale with capability metadata); failure or
-    // an empty intersection leaves that subset untouched. The session driver
+    // subset. The live `GET /models` result feeds the catalog's remote-catalog
+    // overlay (ADR-0203); transport/status/schema failure leaves that subset
+    // untouched, while a valid empty catalog clears it. The session driver
     // handles the refresh and broadcasts updated snapshots to the client.
     let req_tx_for_discovery = req_tx.clone();
     tokio::spawn(async move {

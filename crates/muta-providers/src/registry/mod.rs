@@ -499,10 +499,6 @@ mod spec_tests {
         for spec in MODEL_PROVIDER_SPECS {
             let resolved = model_provider_spec(spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
-            // `custom` is the one provider with an open model universe.
-            if spec.id != "custom" {
-                assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
-            }
         }
         // Unknown ids resolve to None; the loader rejects them (ADR-0201 INV-2).
         assert!(model_provider_spec("does-not-exist").is_none());

@@ -167,10 +167,10 @@ provider, because model existence and capability facts belong to the provider:
 
 ```toml
 [model_providers.deepseek]
-models.include = [{ id = "deepseek-v4-preview", context_window = 1_000_000 }]
-models.exclude = ["deepseek-chat-deprecated"]
+inject = [{ id = "deepseek-v4-preview", context_window = 1_000_000 }]
+block = ["deepseek-chat-deprecated"]
 
-[model_providers.deepseek.models.overrides."deepseek-v4-pro"]
+[model_providers.deepseek.overrides."deepseek-v4-pro"]
 max_output_tokens = 32768
 ```
 
@@ -178,9 +178,18 @@ The effective model set and capabilities for a connection `c` to provider `p`
 resolve in this order (ADR-0199, ADR-0201):
 
 ```text
-effective_models(c) = (Baseline(p) ∪ Include(p) ∪ Include(c)) ∖ Exclude(p) ∖ Exclude(c)
-capabilities(m)     = Overrides(c, m) ≺ Overrides(p, m) ≺ DiscoveryMetadata(c, m) ≺ Baseline(p, m)
+Candidates(p, c)      = RemoteCatalog(p, c) or CompiledSeed(p)
+effective_models(p,c) = (Filter(Candidates, c) ∪ Inject(p) ∪ Inject(c)) ∖ Block(p) ∖ Block(c)
+capabilities(m)       = Overrides(c,m) ≺ Overrides(p,m) ≺ RemoteMetadata(c,m) ≺ Baseline(p,m)
 ```
+
+Official remote-catalog providers default to `filter = "all"`; fixed providers
+default to `filter = "baseline"`. New connections persist that choice.
+Connections created before the policy field existed are migrated once: an old
+materialized provider snapshot is discarded, while models from the former
+`extra_models` field remain explicit injections. Consequently, removing a
+model from a successful official catalog removes it from the picker unless the
+user deliberately injected it.
 
 A connection may narrow or override the resolved set but must not declare a
 model the provider excludes — except under `provider = "custom"`, whose model

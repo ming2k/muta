@@ -1011,7 +1011,7 @@ async fn list_models_returns_status_error_on_non_2xx() {
 }
 
 #[tokio::test]
-async fn list_models_returns_empty_error_when_data_array_is_empty() {
+async fn list_models_accepts_authoritative_empty_data_array() {
     let mut server = Server::new_async().await;
     let _mock = server
         .mock("GET", "/v1/models")
@@ -1030,9 +1030,7 @@ async fn list_models_returns_empty_error_when_data_array_is_empty() {
         user_agent: None,
         extra_headers: &[],
     };
-    // An empty live list is reported as Empty (a failure), so the catalog
-    // keeps the snapshot rather than blanking the instance.
-    assert!(matches!(list_models(req).await, Err(ModelListError::Empty)));
+    assert!(list_models(req).await.unwrap().is_empty());
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

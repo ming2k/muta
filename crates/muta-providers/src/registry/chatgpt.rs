@@ -6,9 +6,13 @@ use muta_contracts::{Model, WireProtocol};
 
 use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
-/// Entitlement-neutral seed for the ChatGPT Subscription backend. Live Codex
-/// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
-/// signed-in account; the static seed never guesses plan-specific access.
+/// Empty seed: the ChatGPT Subscription backend's model set is fully
+/// discovery-derived from the account's live Codex catalog
+/// (`/backend-api/codex/models`). The static seed never guesses
+/// plan-specific access — the entitlement-aware endpoint is the single source
+/// of truth, and the picker is intentionally empty until that first fetch
+/// completes. Baseline capability metadata for ids the catalog returns still
+/// resolves through the model registry (`MODELS` below).
 pub use muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
@@ -123,11 +127,11 @@ mod tests {
     use muta_contracts::PromptCacheMode;
 
     #[test]
-    fn seed_is_entitlement_neutral_and_uses_responses() {
-        assert_eq!(
-            CHATGPT_BUILTIN_MODELS,
-            &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
-        );
+    fn seed_is_empty_and_uses_responses() {
+        // The picker seed is intentionally empty: Codex /backend-api/codex/models
+        // (the entitlement-aware endpoint) is authoritative, so nothing is
+        // hardcoded — see the module doc for why.
+        assert_eq!(CHATGPT_BUILTIN_MODELS, &[] as &[&str]);
         assert_eq!(MODEL_PROVIDER_SPEC.protocol, WireProtocol::OpenAiResponses);
     }
 

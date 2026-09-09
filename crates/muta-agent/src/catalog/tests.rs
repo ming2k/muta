@@ -3,6 +3,7 @@
 //! reasoning, the fitted-model overlay, and live discovery.
 
 use super::derive::{derive_channel, derive_entries, resolve_credential, route_models};
+use super::discovery::source_identity_for_connection;
 use super::picker::channel_model_info;
 use super::{
     build_catalog, build_picker_state, discover_connection_models, discover_provider_models,
@@ -231,9 +232,10 @@ fn adr0203_connection_pipe_valve_algebra() {
         ],
     );
 
-    // 1. Default safe filter ("baseline"): only models in baseline pass through.
+    // 1. Explicit safe filter ("baseline"): only models in baseline pass through.
     // gpt-6-astra is remote-discovered but NOT in baseline, so it is filtered out.
     let mut conn = instance("my-openai", Some("openai"));
+    conn.models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::Baseline));
     let models = route_models(&conn, &cache);
     assert!(models.contains(&"gpt-5.6-sol".to_string()));
     assert!(models.contains(&"gpt-5.6-luna".to_string()));
@@ -277,6 +279,41 @@ fn adr0203_connection_pipe_valve_algebra() {
         !models.contains(&"gpt-5.6-luna".to_string()),
         "block prunes unconditionally"
     );
+}
+
+#[test]
+fn remote_catalog_provider_defaults_to_open_admission() {
+    let mut cache = DiscoveryCache::default();
+    cache
+        .connection_models
+        .insert("chatgpt".to_string(), vec!["gpt-6-astra".to_string()]);
+    let connection = instance("chatgpt", Some("openai-subscription"));
+
+    assert_eq!(route_models(&connection, &cache), vec!["gpt-6-astra"]);
+
+    cache.connection_models.remove("chatgpt");
+    cache
+        .model_lists
+        .insert("chatgpt".to_string(), ModelListCacheState::default());
+    assert!(route_models(&connection, &cache).is_empty());
+}
+
+#[test]
+fn catalog_cache_identity_tracks_client_emulation() {
+    let cache = DiscoveryCache::default();
+    let mut connection = instance("chatgpt", Some("openai-subscription"));
+    let codex_identity = source_identity_for_connection(&connection, &cache).unwrap();
+
+    connection.client_identity = muta_contracts::ClientProfile::custom(
+        "codex_cli_rs/future",
+        vec![(
+            "openai-intent".to_string(),
+            "conversation-edits".to_string(),
+        )],
+    );
+    let future_identity = source_identity_for_connection(&connection, &cache).unwrap();
+
+    assert_ne!(codex_identity, future_identity);
 }
 
 #[test]
@@ -733,7 +770,7 @@ async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
     // The opencode-go preset's live catalog is the models.dev third-party
     // directory (not the relay's own /models). Discovery resolves the
     // embedded snapshot and materializes ids the client baseline does not
-    // know (e.g. glm-5.3) because fitting is enabled for the preset.
+    // know (e.g. glm-5.3) via the remote-catalog overlay (ADR-0203).
     let _sandbox = sandboxed_paths();
     let instances = Connections {
         connections: vec![Connection {
@@ -916,7 +953,54 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
 }
 
 #[tokio::test]
-async fn matching_response_etag_renews_stale_catalog_without_network() {
+async fn successful_empty_remote_catalog_clears_previous_models() {
+    let _sandbox = sandboxed_paths();
+    let mut server = mockito::Server::new_async().await;
+    let model_list = server
+        .mock("GET", "/v1/models")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[]}"#)
+        .create_async()
+        .await;
+    let mut connection = Connection {
+        name: "deepseek".to_string(),
+        provider: "deepseek".to_string(),
+        base_url: Some(format!("{}/v1/responses", server.url())),
+        ..Default::default()
+    };
+    connection.models.filter = Some(muta_contracts::ConnectionFilterPolicy::Named(
+        muta_contracts::NamedFilterPolicy::All,
+    ));
+    Connections {
+        connections: vec![connection],
+    }
+    .save()
+    .unwrap();
+
+    let mut cache = DiscoveryCache::default();
+    cache.connection_models.insert(
+        "deepseek".to_string(),
+        vec!["deepseek-v4-flash".to_string()],
+    );
+    cache
+        .model_lists
+        .insert("deepseek".to_string(), ModelListCacheState::default());
+    cache.save().unwrap();
+
+    let outcome = discover_connection_models("deepseek", true).await;
+    assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
+    assert!(outcome.failures.is_empty());
+    model_list.assert_async().await;
+
+    let cache = DiscoveryCache::load();
+    assert_eq!(cache.connection_models.get("deepseek"), Some(&Vec::new()));
+    let connections = Connections::load();
+    assert!(route_models(connections.get("deepseek").unwrap(), &cache).is_empty());
+}
+
+#[tokio::test]
+async fn orphaned_response_etag_does_not_renew_catalog_state() {
     let _sandbox = sandboxed_paths();
     let mut cache = DiscoveryCache::default();
     cache.model_lists.insert(
@@ -924,6 +1008,7 @@ async fn matching_response_etag_renews_stale_catalog_without_network() {
         ModelListCacheState {
             etag: Some("catalog-v2".to_string()),
             client_version: "stale-client".to_string(),
+            source_identity: "stale-source".to_string(),
             refreshed_at_ms: 0,
         },
     );
@@ -936,8 +1021,8 @@ async fn matching_response_etag_renews_stale_catalog_without_network() {
     let renewed = DiscoveryCache::load();
     let state = renewed.model_lists.get("chatgpt").expect("cache state");
     assert_eq!(state.etag.as_deref(), Some("catalog-v2"));
-    assert_ne!(state.client_version, "stale-client");
-    assert!(state.refreshed_at_ms > 0);
+    assert_eq!(state.client_version, "stale-client");
+    assert_eq!(state.refreshed_at_ms, 0);
 }
 
 #[test]
@@ -1161,11 +1246,14 @@ async fn etag_matching_stale_renews_timestamp() {
     connections.save().unwrap();
 
     let mut cache = DiscoveryCache::default();
+    let source_identity =
+        source_identity_for_connection(connections.get("test-etag-conn").unwrap(), &cache).unwrap();
     cache.model_lists.insert(
         "test-etag-conn".to_string(),
         ModelListCacheState {
             etag: Some("etag-abc".to_string()),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            source_identity,
             refreshed_at_ms: 1000, // very stale
         },
     );

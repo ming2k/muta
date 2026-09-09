@@ -39,7 +39,7 @@
 //! precedence chain (ADR-0065):
 //!
 //! ```text
-//! live discovery (a fitting-enabled provider's GET /models)
+//! live discovery (a preset whose RemoteCatalogSource carries effort tiers)
 //!        ↓  only Kimi & Copilot advertise tiers here
 //! static baseline  ←  the EFFORT_* consts in this module
 //!        ↓  the compiled-in fallback when upstream advertises nothing
@@ -481,7 +481,8 @@ pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medi
 ///   `think_efforts.valid_efforts` on its live `/models`
 ///   (platform.kimi.ai/docs/api/models-overview). This const is the pre-fetch
 ///   **seed**; `register_fitted_models` (ADR-0065) refreshes it from the live
-///   list at startup, and an empty live list never wipes the seed. K3 always
+///   list at startup. A valid catalog that omits K3 removes that model from the
+///   connection; a fetch failure retains the last valid result. K3 always
 ///   reasons; depth is tunable (default `max`).
 /// - **DeepSeek** (`deepseek-v4-pro` / `-flash`) — **upstream advertises
 ///   nothing**: its `/models` is a bare `{id, object, owned_by}` list

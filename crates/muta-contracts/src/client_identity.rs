@@ -30,11 +30,18 @@ pub const CLAUDE_CODE_CLIENT_HEADERS: &[(&str, &str)] = &[
     ("anthropic-version", "2023-06-01"),
 ];
 
-/// OpenAI Codex CLI version emulated by muta.
-pub const CODEX_VERSION: &str = "0.151.0";
+macro_rules! codex_version {
+    () => {
+        "0.153.4"
+    };
+}
+
+/// OpenAI Codex CLI compatibility version emulated by muta. The remote model
+/// catalog uses this request value when selecting its representation.
+pub const CODEX_VERSION: &str = codex_version!();
 
 /// User-Agent header value sent for OpenAI Codex client profile.
-pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.151.0";
+pub const CODEX_USER_AGENT: &str = concat!("codex_cli_rs/", codex_version!());
 
 /// Client identity headers used for OpenAI Codex profile.
 pub const CODEX_CLIENT_HEADERS: &[(&str, &str)] = &[

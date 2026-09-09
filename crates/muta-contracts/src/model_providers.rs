@@ -12,7 +12,7 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[&str] = &[
     "claude-haiku-4-5-20251001",
 ];
 
-pub const CHATGPT_BUILTIN_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[];
 
 pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
     "deepseek-v4-flash",

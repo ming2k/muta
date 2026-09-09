@@ -260,12 +260,13 @@ fn default_scope() -> String {
     "*".to_string()
 }
 
-/// Capability metadata fitted from a provider's live `GET /models` response
+/// Capability metadata overlaid from a provider's live `GET /models` response
 /// for one model id the client registry does not know. Persisted in the
 /// discovery cache (`models_discovery.json`) so the metadata survives
 /// restarts: live discovery refreshes it in the background, and a failed
 /// fetch leaves the last good values in place. Only instances created from a
-/// fitting-enabled template (trusted official endpoints) ever carry this.
+/// preset whose `RemoteCatalogSource` is an endpoint that returns capability
+/// fields (trusted official endpoints) ever carry this.
 /// See `muta_contracts::model::FittedModel`.
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct FittedModelInfo {
@@ -658,6 +659,11 @@ pub struct ModelListCacheState {
     pub etag: Option<String>,
     #[serde(default)]
     pub client_version: String,
+    /// Stable identity of the catalog request that produced this validator.
+    /// An ETag is reusable only for the same source, endpoint, protocol, and
+    /// client emulation profile.
+    #[serde(default)]
+    pub source_identity: String,
     #[serde(default)]
     pub refreshed_at_ms: i64,
 }
@@ -1802,6 +1808,7 @@ deepseek = "new-key"
             ModelListCacheState {
                 etag: Some("\"models-v1\"".to_string()),
                 client_version: "0.1.0".to_string(),
+                source_identity: "models-dev:deepseek".to_string(),
                 refreshed_at_ms: 1234,
             },
         );

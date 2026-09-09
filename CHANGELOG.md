@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remote model catalogs are authoritative for official connections.** Legacy
+  connections without an explicit admission policy now migrate to the `all`
+  filter; provider snapshots formerly persisted as connection injections are
+  removed while explicit legacy `extra_models` remain intact. Catalog cache
+  validators are scoped to the complete request identity, so changes to the
+  endpoint, protocol, or emulated client version force an unconditional
+  refresh. ChatGPT subscription discovery now identifies as Codex 0.153.4 and
+  admits newly listed models such as `gpt-6-astra` without a compiled model-id
+  update. A structurally valid empty catalog now clears stale models, while
+  transport, status, and schema failures continue to preserve the last valid
+  result.
+
 ## [0.43.0] - 2026-09-09
 
 ### Added

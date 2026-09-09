@@ -88,12 +88,14 @@ pub fn route_models_with_providers(
         return Vec::new();
     };
     let mut models = if spec.catalog_source != RemoteCatalogSource::None {
-        if let Some(discovered) = cache.connection_models.get(&connection.name)
-            && !discovered.is_empty()
-        {
-            discovered.clone()
-        } else {
-            spec.models.iter().map(|m| (*m).to_string()).collect()
+        match cache.connection_models.get(&connection.name) {
+            Some(discovered)
+                if !discovered.is_empty() || cache.model_lists.contains_key(&connection.name) =>
+            {
+                discovered.clone()
+            }
+            None if cache.model_lists.contains_key(&connection.name) => Vec::new(),
+            _ => spec.models.iter().map(|m| (*m).to_string()).collect(),
         }
     } else {
         spec.models.iter().map(|m| (*m).to_string()).collect()
@@ -102,16 +104,13 @@ pub fn route_models_with_providers(
     // Connection pipe admission gate (ADR-0203):
     // 1. Filter candidates through the connection pipe valve
     let is_custom = connection.provider == muta_persistence::connections::CUSTOM_PROVIDER;
-    let filter_policy = connection
-        .models
-        .filter
-        .as_ref()
-        .cloned()
-        .unwrap_or(if is_custom {
+    let filter_policy = connection.models.filter.as_ref().cloned().unwrap_or(
+        if is_custom || spec.catalog_source != RemoteCatalogSource::None {
             ConnectionFilterPolicy::Named(NamedFilterPolicy::All)
         } else {
             ConnectionFilterPolicy::Named(NamedFilterPolicy::Baseline)
-        });
+        },
+    );
     let baseline_ids: std::collections::HashSet<&str> =
         spec.baselines.iter().map(|m| m.id).collect();
     models.retain(|id| filter_policy.admits(id, baseline_ids.contains(id.as_str())));
