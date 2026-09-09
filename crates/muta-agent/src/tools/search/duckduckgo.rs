@@ -5,11 +5,12 @@
 //! often returning HTTP 200/202 with a "select all squares containing a duck"
 //! page and zero result links. When that happens we surface an honest,
 //! actionable error instead of a misleading "No results found". This backend is
-//! retained as an opt-in fallback for users who want keyless search and have a
+//! retained as an opt-in provider for users who want keyless search and have a
 //! clean egress IP, but it is no longer the default.
 
 use super::{MOZILLA_UA, ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
+use muta_contracts::{DUCKDUCKGO_HTML_ENDPOINT, DUCKDUCKGO_LITE_ENDPOINT};
 
 pub(crate) struct DdgProvider;
 
@@ -35,7 +36,7 @@ impl SearchProvider for DdgProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let lite = search_ddg_lite(client, query).await;
@@ -58,8 +59,8 @@ impl SearchProvider for DdgProvider {
 /// top-level navigation. Reduces (does NOT eliminate) DuckDuckGo's
 /// bot-challenge rate by matching the browser fingerprint. Cannot defeat
 /// challenges driven by IP reputation.
-fn browser_headers(origin: &str) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+fn browser_headers(origin: &str) -> http::header::HeaderMap {
+    use http::header::{HeaderMap, HeaderName, HeaderValue};
     let mut h = HeaderMap::with_capacity(9);
     let put = |h: &mut HeaderMap, name: &'static str, val: &'static str| {
         if let (Ok(n), Ok(v)) = (
@@ -81,10 +82,10 @@ fn browser_headers(origin: &str) -> reqwest::header::HeaderMap {
     put(&mut h, "sec-fetch-user", "?1");
     put(&mut h, "upgrade-insecure-requests", "1");
     if let Ok(v) = HeaderValue::from_str(&format!("{origin}/")) {
-        h.insert(reqwest::header::REFERER, v);
+        h.insert(http::header::REFERER, v);
     }
     if let Ok(v) = HeaderValue::from_str(origin) {
-        h.insert(reqwest::header::ORIGIN, v);
+        h.insert(http::header::ORIGIN, v);
     }
     h
 }
@@ -299,24 +300,28 @@ fn compose_ddg_failure(
     msg
 }
 
-async fn search_ddg_lite(client: &reqwest::Client, query: &str) -> Result<SearchAttempt, String> {
-    let endpoint = "https://lite.duckduckgo.com/lite/";
+async fn search_ddg_lite(
+    client: &crate::tools::web::http::WebHttp,
+    query: &str,
+) -> Result<SearchAttempt, String> {
+    let mut headers = browser_headers("https://lite.duckduckgo.com");
+    headers.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static(MOZILLA_UA),
+    );
     let response = client
-        .post(endpoint)
-        .header(reqwest::header::USER_AGENT, MOZILLA_UA)
-        .headers(browser_headers("https://lite.duckduckgo.com"))
-        .form(&[("q", query), ("kl", "us-en")])
-        .send()
+        .post_form(
+            DUCKDUCKGO_LITE_ENDPOINT,
+            headers,
+            &[("q", query), ("kl", "us-en")],
+        )
         .await
         .map_err(|e| format!("DuckDuckGo Lite request failed: {}", e))?;
-    let status = response.status().as_u16();
-    if !response.status().is_success() {
+    let status = response.status.as_u16();
+    if !response.is_success() {
         return Err(format!("DuckDuckGo Lite returned HTTP {}", status));
     }
-    let html = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read DuckDuckGo Lite response: {}", e))?;
+    let html = response.body;
     let results = parse_ddg_lite_results(&html);
     let snippet = body_snippet(&html);
     Ok(SearchAttempt {
@@ -326,24 +331,28 @@ async fn search_ddg_lite(client: &reqwest::Client, query: &str) -> Result<Search
     })
 }
 
-async fn search_ddg_html(client: &reqwest::Client, query: &str) -> Result<SearchAttempt, String> {
-    let endpoint = "https://html.duckduckgo.com/html/";
+async fn search_ddg_html(
+    client: &crate::tools::web::http::WebHttp,
+    query: &str,
+) -> Result<SearchAttempt, String> {
+    let mut headers = browser_headers("https://html.duckduckgo.com");
+    headers.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static(MOZILLA_UA),
+    );
     let response = client
-        .post(endpoint)
-        .header(reqwest::header::USER_AGENT, MOZILLA_UA)
-        .headers(browser_headers("https://html.duckduckgo.com"))
-        .form(&[("q", query), ("kl", "us-en")])
-        .send()
+        .post_form(
+            DUCKDUCKGO_HTML_ENDPOINT,
+            headers,
+            &[("q", query), ("kl", "us-en")],
+        )
         .await
         .map_err(|e| format!("DuckDuckGo HTML request failed: {}", e))?;
-    let status = response.status().as_u16();
-    if !response.status().is_success() {
+    let status = response.status.as_u16();
+    if !response.is_success() {
         return Err(format!("DuckDuckGo HTML returned HTTP {}", status));
     }
-    let html = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read DuckDuckGo HTML response: {}", e))?;
+    let html = response.body;
     let results = parse_ddg_results(&html);
     let snippet = body_snippet(&html);
     Ok(SearchAttempt {

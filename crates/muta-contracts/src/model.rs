@@ -331,7 +331,104 @@ impl DeclaredModel {
     }
 }
 
-/// Unified model scope configuration for preset-level or connection-level customization (ADR-0199).
+/// The default admission gate for models passing through a connection pipe (ADR-0203).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(untagged)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub enum ConnectionFilterPolicy {
+    Named(NamedFilterPolicy),
+    Glob(Vec<String>),
+}
+
+/// Standard named pipe filter policies (ADR-0203).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub enum NamedFilterPolicy {
+    /// Admit only models present in the compiled baseline (strict safe filter).
+    Baseline,
+    /// Admit all models delivered by the remote catalog source.
+    All,
+}
+
+impl Default for ConnectionFilterPolicy {
+    fn default() -> Self {
+        Self::Named(NamedFilterPolicy::Baseline)
+    }
+}
+
+impl ConnectionFilterPolicy {
+    /// Whether this filter policy admits `model_id`.
+    pub fn admits(&self, model_id: &str, is_in_baseline: bool) -> bool {
+        match self {
+            Self::Named(NamedFilterPolicy::Baseline) => is_in_baseline,
+            Self::Named(NamedFilterPolicy::All) => true,
+            Self::Glob(patterns) => patterns
+                .iter()
+                .any(|pattern| simple_glob_matches(pattern, model_id)),
+        }
+    }
+}
+
+/// Simple glob pattern matcher supporting leading and trailing wildcards (e.g. `gpt-*`, `*mini`, `*`).
+pub fn simple_glob_matches(pattern: &str, text: &str) -> bool {
+    if pattern == "*" || pattern == text {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        if let Some(suffix) = prefix.strip_prefix('*') {
+            text.contains(suffix)
+        } else {
+            text.starts_with(prefix)
+        }
+    } else if let Some(suffix) = pattern.strip_prefix('*') {
+        text.ends_with(suffix)
+    } else {
+        pattern == text
+    }
+}
+
+/// Sparse capability patch from a remote catalog or declaration (ADR-0203).
+///
+/// Follows tristate sparse merge semantics: `None` means absent/unspecified,
+/// allowing fallthrough to the layer below; `Some(val)` overrides explicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(default)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub struct ModelCapabilityPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ReasoningSupport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_levels: Option<Vec<String>>,
+}
+
+/// Unified model scope configuration for preset-level or connection-level customization (ADR-0199, ADR-0203).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default)]
 #[ts(
@@ -342,11 +439,14 @@ impl DeclaredModel {
     )
 )]
 pub struct ModelScopeConfig {
-    /// Explicitly declared or included models with optional capability facts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Pipeline admission filter rule (ADR-0203).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<ConnectionFilterPolicy>,
+    /// Explicitly declared or included/injected models with optional capability facts.
+    #[serde(default, alias = "inject", skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<DeclaredModel>,
-    /// Explicitly excluded or hidden model ids.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Explicitly excluded or blocked model ids.
+    #[serde(default, alias = "block", skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
     /// Per-model capability overrides keyed by exact model id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -385,8 +485,8 @@ impl ModelScopeConfig {
     )
 )]
 pub enum ModelTargetScope {
-    /// Preset-level customization (affects all connections using this preset).
-    Preset(String),
+    /// Provider-level customization (affects every connection to this provider).
+    Provider(String),
     /// Connection-level customization (affects this connection instance only).
     Connection(String),
 }

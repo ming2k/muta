@@ -18,7 +18,7 @@ use muta_contracts::{
 use muta_persistence::config::{Config, Credentials, DiscoveryCache};
 use muta_persistence::connection_usage::ConnectionUsage;
 use muta_persistence::connections::{Connection, Connections};
-use muta_persistence::presets::Presets;
+use muta_persistence::model_providers::ModelProviders;
 use muta_persistence::route_settings::RouteSettingsStore;
 use muta_persistence::session::{ProviderSelection, SessionStore};
 use std::sync::{Arc, RwLock};
@@ -51,15 +51,17 @@ pub(crate) struct ProviderEnv<'a> {
     pub provider_usage: &'a mut ConnectionUsage,
 }
 
-pub(crate) struct AddProviderParams {
+pub(crate) struct AddConnectionParams {
     pub name: String,
-    pub protocol: WireProtocol,
-    pub base_url: String,
+    pub provider: String,
+    /// Wire-protocol override. Honored only for the `custom` provider, whose
+    /// endpoint the connection owns; a curated provider owns its own wire.
+    pub protocol: Option<WireProtocol>,
+    pub base_url: Option<String>,
     pub api_key: SecretString,
     pub user_agent: Option<String>,
     pub models: Vec<String>,
     pub auth: muta_contracts::ConnectionAuth,
-    pub preset_id: Option<String>,
     pub client_identity: Option<ClientIdentity>,
 }
 
@@ -164,10 +166,10 @@ pub(crate) async fn switch(
     .await;
 }
 
-/// `AgentRequest::AddProvider` — create a connection (from a preset
-/// or as a pure-custom declaration), persist it to the state store, set its
-/// credential, then activate it. For OAuth presets the TUI runs
-/// [`authorize`] first, then calls this with `auth` set.
+/// `AgentRequest::AddConnection` — create a connection to a model provider,
+/// persist it to the state store, set its credential, then activate it. For
+/// OAuth providers the TUI runs [`authorize`] first, then calls this with
+/// `auth` set.
 pub(crate) async fn add(
     ProviderEnv {
         config,
@@ -177,71 +179,78 @@ pub(crate) async fn add(
         resp_tx,
         provider_usage,
     }: ProviderEnv<'_>,
-    params: AddProviderParams,
+    params: AddConnectionParams,
     pending_authorization: Option<PendingOAuthAuthorization>,
 ) {
-    let AddProviderParams {
+    let AddConnectionParams {
         name,
+        provider,
         protocol,
         base_url,
         api_key,
         user_agent,
         models,
         auth,
-        preset_id,
         client_identity,
     } = params;
     let mut connections = Connections::load();
-    let id = connections.unique_id(&name);
+    // The name IS the connection's identity (ADR-0201 INV-3): reject a
+    // duplicate with a suggested alternative instead of silently renaming it.
+    let name = match connections.check_new_name(&name) {
+        Ok(name) => name,
+        Err(reason) => {
+            reject(resp_tx, "Could not add connection", &reason);
+            return;
+        }
+    };
+    // The provider must resolve (ADR-0201 INV-2): an unknown value is a hard
+    // error and never degrades into a different connection kind.
+    let Some(spec) = muta_providers::model_provider_spec(&provider) else {
+        reject(
+            resp_tx,
+            "Could not add connection",
+            &format!("unknown model provider '{provider}'"),
+        );
+        return;
+    };
+    let is_custom = provider == muta_persistence::connections::CUSTOM_PROVIDER;
     let trimmed_key = api_key.expose_secret().trim();
-    // Pasted API key on an OAuth preset → ordinary ApiKey auth.
+    // Pasted API key on an OAuth provider → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
         (a, true) if a.is_oauth() => muta_contracts::ConnectionAuth::ApiKey,
         (other, _) => other,
     };
-    let base_url = {
-        let trimmed = base_url.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    };
-    // Stamp the preset id so the catalog derives this connection's routes from
-    // the preset. Only a known id is recorded; an unknown / blank value
-    // keeps the connection pure-custom (its declared models are honored).
-    let resolved_preset_id =
-        preset_id.filter(|pid| muta_providers::provider_preset_spec(pid).is_some());
-    // Sanitized declared model ids. Preset connections derive their model set
-    // and leave `models` empty; a preset that must still seed its list
-    // (custom-openai) declares it here.
+    let base_url = base_url.and_then(|url| {
+        let trimmed = url.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    // Sanitized declared model ids. A curated provider owns its model universe,
+    // so the list is an initial inclusion set; `custom` declares its own.
     let declared_models: Vec<String> = models
         .iter()
         .map(|m| muta_contracts::sanitize_model_id(m))
         .filter(|m| !m.is_empty())
         .collect();
-    let is_preset = resolved_preset_id.is_some();
-    // A pure-custom provider must declare at least one model; a preset
-    // connection with a preset that seeds none is a no-op.
-    if !is_preset && declared_models.is_empty() {
+    // `custom` must declare at least one model — nothing else supplies them.
+    if is_custom && declared_models.is_empty() {
+        reject(
+            resp_tx,
+            "Could not add connection",
+            "a custom connection must declare at least one model",
+        );
         return;
     }
     let active_model = declared_models
         .first()
         .cloned()
-        .or_else(|| {
-            resolved_preset_id
-                .as_deref()
-                .and_then(muta_providers::provider_preset_spec)
-                .and_then(|spec| spec.models.first())
-                .map(|m| (*m).to_string())
-        })
+        .or_else(|| spec.models.first().map(|m| (*m).to_string()))
         .unwrap_or_default();
 
     let client_identity = client_identity.unwrap_or_else(|| {
         if auth == muta_contracts::ConnectionAuth::AntigravityOAuth {
             ClientIdentity::Antigravity
         } else {
-            resolved_preset_id
-                .as_deref()
-                .and_then(muta_providers::provider_preset_spec)
-                .and_then(|spec| spec.user_agent)
+            spec.user_agent
                 .map(ClientIdentity::from_user_agent)
                 .unwrap_or_default()
         }
@@ -257,7 +266,7 @@ pub(crate) async fn add(
             _ => {
                 let _ = resp_tx.send(AgentResponse::ConnectStatus(
                     muta_contracts::ConnectStatus::Failed {
-                        provider: id.clone(),
+                        provider: name.clone(),
                         message: "OAuth authorization is missing or invalid; authorize this connection again"
                             .to_string(),
                     },
@@ -277,18 +286,18 @@ pub(crate) async fn add(
             Err(error) => {
                 let _ = resp_tx.send(AgentResponse::ConnectStatus(
                     muta_contracts::ConnectStatus::Failed {
-                        provider: id.clone(),
+                        provider: name.clone(),
                         message: format!("could not lock OAuth credential store: {error}"),
                     },
                 ));
                 return;
             }
         };
-        store.set(&id, tokens);
+        store.set(&name, tokens);
         if let Err(error) = store.save() {
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
                 muta_contracts::ConnectStatus::Failed {
-                    provider: id.clone(),
+                    provider: name.clone(),
                     message: format!("could not persist OAuth credentials: {error}"),
                 },
             ));
@@ -300,16 +309,16 @@ pub(crate) async fn add(
     let mut stored_api_key = false;
     if auth == muta_contracts::ConnectionAuth::ApiKey && !trimmed_key.is_empty() {
         let mut creds = Credentials::load();
-        creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
+        creds.set_api_key(&name, Some(SecretString::from(trimmed_key)));
         let save_err = creds.save().err().map(|e| e.to_string());
         if let Some(error_msg) = save_err {
             if stored_oauth && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await {
-                store.remove(&id);
+                store.remove(&name);
                 let _ = store.save();
             }
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
                 muta_contracts::ConnectStatus::Failed {
-                    provider: id.clone(),
+                    provider: name.clone(),
                     message: format!("could not persist API key: {error_msg}"),
                 },
             ));
@@ -320,19 +329,21 @@ pub(crate) async fn add(
 
     // Step 2: Publish connection to Connections store.
     let connection = Connection {
-        id: id.clone(),
-        name: (!name.trim().is_empty()).then(|| name.trim().to_string()),
-        preset_id: resolved_preset_id,
+        name: name.clone(),
+        provider: provider.clone(),
         auth,
         api_key_env: None,
         client_identity,
-        protocol: if is_preset { None } else { Some(protocol) },
-        base_url: if is_preset { None } else { base_url },
-        user_agent: if is_preset { None } else { user_agent },
-        models: if is_preset {
+        // The protocol override is meaningful only for `custom`; a curated
+        // provider owns its wire (and per-model wire overrides).
+        protocol: if is_custom { protocol } else { None },
+        base_url,
+        user_agent,
+        models: if declared_models.is_empty() {
             muta_contracts::model::ModelScopeConfig::default()
         } else {
             muta_contracts::model::ModelScopeConfig {
+                filter: None,
                 include: declared_models
                     .into_iter()
                     .map(|id| muta_contracts::model::DeclaredModel {
@@ -344,40 +355,39 @@ pub(crate) async fn add(
                 overrides: std::collections::BTreeMap::new(),
             }
         },
-        extra_models: Vec::new(),
     };
     connections.connections.push(connection);
     let conn_save_err = connections.save().err().map(|e| e.to_string());
     if let Some(error_msg) = conn_save_err {
         tracing::error!(%error_msg, "add: could not persist connection; rolling back credentials");
         if stored_oauth && let Ok(mut store) = muta_providers::oauth::AuthStore::lock().await {
-            store.remove(&id);
+            store.remove(&name);
             let _ = store.save();
         }
         if stored_api_key {
             let mut creds = Credentials::load();
-            creds.remove_api_key(&id);
+            creds.remove_api_key(&name);
             let _ = creds.save();
         }
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             muta_contracts::ConnectStatus::Failed {
-                provider: id.clone(),
+                provider: name.clone(),
                 message: format!("could not persist connection store: {error_msg}"),
             },
         ));
         return;
     }
 
-    config.default_connection = id.clone();
+    config.default_connection = name.clone();
     config.default_model = Some(active_model.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "add: could not persist selection");
     }
-    // Pin the newly-added provider to this session — adding a provider is
+    // Pin the newly-added connection to this session — adding a connection is
     // also a live switch, so it is pinned like `/models`.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
-            connection: id.clone(),
+            connection: name.clone(),
             model: Some(active_model.clone()),
         }))
         .await
@@ -389,7 +399,7 @@ pub(crate) async fn add(
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
     if auth.is_oauth() && auth != muta_contracts::ConnectionAuth::AntigravityOAuth {
-        let outcome = catalog::discover_connection_models(&id, true).await;
+        let outcome = catalog::discover_connection_models(&name, true).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
             catalog::prune_stale_models_on_disk();
@@ -412,14 +422,22 @@ pub(crate) async fn add(
             resp_tx,
             provider_usage,
         },
-        id,
+        name,
         active_model,
     )
     .await;
 }
 
-/// `AgentRequest::EditProvider` — update a connection's display name, endpoint
-/// override, credential, and client identity in place.
+/// Refuse a connection request with a user-visible error. The add / edit /
+/// rename handlers reject rather than silently degrading or renaming
+/// (ADR-0201 INV-2, INV-3).
+fn reject(resp_tx: &mpsc::UnboundedSender<AgentResponse>, title: &str, reason: &str) {
+    let _ = resp_tx.send(AgentResponse::Error(format!("{title}: {reason}")));
+}
+
+/// `AgentRequest::EditConnection` — update a connection's model provider,
+/// endpoint override, credential, and client identity in place. Keyed by
+/// `name`; renaming is the separate [`rename`] transaction.
 pub(crate) async fn edit(
     ProviderEnv {
         config,
@@ -429,40 +447,54 @@ pub(crate) async fn edit(
         provider_usage,
         ..
     }: ProviderEnv<'_>,
-    id: String,
     name: String,
-    protocol: WireProtocol,
-    base_url: String,
+    provider: String,
+    protocol: Option<WireProtocol>,
+    base_url: Option<String>,
     api_key: SecretString,
     client_identity: Option<ClientIdentity>,
 ) {
     let mut connections = Connections::load();
-    let trimmed_url = base_url.trim();
     let trimmed_key = api_key.expose_secret().trim();
-    let trimmed_name = name.trim();
-    let Some(instance) = connections.get_mut(&id) else {
+    // The provider must resolve (ADR-0201 INV-2).
+    if muta_providers::model_provider_spec(&provider).is_none() {
+        reject(
+            resp_tx,
+            "Could not edit connection",
+            &format!("unknown model provider '{provider}'"),
+        );
+        return;
+    }
+    let is_custom = provider == muta_persistence::connections::CUSTOM_PROVIDER;
+    let Some(instance) = connections.get_mut(&name) else {
+        reject(
+            resp_tx,
+            "Could not edit connection",
+            &format!("no connection named '{name}'"),
+        );
         return;
     };
-    if !trimmed_name.is_empty() {
-        instance.name = Some(trimmed_name.to_string());
-    }
+    instance.provider = provider;
     if let Some(ci) = client_identity {
         instance.client_identity = ci;
     }
-    // OAuth connections' endpoint and bearer are resolved by the auth flow;
-    // Preset connections' endpoints are derived from the hardcoded preset spec.
-    // Pure-custom connections (preset_id = None) adopt the edited base_url and transport.
+    // OAuth connections' endpoint and bearer are resolved by the auth flow.
+    // A curated provider owns its wire; only `custom` accepts a protocol
+    // override (a connection-level protocol would flatten per-model wire
+    // overrides such as opencode-go's).
     if !instance.auth.is_oauth() {
-        if instance.preset_id.is_none() {
-            if !trimmed_url.is_empty() {
-                instance.base_url = Some(trimmed_url.to_string());
-            }
-            instance.protocol = Some(protocol);
+        let trimmed_url = base_url.unwrap_or_default();
+        let trimmed_url = trimmed_url.trim();
+        if !trimmed_url.is_empty() {
+            instance.base_url = Some(trimmed_url.to_string());
+        }
+        if is_custom {
+            instance.protocol = protocol;
         }
         // An empty key keeps whatever the instance already had.
         if !trimmed_key.is_empty() {
             let mut creds = Credentials::load();
-            creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
+            creds.set_api_key(&name, Some(SecretString::from(trimmed_key)));
             if creds.save().is_err() {
                 tracing::warn!("edit: could not persist credential");
             }
@@ -475,8 +507,8 @@ pub(crate) async fn edit(
     // Only rebuild the live provider when editing the active one (so a new
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted state + the picker snapshot without switching.
-    if config.default_connection == id {
-        let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage)
+    if config.default_connection.eq_ignore_ascii_case(&name) {
+        let model = catalog::resolved_model_name_with_usage(config, &name, provider_usage)
             .unwrap_or_default();
         activate(
             ActivateEnv {
@@ -487,7 +519,158 @@ pub(crate) async fn edit(
                 resp_tx,
                 provider_usage,
             },
-            id,
+            name,
+            model,
+        )
+        .await;
+    } else {
+        let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
+        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+            config,
+            provider_usage,
+        )));
+    }
+}
+
+/// `AgentRequest::RenameConnection` — rename a connection, rewriting every hard
+/// join key in one transaction (ADR-0201 INV-4): `credentials.toml`,
+/// `auth.toml`, and `config.toml`'s `default_connection`. The regenerable
+/// stores (discovery cache, usage recency) expire on their own, and historical
+/// session / telemetry records keep the old name rather than being rewritten
+/// retroactively.
+pub(crate) async fn rename(
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        ..
+    }: ProviderEnv<'_>,
+    from: String,
+    to: String,
+) {
+    let mut connections = Connections::load();
+    if connections.get(&from).is_none() {
+        reject(
+            resp_tx,
+            "Could not rename connection",
+            &format!("no connection named '{from}'"),
+        );
+        return;
+    }
+    let trimmed_to = to.trim();
+    if trimmed_to.is_empty() {
+        reject(resp_tx, "Could not rename connection", "a name is required");
+        return;
+    }
+    // A case-only rename targets the same connection and is always allowed.
+    let same_connection = from.eq_ignore_ascii_case(trimmed_to);
+    if !same_connection && connections.contains(trimmed_to) {
+        let suggestion = connections.suggest_name(trimmed_to);
+        reject(
+            resp_tx,
+            "Could not rename connection",
+            &format!("a connection named '{trimmed_to}' already exists; try '{suggestion}'"),
+        );
+        return;
+    }
+    let new_name = trimmed_to.to_string();
+
+    // Stage every hard join key before writing anything.
+    let mut creds = Credentials::load();
+    let mut locked_auth = match muta_providers::oauth::AuthStore::lock().await {
+        Ok(store) => store,
+        Err(error) => {
+            reject(
+                resp_tx,
+                "Could not rename connection",
+                &format!("could not lock the OAuth credential store: {error}"),
+            );
+            return;
+        }
+    };
+    let carried_key = creds.api_key(&from).cloned();
+    let carried_tokens = locked_auth.remove(&from);
+    let was_default = config.default_connection.eq_ignore_ascii_case(&from);
+    let Some(instance) = connections.get_mut(&from) else {
+        unreachable!("existence checked above");
+    };
+    instance.name = new_name.clone();
+    if was_default {
+        config.default_connection = new_name.clone();
+    }
+
+    // Persist in dependency order, rolling back the earlier writes on failure
+    // so no join key is left pointing at the old name.
+    if let Some(key) = carried_key.clone() {
+        creds.set_api_key(&new_name, Some(key));
+    } else {
+        creds.remove_api_key(&new_name);
+    }
+    if let Some(tokens) = carried_tokens.clone() {
+        locked_auth.set(&new_name, tokens);
+    }
+    let mut failure: Option<String> = None;
+    if let Err(error) = creds.save() {
+        failure = Some(format!("could not persist credentials.toml: {error}"));
+    }
+    if failure.is_none()
+        && let Err(error) = locked_auth.save()
+    {
+        failure = Some(format!("could not persist auth.toml: {error}"));
+    }
+    if failure.is_none()
+        && let Err(error) = connections.save()
+    {
+        failure = Some(format!("could not persist connections.toml: {error}"));
+    }
+    if failure.is_none()
+        && was_default
+        && let Err(error) = config.save()
+    {
+        failure = Some(format!("could not persist config.toml: {error}"));
+    }
+
+    if let Some(reason) = failure {
+        // Roll back the in-memory stores and the name so a retry is clean.
+        if let Some(instance) = connections.get_mut(&new_name) {
+            instance.name = from.clone();
+        }
+        if let Some(tokens) = carried_tokens {
+            locked_auth.remove(&new_name);
+            locked_auth.set(&from, tokens);
+        }
+        let _ = locked_auth.save();
+        let mut rollback_creds = Credentials::load();
+        rollback_creds.remove_api_key(&new_name);
+        if let Some(key) = carried_key {
+            rollback_creds.set_api_key(&from, Some(key));
+        }
+        let _ = rollback_creds.save();
+        let _ = connections.save();
+        if was_default {
+            config.default_connection = from.clone();
+            let _ = config.save();
+        }
+        reject(resp_tx, "Could not rename connection", &reason);
+        return;
+    }
+
+    catalog::prune_stale_models(config, provider_usage);
+    if was_default {
+        let model = catalog::resolved_model_name_with_usage(config, &new_name, provider_usage)
+            .unwrap_or_default();
+        activate(
+            ActivateEnv {
+                config,
+                agent,
+                provider_for_task,
+                session: None,
+                resp_tx,
+                provider_usage,
+            },
+            new_name,
             model,
         )
         .await;
@@ -509,17 +692,17 @@ pub(crate) async fn include_model(
     model: muta_contracts::model::DeclaredModel,
 ) {
     match scope {
-        ModelTargetScope::Preset(preset_id) => {
-            let mut presets = Presets::load();
-            let preset = presets.get_or_create_mut(&preset_id);
-            preset.exclude.retain(|id| id != &model.id);
-            if let Some(pos) = preset.include.iter().position(|m| m.id == model.id) {
-                preset.include[pos] = model;
+        ModelTargetScope::Provider(provider_id) => {
+            let mut providers = ModelProviders::load();
+            let provider = providers.get_or_create_mut(&provider_id);
+            provider.exclude.retain(|id| id != &model.id);
+            if let Some(pos) = provider.include.iter().position(|m| m.id == model.id) {
+                provider.include[pos] = model;
             } else {
-                preset.include.push(model);
+                provider.include.push(model);
             }
-            if presets.save().is_err() {
-                tracing::warn!("include_model: could not persist presets.toml");
+            if providers.save().is_err() {
+                tracing::warn!("include_model: could not persist model_providers.toml");
                 return;
             }
         }
@@ -557,15 +740,15 @@ pub(crate) async fn exclude_model(
     model_id: String,
 ) {
     match scope {
-        ModelTargetScope::Preset(preset_id) => {
-            let mut presets = Presets::load();
-            let preset = presets.get_or_create_mut(&preset_id);
-            preset.include.retain(|m| m.id != model_id);
-            if !preset.exclude.contains(&model_id) {
-                preset.exclude.push(model_id);
+        ModelTargetScope::Provider(provider_id) => {
+            let mut providers = ModelProviders::load();
+            let provider = providers.get_or_create_mut(&provider_id);
+            provider.include.retain(|m| m.id != model_id);
+            if !provider.exclude.contains(&model_id) {
+                provider.exclude.push(model_id);
             }
-            if presets.save().is_err() {
-                tracing::warn!("exclude_model: could not persist presets.toml");
+            if providers.save().is_err() {
+                tracing::warn!("exclude_model: could not persist model_providers.toml");
                 return;
             }
         }
@@ -601,14 +784,14 @@ pub(crate) async fn clear_model_rule(
     model_id: String,
 ) {
     match scope {
-        ModelTargetScope::Preset(preset_id) => {
-            let mut presets = Presets::load();
-            if let Some(preset) = presets.presets.get_mut(&preset_id) {
-                preset.include.retain(|m| m.id != model_id);
-                preset.exclude.retain(|m| m != &model_id);
-                preset.overrides.remove(&model_id);
-                if presets.save().is_err() {
-                    tracing::warn!("clear_model_rule: could not persist presets.toml");
+        ModelTargetScope::Provider(provider_id) => {
+            let mut providers = ModelProviders::load();
+            if let Some(provider) = providers.model_providers.get_mut(&provider_id) {
+                provider.include.retain(|m| m.id != model_id);
+                provider.exclude.retain(|m| m != &model_id);
+                provider.overrides.remove(&model_id);
+                if providers.save().is_err() {
+                    tracing::warn!("clear_model_rule: could not persist model_providers.toml");
                     return;
                 }
             }
@@ -643,16 +826,16 @@ pub(crate) async fn set_model_capabilities(
     overrides: muta_contracts::model::CapabilityOverrides,
 ) {
     match scope {
-        ModelTargetScope::Preset(preset_id) => {
-            let mut presets = Presets::load();
-            let preset = presets.get_or_create_mut(&preset_id);
+        ModelTargetScope::Provider(provider_id) => {
+            let mut providers = ModelProviders::load();
+            let provider = providers.get_or_create_mut(&provider_id);
             if overrides.is_empty() {
-                preset.overrides.remove(&model_id);
+                provider.overrides.remove(&model_id);
             } else {
-                preset.overrides.insert(model_id, overrides);
+                provider.overrides.insert(model_id, overrides);
             }
-            if presets.save().is_err() {
-                tracing::warn!("set_model_capabilities: could not persist presets.toml");
+            if providers.save().is_err() {
+                tracing::warn!("set_model_capabilities: could not persist model_providers.toml");
                 return;
             }
         }
@@ -689,7 +872,7 @@ pub(crate) async fn edit_model(
         provider_usage,
         ..
     }: ProviderEnv<'_>,
-    provider_id: String,
+    connection: String,
     model: String,
     effort: Option<String>,
     thinking: Option<bool>,
@@ -705,20 +888,15 @@ pub(crate) async fn edit_model(
     // Resolve the route's transport to decide which knobs apply (Anthropic
     // honors thinking; OpenAI/Responses carry effort only; Google ignores both).
     let stores = catalog::Stores::load();
-    let Some(connection) = stores.connections.get(&provider_id) else {
+    let Some(conn) = stores.connections.get(&connection) else {
         return;
     };
-    let transport = catalog::derive_channel(
-        connection,
-        &model,
-        &stores.cache,
-        &stores.routes,
-        &stores.creds,
-    )
-    .transport;
+    let transport =
+        catalog::derive_channel(conn, &model, &stores.cache, &stores.routes, &stores.creds)
+            .transport;
 
     let mut routes = RouteSettingsStore::load();
-    let entry = routes.settings_for_mut(&provider_id, &model);
+    let entry = routes.settings_for_mut(&connection, &model);
     match transport {
         muta_contracts::catalog::Transport::Anthropic { .. } => {
             entry.effort = valid_effort;
@@ -737,16 +915,15 @@ pub(crate) async fn edit_model(
         entry.capability_overrides = (!record.is_empty()).then_some(record);
     }
     if entry.is_empty() {
-        routes.remove(&provider_id, &model);
+        routes.remove(&connection, &model);
     }
     if routes.save().is_err() {
         tracing::warn!("edit_model: could not persist route settings");
     }
 
-    let active_model =
-        catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage)
-            .unwrap_or_default();
-    if config.default_connection == provider_id && active_model == model {
+    let active_model = catalog::resolved_model_name_with_usage(config, &connection, provider_usage)
+        .unwrap_or_default();
+    if config.default_connection.eq_ignore_ascii_case(&connection) && active_model == model {
         activate(
             ActivateEnv {
                 config,
@@ -756,7 +933,7 @@ pub(crate) async fn edit_model(
                 resp_tx,
                 provider_usage,
             },
-            provider_id,
+            connection,
             model,
         )
         .await;
@@ -1550,11 +1727,7 @@ pub(crate) async fn query_connection_detail(
             )
         });
 
-    let preset_label = connection
-        .preset_id
-        .as_deref()
-        .and_then(muta_providers::provider_preset_spec)
-        .map(|spec| spec.id.to_string());
+    let provider_label = connection.provider.clone();
 
     let raw_key = catalog::resolve_credential(connection, &stores.creds);
     let api_key_masked = mask_api_key(raw_key.expose_secret());
@@ -1567,7 +1740,7 @@ pub(crate) async fn query_connection_detail(
         } else {
             format!("Missing (${env} not set)")
         }
-    } else if stores.creds.api_key(&connection.id).is_some() {
+    } else if stores.creds.api_key(&connection.name).is_some() {
         "credentials.toml".to_string()
     } else {
         "Not configured".to_string()
@@ -1610,10 +1783,9 @@ pub(crate) async fn query_connection_detail(
     };
 
     let mut initial_detail = muta_contracts::ConnectionDetail {
-        id: connection.id.clone(),
-        name: connection.display_name().to_string(),
-        preset_id: connection.preset_id.clone(),
-        preset_label,
+        name: connection.name.clone(),
+        provider: connection.provider.clone(),
+        provider_label,
         protocol,
         base_url: base_url.clone(),
         auth_type,
@@ -1622,7 +1794,7 @@ pub(crate) async fn query_connection_detail(
         client_identity: if connection.client_identity != ClientIdentity::Native {
             connection.client_identity.clone()
         } else if connection.auth == muta_contracts::ConnectionAuth::AntigravityOAuth
-            || connection.preset_id.as_deref() == Some("antigravity-oauth")
+            || connection.provider == "google-antigravity"
         {
             ClientIdentity::Antigravity
         } else {
@@ -1642,9 +1814,9 @@ pub(crate) async fn query_connection_detail(
 
     // Phase 2: Async remote query in background task.
     let resp_tx_bg = resp_tx.clone();
-    let conn_id = connection.id.clone();
+    let conn_id = connection.name.clone();
     let conn_auth = connection.auth;
-    let preset_id = connection.preset_id.clone();
+    let provider = connection.provider.clone();
     let raw_key_str = raw_key.expose_secret().to_string();
     tokio::spawn(async move {
         let (api_key, is_oauth) = if conn_auth.is_oauth() {
@@ -1661,8 +1833,7 @@ pub(crate) async fn query_connection_detail(
             (raw_key_str, false)
         };
 
-        let mut usage =
-            muta_providers::fetch_provider_usage(preset_id.as_deref(), &base_url, &api_key).await;
+        let mut usage = muta_providers::fetch_provider_usage(&provider, &base_url, &api_key).await;
 
         if is_oauth
             && let muta_contracts::ConnectionUsageState::Error(ref err) = usage
@@ -1675,7 +1846,7 @@ pub(crate) async fn query_connection_detail(
                     .await
             {
                 usage = muta_providers::fetch_provider_usage(
-                    preset_id.as_deref(),
+                    &provider,
                     &base_url,
                     refreshed.token.expose_secret(),
                 )
@@ -1742,16 +1913,21 @@ mod tests {
     }
 
     #[test]
-    fn connection_unique_id_slugifies_and_disambiguates() {
+    fn connection_names_are_unique_and_suggest_an_alternative() {
         let mut connections = Connections::default();
         connections.connections.push(Connection {
-            id: "my-relay".to_string(),
+            name: "my-relay".to_string(),
             ..Default::default()
         });
-        assert_eq!(connections.unique_id("My Relay"), "my-relay-2");
-        assert_eq!(connections.unique_id("  Acme  AI  "), "acme-ai");
-        assert_eq!(connections.unique_id("***"), "custom");
-        assert_eq!(connections.unique_id(""), "custom");
+        // A different name is accepted (trimmed), a duplicate is rejected with
+        // a suggestion, and an empty name is rejected (ADR-0201 INV-3).
+        assert_eq!(
+            connections.check_new_name(" My Relay ").unwrap(),
+            "My Relay"
+        );
+        let err = connections.check_new_name("my-relay").unwrap_err();
+        assert!(err.contains("my-relay-2"), "{err}");
+        assert!(connections.check_new_name("  ").is_err());
     }
 
     #[tokio::test]
@@ -1803,15 +1979,15 @@ mod tests {
             },
         };
 
-        let params = AddProviderParams {
+        let params = AddConnectionParams {
             name: "Mismatched Provider".to_string(),
-            protocol: WireProtocol::OpenAiResponses,
-            base_url: "https://api.openai.com".to_string(),
+            provider: "openai-subscription".to_string(),
+            protocol: None,
+            base_url: Some("https://api.openai.com".to_string()),
             api_key: "".into(),
             user_agent: None,
             models: vec!["gpt-5.6".to_string()],
             auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
-            preset_id: Some("chatgpt".to_string()),
             client_identity: None,
         };
 
@@ -1849,8 +2025,8 @@ mod tests {
 
         let mut conns = Connections::default();
         conns.connections.push(Connection {
-            id: "test-relay".to_string(),
-            name: Some("Test Relay".to_string()),
+            name: "test-relay".to_string(),
+            provider: "custom".to_string(),
             base_url: Some("https://example.com".to_string()),
             protocol: Some(WireProtocol::OpenAiChatCompletions),
             ..Default::default()
@@ -1864,7 +2040,7 @@ mod tests {
         let initial = resp_rx.recv().await.expect("initial response");
         match initial {
             AgentResponse::ConnectionDetail(detail) => {
-                assert_eq!(detail.id, "test-relay");
+                assert_eq!(detail.name, "test-relay");
                 assert_eq!(detail.usage, muta_contracts::ConnectionUsageState::Fetching);
             }
             other => panic!("expected ConnectionDetail, got {other:?}"),
@@ -1874,7 +2050,7 @@ mod tests {
         let final_resp = resp_rx.recv().await.expect("final response");
         match final_resp {
             AgentResponse::ConnectionDetail(detail) => {
-                assert_eq!(detail.id, "test-relay");
+                assert_eq!(detail.name, "test-relay");
                 // Unsupported since base_url is example.com and no API key is set
                 assert!(matches!(
                     detail.usage,
@@ -1948,12 +2124,12 @@ mod tests {
         let mut usage = ConnectionUsage::default();
         let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // 1. Include on preset scope
+        // 1. Include on provider scope
         include_model(
             &mut config,
             &resp_tx,
             &mut usage,
-            ModelTargetScope::Preset("deepseek".into()),
+            ModelTargetScope::Provider("deepseek".into()),
             muta_contracts::model::DeclaredModel {
                 id: "deepseek-v4-preview".into(),
                 context_window: Some(1_000_000),
@@ -1965,39 +2141,39 @@ mod tests {
         let picker = resp_rx.recv().await.expect("picker after include");
         assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
 
-        let presets = Presets::load();
-        let ds = presets.get("deepseek").expect("preset saved");
+        let providers = ModelProviders::load();
+        let ds = providers.get("deepseek").expect("provider scope saved");
         assert_eq!(ds.include.len(), 1);
         assert_eq!(ds.include[0].id, "deepseek-v4-preview");
 
-        // 2. Exclude on preset scope
+        // 2. Exclude on provider scope
         exclude_model(
             &mut config,
             &resp_tx,
             &mut usage,
-            ModelTargetScope::Preset("deepseek".into()),
+            ModelTargetScope::Provider("deepseek".into()),
             "deepseek-chat".into(),
         )
         .await;
         let _ = resp_rx.recv().await;
 
-        let presets = Presets::load();
-        let ds = presets.get("deepseek").unwrap();
+        let providers = ModelProviders::load();
+        let ds = providers.get("deepseek").unwrap();
         assert_eq!(ds.exclude, vec!["deepseek-chat"]);
 
-        // 3. Clear rule on preset scope
+        // 3. Clear rule on provider scope
         clear_model_rule(
             &mut config,
             &resp_tx,
             &mut usage,
-            ModelTargetScope::Preset("deepseek".into()),
+            ModelTargetScope::Provider("deepseek".into()),
             "deepseek-chat".into(),
         )
         .await;
         let _ = resp_rx.recv().await;
 
-        let presets = Presets::load();
-        let ds = presets.get("deepseek").unwrap();
+        let providers = ModelProviders::load();
+        let ds = providers.get("deepseek").unwrap();
         assert!(!ds.exclude.contains(&"deepseek-chat".to_string()));
 
         muta_persistence::paths::set_test_default(None);

@@ -47,6 +47,12 @@ pub(super) async fn handle_send_chat(
     app.show_chat_surface();
     app.suggestion_index = None;
     app.input_scroll = 0;
+    // The latency timeline starts here: the daemon records dispatch, this
+    // records the moment the user pressed Enter.
+    app.last_submit_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_millis() as u64);
 
     let images = std::mem::take(&mut app.pending_images);
     let text_pastes = std::mem::take(&mut app.pending_text_pastes);
@@ -175,16 +181,16 @@ pub(super) async fn handle_send_chat(
             });
         }
     } else if let Some((start, end)) = app.selection.active_normalized_range() {
-        // Enter on a selected step: navigate into an runner
+        // Enter on a selected step: navigate into a subagent
         // task, otherwise toggle that step's expansion.
         if start.message_idx == end.message_idx {
             let mi = start.message_idx;
             let mut messages = std::mem::take(&mut app.messages);
-            // An runner task navigates into its view instead
+            // An subagent task navigates into its view instead
             // of expanding.
             let enter_id =
                 resolve_focused_mut(&mut messages, &app.focus_stack, mi).and_then(|message| {
-                    if message.is_runner_task() {
+                    if message.is_subagent_task() {
                         message.tool_step_call_id().map(String::from)
                     } else {
                         None
@@ -192,7 +198,7 @@ pub(super) async fn handle_send_chat(
                 });
             if let Some(id) = enter_id {
                 app.messages = messages;
-                app.enter_runner(id);
+                app.enter_subagent(id);
             } else {
                 let toggled = app.toggle_step_pinned(&mut messages, mi);
                 app.messages = messages;

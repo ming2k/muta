@@ -4,7 +4,7 @@
 //! so that selection and copy operate on semantic units (blocks) rather than
 //! terminal grid characters.
 
-use muta_contracts::{Role, RunnerEvent};
+use muta_contracts::{Role, SubagentEvent};
 
 use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_ENUMERATE_COLS};
 use unicode_width::UnicodeWidthStr;
@@ -28,7 +28,7 @@ pub enum ToolStepStatus {
     /// like `Ok`/`Failed`: a later result or cancel event is ignored.
     Cancelled,
     /// Stopped by the user (the turn was interrupted) *after* producing real
-    /// work: the runner's partial transcript was preserved. Distinct from
+    /// work: the subagent's partial transcript was preserved. Distinct from
     /// [`ToolStepStatus::Cancelled`] (nothing recovered) and
     /// [`ToolStepStatus::Failed`] (the sub-task errored on its own): this is
     /// resumable work the user deliberately cut short.
@@ -138,10 +138,10 @@ pub enum MessageKind {
     ToolStep {
         id: String,
         name: String,
-        /// The bound runner profile name (`explore` / `plan` / `verify` / …)
-        /// for an runner-spawning tool step, populated from the first
-        /// `RunnerEvent::Started` and used to label the step by its role.
-        /// `None` for non-runner steps, or until the `Started` event lands.
+        /// The bound subagent profile name (`explore` / `plan` / `verify` / …)
+        /// for a subagent-spawning tool step, populated from the first
+        /// `SubagentEvent::Started` and used to label the step by its role.
+        /// `None` for non-subagent steps, or until the `Started` event lands.
         profile: Option<String>,
         arguments: String,
         output: Option<String>,
@@ -155,7 +155,7 @@ pub enum MessageKind {
         /// fallback for restored sessions that predate the typed payload.
         ///
         /// Boxed to keep this enum variant small: `ToolOutput` (and especially
-        /// its `Runner`/`Patch` variants) is large enough that an unboxed
+        /// its `Subagent`/`Patch` variants) is large enough that an unboxed
         /// `Option<ToolOutput>` would dominate the `MessageKind` enum size
         /// (clippy::large_enum_variant). The indirection is transparent to
         /// callers — the surrounding accessors deref it as needed.
@@ -170,26 +170,26 @@ pub enum MessageKind {
         user_pinned: bool,
         duration_ms: Option<u64>,
         /// Wall-clock instant the step started, so the UI can show a live
-        /// elapsed time while the call (or runner) is still running.
+        /// elapsed time while the call (or subagent) is still running.
         /// `Instant` is cheap to capture at construction time and is not
         /// serialized — session restore reconstructs finished steps without it.
         started_at: Option<std::time::Instant>,
-        /// Set when this runner surfaced a permission / user-input request that
+        /// Set when this subagent surfaced a permission / user-input request that
         /// is still parked awaiting a human decision. The peek row reads it to
         /// show `awaiting approval` instead of the last tool activity, which
-        /// would misleadingly suggest the runner is still making progress.
-        /// Cleared by the next progress event from this runner (tool call,
+        /// would misleadingly suggest the subagent is still making progress.
+        /// Cleared by the next progress event from this subagent (tool call,
         /// tool result, or streamed text) and on any terminal transition.
         awaiting: bool,
-        /// Latest free-text activity line the runner reported via
-        /// `RunnerEvent::Activity` (`waiting for model`, `waiting to retry
+        /// Latest free-text activity line the subagent reported via
+        /// `SubagentEvent::Activity` (`waiting for model`, `waiting to retry
         /// (3s)`, …). The peek row prefers it over the derived
         /// `starting`/`thinking` fallbacks while no child event has landed
         /// yet, so a long model call reads as alive instead of stuck on
         /// `starting`. Not serialized — restored sessions render terminal
         /// steps, which never show a peek.
         activity: Option<String>,
-        /// Child events emitted by an runner spawned from this tool step.
+        /// Child events emitted by a subagent spawned from this tool step.
         children: Vec<TranscriptMessage>,
     },
     Reasoning {
@@ -548,6 +548,17 @@ impl Block {
             Block::Table { rendered, .. } => rendered,
             Block::Rule => "",
             Block::Break => "\n",
+        }
+    }
+
+    /// Returns the inline markup metadata of this block, if it has one.
+    pub fn inline(&self) -> Option<&Inline> {
+        match self {
+            Block::Text(inline)
+            | Block::Quote(inline)
+            | Block::Heading { inline, .. }
+            | Block::ListItem { inline, .. } => Some(inline),
+            _ => None,
         }
     }
 
@@ -1080,9 +1091,9 @@ impl TranscriptMessage {
         *awaiting = false;
         let output = output.into();
         // Classify from the structured result (data-level: a non-zero shell
-        // exit, an explicit `ToolOutput::Error`, a `failed` runner). The
+        // exit, an explicit `ToolOutput::Error`, a `failed` subagent). The
         // legacy `starts_with("Error")` text fallback was removed once tool
-        // error sites migrated to `ToolOutput::Error` and runners carried
+        // error sites migrated to `ToolOutput::Error` and subagents carried
         // an explicit `failed` flag — classification is now fully data-driven.
         // Permission denial gets its own status so the UI shows it distinctly
         // from a runtime error.
@@ -1093,12 +1104,12 @@ impl TranscriptMessage {
             ToolStepStatus::Denied
         } else if matches!(
             &structured,
-            muta_contracts::ToolOutput::Runner {
+            muta_contracts::ToolOutput::Subagent {
                 interrupted: true,
                 ..
             }
         ) {
-            // A cooperatively-drained runner: the user interrupted the turn,
+            // A cooperatively-drained subagent: the user interrupted the turn,
             // but the partial transcript was preserved. Classified before
             // `is_error()` because interruption is not a failure.
             ToolStepStatus::Interrupted
@@ -1202,9 +1213,9 @@ impl TranscriptMessage {
 
     /// Mark a still-running tool step as cancelled. Idempotent: a step that
     /// already reached a terminal state (`Ok` / `Failed` / `Cancelled`) is left
-    /// untouched and returns `false`. When the step is a `task` (runner),
+    /// untouched and returns `false`. When the step is a `task` (subagent),
     /// its still-running nested tool children are cancelled too, so an aborted
-    /// runner never leaves a "running" child step behind.
+    /// subagent never leaves a "running" child step behind.
     pub fn cancel_tool_step(&mut self, id: &str) -> bool {
         let MessageKind::ToolStep {
             id: step_id,
@@ -1224,7 +1235,7 @@ impl TranscriptMessage {
     }
 
     /// Recursively cancel every still-running tool step within this message
-    /// (used for runner children and as a defensive sweep). Returns `true`
+    /// (used for subagent children and as a defensive sweep). Returns `true`
     /// if anything transitioned.
     pub fn cancel_all_running(&mut self) -> bool {
         let (step_running, child_changed) = {
@@ -1272,10 +1283,10 @@ impl TranscriptMessage {
         }
     }
 
-    /// Append an runner event as a nested child of this tool step.
+    /// Append a subagent event as a nested child of this tool step.
     ///
     /// Returns `true` if this message is a tool step and the event was stored.
-    pub fn push_runner_event(&mut self, event: &RunnerEvent) -> bool {
+    pub fn push_subagent_event(&mut self, event: &SubagentEvent) -> bool {
         let MessageKind::ToolStep {
             children,
             profile,
@@ -1290,37 +1301,37 @@ impl TranscriptMessage {
         // (permission / ask-user / input) park it, so the peek row can say
         // `awaiting approval` instead of replaying the last tool activity.
         match event {
-            RunnerEvent::PermissionRequest(_)
-            | RunnerEvent::UserQuestionRequest(_)
-            | RunnerEvent::StdinRequest(_) => *awaiting = true,
-            RunnerEvent::ToolCall { .. }
-            | RunnerEvent::ToolResult { .. }
-            | RunnerEvent::StreamStart { .. }
-            | RunnerEvent::StreamDelta(_)
-            | RunnerEvent::StreamEnd(_)
-            | RunnerEvent::StreamReasoningStart { .. }
-            | RunnerEvent::StreamReasoningDelta(_)
-            | RunnerEvent::StreamReasoningEnd(_) => *awaiting = false,
+            SubagentEvent::PermissionRequest(_)
+            | SubagentEvent::UserQuestionRequest(_)
+            | SubagentEvent::StdinRequest(_) => *awaiting = true,
+            SubagentEvent::ToolCall { .. }
+            | SubagentEvent::ToolResult { .. }
+            | SubagentEvent::StreamStart { .. }
+            | SubagentEvent::StreamDelta(_)
+            | SubagentEvent::StreamEnd(_)
+            | SubagentEvent::StreamReasoningStart { .. }
+            | SubagentEvent::StreamReasoningDelta(_)
+            | SubagentEvent::StreamReasoningEnd(_) => *awaiting = false,
             _ => {}
         }
         match event {
-            // The runner announced its role — stamp it on the step so the
-            // renderer can draw an `[RUNNER_EXPLORE]` / `[PLAN]` role badge in front
-            // of the summary instead of a generic `[ENVOY]`.
+            // The subagent announced its role — stamp it on the step so the
+            // renderer can draw an `[SUBAGENT_EXPLORE]` / `[PLAN]` role badge in front
+            // of the summary instead of a generic `[SUBAGENT]`.
             // No child message is produced.
-            RunnerEvent::Started { profile: name } => {
+            SubagentEvent::Started { profile: name } => {
                 *profile = Some(name.clone());
             }
-            RunnerEvent::StreamStart { round, turn } => {
+            SubagentEvent::StreamStart { round, turn } => {
                 children.push(
                     TranscriptMessage::new(Role::Assistant, "")
                         .with_round(*round)
-                        // `turn` is the runner's 0-indexed model-request
+                        // `turn` is the subagent's 0-indexed model-request
                         // position; the transcript's `turn` is 1-indexed.
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            RunnerEvent::StreamDelta(delta) => {
+            SubagentEvent::StreamDelta(delta) => {
                 // Identity-addressed (ADR-0114): fold the delta into the
                 // latest assistant-text child of the *same* stream turn, not
                 // merely the last child — a tool-call/result child can be
@@ -1337,7 +1348,7 @@ impl TranscriptMessage {
                     children.push(msg);
                 }
             }
-            RunnerEvent::StreamEnd(content) => {
+            SubagentEvent::StreamEnd(content) => {
                 if let Some(last) = children
                     .iter_mut()
                     .rfind(|m| m.role == Role::Assistant && matches!(m.kind, MessageKind::Text))
@@ -1348,7 +1359,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::new(Role::Assistant, content.clone()));
                 }
             }
-            // The runner's live reasoning chain, folded into the same
+            // The subagent's live reasoning chain, folded into the same
             // `MessageKind::Reasoning` message a resumed session restores from
             // `reasoning_content` — so a live drill-in and a reloaded one show
             // the same children. Placement mirrors the wire order the child
@@ -1356,14 +1367,14 @@ impl TranscriptMessage {
             // calls), so the trace lands in the right turn band. Disclosed
             // chains only: the sender gates hidden-chain models out at the
             // source, so no phantom summary trace can appear here.
-            RunnerEvent::StreamReasoningStart { round, turn } => {
+            SubagentEvent::StreamReasoningStart { round, turn } => {
                 children.push(
                     TranscriptMessage::reasoning("")
                         .with_round(*round)
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            RunnerEvent::StreamReasoningDelta(delta) => {
+            SubagentEvent::StreamReasoningDelta(delta) => {
                 // Identity-addressed (ADR-0114): fold into the latest still-
                 // streaming thinking child. `StreamReasoningStart` pushes a
                 // stamped Thinking child; a tool-call child landing between
@@ -1377,7 +1388,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::reasoning(delta));
                 }
             }
-            RunnerEvent::StreamReasoningEnd(content) => {
+            SubagentEvent::StreamReasoningEnd(content) => {
                 if let Some(last) = children
                     .iter_mut()
                     .rfind(|m| m.is_reasoning() && m.is_reasoning_streaming())
@@ -1392,7 +1403,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::reasoning(content));
                 }
             }
-            RunnerEvent::ToolCall {
+            SubagentEvent::ToolCall {
                 id,
                 name,
                 arguments,
@@ -1405,7 +1416,7 @@ impl TranscriptMessage {
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            RunnerEvent::ToolResult {
+            SubagentEvent::ToolResult {
                 id,
                 output,
                 duration_ms,
@@ -1441,26 +1452,26 @@ impl TranscriptMessage {
                     children.push(msg);
                 }
             }
-            RunnerEvent::Notice(notice) => {
+            SubagentEvent::Notice(notice) => {
                 children.push(TranscriptMessage::notice_from_core(notice));
             }
-            // The runner reported a free-text activity line (`waiting for
+            // The subagent reported a free-text activity line (`waiting for
             // model`, `waiting to retry (3s)`). Stored for the peek row so a
             // stretch with no child events still reads as alive. No child
             // message is produced.
-            RunnerEvent::Activity(text) => *activity = Some(text.clone()),
-            // Full-duplex (ADR-0029): an runner surfaced a permission /
-            // ask_user request up through the runner tool. The down-direction
+            SubagentEvent::Activity(text) => *activity = Some(text.clone()),
+            // Full-duplex (ADR-0029): a subagent surfaced a permission /
+            // ask_user request up through the subagent tool. The down-direction
             // reply (registry → handle → reply_permission / reply_user_question)
             // is wired at the agent layer; rendering the nested prompt in the
             // TUI and routing the user's answer back down is the harness↔TUI
             // integration step that follows. Until then these are observed but
             // not rendered as a nested child step (the request still reaches
-            // the harness via the `RoundEvent::Runner` envelope, so a future
+            // the harness via the `RoundEvent::Subagent` envelope, so a future
             // handler can attach without changing the event shape).
-            RunnerEvent::PermissionRequest(_)
-            | RunnerEvent::UserQuestionRequest(_)
-            | RunnerEvent::StdinRequest(_) => {}
+            SubagentEvent::PermissionRequest(_)
+            | SubagentEvent::UserQuestionRequest(_)
+            | SubagentEvent::StdinRequest(_) => {}
         }
         true
     }
@@ -1634,26 +1645,26 @@ impl TranscriptMessage {
         }
     }
 
-    /// A tool step that spawns an runner — the read-only `runner` tool or the
-    /// write-capable `runner_code` tool. Such steps render as a compact,
-    /// non-expandable line that navigates into a dedicated runner view on
+    /// A tool step that spawns a subagent — the read-only `subagent` tool or the
+    /// write-capable `delegate_code` tool. Such steps render as a compact,
+    /// non-expandable line that navigates into a dedicated subagent view on
     /// activation (see the TUI focus stack) rather than expanding inline.
-    pub fn is_runner_task(&self) -> bool {
+    pub fn is_subagent_task(&self) -> bool {
         matches!(
             &self.kind,
             MessageKind::ToolStep { name, .. }
                 if matches!(
                     name.as_str(),
-                    "spawn_runner" | "runner" | "runner_code" | "runner_mcp"
+                    "spawn_agent" | "delegate_code" | "delegate_mcp"
                 )
         )
     }
 
-    /// The bound runner profile name (`explore` / `plan` / `verify` / …), used
+    /// The bound subagent profile name (`explore` / `plan` / `verify` / …), used
     /// by the inline step's role badge. `None` until the `Started` event lands
-    /// (or for non-runner steps); the renderer falls back to a generic
-    /// `[RUNNER]` badge then.
-    pub fn runner_profile(&self) -> Option<&str> {
+    /// (or for non-subagent steps); the renderer falls back to a generic
+    /// `[SUBAGENT]` badge then.
+    pub fn subagent_profile(&self) -> Option<&str> {
         match &self.kind {
             MessageKind::ToolStep { profile, .. } => profile.as_deref(),
             _ => None,
@@ -1661,7 +1672,7 @@ impl TranscriptMessage {
     }
 
     /// The call id of a tool step, used as the addressable identity of a
-    /// runner task for the focus stack.
+    /// subagent task for the focus stack.
     pub fn tool_step_call_id(&self) -> Option<&str> {
         match &self.kind {
             MessageKind::ToolStep { id, .. } => Some(id),
@@ -1669,9 +1680,9 @@ impl TranscriptMessage {
         }
     }
 
-    /// The nested child messages emitted by an runner task. Returns `None`
+    /// The nested child messages emitted by a subagent task. Returns `None`
     /// for non-tool-step messages.
-    pub fn runner_children(&self) -> Option<&[TranscriptMessage]> {
+    pub fn subagent_children(&self) -> Option<&[TranscriptMessage]> {
         match &self.kind {
             MessageKind::ToolStep { children, .. } => Some(children),
             _ => None,
@@ -1679,49 +1690,49 @@ impl TranscriptMessage {
     }
 
     /// Mutable access to a tool step's child messages (used when the view is
-    /// zoomed into an runner and its children are the active message stream).
-    pub fn runner_children_mut(&mut self) -> Option<&mut Vec<TranscriptMessage>> {
+    /// zoomed into a subagent and its children are the active message stream).
+    pub fn subagent_children_mut(&mut self) -> Option<&mut Vec<TranscriptMessage>> {
         match &mut self.kind {
             MessageKind::ToolStep { children, .. } => Some(children),
             _ => None,
         }
     }
 
-    /// The runner's role (`explore` / `plan` / `verify` / …), identified by
+    /// The subagent's role (`explore` / `plan` / `verify` / …), identified by
     /// the `Started` event. `None` for non-task steps and before the role is
-    /// known. The Runner page header renders this as the `[ROLE]` tag between
-    /// the `ENVOY` identity and the task title.
-    pub fn runner_role(&self) -> Option<String> {
+    /// known. The Subagent page header renders this as the `[ROLE]` tag between
+    /// the `SUBAGENT` identity and the task title.
+    pub fn subagent_role(&self) -> Option<String> {
         match &self.kind {
             MessageKind::ToolStep { profile, .. } => profile.clone(),
             _ => None,
         }
     }
 
-    /// The runner's task description (the `description` argument), truncated
-    /// for display. Shown as the title of the Runner page header.
-    pub fn runner_description(&self) -> String {
+    /// The subagent's task description (the `description` argument), truncated
+    /// for display. Shown as the title of the Subagent page header.
+    pub fn subagent_description(&self) -> String {
         let MessageKind::ToolStep { arguments, .. } = &self.kind else {
-            return "Runner".to_string();
+            return "Subagent".to_string();
         };
         let label = parse_arguments_kv(arguments)
             .into_iter()
             .find(|(k, _)| k == "description")
             .map(|(_, v)| v)
-            .unwrap_or_else(|| "Runner".to_string());
+            .unwrap_or_else(|| "Subagent".to_string());
         truncate(&label, 48)
     }
 
-    /// One-line live "peek" at the runner's current activity, e.g.
+    /// One-line live "peek" at the subagent's current activity, e.g.
     /// `running Grep "foo"  12s` or `running thinking  8s`. Shown as the
-    /// step's second row while the runner runs and replaced in place by
-    /// [`Self::runner_outcome_line`] when the step terminates. Returns `None`
+    /// step's second row while the subagent runs and replaced in place by
+    /// [`Self::subagent_outcome_line`] when the step terminates. Returns `None`
     /// for non-task steps and for terminal steps (the outcome row owns the
     /// second row then). The elapsed timer is derived from `started_at` at
     /// render time, so the line stays fresh on every animation tick without
     /// storing any ticking state.
-    pub fn runner_status_line(&self) -> Option<String> {
-        if !self.is_runner_task() {
+    pub fn subagent_status_line(&self) -> Option<String> {
+        if !self.is_subagent_task() {
             return None;
         }
         let MessageKind::ToolStep {
@@ -1749,9 +1760,9 @@ impl TranscriptMessage {
             }
         });
         // A parked human-decision wait outranks replaying the last tool
-        // activity: the runner is blocked on the user, not making progress.
+        // activity: the subagent is blocked on the user, not making progress.
         // It keeps the bare phrase — no `running` prefix — because nothing
-        // is moving while the runner waits.
+        // is moving while the subagent waits.
         let activity = if *awaiting {
             "awaiting approval".to_string()
         } else {
@@ -1770,15 +1781,15 @@ impl TranscriptMessage {
                     )
                 }
                 // Assistant text has streamed but no tool call followed it:
-                // the runner is composing between tools. A bare `starting`
+                // the subagent is composing between tools. A bare `starting`
                 // here read as "possibly stuck" during long model calls,
                 // which is exactly what the `running` prefix disambiguates.
                 Some(child) if child.role == Role::Assistant && !child.raw.is_empty() => {
                     Some("thinking".to_string())
                 }
-                // Nothing observable has landed yet. Prefer the runner's own
+                // Nothing observable has landed yet. Prefer the subagent's own
                 // reported activity (`waiting for model`, …) over the
-                // generic `starting`: it proves the runner is alive during
+                // generic `starting`: it proves the subagent is alive during
                 // the model call that precedes the first child event.
                 _ => activity.clone(),
             };
@@ -1799,13 +1810,13 @@ impl TranscriptMessage {
         })
     }
 
-    /// One-line outcome replacing the peek row once the runner terminates: the
-    /// first non-empty line of its conclusion (`ToolOutput::Runner.summary`,
+    /// One-line outcome replacing the peek row once the subagent terminates: the
+    /// first non-empty line of its conclusion (`ToolOutput::Subagent.summary`,
     /// falling back to the legacy `output` text for restored sessions).
     /// Returns `None` for non-task steps, running steps, and terminal steps
     /// with no conclusion text.
-    pub fn runner_outcome_line(&self) -> Option<String> {
-        if !self.is_runner_task() {
+    pub fn subagent_outcome_line(&self) -> Option<String> {
+        if !self.is_subagent_task() {
             return None;
         }
         let MessageKind::ToolStep {
@@ -1821,7 +1832,7 @@ impl TranscriptMessage {
             return None;
         }
         let source: &str = match structured.as_deref() {
-            Some(muta_contracts::ToolOutput::Runner { summary, .. }) => summary,
+            Some(muta_contracts::ToolOutput::Subagent { summary, .. }) => summary,
             _ => output.as_deref()?,
         };
         source

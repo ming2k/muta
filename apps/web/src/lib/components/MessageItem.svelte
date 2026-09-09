@@ -70,9 +70,9 @@
     </div>
 
     {#if message.children && message.children.length > 0}
-      <details class="runner-children">
-        <summary>{t("runnerTranscript")(message.children.length)}</summary>
-        <div class="runner-inner">
+      <details class="subagent-children">
+        <summary>{t("subagentTranscript")(message.children.length)}</summary>
+        <div class="subagent-inner">
           {#each message.children as child, i (i)}
             <Self message={child} compact={true} />
           {/each}
@@ -223,20 +223,20 @@
     margin: 0;
   }
 
-  .runner-children {
+  .subagent-children {
     margin: 0.5rem 0 0 2rem;
     border-left: 2px solid var(--line);
     padding-left: 0.7rem;
   }
 
-  .runner-children summary {
+  .subagent-children summary {
     font-size: 0.7rem;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
   }
 
-  .runner-inner {
+  .subagent-inner {
     padding-top: 0.35rem;
   }
 

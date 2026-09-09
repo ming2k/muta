@@ -24,7 +24,7 @@ other.
   connector-neutral dynamic-tool sink, and the **MCP runtime** (`mcp` module:
   stdio JSON-RPC transport, server lifecycle, tool adapters, live runtime,
   catalog refresh).
-- **Catalog & envoy** — model/channel resolution and sub-agent ("envoy")
+- **Catalog & subagents** — model/channel resolution and subagent preset
   profiles.
 
 This crate owns behavior even when that behavior is implemented as pure code.

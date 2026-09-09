@@ -90,42 +90,42 @@ pub fn draw_help_modal(
         "Composer Line Editing",
     ))));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+A / Home",
+        "Ctrl-a / Home",
         "Move cursor to line start",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+E / End",
+        "Ctrl-e / End",
         "Move cursor to line end",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+U",
+        "Ctrl-u",
         "Clear prompt line from cursor to start",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+K",
+        "Ctrl-k",
         "Clear prompt line from cursor to end",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+W / Alt+Bksp",
+        "Ctrl-w / Alt-Bksp",
         "Delete word before cursor",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Alt+D",
+        "Alt-d",
         "Delete word after cursor",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Alt+B / Alt+F",
+        "Alt-b / Alt-f",
         "Move cursor backward / forward word",
     )));
     rows.push(SelectableRow::from_line(row_fmt(
-        "Ctrl+V",
+        "Ctrl-v",
         "Paste clipboard text or image",
     )));
 
     // 4. Surface Navigation & Discovery
     rows.push(SelectableRow::from_line(Line::from("")));
     rows.push(SelectableRow::from_line(Line::from(section_fmt(
-        "Navigation (Open via Ctrl+L or Slash)",
+        "Navigation (Open via Ctrl-l or Slash)",
     ))));
     for cmd in COMMAND_REGISTRY.iter().filter(|c| {
         c.category == CommandCategory::Navigate || c.category == CommandCategory::Settings

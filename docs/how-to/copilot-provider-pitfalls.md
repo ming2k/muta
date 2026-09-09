@@ -1,6 +1,6 @@
 # How to avoid GitHub Copilot provider pitfalls
 
-The `copilot-oauth` provider logs in through GitHub's OAuth device flow and then
+The `github-copilot` provider logs in through GitHub's OAuth device flow and then
 reads the live model list from `api.githubcopilot.com/models`. Because GitHub's
 Copilot backend behaves differently depending on the OAuth client, token type,
 and account plan, the model picker can end up missing models you expect. This
@@ -43,7 +43,7 @@ as `api.business.githubcopilot.com`. The exact endpoint is returned by the
 model list or 404 errors even with a valid token.
 
 The fix is to implement the token exchange and use the `endpoints.api` value
-from the exchange response. Until then, the built-in `copilot-oauth` template is
+from the exchange response. Until then, the built-in `github-copilot` template is
 best suited for Individual subscribers.
 
 ## `model_picker_enabled` filters the picker
@@ -92,7 +92,7 @@ transcript explaining which provider failed and why. A silently seed-only list
 
 ## See also
 
-- [Providers](../reference/providers.md) — capability matrix and `copilot-oauth`
+- [Providers](../reference/providers.md) — capability matrix and `github-copilot`
   notes
 - [Model Metadata](../reference/model-metadata.md) — how discovered remote
   metadata overrides static model facts

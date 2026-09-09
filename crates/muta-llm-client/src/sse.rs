@@ -24,7 +24,6 @@
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use crate::transport_error;
 use muta_contracts::{ProviderError, ProviderErrorKind};
 
 /// Decode a streaming SSE response into a flat stream of `data:` payload
@@ -36,29 +35,42 @@ use muta_contracts::{ProviderError, ProviderErrorKind};
 /// event's payload — finer-grained and more responsive than batching by
 /// network chunk, and the standard shape expected of an SSE reader.
 pub fn data_payloads(
-    response: reqwest::Response,
+    response: crate::egress::HttpResponse,
     provider: &'static str,
 ) -> BoxStream<'static, Result<String, ProviderError>> {
-    payloads_from_chunks(response.bytes_stream(), provider)
+    // Both transports hand back provider errors already; the identity mapper
+    // keeps the signature honest for the owned path.
+    payloads_from_chunks(
+        response.into_byte_stream(),
+        provider,
+        |error: ProviderError| error,
+    )
 }
 
-/// Core decoder over an arbitrary byte-chunk stream, split out from
-/// [`data_payloads`] so tests can drive reassembly without a live HTTP
-/// response.
-fn payloads_from_chunks<C, S>(
+/// Core decoder over an arbitrary byte-chunk stream.
+///
+/// The transport is a parameter, not an assumption: this is the seam that lets
+/// any byte source — `reqwest` today, the owned `muta-net` transport tomorrow —
+/// feed the *same* SSE reassembly, so the two can be compared byte for byte
+/// (ADR-0200's shadow criterion). `map_error` turns the source's error type into
+/// the provider error the retry classifier understands.
+pub fn payloads_from_chunks<C, S, E, F>(
     chunks: S,
     provider: &'static str,
+    map_error: F,
 ) -> BoxStream<'static, Result<String, ProviderError>>
 where
-    S: futures::Stream<Item = Result<C, reqwest::Error>> + Send + 'static,
-    C: AsRef<[u8]>,
+    S: futures::Stream<Item = Result<C, E>> + Send + 'static,
+    C: AsRef<[u8]> + 'static,
+    E: 'static,
+    F: Fn(E) -> ProviderError + Send + 'static,
 {
     let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     let tail_buffer = std::sync::Arc::clone(&buffer);
     let decoded = chunks.map(move |item| {
         let chunk = match item {
             Ok(chunk) => chunk,
-            Err(error) => return vec![Err(transport_error(provider, error))],
+            Err(error) => return vec![Err(map_error(error))],
         };
         let mut buffer = buffer.lock().unwrap_or_else(|error| error.into_inner());
         buffer.extend_from_slice(chunk.as_ref());
@@ -148,10 +160,13 @@ mod tests {
     /// Drive the chunk decoder over scripted network chunks, collecting every
     /// item the same way a provider stream consumer would.
     fn collect_payloads(chunks: &[&[u8]]) -> Vec<Result<String, ProviderError>> {
-        let chunks: Vec<Result<Vec<u8>, reqwest::Error>> =
+        let chunks: Vec<Result<Vec<u8>, std::io::Error>> =
             chunks.iter().map(|chunk| Ok(chunk.to_vec())).collect();
         futures::executor::block_on(
-            payloads_from_chunks(futures::stream::iter(chunks), "Test").collect::<Vec<_>>(),
+            payloads_from_chunks(futures::stream::iter(chunks), "Test", |error| {
+                ProviderError::new("Test", ProviderErrorKind::Transport, error.to_string())
+            })
+            .collect::<Vec<_>>(),
         )
     }
 

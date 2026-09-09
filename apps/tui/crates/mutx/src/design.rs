@@ -156,7 +156,7 @@ pub(crate) const JOIN_BREADCRUMB: &str = " › ";
 /// (above the transient activity bar) that always surfaces the pending
 /// outbox (the `QUEUE` identity + count, an inline preview of the next item
 /// to pop, and the key affordances). Always one row tall when visible
-/// (hidden only while an overlay modal replaces the chrome, inside an runner
+/// (hidden only while an overlay modal replaces the chrome, inside a subagent
 /// zoom, or when the outbox is empty). It is the permanent home for queue
 /// affordances, so the hint bar no longer needs to embed outbox counts.
 /// Rendered on the plain surface (no raised tint, no glyph) so it stays
@@ -178,7 +178,7 @@ pub(crate) const STREAM_BOTTOM_GAP_ROWS: usize = 1;
 /// via [`STREAM_TOP_GAP_ROWS`] and [`STREAM_BOTTOM_GAP_ROWS`].
 pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 0;
 /// Maximum height of the head band shown at the top of every transcript
-/// page — Main (session identity + workspace + mode), `/btw`, Runner, and
+/// page — Main (session identity + workspace + mode), `/btw`, Subagent, and
 /// future focused pages all share this single chrome slot. Row 1 is always
 /// identity + status; row 2 is the view-level affordance legend (ADR-0103
 /// §3), reserved only while the view has page-specific affordances that no
@@ -187,12 +187,12 @@ pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 0;
 /// and the transcript reclaims the line.
 pub(crate) const PAGE_HEADER_ROWS: u16 = 2;
 
-/// Height of the Runner page's permanent key-legend footer. Three rows on the
+/// Height of the Subagent page's permanent key-legend footer. Three rows on the
 /// page background: a top and bottom blank padding row around a middle row
 /// that carries the actual shortcuts (`Esc back`, `[ prev`, `] next` — the
 /// page's own navigation only; the global `F1 help` pair lives on no
 /// persistent chrome, ADR-0104).
-pub(crate) const ENVOY_FOOTER_ROWS: u16 = 3;
+pub(crate) const SUBAGENT_FOOTER_ROWS: u16 = 3;
 
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;

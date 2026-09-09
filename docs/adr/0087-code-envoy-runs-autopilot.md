@@ -129,7 +129,7 @@ on its supervision decision only.
   `envoy_code` tool this revises (superseded on the `autopilot` decision).
 - [ADR-0011](0011-subagent-profiles.md) — admission and supervision are
   orthogonal axes.
-- [ADR-0028](0028-capability-allocation-scoped-writes.md) /
+- [ADR-0028](archive/0028-capability-allocation-scoped-writes.md) /
   [ADR-0084](0084-soft-write-scope-gate.md) — the scoped-write path a future
   supervised-coding role could use.
 - [ADR-0029](0029-full-duplex-subagent-communication.md) — the up/down

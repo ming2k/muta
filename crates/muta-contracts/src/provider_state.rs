@@ -2,7 +2,7 @@
 //!
 //! These values make remote response chains explicit session data. Provider
 //! instances remain stateless transports and can therefore be shared safely by
-//! forks, runners, retries, and concurrently active sessions.
+//! forks, subagents, retries, and concurrently active sessions.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

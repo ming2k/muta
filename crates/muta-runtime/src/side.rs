@@ -85,7 +85,7 @@ impl SideSession {
         // `ProxyProvider` holder as the primary, which clones the inner
         // `Arc<dyn Provider>` per call and is safe under concurrency
         // (ADR-0017 §2). Tools come from the cached static snapshot (no
-        // `RunnerTool` and no session-scoped dynamic connector sources), so a
+        // `SubagentTool` and no session-scoped dynamic connector sources), so a
         // side chat neither recurses nor implicitly acquires the master's
         // external connections. Dynamic capability propagation must be an
         // explicit policy decision (ADR-0060).
@@ -101,7 +101,7 @@ impl SideSession {
         // An aside is a quick aside; run it unattended — without human
         // intervention — so it never raises a permission modal whose reply
         // could not be routed back to the side `Agent` through the shared
-        // permission channel. This mirrors the runner policy (`runner_tool.rs`
+        // permission channel. This mirrors the subagent policy (`subagent_tool.rs`
         // sets `unattended: true`).
         agent.set_unattended(true);
 
@@ -383,7 +383,7 @@ pub async fn publish_btw_list(
 #[derive(Clone, Copy)]
 pub(crate) struct SideEnv<'a> {
     pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
-    pub master: &'a Arc<Agent>,
+    pub agent: &'a Arc<Agent>,
     pub primary_session: &'a Arc<SessionStore>,
     pub primary_lifecycle: &'a Arc<RoundLifecycle>,
     pub tx: &'a mpsc::UnboundedSender<AgentResponse>,
@@ -393,7 +393,7 @@ pub(crate) struct SideEnv<'a> {
 pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
     let SideEnv {
         side,
-        master,
+        agent,
         primary_session,
         primary_lifecycle,
         tx,
@@ -410,7 +410,7 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
             session_id: active.id.clone(),
         },
         None => ResolvedTurnTarget {
-            agent: master.clone(),
+            agent: agent.clone(),
             session: primary_session.clone(),
             lifecycle: primary_lifecycle.clone(),
             session_id: primary_session.id().await,
@@ -437,7 +437,7 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
         return;
     }
 
-    start_resolved_turn(master, tx, config, target, input).await;
+    start_resolved_turn(agent, tx, config, target, input).await;
 }
 
 /// Resolve a live master or aside agent by its stable session id. Keeping
@@ -445,12 +445,12 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
 /// switch into the wrong conversation.
 pub async fn target_agent(
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    master: &Arc<Agent>,
+    agent: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     target_session_id: &str,
 ) -> Option<Arc<Agent>> {
     if primary_session.id().await == target_session_id {
-        return Some(master.clone());
+        return Some(agent.clone());
     }
     side.read()
         .await
@@ -464,7 +464,7 @@ pub async fn target_agent(
 /// lifecycle, not the primary's).
 pub(crate) async fn resolve_turn_target(
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    master: &Arc<Agent>,
+    agent: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     primary_lifecycle: &Arc<RoundLifecycle>,
     target_session_id: &str,
@@ -472,7 +472,7 @@ pub(crate) async fn resolve_turn_target(
     let primary_id = primary_session.id().await;
     if primary_id == target_session_id {
         return Some(ResolvedTurnTarget {
-            agent: master.clone(),
+            agent: agent.clone(),
             session: primary_session.clone(),
             lifecycle: primary_lifecycle.clone(),
             session_id: primary_id,
@@ -498,7 +498,7 @@ pub(crate) async fn start_session_turn(
 ) -> bool {
     let SideEnv {
         side,
-        master,
+        agent,
         primary_session,
         primary_lifecycle,
         tx,
@@ -506,7 +506,7 @@ pub(crate) async fn start_session_turn(
     } = env;
     let resolved = resolve_turn_target(
         side,
-        master,
+        agent,
         primary_session,
         primary_lifecycle,
         target_session_id,
@@ -534,7 +534,7 @@ pub(crate) async fn start_session_turn(
         return false;
     }
 
-    start_resolved_turn(master, tx, config, target, input).await;
+    start_resolved_turn(agent, tx, config, target, input).await;
     true
 }
 
@@ -546,7 +546,7 @@ pub(crate) struct ResolvedTurnTarget {
 }
 
 async fn start_resolved_turn(
-    master: &Arc<Agent>,
+    _agent: &Arc<Agent>,
     tx: &mpsc::UnboundedSender<AgentResponse>,
     config: &Config,
     target: ResolvedTurnTarget,
@@ -583,7 +583,7 @@ async fn start_resolved_turn(
         // handler read the primary's, which may differ from an aside target.
         input = RoundInput::resume(pending);
     }
-    let projection = ContextProjectionSettings::from_config(config, active_context_window(master));
+    let projection = ContextProjectionSettings::from_config(config, active_context_window(&agent));
     let retry_max_attempts = config.connection_retry_max_attempts;
     let retry_base_ms = config.connection_retry_base_ms;
     let retry_max_ms = config.connection_retry_max_ms;

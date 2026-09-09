@@ -27,7 +27,7 @@ use crate::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::model::layout::InteractiveTarget;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::providers::{
-    CustomField, ProviderPreset, RankedModel, RankedProvider, edit_fields,
+    ConnectionTemplate, CustomField, RankedModel, RankedProvider, edit_fields,
     models_flat_filtered_from, providers_filtered_from,
 };
 use crate::render::Theme;
@@ -117,14 +117,14 @@ pub enum RecallQueued {
 /// composition window to, so the owner must be exactly the one text-input
 /// surface the user is typing into — or [`Self::None`] when no such surface
 /// exists (a transcript step has keyboard focus, the view is zoomed into an
-/// runner task, or a read-only / decision modal is open). In the `None` case
+/// subagent task, or a read-only / decision modal is open). In the `None` case
 /// the cursor is hidden so the IME has no stale anchor to bind to, which is
 /// the bug that previously let the IME "drift" when a disclosure was
 /// clicked mid-composition: the caret left the composer but the cursor
 /// stayed visible at its old coordinate.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CaretOwner {
-    /// The live composer (no modal, no runner zoom, no transcript-step focus).
+    /// The live composer (no modal, no subagent zoom, no transcript-step focus).
     Composer,
     /// A modal that renders its own caret (`Modal::owns_caret`).
     Modal,
@@ -150,7 +150,7 @@ pub struct ScrollSnapshot {
     pub follow_bottom: bool,
 }
 
-/// One frame on the focus stack: the runner task call-id plus the parent
+/// One frame on the focus stack: the subagent task call-id plus the parent
 /// view's scroll snapshot, restored verbatim when the frame is popped.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ZoomFrame {
@@ -375,11 +375,11 @@ pub struct App {
     pub pending_permissions: std::collections::VecDeque<PermissionRequest>,
     pub pending_questions: std::collections::VecDeque<UserQuestionRequest>,
     pub pending_inputs: std::collections::VecDeque<muta_contracts::InputRequest>,
-    /// Full-duplex (ADR-0029): which runner (by parent tool-call id)
+    /// Full-duplex (ADR-0029): which subagent (by parent tool-call id)
     /// surfaced a given permission / ask_user request, so the modal's reply
     /// can be tagged for down-routing.
-    pub runner_permission_parent: HashMap<String, String>,
-    pub runner_question_parent: HashMap<String, String>,
+    pub subagent_permission_parent: HashMap<String, String>,
+    pub subagent_question_parent: HashMap<String, String>,
     /// The latest harness workspace-security snapshot (trust-gate state).
     pub workspace_security: muta_contracts::WorkspaceSecuritySnapshot,
     /// One-shot backend navigation signals (ADR-0197 M1): the applier latches
@@ -455,7 +455,7 @@ pub struct App {
     /// manual scroll, and by view resets — the same lifecycle as
     /// [`Self::pin_summary_line`].
     pub scroll_settle_pending: bool,
-    /// Stack of nested zoom frames (runner tasks). Empty means the root
+    /// Stack of nested zoom frames (subagent tasks). Empty means the root
     /// conversation is shown; the top frame is the currently focused view.
     /// Each frame carries the parent's scroll snapshot, restored on exit.
     pub focus_stack: Vec<ZoomFrame>,
@@ -578,7 +578,7 @@ pub struct App {
     pub config_detail_index: usize,
     /// Scroll offset for the `/config` detail pane body.
     pub config_detail_scroll: usize,
-    /// Latest `[websearch]` snapshot (presence-only view) from the harness.
+    /// Latest authoritative `[web]` selection/readiness snapshot from the harness.
     /// Refreshed when the Settings view opens (`QueryWebSearchConfig`) and
     /// on every `WebSearchConfigUpdated` ack.
     pub websearch_config: Option<muta_contracts::WebSearchConfigView>,
@@ -588,6 +588,9 @@ pub struct App {
         crate::components::dropdown::DropdownState<String>,
         crate::components::dropdown::DropdownAnchor,
     )>,
+    /// Authoritative screen rectangle of the active settings detail row,
+    /// updated during settings render to anchor popovers precisely.
+    pub config_selected_rect: Option<mutx_engine::Rect>,
     /// Index of the skills-modal row whose detail block is expanded
     /// (`Modal::Skills`), or `None` when every row is collapsed. `Enter`
     /// toggles the selected row; reset to `None` each time the modal opens.
@@ -937,7 +940,7 @@ pub struct App {
     /// binding fires and advertises consistently.
     pub key_overrides: crate::keymap::GlobalOverrides,
     /// User remaps of the full-screen-view surface verbs (`session.*` dotted
-    /// keys, ADR-0172). The Session/Runner/Side resolvers and the composer
+    /// keys, ADR-0172). The Session/Subagent/Side resolvers and the composer
     /// hint row consult it.
     pub surface_overrides: crate::keymap::SurfaceOverrides,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
@@ -993,6 +996,10 @@ pub struct App {
     /// composer's background wave tint, the hint bar's `M A X` label
     /// takeover, and the prompt's charge — see `crate::effort_ignition`.
     pub effort_ignition_epoch: Option<std::time::Instant>,
+    /// Epoch milliseconds of the last composer submission. The ledger records
+    /// when the provider was dispatched; together they let the latency timeline
+    /// show what happened *before* dispatch (queue, context projection, hooks).
+    pub last_submit_ms: Option<u64>,
     /// The composer draft parked while the input-injection sheet
     /// (L3.5 β) borrows the input line. Under ADR-0139 the
     /// picker flows (Models / Connections / History) park their drafts in
@@ -1023,7 +1030,7 @@ pub struct App {
     /// **built-in** (served by a built-in provider like `anthropic`). A built-in
     /// model's per-model reasoning knobs persist to the `[model_reasoning]`
     /// table via `EditModelReasoning`; a user-defined model's knobs persist to
-    /// its channel via `EditProviderModel` (ADR-0045).
+    /// its channel via `EditConnectionModel` (ADR-0045).
     pub editor_target_is_builtin: bool,
     /// Current reasoning-effort selection in the key editor, as a lowercase wire
     /// string. Defaults to `"high"`; cycled with ←/→ over the selected model's
@@ -1046,40 +1053,38 @@ pub struct App {
     /// semantics as [`Self::editor_vision_override`].
     pub editor_tool_override: Option<bool>,
     /// Focused field of the provider editor (`Modal::CustomProvider`) as an
-    /// index into [`Self::custom_fields`] — the per-preset visible field set
+    /// index into [`Self::custom_fields`] — the per-template visible field set
     /// (Name / Base URL / Token / Model / Protocol / Client Identity). Text
     /// fields borrow the composer line; selectors are cycled inline.
     pub custom_field: u8,
     /// The ordered visible fields of the provider editor, chosen by the active
-    /// preset (create) or the edited connection's protocol (edit). Empty when no
-    /// editor is open.
+    /// template (create) or the edited connection's provider (edit). Empty when
+    /// no editor is open.
     pub custom_fields: Vec<CustomField>,
-    /// Wire protocol of the provider being created/edited. Curated presets
-    /// carry their fixed protocol; a pure-custom connection exposes this as
-    /// an inline selector.
+    /// Wire protocol of the connection being created/edited. Curated providers
+    /// carry their fixed wire; the `custom` provider exposes this as an inline
+    /// selector.
     pub custom_protocol_wire: String,
     /// Client identity (User-Agent and impersonation headers) selected for a
-    /// pure-custom connection. Curated presets keep their provider-defined
-    /// identity.
+    /// connection. Curated providers keep their provider-defined identity.
     pub custom_client_identity: muta_contracts::ClientIdentity,
-    /// Models seeded by the active preset (create mode). Submitted as the
+    /// Models seeded by the active template (create mode). Submitted as the
     /// provider's model list unless the editor exposes a free-text Model field
     /// (then the single typed model is submitted instead). Empty in edit mode.
     pub custom_models: Vec<String>,
-    /// Base URL placeholder for the active preset (the expected endpoint shape).
+    /// Base URL placeholder for the active template (the expected endpoint shape).
     pub custom_url_hint: String,
     /// Template-specific user agent carried into newly-created channels.
     pub custom_user_agent: Option<String>,
-    /// How newly-created connections authenticate (from the selected preset).
+    /// How newly-created connections authenticate (from the selected template).
     pub custom_auth: muta_contracts::ConnectionAuth,
-    /// Stable preset id the active create flow was seeded from, or `None` in
-    /// edit mode / when no preset is active. Sent as `AddProvider::preset_id`
-    /// (the wire field) so the catalog can re-seed the connection from the
-    /// preset's current
-    /// models on later startups. `None` yields a pure-custom instance that is
-    /// never re-seeded.
-    pub custom_preset_id: Option<String>,
-    /// True while an "Add preset connection → OAuth" flow is in flight.
+    /// The **model provider id** the active create flow was seeded from, or
+    /// `None` in edit mode / when no template is active. Sent as
+    /// `AddConnection::provider` (the wire field, ADR-0201): it is the
+    /// connection's durable provider binding, and the catalog resolves the
+    /// connection's models from it on later startups.
+    pub custom_provider_id: Option<String>,
+    /// True while an "Add curated connection → OAuth" flow is in flight.
     pub awaiting_oauth_add: bool,
     pub oauth_pending_message: String,
     pub oauth_pending_url: String,
@@ -1106,9 +1111,9 @@ pub struct App {
     /// Selected row of the provider-template chooser (`Modal::ProviderPreset`),
     /// indexing `crate::PROVIDER_PRESETS`. Cycled with `↑/↓`.
     pub preset_choice: usize,
-    /// Scroll offset for the preset-chooser body. The rendered body
+    /// Scroll offset for the template-chooser body. The rendered body
     /// sets the upper bound automatically (via `render_body`), and `↑/↓` move
-    /// the selection so the chosen preset stays on-screen.
+    /// the selection so the chosen template stays on-screen.
     pub preset_scroll: usize,
     /// Whether the model picker's **search sub-layer** is active. Both pickers
     /// (`Modal::Models` and `Modal::Connections`) open in browse mode
@@ -1162,5 +1167,5 @@ mod history;
 mod link;
 mod providers;
 mod queue;
-mod runners;
+mod subagents;
 mod surfaces;

@@ -209,7 +209,7 @@ pub fn into_message(
         effort: None,
         hidden: false,
         children: None,
-        runner_meta: None,
+        subagent_meta: None,
         origin: None,
         timestamp: Some(muta_contracts::todos::unix_now()),
         sent_at_ms: None,

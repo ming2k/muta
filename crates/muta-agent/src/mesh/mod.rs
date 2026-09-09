@@ -9,7 +9,7 @@
 //!   creation and unregisters on drop.
 //! - **Sends are lawfulness-checked.** [`MeshTracker::send`] consults
 //!   [`MeshEnvelope::lawful`] and refuses (with an explicit error) rather
-//!   than delivering an out-of-contract message (e.g. a runner commanding a
+//!   than delivering an out-of-contract message (e.g. a subagent commanding a
 //!   master). Fail-closed beats silent misrouting.
 
 use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MeshStation};
@@ -66,7 +66,7 @@ impl MeshError {
             MeshMessage::ReportAck { .. } => "report_ack",
             MeshMessage::ProgressNote { .. } => "progress_note",
             MeshMessage::PeerNote { .. } => "peer_note",
-            MeshMessage::RunnerEol { .. } => "runner_eol",
+            MeshMessage::SubagentEol { .. } => "subagent_eol",
         }
     }
 }
@@ -76,9 +76,9 @@ impl MeshError {
 struct Entry {
     sender: mpsc::UnboundedSender<MeshEnvelope>,
     token: CancellationToken,
-    /// The parent master of a runner (masters have `None`). Used by
+    /// The parent master of a subagent (masters have `None`). Used by
     /// [`MeshTracker::reap_children`].
-    master: Option<MeshAddress>,
+    parent: Option<MeshAddress>,
 }
 
 /// The daemon-level coordinator for agent communication.
@@ -99,7 +99,7 @@ impl MeshTracker {
         address: MeshAddress,
         sender: mpsc::UnboundedSender<MeshEnvelope>,
         token: CancellationToken,
-        master: Option<MeshAddress>,
+        parent: Option<MeshAddress>,
     ) {
         let mut map = lock(&self.entries);
         if let Some(old) = map.insert(
@@ -107,7 +107,7 @@ impl MeshTracker {
             Entry {
                 sender,
                 token,
-                master,
+                parent,
             },
         ) {
             old.token.cancel();
@@ -120,14 +120,14 @@ impl MeshTracker {
         lock(&self.entries).remove(address);
     }
 
-    /// Cancel and remove all runner endpoints registered under `master`
-    /// (its runners). Returns the number of addresses reaped.
-    pub fn reap_children(&self, master: &MeshAddress) -> usize {
+    /// Cancel and remove all subagent endpoints registered under `master`
+    /// (its subagents). Returns the number of addresses reaped.
+    pub fn reap_children(&self, parent: &MeshAddress) -> usize {
         let mut map = lock(&self.entries);
         let victims: Vec<MeshAddress> = map
             .iter()
             .filter(|(addr, e)| {
-                addr.station == MeshStation::Subtask && e.master.as_ref() == Some(master)
+                addr.station == MeshStation::Subtask && e.parent.as_ref() == Some(parent)
             })
             .map(|(addr, _)| addr.clone())
             .collect();
@@ -219,10 +219,10 @@ impl MeshMailbox {
     /// Spawn a mailbox registered with `tracker`. If `master` is supplied,
     /// this mailbox will be reaped when `tracker.reap_children(master)` is
     /// called.
-    pub fn spawn(tracker: MeshTracker, address: MeshAddress, master: Option<MeshAddress>) -> Self {
+    pub fn spawn(tracker: MeshTracker, address: MeshAddress, parent: Option<MeshAddress>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let token = CancellationToken::new();
-        tracker.register(address.clone(), tx, token.clone(), master);
+        tracker.register(address.clone(), tx, token.clone(), parent);
         Self {
             tracker,
             address,
@@ -269,29 +269,29 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
 
-    fn master(session: &str) -> MeshAddress {
-        MeshAddress::master(session)
+    fn session_root(session: &str) -> MeshAddress {
+        MeshAddress::session_root(session)
     }
 
-    fn runner(session: &str, agent: &str) -> MeshAddress {
-        MeshAddress::runner(session, agent)
+    fn subagent(session: &str, agent: &str) -> MeshAddress {
+        MeshAddress::subagent(session, agent)
     }
 
     #[tokio::test]
     async fn send_delivers_to_registered_mailbox() {
         let tracker = MeshTracker::new();
-        let mut mb = MeshMailbox::spawn(tracker.clone(), master("s"), None);
+        let mut mb = MeshMailbox::spawn(tracker.clone(), session_root("s"), None);
         let sender = MeshAddress::hypervisor("daemon");
 
         tracker
             .send(MeshEnvelope::new(
                 Some(sender),
-                master("s"),
+                session_root("s"),
                 MeshMessage::Instruction {
                     body: "begin".into(),
                 },
             ))
-            .expect("hypervisor may instruct master");
+            .expect("hypervisor may instruct session root");
 
         let got = mb.recv().await.expect("envelope arrives");
         assert_eq!(
@@ -305,17 +305,17 @@ mod tests {
     #[tokio::test]
     async fn unlawful_send_is_refused_not_delivered() {
         let tracker = MeshTracker::new();
-        let mut mb = MeshMailbox::spawn(tracker.clone(), master("s"), None);
+        let mut mb = MeshMailbox::spawn(tracker.clone(), session_root("s"), None);
 
         let err = tracker
             .send(MeshEnvelope::new(
-                Some(runner("s", "r1")),
-                master("s"),
+                Some(subagent("s", "r1")),
+                session_root("s"),
                 MeshMessage::Instruction {
                     body: "usurp".into(),
                 },
             ))
-            .expect_err("runner cannot command master");
+            .expect_err("subagent cannot command session root");
 
         assert!(matches!(err, MeshError::Unlawful { .. }));
         assert!(
@@ -326,14 +326,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reap_children_removes_only_that_masters_runners() {
+    async fn reap_children_removes_only_that_masters_subagents() {
         let tracker = MeshTracker::new();
-        let _m1 = MeshMailbox::spawn(tracker.clone(), master("s1"), None);
-        let _m2 = MeshMailbox::spawn(tracker.clone(), master("s2"), None);
-        let r1 = MeshMailbox::spawn(tracker.clone(), runner("s1", "r1"), Some(master("s1")));
-        let r2 = MeshMailbox::spawn(tracker.clone(), runner("s2", "r2"), Some(master("s2")));
+        let _m1 = MeshMailbox::spawn(tracker.clone(), session_root("s1"), None);
+        let _m2 = MeshMailbox::spawn(tracker.clone(), session_root("s2"), None);
+        let r1 = MeshMailbox::spawn(
+            tracker.clone(),
+            subagent("s1", "r1"),
+            Some(session_root("s1")),
+        );
+        let r2 = MeshMailbox::spawn(
+            tracker.clone(),
+            subagent("s2", "r2"),
+            Some(session_root("s2")),
+        );
 
-        assert_eq!(tracker.reap_children(&master("s1")), 1);
+        assert_eq!(tracker.reap_children(&session_root("s1")), 1);
         assert!(r1.token().is_cancelled());
         assert!(!r2.token().is_cancelled());
 
@@ -342,38 +350,42 @@ mod tests {
             .iter()
             .map(|a| a.display())
             .collect();
-        assert!(!live.contains(&runner("s1", "r1").display()));
-        assert!(live.contains(&runner("s2", "r2").display()));
+        assert!(!live.contains(&subagent("s1", "r1").display()));
+        assert!(live.contains(&subagent("s2", "r2").display()));
     }
 
     #[tokio::test]
     async fn cancelled_endpoint_is_reaped_on_use() {
         let tracker = MeshTracker::new();
-        let mb = MeshMailbox::spawn(tracker.clone(), master("s"), None);
+        let mb = MeshMailbox::spawn(tracker.clone(), session_root("s"), None);
         mb.token().cancel();
 
         let sender = MeshAddress::hypervisor("daemon");
         let err = tracker
             .send(MeshEnvelope::new(
                 Some(sender),
-                master("s"),
+                session_root("s"),
                 MeshMessage::Ping { nonce: 1 },
             ))
             .expect_err("cancelled endpoint is unroutable");
-        assert_eq!(err, MeshError::Unroutable(master("s")));
+        assert_eq!(err, MeshError::Unroutable(session_root("s")));
     }
 
     #[tokio::test]
     async fn peer_discovery_is_station_and_session_scoped() {
         let tracker = MeshTracker::new();
-        let _m1 = MeshMailbox::spawn(tracker.clone(), master("s1"), None);
-        let _m2 = MeshMailbox::spawn(tracker.clone(), master("s2"), None);
-        let _r1 = MeshMailbox::spawn(tracker.clone(), runner("s1", "r1"), Some(master("s1")));
+        let _m1 = MeshMailbox::spawn(tracker.clone(), session_root("s1"), None);
+        let _m2 = MeshMailbox::spawn(tracker.clone(), session_root("s2"), None);
+        let _r1 = MeshMailbox::spawn(
+            tracker.clone(),
+            subagent("s1", "r1"),
+            Some(session_root("s1")),
+        );
 
         let peers = tracker.peers(MeshStation::Session, "s1");
-        assert_eq!(peers, vec![master("s1")]);
-        let runners = tracker.peers(MeshStation::Subtask, "s1");
-        assert_eq!(runners, vec![runner("s1", "r1")]);
+        assert_eq!(peers, vec![session_root("s1")]);
+        let subagents = tracker.peers(MeshStation::Subtask, "s1");
+        assert_eq!(subagents, vec![subagent("s1", "r1")]);
         assert!(tracker.peers(MeshStation::Subtask, "s2").is_empty());
     }
 }

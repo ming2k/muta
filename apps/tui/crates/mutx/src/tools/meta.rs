@@ -1,5 +1,5 @@
 //! Presenters for orchestration / meta tools that act on session state rather
-//! than the filesystem: `todo`, `runner`, `use_skill`.
+//! than the filesystem: `todo`, `subagent`, `use_skill`.
 
 use super::{ResultKind, ToolPresenter, ToolView, truncate};
 use serde_json::Value;
@@ -62,16 +62,16 @@ impl ToolPresenter for TodoPresenter {
     }
 }
 
-pub struct RunnerPresenter;
+pub struct SubagentPresenter;
 
-impl ToolPresenter for RunnerPresenter {
+impl ToolPresenter for SubagentPresenter {
     fn summary(&self, view: &ToolView) -> String {
         // The role badge `[explore]` / `[plan]` is drawn by the renderer in
         // front of this summary, so the summary itself carries only the task
         // description — repeating the role here would double it up.
         view.str("description")
             .map(|desc| truncate(desc, 56).to_string())
-            .unwrap_or_else(|| "Run runner".to_string())
+            .unwrap_or_else(|| "Run subagent".to_string())
     }
 }
 

@@ -64,6 +64,10 @@ pub(super) async fn handle_selection_start(
                 return;
             }
         }
+        Some(UiKey::SettingsOption(index)) => {
+            app.config_focus = crate::overlays::ConfigFocus::Detail;
+            app.config_detail_index = index;
+        }
         Some(UiKey::Modal(_) | UiKey::OauthUrl | UiKey::OauthCode) => {
             let modal = app.active_modal();
             if let Some(cursor) = app
@@ -111,7 +115,7 @@ pub(super) async fn handle_selection_start(
                 app.focused_target = app.focused_messages().get(mi).and_then(|message| {
                     if message.is_reasoning() {
                         Some(InteractiveTarget::reasoning(mi))
-                    } else if message.is_tool_step() || message.is_runner_task() {
+                    } else if message.is_tool_step() || message.is_subagent_task() {
                         Some(InteractiveTarget::tool_step(mi))
                     } else {
                         None
@@ -173,7 +177,7 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                 );
             }
             ClickTarget::StepSummary { message_idx, kind } => {
-                // Clicked a step summary: navigate into an runner
+                // Clicked a step summary: navigate into a subagent
                 // task, otherwise toggle that step's disclosure.
                 let mi = message_idx;
                 app.focused_target = Some(kind.focus_target(mi));
@@ -182,7 +186,7 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                     StepKind::ToolStep => {
                         let enter_id = resolve_focused_mut(&mut messages, &app.focus_stack, mi)
                             .and_then(|message| {
-                                if message.is_runner_task() {
+                                if message.is_subagent_task() {
                                     message.tool_step_call_id().map(String::from)
                                 } else {
                                     None
@@ -190,7 +194,7 @@ async fn handle_document_press(app: &mut App, runtime: &UiRuntime, x: u16, y: u1
                             });
                         if let Some(id) = enter_id {
                             app.messages = messages;
-                            app.enter_runner(id);
+                            app.enter_subagent(id);
                         } else {
                             app.toggle_step_pinned(&mut messages, mi);
                             app.messages = messages;
@@ -344,6 +348,12 @@ pub(super) fn handle_selection_end(app: &mut App) {
     // key after the drag relays from the release point instead of the stale
     // pre-drag caret (the composer's scene-routed selection handler resolves
     // it when the selection is next touched).
+    if let SelectionState::InputRange { head_byte, .. } = app.selection
+        && app.caret_owner() == CaretOwner::Composer
+    {
+        let byte = floor_grapheme_boundary(&app.input, head_byte);
+        app.set_cursor(app.input[..byte].chars().count());
+    }
     if let SelectionState::Range { head, .. } = app.selection
         && head.message_idx == crate::render::INPUT_MSG_IDX
         && app.caret_owner() == CaretOwner::Composer
@@ -380,7 +390,7 @@ pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
 
 /// Loop stage (input dispatch): the `Hover` arm of the action match.
 pub(super) async fn handle_hover(app: &mut App, _runtime: &UiRuntime, x: u16, y: u16) {
-    // Every step summary (tool step, runner task, reasoning
+    // Every step summary (tool step, subagent task, reasoning
     // trace) carries the same hover affordance. When the pointer
     // rests on one — either the inline summary or the sticky
     // pinned variant — record its message index so the next draw
@@ -391,7 +401,7 @@ pub(super) async fn handle_hover(app: &mut App, _runtime: &UiRuntime, x: u16, y:
             let is_step = app
                 .messages
                 .get(mi)
-                .map(|m| m.is_reasoning() || m.is_tool_step() || m.is_runner_task())
+                .map(|m| m.is_reasoning() || m.is_tool_step() || m.is_subagent_task())
                 .unwrap_or(false);
             app.hovered_step = is_step.then_some(mi);
         }

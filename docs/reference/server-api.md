@@ -439,7 +439,7 @@ When receiving `Round.event.PermissionRequest`, show its user-facing `label`,
 ```
 
 Valid decisions are `Once`, `Always`, and `Reject`. For a permission nested in
-an `Envoy` event, set `parent_call_id` to the enclosing envoy
+a `Subagent` event, set `parent_call_id` to the enclosing subagent
 `parent_call_id`; otherwise use `null`.
 
 ### User questions
@@ -479,7 +479,7 @@ For `InputRequest`, use `secret` to decide whether to mask input. Reply with:
 ```
 
 An empty `text` cancels the input path. As with permission/questions, propagate
-the envoy parent id for nested requests.
+the subagent parent id for nested requests.
 
 ### Session context and configuration
 
@@ -509,7 +509,7 @@ A production frontend should:
 1. Treat `Welcome` (and a monitor `snapshot`) as a replacement snapshot, not
    as incremental messages.
 2. Route every `Round` event by `session_id`.
-3. Preserve request ids and envoy `parent_call_id` values exactly.
+3. Preserve request ids and subagent `parent_call_id` values exactly.
 4. Render the plain `ToolResult.output` when its `structured` variant is
    unknown. `ToolOutput` intentionally evolves as tools gain richer output.
 5. Log and ignore unknown response/event variants rather than closing the

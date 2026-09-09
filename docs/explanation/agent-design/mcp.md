@@ -83,7 +83,7 @@ accepts a request but never answers cannot pin the agent indefinitely.
 Connecting never returns a single `Result`: muta always starts, with whatever
 tools came up. The runtime publishes them directly to the principal Agent's
 dynamic registry; it does not mutate the static tool set used to construct
-envoys or side agents.
+subagents or side agents.
 
 ## The tool wrapper
 
@@ -173,7 +173,7 @@ An MCP server's `read_only` flag classifies every wrapped tool as
 would constrain any explicit role-profile delegation, but it does **not** by
 itself grant the connector to another agent.
 
-The session attaches its MCP runtime to the principal Agent only. Envoys and
+The session attaches its MCP runtime to the principal Agent only. Subagents and
 `/btw` side agents are constructed from a static capability snapshot and do
 not implicitly inherit session-scoped external connections. This separates
 two decisions that must not be conflated:
@@ -191,7 +191,7 @@ read-only.
 ### The mcp_specialist delegation (ADR-0138)
 
 One profile embeds exactly that explicit delegation: the `mcp_specialist`
-runner preset. At spawn, runner dispatch reads the master's live dynamic-tool
+subagent preset. At spawn, subagent dispatch reads the master's live dynamic-tool
 registry (`DynamicToolSource` — the read port of the sink the MCP runtime
 publishes into) and adds its tools to the child's capability set on top of
 the static snapshot. Reading at *spawn* (not at bind) means the 10-minute
@@ -205,7 +205,7 @@ re-binding. Two rules still hold:
   always wins a name collision with a dynamic one.
 
 This is the sandboxing half of ADR-0138: heavy or chatty MCP integrations run
-in a scratchpad envoy that returns a summary, keeping the principal's context
+in a scratchpad subagent that returns a summary, keeping the principal's context
 clean and its Zone-1 tool schema stable.
 
 ## Permission broker
@@ -232,7 +232,7 @@ is no graceful `shutdown` JSON-RPC exchange — the child is sent `SIGKILL`.
 
 - [Built-in tools](../../reference/tools/index.md) — `mcp__<server>__<tool>`
   parameter surface and the MCP tools subsection
-- [Envoys](envoys.md) — role-profile admission for capabilities that are
-  explicitly supplied to an envoy
+- [Subagents](subagents.md) — role-profile admission for capabilities that are
+  explicitly supplied to a subagent
 - [Harness architecture](harness.md) — the 8-second MCP init bound and the
   tool permission broker

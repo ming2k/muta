@@ -7,7 +7,7 @@
 use muta_contracts::{ProviderError, ProviderErrorKind};
 use std::time::SystemTime;
 
-pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+pub fn retry_after_ms(headers: &http::header::HeaderMap) -> Option<u64> {
     if let Some(milliseconds) = headers
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
@@ -15,7 +15,7 @@ pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     {
         return Some(milliseconds.max(0.0) as u64);
     }
-    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
     if let Ok(seconds) = value.parse::<f64>() {
         return Some((seconds.max(0.0) * 1000.0) as u64);
     }
@@ -30,23 +30,32 @@ pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     )
 }
 
+/// Enforce HTTP success on either transport.
 pub async fn ensure_success(
-    response: reqwest::Response,
+    response: crate::egress::HttpResponse,
     provider: &str,
-) -> Result<reqwest::Response, ProviderError> {
-    let status = response.status();
+) -> Result<crate::egress::HttpResponse, ProviderError> {
+    let status = response.status;
     if status.is_success() {
         return Ok(response);
     }
-    let retry_after = retry_after_ms(response.headers());
+    let retry_after = retry_after_ms(&response.headers);
     let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
+        .headers
+        .get(http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let body = response.text().await.unwrap_or_default();
+    let body = response.into_text().await.unwrap_or_default();
     let message = match http_error_body_detail(content_type.as_deref(), &body) {
-        Some(detail) => format!("{provider} HTTP {status}: {detail}"),
+        Some(detail) => {
+            if status.as_u16() == 404 && body.contains("model_not_found") {
+                format!(
+                    "{provider} HTTP 404: {detail} (Note: If this is a newly released model, your account or API key tier may not yet have rollout access)."
+                )
+            } else {
+                format!("{provider} HTTP {status}: {detail}")
+            }
+        }
         None => format!("{provider} HTTP {status}"),
     };
     let kind = classify_http_error(status, &body);
@@ -58,7 +67,7 @@ pub async fn ensure_success(
     }
 }
 
-fn classify_http_error(status: reqwest::StatusCode, body: &str) -> ProviderErrorKind {
+fn classify_http_error(status: http::StatusCode, body: &str) -> ProviderErrorKind {
     match status.as_u16() {
         401 | 403 => ProviderErrorKind::Authentication,
         408 => ProviderErrorKind::Timeout,
@@ -149,6 +158,7 @@ fn http_error_body_detail(content_type: Option<&str>, body: &str) -> Option<Stri
     (!looks_html).then(|| body_preview(trimmed))
 }
 
+#[cfg(feature = "reqwest-oracle")]
 fn is_transient_io_kind(kind: std::io::ErrorKind) -> bool {
     use std::io::ErrorKind::*;
     matches!(
@@ -163,6 +173,7 @@ fn is_transient_io_kind(kind: std::io::ErrorKind) -> bool {
     )
 }
 
+#[cfg(feature = "reqwest-oracle")]
 fn chain_has_transient_io(error: &(dyn std::error::Error + 'static)) -> bool {
     let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(err) = next {
@@ -176,6 +187,7 @@ fn chain_has_transient_io(error: &(dyn std::error::Error + 'static)) -> bool {
     false
 }
 
+#[cfg(feature = "reqwest-oracle")]
 fn is_transient_transport_error(error: &reqwest::Error) -> bool {
     if error.is_timeout() || error.is_connect() || error.is_request() || error.is_body() {
         return true;
@@ -199,12 +211,14 @@ fn is_transient_transport_error(error: &reqwest::Error) -> bool {
 /// `access_token` the same way. A `reqwest::Error`'s `Display` embeds the
 /// request URL, so formatting it verbatim would leak the credential into
 /// logs and user-facing errors.
+#[cfg(feature = "reqwest-oracle")]
 const CREDENTIAL_QUERY_PARAMS: [&str; 4] = ["key", "api_key", "apikey", "access_token"];
 
 /// Mask credential-carrying query parameter values inside a formatted error
 /// message. A value runs until `&`, whitespace, or `)` (reqwest wraps URLs
 /// in parentheses). Only `name=` occurrences immediately preceded by `?` or
 /// `&` count as query parameters, so prose like "key=value" is left alone.
+#[cfg(feature = "reqwest-oracle")]
 fn redact_url_credentials(message: &str) -> String {
     let mut redacted = message.to_string();
     for name in CREDENTIAL_QUERY_PARAMS {
@@ -237,6 +251,7 @@ fn redact_url_credentials(message: &str) -> String {
 /// reaches the user, so a truncated stream is undiagnosable from the error
 /// alone. Join the sources with `: ` and cap the total to keep the message
 /// bounded.
+#[cfg(feature = "reqwest-oracle")]
 fn error_source_chain(error: &(dyn std::error::Error + 'static)) -> String {
     const MAX_CHAIN_CHARS: usize = 240;
     let mut chain = String::new();
@@ -261,6 +276,7 @@ fn error_source_chain(error: &(dyn std::error::Error + 'static)) -> String {
     chain
 }
 
+#[cfg(feature = "reqwest-oracle")]
 pub fn transport_error(provider: &str, error: reqwest::Error) -> ProviderError {
     let retryable = is_transient_transport_error(&error);
     let sources = error_source_chain(&error);
@@ -286,13 +302,10 @@ pub fn transport_error(provider: &str, error: reqwest::Error) -> ProviderError {
 const DECODE_ERROR_BODY_PREVIEW: usize = 2048;
 
 pub async fn decode_response_json(
-    response: reqwest::Response,
+    response: crate::egress::HttpResponse,
     provider: &str,
 ) -> Result<serde_json::Value, ProviderError> {
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| transport_error(provider, error))?;
+    let bytes = response.into_bytes().await?;
     let text = String::from_utf8_lossy(&bytes);
     match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(value) => Ok(value),
@@ -341,7 +354,7 @@ mod tests {
 
     #[test]
     fn retry_after_supports_seconds_and_milliseconds() {
-        let mut headers = reqwest::header::HeaderMap::new();
+        let mut headers = http::header::HeaderMap::new();
         headers.insert("retry-after", "2.5".parse().unwrap());
         assert_eq!(retry_after_ms(&headers), Some(2_500));
 
@@ -349,6 +362,7 @@ mod tests {
         assert_eq!(retry_after_ms(&headers), Some(750));
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn transient_io_kinds_are_retryable() {
         use std::io::ErrorKind::*;
@@ -365,6 +379,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn logical_io_kinds_are_not_retryable() {
         use std::io::ErrorKind::*;
@@ -376,6 +391,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn transport_error_includes_source_chain() {
         // Unit-check the chain renderer directly: a nested source chain must
@@ -403,6 +419,7 @@ mod tests {
         assert_eq!(error_source_chain(&Nested("leaf")), "");
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[tokio::test]
     async fn decode_kind_stream_truncation_is_retryable() {
         // Reproduce the exact error shape the streaming path produces: the
@@ -411,7 +428,7 @@ mod tests {
         // in `Kind::Decode` (its `map_err(crate::error::decode)`), which is
         // exactly how a cut-off SSE generation surfaces. Before the
         // `is_decode()` arm this classified as terminal, so one truncated
-        // stream killed the whole runner sub-task with no retry.
+        // stream killed the whole subagent sub-task with no retry.
         use std::io::Write;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -474,6 +491,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn connection_reset_is_found_deep_in_the_source_chain() {
         #[derive(Debug)]
@@ -566,6 +584,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn redact_url_credentials_masks_google_style_key_param() {
         let message = "google transport error: error sending request for url \
@@ -579,6 +598,7 @@ mod tests {
         assert!(redacted.contains("key=***"), "masked in place: {redacted}");
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn redact_url_credentials_masks_each_known_param_and_stops_at_ampersand() {
         let message = "see (https://x.test/v1?api_key=sk-1&model=g) and (https://y.test/v1?access_token=tok%20)";
@@ -588,6 +608,7 @@ mod tests {
         assert!(redacted.contains("model=g"));
     }
 
+    #[cfg(feature = "reqwest-oracle")]
     #[test]
     fn redact_url_credentials_leaves_prose_and_empty_values_alone() {
         // No `?`/`&` immediately before `key=` → not a query parameter.
@@ -625,18 +646,18 @@ mod tests {
     #[test]
     fn http_error_classification_promotes_only_context_failures() {
         assert_eq!(
-            classify_http_error(reqwest::StatusCode::BAD_REQUEST, "context_length_exceeded"),
+            classify_http_error(http::StatusCode::BAD_REQUEST, "context_length_exceeded"),
             ProviderErrorKind::ContextOverflow
         );
         assert_eq!(
             classify_http_error(
-                reqwest::StatusCode::BAD_REQUEST,
+                http::StatusCode::BAD_REQUEST,
                 "max_tokens must be greater than zero"
             ),
             ProviderErrorKind::InvalidRequest
         );
         assert_eq!(
-            classify_http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "too many tokens"),
+            classify_http_error(http::StatusCode::TOO_MANY_REQUESTS, "too many tokens"),
             ProviderErrorKind::RateLimited
         );
     }

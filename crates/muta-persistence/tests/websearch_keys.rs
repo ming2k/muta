@@ -1,16 +1,15 @@
 #![cfg(test)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! Migration tests for the `[websearch]` key split (config → credentials).
 
-use muta_contracts::WebSearchConfig;
-use muta_persistence::config::{Config, Credentials, WebSearchKeys};
+use muta_contracts::{
+    SecretString, WebCredentialStatus, WebProviderAxis, WebReaderProvider, WebSearchProvider,
+};
+use muta_persistence::config::{Config, Credentials, resolve_web_config};
 
-/// Install a sandboxed `Dirs` pair; the returned guard holds the crate-wide
-/// test lock until dropped (keeps other tests from racing the override).
 fn sandbox() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
     let guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
+        .unwrap_or_else(|error| error.into_inner());
     let root = tempfile::tempdir().unwrap();
     muta_persistence::paths::set_test_default(Some(muta_persistence::paths::Dirs {
         config_dir: root.path().join("config"),
@@ -23,164 +22,121 @@ fn sandbox() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
 }
 
 #[test]
-fn websearch_keys_are_not_serialized_into_config_toml() {
-    // The shareability contract: `config.toml` must never carry a secret.
-    let mut cfg = Config::default();
-    cfg.websearch.exa_api_key = Some(muta_contracts::SecretString::new("exa-1"));
-    cfg.websearch.provider = "tavily".into();
-    let toml = toml::to_string_pretty(&cfg).unwrap();
-    assert!(
-        !toml.contains("exa-1"),
-        "secret leaked into config.toml: {toml}"
-    );
-    assert!(
-        !toml.contains("api_key"),
-        "key field emitted at all: {toml}"
-    );
-    assert!(
-        toml.contains("provider = \"tavily\""),
-        "behavior keys stay: {toml}"
-    );
+fn config_is_behavior_only_and_uses_web_table() {
+    let mut config = Config::default();
+    config.web.provider = WebSearchProvider::Tavily;
+    let encoded = toml::to_string_pretty(&config).unwrap();
+    assert!(encoded.contains("[web]"));
+    assert!(encoded.contains("provider = \"tavily\""));
+    assert!(!encoded.contains("api_key"));
 }
 
 #[test]
-fn websearch_keys_round_trip_through_credentials_toml() {
-    let creds = Credentials {
-        websearch: WebSearchKeys {
-            tavily_api_key: Some(muta_contracts::SecretString::new("tvly-1")),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let toml = toml::to_string_pretty(&creds).unwrap();
-    assert!(toml.contains("[websearch]"));
-    let parsed: Credentials = toml::from_str(&toml).unwrap();
+fn provider_credentials_round_trip_by_axis_and_id() {
+    let mut credentials = Credentials::default();
+    credentials.set_web_credential(
+        WebProviderAxis::Search,
+        "tavily",
+        Some(SecretString::new("tvly-1")),
+    );
+    credentials.set_web_credential(
+        WebProviderAxis::Reader,
+        "jina",
+        Some(SecretString::new("jina-1")),
+    );
+    let encoded = toml::to_string_pretty(&credentials).unwrap();
+    let decoded: Credentials = toml::from_str(&encoded).unwrap();
     assert_eq!(
-        parsed
-            .websearch
-            .tavily_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
+        decoded
+            .web_credential(WebProviderAxis::Search, "tavily")
+            .map(SecretString::expose_secret),
         Some("tvly-1")
     );
+    assert_eq!(
+        decoded
+            .web_credential(WebProviderAxis::Reader, "jina")
+            .map(SecretString::expose_secret),
+        Some("jina-1")
+    );
 }
 
 #[test]
-fn empty_websearch_keys_omit_the_table() {
-    let toml = toml::to_string_pretty(&Credentials::default()).unwrap();
-    assert!(!toml.contains("[websearch]"), "empty table emitted: {toml}");
-}
-
-#[test]
-fn load_migrates_keys_from_config_toml_into_credentials_toml_once() {
-    let (_root, _guard) = {
-        let (root, guard) = sandbox();
-        (root, guard)
-    };
-
-    // Seed a pre-migration config.toml with keys inline.
-    let pre = r#"
-[websearch]
-provider = "bocha"
-bocha_api_key = "sk-old"
-"#;
-    std::fs::create_dir_all(muta_persistence::paths::get().config_dir.clone()).unwrap();
-    std::fs::write(Config::config_file_path(), pre).unwrap();
-
-    // First load: keys move into credentials.toml and stay in memory.
-    let cfg = Config::load();
-    assert_eq!(
-        cfg.websearch
-            .bocha_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
-        Some("sk-old")
-    );
-    assert_eq!(cfg.websearch.provider, "bocha", "behavior keys untouched");
-    let creds = Credentials::load();
-    assert_eq!(
-        creds
-            .websearch
-            .bocha_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
-        Some("sk-old"),
-        "the key must now live in credentials.toml"
-    );
-
-    // The config file on disk keeps its (stale) inline key — the next save
-    // writes behavior-only — but a *reload* must not duplicate or flip it:
-    let again = Config::load();
-    assert_eq!(
-        again
-            .websearch
-            .bocha_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
-        Some("sk-old")
-    );
-    let creds_again = Credentials::load();
-    assert_eq!(
-        creds_again
-            .websearch
-            .bocha_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
-        Some("sk-old")
-    );
-
-    // A save of the migrated config must not write any key back.
-    let serialized = toml::to_string_pretty(&again).unwrap();
-    assert!(!serialized.contains("sk-old"));
-
-    muta_persistence::paths::set_test_default(None);
-}
-
-#[test]
-fn credentials_entry_wins_over_stale_config_inline_key() {
-    let _guard = {
-        let (_root, guard) = sandbox();
-        guard
-    };
-
-    // credentials.toml already holds the canonical key; config.toml still
-    // carries an outdated inline one. The credentials file is the location
-    // the user edits going forward, so it wins.
-    std::fs::create_dir_all(muta_persistence::paths::get().config_dir.clone()).unwrap();
+fn legacy_builtin_reader_canonicalizes_to_disabled() {
+    let (_root, _guard) = sandbox();
+    std::fs::create_dir_all(&muta_persistence::paths::get().config_dir).unwrap();
     std::fs::write(
         Config::config_file_path(),
-        "[websearch]\nexa_api_key = \"exa-stale\"\n",
+        "[websearch]\nreader = 'builtin'\n",
     )
     .unwrap();
-    let mut creds = Credentials::default();
-    creds.websearch.exa_api_key = Some(muta_contracts::SecretString::new("exa-fresh"));
-    creds.save().unwrap();
-
-    let cfg = Config::load();
-    assert_eq!(
-        cfg.websearch
-            .exa_api_key
-            .as_ref()
-            .map(|k| k.expose_secret()),
-        Some("exa-fresh")
-    );
-
+    let config = Config::load();
+    assert_eq!(config.web.reader, WebReaderProvider::Disabled);
     muta_persistence::paths::set_test_default(None);
 }
 
 #[test]
-fn secret_keys_only_extractor_leaves_behavior_defaults() {
-    let cfg = WebSearchConfig {
-        provider: "bocha".into(),
-        timeout_secs: 99,
-        bocha_api_key: Some(muta_contracts::SecretString::new("k")),
-        ..Default::default()
-    };
-    let keys = cfg.secret_keys_only();
-    assert_eq!(keys.provider, WebSearchConfig::default().provider);
-    assert_eq!(keys.timeout_secs, WebSearchConfig::default().timeout_secs);
+fn required_credential_readiness_is_explicit() {
+    let mut config = Config::default();
+    config.web.provider = WebSearchProvider::Tavily;
+    let resolved = resolve_web_config(&config.web, &Credentials::default());
     assert_eq!(
-        keys.bocha_api_key.as_ref().map(|k| k.expose_secret()),
-        Some("k")
+        resolved.search_credential,
+        WebCredentialStatus::RequiredMissing
     );
+    assert!(resolved.runtime.search_credential.is_none());
+}
+
+#[test]
+fn legacy_connection_selection_and_token_migrate_without_deleting_source() {
+    let (_root, _guard) = sandbox();
+    let dirs = muta_persistence::paths::get();
+    std::fs::create_dir_all(&dirs.config_dir).unwrap();
+    std::fs::create_dir_all(&dirs.state_dir).unwrap();
+    std::fs::write(
+        Config::config_file_path(),
+        "[websearch]\nprovider = 'team-search'\nreader = 'builtin'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dirs.web_connections_file(),
+        "[[search_connections]]\nid = 'team-search'\npreset_id = 'tavily'\nenabled = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dirs.credentials_file(),
+        "[connections]\nteam-search = 'legacy-secret'\n",
+    )
+    .unwrap();
+
+    let config = Config::load();
+    let credentials = Credentials::load();
+    assert_eq!(config.web.provider, WebSearchProvider::Tavily);
+    assert_eq!(config.web.reader, WebReaderProvider::Disabled);
+    assert_eq!(
+        credentials
+            .web_credential(WebProviderAxis::Search, "tavily")
+            .map(SecretString::expose_secret),
+        Some("legacy-secret")
+    );
+    assert!(
+        dirs.web_connections_file().exists(),
+        "legacy source is archival, not deleted"
+    );
+
+    let mut credentials = credentials;
+    credentials.set_web_credential(WebProviderAxis::Search, "tavily", None);
+    credentials.save().unwrap();
+    let reloaded = Credentials::load();
+    assert!(
+        reloaded
+            .web_credential(WebProviderAxis::Search, "tavily")
+            .is_none(),
+        "the one-shot migration marker must prevent a cleared token from being resurrected"
+    );
+    assert!(
+        reloaded.connections.contains_key("team-search"),
+        "the preserved source credential remains available for manual recovery"
+    );
+
+    muta_persistence::paths::set_test_default(None);
 }

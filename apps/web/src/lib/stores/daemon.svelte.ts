@@ -24,7 +24,7 @@ import type {
   CommandRecord,
   CommandCatalog,
   CommandResult,
-  RunnerEvent,
+  SubagentEvent,
   ImagePart,
   ComposerCompletion,
   ComposerCompletion as InputCompletion,
@@ -44,8 +44,8 @@ import type {
   RoundSummary,
   TodoList,
   UserQuestionRequest,
-  WebSearchConfigUpdate,
-  WebSearchConfigView,
+  WebConfigUpdate,
+  WebConfigView,
   Wire,
 } from "../types.js";
 
@@ -85,7 +85,7 @@ const CLIENT_VERSION: string =
  * in its window; sending it is what opts this client into protocol-number
  * negotiation instead of product-version equality.
  */
-const PROTOCOL_VERSION = 5;
+const PROTOCOL_VERSION = 7;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;
@@ -102,11 +102,11 @@ const TOKEN_STORAGE_KEY = "muta.ws-token";
 /** Connection state, distinct from any session's status. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
-/** Where a blocking request originated (top-level agent or an runner). */
+/** Where a blocking request originated (top-level agent or a subagent). */
 export interface RequestOrigin {
-  /** The runner's parent tool-call id; `null` for top-level requests. */
+  /** The subagent's parent tool-call id; `null` for top-level requests. */
   parentCallId: string | null;
-  /** Display label, e.g. the runner profile name. */
+  /** Display label, e.g. the subagent profile name. */
   label: string | null;
 }
 
@@ -138,8 +138,8 @@ export interface Toast {
   body?: string;
 }
 
-/** A tool run by an runner, rendered nested inside the parent tool card. */
-export interface RunnerTool {
+/** A tool run by a subagent, rendered nested inside the parent tool card. */
+export interface SubagentTool {
   id: string;
   name: string;
   arguments: string;
@@ -148,17 +148,17 @@ export interface RunnerTool {
   durationMs?: number;
 }
 
-/** UI-model runner execution, folded from `RoundEvent::Runner` sub-events. */
-export interface RunnerExecution {
+/** UI-model subagent execution, folded from `RoundEvent::SubagentStep` sub-events. */
+export interface SubagentExecution {
   profile: string | null;
   activity: string | null;
-  /** Completed runner response text (accumulated across `StreamEnd`s). */
+  /** Completed subagent response text (accumulated across `StreamEnd`s). */
   text: string;
   streamingText: string;
-  /** Completed runner reasoning traces (accumulated across `StreamReasoningEnd`s). */
+  /** Completed subagent reasoning traces (accumulated across `StreamReasoningEnd`s). */
   reasoning: string[];
   streamingReasoning: string;
-  tools: RunnerTool[];
+  tools: SubagentTool[];
 }
 
 /** UI-model tool execution, folded from ToolCall/ToolStream/ToolResult events. */
@@ -171,8 +171,8 @@ export interface LiveToolExecution {
   stderr: string;
   output?: string;
   durationMs?: number;
-  /** Nested runner activity when this tool is a `task` spawn (ADR-0029). */
-  runner?: RunnerExecution;
+  /** Nested subagent activity when this tool is a `task` spawn (ADR-0029). */
+  subagent?: SubagentExecution;
 }
 
 /**
@@ -416,11 +416,10 @@ export class DaemonStore {
   private completionRequestState: { text: string; cursor: number } | null = null;
 
   /**
-   * Effective `[websearch]` configuration (presence-only view — API keys are
-   * never echoed back). Refreshed when the settings dialog opens and on
-   * every update ack.
+   * Effective singleton `[web]` configuration and credential readiness.
+   * Refreshed when the settings dialog opens and on every update ack.
    */
-  public websearchConfig = $state<WebSearchConfigView | null>(null);
+  public websearchConfig = $state<WebConfigView | null>(null);
 
   public pendingPermission = $state<PendingPermission | null>(null);
   public pendingQuestion = $state<PendingQuestion | null>(null);
@@ -1246,11 +1245,8 @@ export class DaemonStore {
       this.pushToast("error", "Turn error", event.Error);
     } else if ("UnsentInput" in event) {
       this.handleUnsentInput(event.UnsentInput);
-    } else if ("EnvoyCompat" in event) {
-      this.handleRunnerEvent(event.EnvoyCompat.parent_call_id, event.EnvoyCompat.event);
-    } else if ("Runner" in event) {
-      const runner = (event as { Runner: { parent_call_id: string; event: RunnerEvent } }).Runner;
-      this.handleRunnerEvent(runner.parent_call_id, runner.event);
+    } else if ("SubagentStep" in event) {
+      this.handleSubagentEvent(event.SubagentStep.parent_call_id, event.SubagentStep.event);
     }
     // UserInputCancelled / UserInputCancelFailed concern queued inserts this
     // client never issues; nothing to surface.
@@ -1323,13 +1319,13 @@ export class DaemonStore {
     }
   }
 
-  // Runner events (nested under a parent `task` tool call; ADR-0029)
+  // Subagent events (nested under a parent `task` tool call; ADR-0029)
 
-  private handleRunnerEvent(parentCallId: string, event: RunnerEvent) {
+  private handleSubagentEvent(parentCallId: string, event: SubagentEvent) {
     const parent = this.liveTools[parentCallId];
     const origin: RequestOrigin = {
       parentCallId,
-      label: parent?.runner?.profile ?? null,
+      label: parent?.subagent?.profile ?? null,
     };
 
     if ("PermissionRequest" in event) {
@@ -1348,9 +1344,9 @@ export class DaemonStore {
       this.pendingStdin = { request: (event as { InputRequest: StdinRequest }).InputRequest, origin };
       return;
     }
-    if (!parent) return; // stray runner event for a tool we never saw
-    if (!parent.runner) {
-      parent.runner = {
+    if (!parent) return; // stray subagent event for a tool we never saw
+    if (!parent.subagent) {
+      parent.subagent = {
         profile: null,
         activity: null,
         text: "",
@@ -1360,33 +1356,33 @@ export class DaemonStore {
         tools: [],
       };
     }
-    const runner = parent.runner;
+    const subagent = parent.subagent;
 
     if ("Started" in event) {
-      runner.profile = event.Started.profile;
+      subagent.profile = event.Started.profile;
     } else if ("Notice" in event) {
       this.handleNotice(event.Notice);
     } else if ("StreamStart" in event) {
-      runner.streamingText = "";
+      subagent.streamingText = "";
     } else if ("StreamDelta" in event) {
-      runner.streamingText += event.StreamDelta;
+      subagent.streamingText += event.StreamDelta;
     } else if ("StreamEnd" in event) {
-      const finalText = event.StreamEnd || runner.streamingText;
-      runner.text = runner.text ? `${runner.text}\n\n${finalText}` : finalText;
-      runner.streamingText = "";
+      const finalText = event.StreamEnd || subagent.streamingText;
+      subagent.text = subagent.text ? `${subagent.text}\n\n${finalText}` : finalText;
+      subagent.streamingText = "";
     } else if ("StreamReasoningStart" in event) {
-      runner.streamingReasoning = "";
+      subagent.streamingReasoning = "";
     } else if ("StreamReasoningDelta" in event) {
-      runner.streamingReasoning += event.StreamReasoningDelta;
+      subagent.streamingReasoning += event.StreamReasoningDelta;
     } else if ("StreamReasoningEnd" in event) {
-      const finalReasoning = event.StreamReasoningEnd || runner.streamingReasoning;
+      const finalReasoning = event.StreamReasoningEnd || subagent.streamingReasoning;
       if (finalReasoning.trim()) {
-        runner.reasoning = [...runner.reasoning, finalReasoning];
+        subagent.reasoning = [...subagent.reasoning, finalReasoning];
       }
-      runner.streamingReasoning = "";
+      subagent.streamingReasoning = "";
     } else if ("ToolCall" in event) {
       const call = event.ToolCall;
-      runner.tools.push({
+      subagent.tools.push({
         id: call.id,
         name: call.name,
         arguments: call.arguments,
@@ -1394,14 +1390,14 @@ export class DaemonStore {
       });
     } else if ("ToolResult" in event) {
       const r = event.ToolResult;
-      const tool = runner.tools.find((t) => t.id === r.id);
+      const tool = subagent.tools.find((t) => t.id === r.id);
       if (tool) {
         tool.status = "completed";
         tool.output = r.output;
         tool.durationMs = r.duration_ms;
       }
     } else if ("Activity" in event) {
-      runner.activity = event.Activity;
+      subagent.activity = event.Activity;
     }
   }
 
@@ -1495,18 +1491,16 @@ export class DaemonStore {
     this.send({ SetDefaultModel: { id } });
   }
 
-  /** Fetch the effective `[websearch]` configuration (presence-only view). */
+  /** Fetch the effective `[web]` configuration and provider catalog. */
   public queryWebSearchConfig() {
     this.send({ QueryWebSearchConfig: null });
   }
 
   /**
-   * PATCH the `[websearch]` configuration. Absent fields keep their values;
-   * an empty-string API key clears it. Behavior fields persist to
-   * config.toml, keys to credentials.toml; the daemon hot-applies to the
-   * live web tools and acks with the authoritative view.
+   * PATCH `[web]`. An empty credential value clears it; the daemon persists
+   * and hot-applies one resolved snapshot, then returns authoritative state.
    */
-  public updateWebSearchConfig(update: Partial<WebSearchConfigUpdate>) {
+  public updateWebSearchConfig(update: WebConfigUpdate) {
     this.send({ UpdateWebSearchConfig: update });
   }
 

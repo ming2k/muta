@@ -329,7 +329,7 @@ mod tests {
         RequestUsageRecord {
             key: RequestUsageKey {
                 session_id: session.to_string(),
-                actor_id: "master".to_string(),
+                actor_id: "root".to_string(),
                 round: 1,
                 turn: 1,
                 attempt,

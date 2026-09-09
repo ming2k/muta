@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn resolve_focused_mut_indexes_root_when_unfocused() {
-    let mut messages = conversation_with_runners();
+    let mut messages = conversation_with_subagents();
     let focus: Vec<crate::app::ZoomFrame> = Vec::new();
     let resolved = event_loop::resolve_focused_mut(&mut messages, &focus, 2);
     assert_eq!(resolved.map(|m| m.raw.clone()).as_deref(), Some("ok"));
@@ -12,7 +12,7 @@ fn resolve_focused_mut_indexes_root_when_unfocused() {
 
 #[test]
 fn resolve_focused_mut_indexes_children_when_focused() {
-    let mut messages = conversation_with_runners();
+    let mut messages = conversation_with_subagents();
     let focus = vec![crate::app::ZoomFrame {
         call_id: "task_b".to_string(),
         saved_scroll: crate::app::ScrollSnapshot::default(),
@@ -156,7 +156,7 @@ fn composer_image_paste_follows_picker_snapshot_vision() {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            preset_id: "opencode-go".to_string(),
+            provider: "opencode-go".to_string(),
             client_identity: Default::default(),
             last_used_ms: None,
             auth: muta_contracts::ConnectionAuth::ApiKey,
@@ -212,7 +212,7 @@ fn active_model_context_window_follows_picker_snapshot_for_relay_models() {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            preset_id: "opencode-go".to_string(),
+            provider: "opencode-go".to_string(),
             client_identity: Default::default(),
             last_used_ms: None,
             auth: muta_contracts::ConnectionAuth::ApiKey,
@@ -256,7 +256,7 @@ fn composer_image_paste_snapshot_override_forces_off() {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            preset_id: String::new(),
+            provider: String::new(),
             client_identity: Default::default(),
             last_used_ms: None,
             auth: muta_contracts::ConnectionAuth::ApiKey,
@@ -355,7 +355,7 @@ fn composer_text_paste_of_non_image_or_prose_stays_verbatim() {
     assert!(app.input.contains(&prose), "got: {}", app.input);
 }
 
-/// The view reset that follows a focus change (runner zoom enter/exit) must
+/// The view reset that follows a focus change (subagent zoom enter/exit) must
 /// drop a pending settle: the staged frame it was computed for belongs to a
 /// transcript slice that is no longer displayed.
 #[test]

@@ -105,12 +105,12 @@ reasoning channel.
 muta's provider adapters encode an opinionated mapping between the three
 layers:
 
-- **OpenAI-compatible registry presets** (`kimi-code`, `zai-code`, plus the
+- **OpenAI-compatible registry providers** (`kimi-code`, `glm-cn`, plus the
   catalog-built `openai`/`deepseek` multi-model entries, all backed by one
   shared OpenAI-compatible adapter) assume a runtime that fully
   implements the OpenAI Chat Completions contract including `tools`,
-  `tool_choice`, `reasoning_content`, and SSE tool-call deltas. The registry
-  presets are pure data, so they inherit every capability from that one
+  `tool_choice`, `reasoning_content`, and SSE tool-call deltas. The model
+  provider specs are pure data, so they inherit every capability from that one
   shared implementation.
 - **Anthropic** (`AnthropicMessagesProvider`) speaks the `/messages` wire
   format with `x-api-key` auth; muta converts the internal tool schema

@@ -115,14 +115,24 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 "compaction.fallback_window_tokens" => {
                     println!("{}", config.compaction.fallback_window_tokens)
                 }
-                "master.hard_stop_turns" => println!("{}", config.master.hard_stop_turns),
-                "master.allow_model_stdin" => println!("{}", config.master.allow_model_stdin),
-                "master.skip_interactive_input" => {
-                    println!("{}", config.master.skip_interactive_input)
+                "agent.hard_stop_turns" | "master.hard_stop_turns" => {
+                    println!("{}", config.agent.hard_stop_turns)
                 }
-                "master.doom_guard.enabled" => println!("{}", config.master.doom_guard.enabled),
-                "master.doom_guard.window" => println!("{}", config.master.doom_guard.window),
-                "master.doom_guard.threshold" => println!("{}", config.master.doom_guard.threshold),
+                "agent.allow_model_stdin" | "master.allow_model_stdin" => {
+                    println!("{}", config.agent.allow_model_stdin)
+                }
+                "agent.skip_interactive_input" | "master.skip_interactive_input" => {
+                    println!("{}", config.agent.skip_interactive_input)
+                }
+                "agent.doom_guard.enabled" | "master.doom_guard.enabled" => {
+                    println!("{}", config.agent.doom_guard.enabled)
+                }
+                "agent.doom_guard.window" | "master.doom_guard.window" => {
+                    println!("{}", config.agent.doom_guard.window)
+                }
+                "agent.doom_guard.threshold" | "master.doom_guard.threshold" => {
+                    println!("{}", config.agent.doom_guard.threshold)
+                }
                 "daemon.shutdown_grace_secs" => println!("{}", config.daemon.shutdown_grace_secs),
                 "daemon.idle_exit_minutes" => println!("{}", config.daemon.idle_exit_minutes),
                 "daemon.local_auth" => println!("{}", config.daemon.local_auth),
@@ -206,35 +216,35 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                         .parse()
                         .map_err(|_| "invalid integer for compaction.fallback_window_tokens")?;
                 }
-                "master.hard_stop_turns" => {
-                    config.master.hard_stop_turns = value
+                "agent.hard_stop_turns" | "master.hard_stop_turns" => {
+                    config.agent.hard_stop_turns = value
                         .parse()
-                        .map_err(|_| "invalid integer for master.hard_stop_turns")?;
+                        .map_err(|_| "invalid integer for agent.hard_stop_turns")?;
                 }
-                "master.allow_model_stdin" => {
-                    config.master.allow_model_stdin = value
+                "agent.allow_model_stdin" | "master.allow_model_stdin" => {
+                    config.agent.allow_model_stdin = value
                         .parse()
-                        .map_err(|_| "invalid boolean for master.allow_model_stdin")?;
+                        .map_err(|_| "invalid boolean for agent.allow_model_stdin")?;
                 }
-                "master.skip_interactive_input" => {
-                    config.master.skip_interactive_input = value
+                "agent.skip_interactive_input" | "master.skip_interactive_input" => {
+                    config.agent.skip_interactive_input = value
                         .parse()
-                        .map_err(|_| "invalid boolean for master.skip_interactive_input")?;
+                        .map_err(|_| "invalid boolean for agent.skip_interactive_input")?;
                 }
-                "master.doom_guard.enabled" => {
-                    config.master.doom_guard.enabled = value
+                "agent.doom_guard.enabled" | "master.doom_guard.enabled" => {
+                    config.agent.doom_guard.enabled = value
                         .parse()
-                        .map_err(|_| "invalid boolean for master.doom_guard.enabled")?;
+                        .map_err(|_| "invalid boolean for agent.doom_guard.enabled")?;
                 }
-                "master.doom_guard.window" => {
-                    config.master.doom_guard.window = value
+                "agent.doom_guard.window" | "master.doom_guard.window" => {
+                    config.agent.doom_guard.window = value
                         .parse()
-                        .map_err(|_| "invalid integer for master.doom_guard.window")?;
+                        .map_err(|_| "invalid integer for agent.doom_guard.window")?;
                 }
-                "master.doom_guard.threshold" => {
-                    config.master.doom_guard.threshold = value
+                "agent.doom_guard.threshold" | "master.doom_guard.threshold" => {
+                    config.agent.doom_guard.threshold = value
                         .parse()
-                        .map_err(|_| "invalid integer for master.doom_guard.threshold")?;
+                        .map_err(|_| "invalid integer for agent.doom_guard.threshold")?;
                 }
                 "daemon.shutdown_grace_secs" => {
                     config.daemon.shutdown_grace_secs = value

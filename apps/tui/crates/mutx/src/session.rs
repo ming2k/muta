@@ -1,7 +1,7 @@
 //! The Session view's self-owned keyboard scheme and resolver
 //! (ADR-0172, plane-less per ADR-0173).
 //!
-//! The Session view — and its chat siblings, the zoomed Runner and the `/btw`
+//! The Session view — and its chat siblings, the zoomed Subagent and the `/btw`
 //! Side aside — owns the keys that act on its surface across its run states.
 //! The keyboard is **plane-less** (ADR-0173): there is no composer/transcript
 //! mode to enter or leave. Every chord has one meaning; the focused step is a
@@ -19,7 +19,7 @@
 //!
 //! The input router (`crate::input::route_event`) offers the key to this
 //! resolver **only** while the chat surface owns the keyboard (no modal, view
-//! is Session / Runner / Side). A `Some(action)` means the chat surface
+//! is Session / Subagent / Side). A `Some(action)` means the chat surface
 //! consumed the key. A `None` falls through to the shared affordance library
 //! (readline editing, caret motion, paste, scrolling) and the modal arms,
 //! which stay central until each modal owns its own scheme.
@@ -30,7 +30,7 @@ use crate::input::InputAction;
 use crate::keymap::LiveHint;
 
 /// The view schemes' own sub-state (ADR-0197 M2): the completion/selection
-/// family plus the run-state and navigation facts the Session/Runner/Side
+/// family plus the run-state and navigation facts the Session/Subagent/Side
 /// resolvers arbitrate against. Built once per event by the caller; every
 /// read below is view-local, so nothing else leaks in.
 #[derive(Debug, Default, Clone)]
@@ -137,7 +137,7 @@ pub(crate) fn live_chat_hints(
 /// through to the shared affordance library.
 ///
 /// The surface *verb* chords (history recall, history walk, steer, step-focus
-/// enter/clear, focused-step scroll, runner siblings) resolve override-first
+/// enter/clear, focused-step scroll, subagent siblings) resolve override-first
 /// (ADR-0172 step 9): each verb's canonical chord is replaced by the user's
 /// `session.*` binding when one is configured, and the canonical chord goes
 /// inactive. The interaction grammar (Enter/Tab/BackTab/Esc/↑/↓/text) is not
@@ -223,11 +223,11 @@ pub(crate) fn resolve_chat_surface_key(
     }
 }
 
-/// The Runner view's own scheme (ADR-0172): the zoom owns its exit (`Esc`)
+/// The Subagent view's own scheme (ADR-0172): the zoom owns its exit (`Esc`)
 /// and sibling navigation (`[`/`]`, a remappable `session.prev_sibling` /
 /// `session.next_sibling` verb), and delegates every other key to the shared
 /// chat core for step-focus walking.
-pub(crate) fn resolve_runner_key(
+pub(crate) fn resolve_subagent_key(
     key: crate::keymap::Key,
     keys: &ViewKeys,
     input: &mut String,
@@ -245,11 +245,11 @@ pub(crate) fn resolve_runner_key(
         return Some(InputAction::NextSibling);
     }
     match key.code {
-        // Runner zoom: Esc returns to the parent view, priority over focus
+        // Subagent zoom: Esc returns to the parent view, priority over focus
         // clearing — unless a completion popup is up, which is dismissed
         // first (mirrors the pre-ADR-0172 arm order).
         KeyCode::Esc if keys.completion_kind == crate::completion::CompletionKind::None => {
-            Some(InputAction::ExitRunner)
+            Some(InputAction::ExitSubagent)
         }
         _ => resolve_chat_surface_key(key, keys, input, cursor_position),
     }
@@ -288,7 +288,7 @@ pub(crate) fn resolve_view_key(
         crate::surfaces::View::Session => {
             resolve_chat_surface_key(key, keys, input, cursor_position)
         }
-        crate::surfaces::View::Runner => resolve_runner_key(key, keys, input, cursor_position),
+        crate::surfaces::View::Subagent => resolve_subagent_key(key, keys, input, cursor_position),
         crate::surfaces::View::Side => resolve_side_key(key, keys, input, cursor_position),
         _ => None,
     }
@@ -392,8 +392,8 @@ fn resolve_tab(keys: &ViewKeys) -> Option<InputAction> {
 /// arm: dismiss an open completion first, then cancel the inline history
 /// recall (ADR-0192 — the recall pointer is a transient navigation state
 /// that must be escapable), then clear step focus, then interrupt a running
-/// round. (Runner and Side own their own Esc exits in
-/// [`resolve_runner_key`] / [`resolve_side_key`].)
+/// round. (Subagent and Side own their own Esc exits in
+/// [`resolve_subagent_key`] / [`resolve_side_key`].)
 fn resolve_esc(keys: &ViewKeys) -> Option<InputAction> {
     if keys.completion_kind != crate::completion::CompletionKind::None && !keys.completion_dismissed
     {
@@ -464,7 +464,7 @@ fn resolve_down(keys: &ViewKeys, input: &str, cursor_position: &mut usize) -> Op
 
 /// A printable character on the chat surface. When transcript or a step target is focused,
 /// characters do not bounce to the composer: focus returns to the composer only explicitly
-/// via `Esc` or a mouse click. Runner sibling navigation (`[`/`]`) is owned by the Runner
+/// via `Esc` or a mouse click. Subagent sibling navigation (`[`/`]`) is owned by the Subagent
 /// view's resolver.
 fn resolve_printable(
     keys: &ViewKeys,
@@ -494,7 +494,7 @@ mod tests {
         Running,
         FocusedTarget,
         Completion,
-        Runner,
+        Subagent,
         Side,
     }
 
@@ -511,7 +511,7 @@ mod tests {
                 c.suggestion_count = 3;
                 c.suggestion_index = Some(1);
             }
-            Mode::Runner | Mode::Side => {}
+            Mode::Subagent | Mode::Side => {}
         }
         tune(&mut c);
         c
@@ -521,7 +521,7 @@ mod tests {
     /// view, ADR-0172).
     fn view_of(mode: Mode) -> View {
         match mode {
-            Mode::Runner => View::Runner,
+            Mode::Subagent => View::Subagent,
             Mode::Side => View::Side,
             _ => View::Session,
         }
@@ -566,7 +566,7 @@ mod tests {
             (crate::keymap::Key::ESC, Mode::Running),
             (crate::keymap::Key::ESC, Mode::FocusedTarget),
             (crate::keymap::Key::ESC, Mode::Side),
-            (crate::keymap::Key::ESC, Mode::Runner),
+            (crate::keymap::Key::ESC, Mode::Subagent),
             (crate::keymap::Key::TAB, Mode::Running),
             (crate::keymap::Key::CTRL_R, Mode::Idle),
             (crate::keymap::Key::ALT_P, Mode::Idle),
@@ -840,10 +840,10 @@ mod tests {
             process(View::Settings, KeyCode::Tab, KeyModifiers::NONE, Mode::Idle),
             InputAction::None
         );
-        // A runner step's Enter still activates through the shared path.
+        // A subagent step's Enter still activates through the shared path.
         assert_eq!(
             process(
-                View::Runner,
+                View::Subagent,
                 KeyCode::Enter,
                 KeyModifiers::NONE,
                 Mode::FocusedTarget
@@ -929,11 +929,11 @@ mod tests {
             "toggle_send_mode on a remapped chord must still require a running round"
         );
 
-        // Runner sibling nav follows the remapped chord, same guards.
-        let rc = ctx(Mode::Runner, |c| c.surface_overrides = ov);
+        // Subagent sibling nav follows the remapped chord, same guards.
+        let rc = ctx(Mode::Subagent, |c| c.surface_overrides = ov);
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 Key::ALT_BRACKET_LEFT,
                 &rc,
                 &mut String::new(),
@@ -943,7 +943,7 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 Key::BRACKET_LEFT,
                 &rc,
                 &mut String::new(),
@@ -955,30 +955,30 @@ mod tests {
     }
 
     #[test]
-    fn runner_and_side_own_their_esc_and_navigation() {
+    fn subagent_and_side_own_their_esc_and_navigation() {
         use crate::keymap::Key;
 
-        // Runner: Esc exits the zoom — even while a step is focused.
+        // Subagent: Esc exits the zoom — even while a step is focused.
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 Key::ESC,
-                &ctx(Mode::Runner, |_| {}),
+                &ctx(Mode::Subagent, |_| {}),
                 &mut String::new(),
                 &mut 0
             ),
-            Some(InputAction::ExitRunner)
+            Some(InputAction::ExitSubagent)
         );
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 Key::ESC,
-                &ctx(Mode::Runner, |c| c.focused_target = true),
+                &ctx(Mode::Subagent, |c| c.focused_target = true),
                 &mut String::new(),
                 &mut 0
             ),
-            Some(InputAction::ExitRunner),
-            "runner Esc exits even with a focused step"
+            Some(InputAction::ExitSubagent),
+            "subagent Esc exits even with a focused step"
         );
         // `[` / `]` walk siblings while the composer is empty and no step is
         // focused; a focused step bounces the key to the composer instead.
@@ -988,9 +988,9 @@ mod tests {
         };
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 bracket,
-                &ctx(Mode::Runner, |_| {}),
+                &ctx(Mode::Subagent, |_| {}),
                 &mut String::new(),
                 &mut 0
             ),
@@ -998,9 +998,9 @@ mod tests {
         );
         assert_eq!(
             resolve_view_key(
-                View::Runner,
+                View::Subagent,
                 bracket,
-                &ctx(Mode::Runner, |c| c.focused_target = true),
+                &ctx(Mode::Subagent, |c| c.focused_target = true),
                 &mut String::new(),
                 &mut 0
             ),
@@ -1034,10 +1034,10 @@ mod tests {
             "side Esc dismisses a completion before returning"
         );
 
-        // The Session view never emits the runner/side exits.
+        // The Session view never emits the subagent/side exits.
         let c = ctx(Mode::FocusedTarget, |_| {});
         let action = resolve_view_key(View::Session, Key::ESC, &c, &mut String::new(), &mut 0);
-        assert_ne!(action, Some(InputAction::ExitRunner));
+        assert_ne!(action, Some(InputAction::ExitSubagent));
         assert_ne!(action, Some(InputAction::ExitSideView));
     }
 

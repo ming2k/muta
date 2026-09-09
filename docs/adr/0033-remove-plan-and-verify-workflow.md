@@ -88,13 +88,13 @@ Remove the plan-as-subagent and verify workflow in full.
 
 ## References
 
-- Supersedes [ADR-0026](0026-plan-progression-forcing-functions.md) (the
-  forcing functions) and [ADR-0027](0027-plan-as-subagent.md) (the `PLAN`
+- Supersedes [ADR-0026](archive/0026-plan-progression-forcing-functions.md) (the
+  forcing functions) and [ADR-0027](archive/0027-plan-as-subagent.md) (the `PLAN`
   profile and `plan` tool).
 - Narrows [ADR-0012](0012-toolaccess-tier-split.md): the `VERIFY` profile is
   removed; the `Read < Execute < Write` tier split stays but only the main
   agent and `Read`-ceiling subagents remain.
-- [ADR-0028](0028-capability-allocation-scoped-writes.md) — the
+- [ADR-0028](archive/0028-capability-allocation-scoped-writes.md) — the
   `WriteScope` / `write_paths` mechanism survives; no built-in profile uses
   it today.
 - [ADR-0030](0030-early-loop-intervention-and-round-hook.md) — the

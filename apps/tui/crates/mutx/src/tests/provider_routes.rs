@@ -1,4 +1,4 @@
-//! Provider/route settings tests: preset editors, capability overrides, custom connection submission, model selection.
+//! Provider/route settings tests: template editors, capability overrides, custom connection submission, model selection.
 
 use super::*;
 
@@ -268,12 +268,12 @@ fn completions_expose_only_canonical_trust_subcommands() {
 }
 
 #[test]
-fn add_connection_row_opens_the_preset_chooser() {
+fn add_connection_row_opens_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_preset_chooser();
     assert!(app.active_modal() == Modal::ProviderPreset);
     assert_eq!(app.preset_choice, 0);
-    // `↑/↓` wrap across the preset list.
+    // `↑/↓` wrap across the template list.
     let n = crate::PROVIDER_PRESETS.len();
     app.move_preset_choice(false);
     assert_eq!(app.preset_choice, n - 1, "wraps to the last template");
@@ -282,11 +282,11 @@ fn add_connection_row_opens_the_preset_chooser() {
 }
 
 #[test]
-fn custom_connection_opens_as_a_sibling_of_the_preset_chooser() {
+fn custom_connection_opens_as_a_sibling_of_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_connection_editor();
     assert!(app.active_modal() == Modal::CustomProvider);
-    assert_eq!(app.custom_preset_id.as_deref(), Some("custom-openai"));
+    assert_eq!(app.custom_provider_id.as_deref(), Some("custom"));
     assert_eq!(
         app.custom_fields,
         vec![
@@ -304,7 +304,7 @@ fn custom_connection_opens_as_a_sibling_of_the_preset_chooser() {
 fn custom_provider_editor_opens_empty_on_name_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.custom_name = "stale".to_string();
-    app.open_custom_provider_editor(openai_preset());
+    app.open_custom_provider_editor(openai_template());
     assert!(app.active_modal() == Modal::CustomProvider);
     assert_eq!(app.custom_field, 0, "opens on the Name field");
     assert!(app.custom_name.is_empty(), "buffers reset on open");
@@ -312,28 +312,28 @@ fn custom_provider_editor_opens_empty_on_name_field() {
         app.input.is_empty(),
         "Name field borrows an empty input line"
     );
-    // The preset seeds the protocol and OpenAI model list.
+    // The template seeds the protocol and OpenAI model list.
     assert_eq!(app.custom_protocol_wire, "openai-chat-completions");
     assert!(app.custom_models.iter().any(|m| m == "gpt-5.5"));
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
 
 #[test]
-fn anthropic_preset_seeds_the_claude_family_without_a_model_field() {
+fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(anthropic_preset());
+    app.open_custom_provider_editor(anthropic_template());
     assert_eq!(app.custom_protocol_wire, "anthropic-messages");
     // The Claude family is seeded as the provider's model list…
     assert!(app.custom_models.len() > 1, "seeds multiple Claude models");
     assert!(app.custom_models.iter().any(|m| m.starts_with("claude-")));
-    // …and there is no Model field (models are fixed by the preset).
+    // …and there is no Model field (models are fixed by the provider).
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
 
 #[test]
-fn antigravity_preset_prefills_url_and_seeds_relay_models() {
+fn antigravity_template_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(antigravity_preset());
+    app.open_custom_provider_editor(antigravity_template());
     assert_eq!(app.custom_protocol_wire, "google-generate-content");
     assert_eq!(
         app.custom_base_url,
@@ -341,7 +341,7 @@ fn antigravity_preset_prefills_url_and_seeds_relay_models() {
     );
     assert_eq!(
         app.custom_models,
-        muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS
+        muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS
     );
     // No free-text Model field — the closed Gemini family is the seed.
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
@@ -353,8 +353,8 @@ fn antigravity_preset_prefills_url_and_seeds_relay_models() {
 #[test]
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let custom_preset = &crate::providers::CUSTOM_CONNECTION;
-    app.open_custom_provider_editor(custom_preset);
+    let custom_template = &crate::providers::CUSTOM_TEMPLATE;
+    app.open_custom_provider_editor(custom_template);
     // Fields: Name / Base URL / Token / Model / Protocol / Identity.
     let n = app.custom_fields.len() as u8;
     // Type a name, then advance: the name is stashed and the Base URL field
@@ -375,10 +375,10 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 #[test]
 fn custom_provider_model_is_an_unmodified_text_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    // The real generic preset: it exposes the Model field and seeds no
+    // The real generic template: it exposes the Model field and seeds no
     // models, so the flow under test is exactly what ships.
-    let free_model_preset = &crate::providers::CUSTOM_CONNECTION;
-    app.open_custom_provider_editor(free_model_preset);
+    let free_model_template = &crate::providers::CUSTOM_TEMPLATE;
+    app.open_custom_provider_editor(free_model_template);
     assert!(app.custom_model.is_empty());
     // Focus Model and type an arbitrary, case-sensitive id. No registry-backed
     // suggestions or normalization participate.
@@ -393,7 +393,7 @@ fn custom_provider_model_is_an_unmodified_text_field() {
 #[test]
 fn custom_provider_cycles_protocol_and_request_identity() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(&crate::providers::CUSTOM_CONNECTION);
+    app.open_custom_provider_editor(&crate::providers::CUSTOM_TEMPLATE);
 
     app.custom_field = 4;
     assert_eq!(
@@ -427,7 +427,6 @@ fn custom_provider_edit_restores_protocol_and_request_identity() {
         false,
         muta_contracts::ClientIdentity::ClaudeCode,
     );
-
     assert_eq!(app.custom_protocol_wire, "anthropic-messages");
     assert_eq!(
         app.custom_client_identity,
@@ -443,13 +442,13 @@ fn custom_provider_edit_restores_protocol_and_request_identity() {
 #[test]
 fn custom_connection_submits_with_the_typed_model_and_url() {
     // Create-flow projection for a custom connection: fields Name/Base
-    // URL/Token/Model, and the submitted `AddProvider` carries the typed
+    // URL/Token/Model, and the submitted `AddConnection` carries the typed
     // model id (not a seeded list) plus the relay endpoint.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let preset = &crate::providers::CUSTOM_CONNECTION;
+    let template = &crate::providers::CUSTOM_TEMPLATE;
     // The editor exposes the four basic strings plus API and identity selectors.
     assert_eq!(
-        preset.fields(),
+        template.fields(),
         vec![
             crate::CustomField::Name,
             crate::CustomField::BaseUrl,
@@ -459,7 +458,7 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
             crate::CustomField::ClientIdentity,
         ]
     );
-    app.open_custom_provider_editor(preset);
+    app.open_custom_provider_editor(template);
     app.custom_name = "WeChat".to_string();
     app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
     app.custom_token = "tok".to_string();
@@ -470,18 +469,18 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
     app.stash_custom_field();
     assert_eq!(app.custom_model, "GLM-5.2");
 
-    // Submit: the request carries the single typed model, no preset id, and
-    // the endpoint — a case-sensitive id travels
+    // Submit: the request carries the `custom` provider, the single typed
+    // model, and the endpoint — a case-sensitive id travels
     // verbatim (the WeChat endpoint 400s on the lowercase spelling).
     let payload = serde_json::json!({
         "name": app.custom_name,
+        "provider": app.custom_provider_id,
         "protocol": app.custom_protocol_wire,
         "base_url": app.custom_base_url,
         "models": [app.custom_model],
-        "preset_id": serde_json::Value::Null,
     });
     assert_eq!(payload["models"][0], "GLM-5.2");
-    assert!(payload["preset_id"].is_null());
+    assert_eq!(payload["provider"], "custom");
     assert_eq!(payload["protocol"], "openai-chat-completions");
     assert_eq!(
         payload["base_url"],
@@ -687,9 +686,9 @@ fn model_editor_esc_pops_back_to_its_picker() {
 #[test]
 fn custom_connection_submits_with_multiple_comma_separated_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let preset = &crate::providers::CUSTOM_CONNECTION;
+    let template = &crate::providers::CUSTOM_TEMPLATE;
     app.open_panel(crate::surfaces::PanelId::Connections);
-    app.open_custom_provider_editor(preset);
+    app.open_custom_provider_editor(template);
     assert_eq!(app.active_modal(), Modal::CustomProvider);
     app.custom_name = "WeChat Multi".to_string();
     app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
@@ -704,10 +703,129 @@ fn custom_connection_submits_with_multiple_comma_separated_models() {
 
     let req = rx.try_recv().expect("should send a request");
     match req {
-        muta_contracts::AgentRequest::AddProvider { models, .. } => {
+        muta_contracts::AgentRequest::AddConnection {
+            name,
+            provider,
+            protocol,
+            models,
+            ..
+        } => {
+            assert_eq!(name, "WeChat Multi", "the raw trimmed name is sent");
+            assert_eq!(provider, "custom");
+            assert_eq!(
+                protocol,
+                Some(muta_contracts::WireProtocol::OpenAiChatCompletions)
+            );
             assert_eq!(models, vec!["gpt-4o", "gpt-4o-mini", "claudy"]);
         }
-        _ => panic!("Expected AddProvider request"),
+        _ => panic!("Expected AddConnection request"),
+    }
+}
+
+#[test]
+fn curated_template_submits_the_provider_id_without_a_protocol_override() {
+    // A curated provider owns its wire: the create request carries the provider
+    // id (the template's id) and no protocol/base-url override.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.open_custom_provider_editor(openai_template());
+    // The focused Name field owns the composer line.
+    app.input = "OpenAI Work".to_string();
+    app.custom_token = "sk-test".to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+
+    crate::event_loop::actions::handle_submit_custom_provider(&mut app);
+
+    let req = rx.try_recv().expect("should send a request");
+    match req {
+        muta_contracts::AgentRequest::AddConnection {
+            name,
+            provider,
+            protocol,
+            base_url,
+            models,
+            ..
+        } => {
+            assert_eq!(name, "OpenAI Work");
+            assert_eq!(provider, "openai");
+            assert_eq!(protocol, None, "curated providers never send a protocol");
+            assert_eq!(base_url, None, "curated providers own their endpoint");
+            assert!(!models.is_empty(), "seeded model list travels");
+        }
+        _ => panic!("Expected AddConnection request"),
+    }
+}
+
+#[test]
+fn editor_rename_sends_the_rename_transaction_then_the_metadata_edit() {
+    // ADR-0201 INV-4: the connection name IS the identity, so a rename is its
+    // own atomic request. The editor emits it first (the metadata edit is keyed
+    // by the new name) and then the `EditConnection` metadata update.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_panel(crate::surfaces::PanelId::Connections);
+    app.provider_picker
+        .rows
+        .push(muta_contracts::ProviderPickerRow {
+            id: "my-relay".to_string(),
+            name: "My Relay".to_string(),
+            model: "glm-5.2".to_string(),
+            models: vec!["glm-5.2".to_string()],
+            model_info: Vec::new(),
+            builtin: false,
+            protocol: "openai-chat-completions".to_string(),
+            base_url: "https://relay.example.com/v1".to_string(),
+            key_ready: true,
+            provider: "custom".to_string(),
+            client_identity: Default::default(),
+            last_used_ms: None,
+            auth: muta_contracts::ConnectionAuth::ApiKey,
+        });
+    app.open_edit_provider_editor(
+        "my-relay".to_string(),
+        "My Relay".to_string(),
+        "openai-chat-completions".to_string(),
+        "https://relay.example.com/v1".to_string(),
+        muta_contracts::ConnectionAuth::ApiKey,
+        false,
+        muta_contracts::ClientIdentity::Native,
+    );
+    // The Name field owns the composer line; typing a new name renames.
+    app.custom_field = 0;
+    app.input = "My Relay Renamed".to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+
+    crate::event_loop::actions::handle_submit_custom_provider(&mut app);
+
+    let rename = rx.try_recv().expect("rename transaction first");
+    match rename {
+        muta_contracts::AgentRequest::RenameConnection { from, to } => {
+            assert_eq!(from, "my-relay");
+            assert_eq!(to, "My Relay Renamed");
+        }
+        other => panic!("Expected RenameConnection first, got {other:?}"),
+    }
+    let edit = rx.try_recv().expect("metadata edit second");
+    match edit {
+        muta_contracts::AgentRequest::EditConnection {
+            name,
+            provider,
+            protocol,
+            base_url,
+            ..
+        } => {
+            assert_eq!(name, "My Relay Renamed", "the edit follows the rename");
+            assert_eq!(provider, "custom");
+            assert_eq!(
+                protocol,
+                Some(muta_contracts::WireProtocol::OpenAiChatCompletions)
+            );
+            assert_eq!(base_url.as_deref(), Some("https://relay.example.com/v1"));
+        }
+        other => panic!("Expected EditConnection second, got {other:?}"),
     }
 }
 
@@ -749,10 +867,9 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
 
     // Initial phase 1 detail arrives with Fetching usage
     let detail_phase1 = muta_contracts::ConnectionDetail {
-        id: "google-antigravity".to_string(),
-        name: "Google Antigravity".to_string(),
-        preset_id: Some("antigravity-oauth".to_string()),
-        preset_label: None,
+        name: "google-antigravity".to_string(),
+        provider: "google-antigravity".to_string(),
+        provider_label: "Google Antigravity".to_string(),
         protocol: "google".to_string(),
         base_url: "https://daily-cloudcode-pa.googleapis.com".to_string(),
         auth_type: "OAuth (AntigravityOAuth)".to_string(),
@@ -776,7 +893,7 @@ async fn connection_detail_quota_update_preserves_scroll_position() {
 
     assert_eq!(app.connection_info_scroll, 0);
     assert_eq!(
-        app.connection_detail.as_ref().map(|d| &d.id),
+        app.connection_detail.as_ref().map(|d| &d.name),
         Some(&"google-antigravity".to_string())
     );
 
@@ -810,10 +927,9 @@ async fn connection_detail_refresh_action_queries_active_detail_id() {
     app.open_panel(crate::surfaces::PanelId::Connections);
     app.connection_info_detail = true;
     app.connection_detail = Some(muta_contracts::ConnectionDetail {
-        id: "custom-relay".to_string(),
-        name: "Custom Relay".to_string(),
-        preset_id: None,
-        preset_label: None,
+        name: "custom-relay".to_string(),
+        provider: "custom".to_string(),
+        provider_label: "Custom connection".to_string(),
         protocol: "openai".to_string(),
         base_url: "https://example.com".to_string(),
         auth_type: "API Key".to_string(),

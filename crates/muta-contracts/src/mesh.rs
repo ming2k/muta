@@ -17,8 +17,8 @@
 //! without touching the agent loop.
 //!
 //! Direction is **governed by station hierarchy**: [`MeshMessage::route`] encodes who may
-//! send what to whom, so a runner can never be commanded by a sibling, and a
-//! master never receives a report from a runner it does not own (ownership
+//! send what to whom, so a subagent can never be commanded by a sibling, and a
+//! master never receives a report from a subagent it does not own (ownership
 //! is checked by the receiving side against the sender's parent identity).
 
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ use crate::agent_kind::MeshStation;
 pub struct MeshAddress {
     /// Station of the addressed agent — the first routing hop.
     pub station: MeshStation,
-    /// Owning session id (runners inherit their master's session).
+    /// Owning session id (subagents inherit their master's session).
     pub session: String,
     /// Agent instance id — unique within `(station, session)`.
     pub agent: String,
@@ -50,25 +50,20 @@ impl MeshAddress {
         Self::new(MeshStation::Hypervisor, "daemon", agent_id)
     }
 
-    /// Master address for a given session.
-    pub fn master(session: impl Into<String>) -> Self {
+    /// Canonical root session agent address (ADR-0183).
+    pub fn session_root(session: impl Into<String>) -> Self {
         let s = session.into();
         Self::new(MeshStation::Session, s.clone(), s)
     }
 
-    /// Canonical root session agent address (ADR-0183).
-    pub fn session_root(session: impl Into<String>) -> Self {
-        Self::master(session)
+    /// Legacy alias for [`Self::session_root`].
+    pub fn master(session: impl Into<String>) -> Self {
+        Self::session_root(session)
     }
 
-    /// Runner address for a subordinate within a session.
-    pub fn runner(session: impl Into<String>, agent: impl Into<String>) -> Self {
-        Self::new(MeshStation::Subtask, session, agent)
-    }
-
-    /// Canonical sub-agent address for a subordinate within a session (ADR-0183).
+    /// Subagent address for a subordinate within a session.
     pub fn subagent(session: impl Into<String>, agent: impl Into<String>) -> Self {
-        Self::runner(session, agent)
+        Self::new(MeshStation::Subtask, session, agent)
     }
 
     /// The address of this agent's parent in the mesh (same session, one
@@ -96,7 +91,7 @@ impl std::fmt::Display for MeshAddress {
 
 /// A single mesh message payload. Delivery semantics per variant:
 /// acknowledged (`Instruction`/`Report`), fire-and-forget (`ProgressNote`,
-/// `PeerNote`), lifecycle (`RunnerEol`).
+/// `PeerNote`), lifecycle (`SubagentEol`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MeshMessage {
@@ -116,8 +111,8 @@ pub enum MeshMessage {
     ProgressNote { body: String },
     /// Same-station fire-and-forget note; never crosses station boundaries.
     PeerNote { body: String },
-    /// A runner announcing graceful end-of-life to its master.
-    RunnerEol { final_note: Option<String> },
+    /// A subagent announcing graceful end-of-life to its master.
+    SubagentEol { final_note: Option<String> },
 }
 
 impl MeshMessage {
@@ -128,7 +123,7 @@ impl MeshMessage {
                 MeshRoute::Vertical
             }
             MeshMessage::Report { .. } | MeshMessage::ReportAck { .. } => MeshRoute::Vertical,
-            MeshMessage::ProgressNote { .. } | MeshMessage::RunnerEol { .. } => MeshRoute::UpOnly,
+            MeshMessage::ProgressNote { .. } | MeshMessage::SubagentEol { .. } => MeshRoute::UpOnly,
             MeshMessage::PeerNote { .. } => MeshRoute::Peer,
             MeshMessage::Ping { .. } | MeshMessage::Pong { .. } => MeshRoute::Any,
         }
@@ -143,7 +138,7 @@ impl MeshMessage {
     ///   respectively, never skipping stations and never inverted.
     /// - The acks travel the *reverse* direction of their verb: an
     ///   `InstructionAck` flows up, a `ReportAck` flows down.
-    /// - `ProgressNote`/`RunnerEol` flow strictly up (one hop).
+    /// - `ProgressNote`/`SubagentEol` flow strictly up (one hop).
     /// - `PeerNote` flows strictly sideways (same station).
     /// - `Ping`/`Pong` are direction-free liveness.
     pub fn lawful_for(&self, sender: MeshStation, recipient: MeshStation) -> bool {
@@ -156,7 +151,7 @@ impl MeshMessage {
         match self {
             Instruction { .. } | ReportAck { .. } => sender.may_command(recipient),
             Report { .. } | InstructionAck { .. } => recipient.may_command(sender),
-            ProgressNote { .. } | RunnerEol { .. } => recipient.may_command(sender),
+            ProgressNote { .. } | SubagentEol { .. } => recipient.may_command(sender),
             PeerNote { .. } => false,
             Ping { .. } | Pong { .. } => true,
         }
@@ -253,7 +248,7 @@ mod tests {
         MeshAddress::new(MeshStation::Session, session, session)
     }
 
-    fn runner(session: &str, agent: &str) -> MeshAddress {
+    fn subagent(session: &str, agent: &str) -> MeshAddress {
         MeshAddress::new(MeshStation::Subtask, session, agent)
     }
 
@@ -261,8 +256,8 @@ mod tests {
     fn addresses_sort_by_station_then_session_then_agent() {
         let sup = MeshAddress::hypervisor("daemon");
         let m1 = master("session-1");
-        let r1 = runner("session-1", "runner-a");
-        let r2 = runner("session-1", "runner-b");
+        let r1 = subagent("session-1", "subagent-a");
+        let r2 = subagent("session-1", "subagent-b");
         let m2 = master("session-2");
 
         let mut addrs = vec![r2.clone(), m2.clone(), sup.clone(), r1.clone(), m1.clone()];
@@ -299,8 +294,8 @@ mod tests {
     }
 
     #[test]
-    fn runner_eol_flows_up_only() {
-        let note = MeshMessage::RunnerEol {
+    fn subagent_eol_flows_up_only() {
+        let note = MeshMessage::SubagentEol {
             final_note: Some("done".into()),
         };
         assert!(note.lawful_for(MeshStation::Subtask, MeshStation::Session));

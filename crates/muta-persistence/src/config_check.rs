@@ -55,7 +55,8 @@ pub fn check_config_file(path: Option<PathBuf>) -> Vec<ConfigFinding> {
     // (e.g. a string where a number is expected) — the loudest possible
     // signal, because loading discarded the user's whole setup.
     let mut findings = Vec::new();
-    if let Err(error) = toml::from_str::<crate::config::Config>(&content) {
+    let effective = crate::web_migration::migrate_config_source(&content);
+    if let Err(error) = toml::from_str::<crate::config::Config>(&effective) {
         findings.push(ConfigFinding {
             key: "<file>".to_string(),
             message: format!(
@@ -89,8 +90,8 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     root.insert("permissions".to_string(), BTreeMap::new());
     root.insert("workspace".to_string(), BTreeMap::new());
     root.insert("bash_policy".to_string(), BTreeMap::new());
-    root.insert("websearch".to_string(), BTreeMap::new());
-    root.insert("master".to_string(), BTreeMap::new());
+    root.insert("web".to_string(), BTreeMap::new());
+    root.insert("agent".to_string(), BTreeMap::new());
     root.insert("hooks".to_string(), BTreeMap::new());
     root.insert("tool_variants".to_string(), BTreeMap::new());
     root.insert("daemon".to_string(), BTreeMap::new());
@@ -113,8 +114,8 @@ pub const CONFIG_KEYS: &[&str] = &[
     "permissions",
     "workspace",
     "bash_policy",
-    "websearch",
-    "master",
+    "web",
+    "agent",
     "hooks",
     "tool_variants",
     "daemon",
@@ -125,6 +126,10 @@ pub const CONFIG_KEYS: &[&str] = &[
 /// dead and what replaced it.
 const LEGACY_KEYS: &[(&str, &str)] = &[
     ("default_provider", "renamed to `default_connection`"),
+    (
+        "websearch",
+        "renamed to `[web]`; accepted as migration input and emitted canonically on save",
+    ),
     (
         "provider_retry_max_attempts",
         "renamed to `connection_retry_max_attempts`",
@@ -186,27 +191,27 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     ),
     (
         "websearch.exa_api_key",
-        "secrets moved to `credentials.toml [websearch]`",
+        "secrets moved to provider-scoped `credentials.toml [web.search]`",
     ),
     (
         "websearch.parallel_api_key",
-        "secrets moved to `credentials.toml [websearch]`",
+        "secrets moved to provider-scoped `credentials.toml [web.search]`",
     ),
     (
         "websearch.tavily_api_key",
-        "secrets moved to `credentials.toml [websearch]`",
+        "secrets moved to provider-scoped `credentials.toml [web.search]`",
     ),
     (
         "websearch.bocha_api_key",
-        "secrets moved to `credentials.toml [websearch]`",
+        "secrets moved to provider-scoped `credentials.toml [web.search]`",
     ),
     (
         "websearch.jina_api_key",
-        "secrets moved to `credentials.toml [websearch]`",
+        "secrets moved to provider-scoped `credentials.toml [web.reader]`",
     ),
     (
         "websearch.fallback",
-        "removed; web search uses a direct backend connection without fallback",
+        "removed; web search has exactly one selected provider and no fallback route",
     ),
 ];
 
@@ -341,6 +346,16 @@ mod tests {
             findings.iter().any(|f| f.message.contains("schema")),
             "got: {findings:?}"
         );
+    }
+
+    #[test]
+    fn legacy_websearch_alias_is_understood_and_reported() {
+        let (path, _dir) = write_config("[websearch]\nreader = \"builtin\"\n");
+        let findings = check_config_file(Some(path));
+        assert_eq!(findings.len(), 1, "got: {findings:?}");
+        assert_eq!(findings[0].key, "websearch");
+        assert!(findings[0].is_legacy);
+        assert!(findings[0].message.contains("[web]"));
     }
 
     #[test]

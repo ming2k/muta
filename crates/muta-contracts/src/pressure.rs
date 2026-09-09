@@ -153,7 +153,7 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
     let mut tokens: i64 = 0;
     for m in messages {
         tokens += estimate_message_tokens(m);
-        // Nested envoy transcripts are real session weight (persisted, replayed
+        // Nested subagent transcripts are real session weight (persisted, replayed
         // on resume) so they count, just like `message_bytes` does.
         if let Some(children) = m.children.as_ref() {
             tokens += estimate_tokens(children) as i64;
@@ -163,7 +163,7 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
 }
 
 /// Session-weight estimate with **identical semantics** to
-/// [`estimate_tokens`] (per-message framing included, nested envoy children
+/// [`estimate_tokens`] (per-message framing included, nested subagent children
 /// counted), routed through the shared [`MessageTokenWeights`] cache: every
 /// message's BPE cost is paid once per session lifetime, and repeated passes
 /// cost O(new bytes) instead of O(total bytes).
@@ -203,8 +203,8 @@ pub(crate) fn message_bytes(message: &Message) -> usize {
                     .sum::<usize>()
             })
             .unwrap_or(0);
-    // Recursively count nested envoy transcripts. A `task` tool result
-    // carries the envoy's full conversation as `children`, and that
+    // Recursively count nested subagent transcripts. A `task` tool result
+    // carries the subagent's full conversation as `children`, and that
     // conversation is real context weight the parent model is effectively
     // paying for (it sees the summary, but the children live in the same
     // session.json and survive resume — both the context-pressure meter and
@@ -403,7 +403,7 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
 }
 
 /// Apply a plan, recording originals for archival and recursing into any nested
-/// envoy transcript on the messages it touches.
+/// subagent transcript on the messages it touches.
 fn apply_prune(
     messages: &mut [Message],
     plan: Vec<PrunePlan>,
@@ -416,10 +416,10 @@ fn apply_prune(
         outcome.cleared_count += 1;
         messages[item.index].content = item.new_content;
         messages[item.index].reasoning_content = None;
-        // A `task` result carries the envoy's whole transcript as
+        // A `task` result carries the subagent's whole transcript as
         // `children`; its old `Tool` results are the same kind of bulky weight,
         // so prune them too (ungated — durability already happened when the
-        // envoy finished; here we relieve in-memory pressure).
+        // subagent finished; here we relieve in-memory pressure).
         if let Some(children) = messages[item.index].children.as_mut() {
             let child_plan = plan_prune(children, protect_recent_tokens);
             if !child_plan.is_empty() {
@@ -1022,13 +1022,13 @@ mod tests {
     #[test]
     fn weighted_session_estimate_matches_uncached_semantics() {
         // The pressure/prune gates must see EXACTLY the number the uncached
-        // `estimate_tokens` produced (per-message framing + nested envoy
+        // `estimate_tokens` produced (per-message framing + nested subagent
         // children), or their thresholds silently drift between call sites.
         // Build a session with children, tool calls, and CJK (multi-byte)
         // content, then compare both paths.
         let mut parent = Message::new(Role::Assistant, "父消息 some tool narrative");
         parent.tool_calls = Some(vec![call("c1", "read", "{\"path\":\"a.rs\"}")]);
-        let mut child_user = Message::new(Role::User, "runner prompt");
+        let mut child_user = Message::new(Role::User, "subagent prompt");
         child_user.children = Some(vec![Message::tool_result(
             &call("c2", "bash", "ls"),
             "child output 汉字混合 with English words",

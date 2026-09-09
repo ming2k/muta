@@ -42,11 +42,11 @@ async fn in_memory_fs_roundtrip() {
 }
 
 #[tokio::test]
-async fn mock_process_runner_scripted_response() {
+async fn mock_process_subagent_scripted_response() {
     let env = InMemoryExecutionEnvironment::new("/virtual/workspace");
-    let runner = env.process_runner();
+    let subagent = env.process_runner();
 
-    runner
+    subagent
         .register(
             "cargo build",
             muta_contracts::execution::ProcessOutput {

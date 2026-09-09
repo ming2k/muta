@@ -50,7 +50,7 @@ const OAUTH_POLLING_SAFETY_MARGIN_MS: i64 = 3_000;
 /// Request a device code (RFC 8628). Prints nothing; the caller surfaces the
 /// `user_code` + `verification_uri` to the operator.
 pub async fn request_device_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
 ) -> Result<DeviceCodeResponse, crate::oauth::AuthError> {
     request_device_code_at(client, cfg, cfg.device_authorization_url.as_ref()).await
@@ -58,7 +58,7 @@ pub async fn request_device_code(
 
 /// Same as [`request_device_code`] but with an explicit endpoint (tests).
 pub async fn request_device_code_at(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     endpoint: &str,
 ) -> Result<DeviceCodeResponse, crate::oauth::AuthError> {
@@ -67,18 +67,15 @@ pub async fn request_device_code_at(
         cfg.client_id,
         crate::oauth::token::percent_encode_form_value(cfg.scope.as_ref())
     );
-    let response = client
-        .post(endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("Accept", "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| {
-            crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
-        })?;
-    let status = response.status();
-    let text = crate::oauth::token::read_response_text(response, "device code response").await?;
+    let request = crate::http::Request::new(muta_net::Method::POST, endpoint)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .raw_body(body);
+    let response = client.send(request).await.map_err(|e| {
+        crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
+    })?;
+    let status = response.status;
+    let text = response.body;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
@@ -101,7 +98,7 @@ pub async fn request_device_code_at(
 /// expires, or a terminal error arrives. Honors RFC 8628 §3.5:
 /// `authorization_pending` → keep polling; `slow_down` → bump the interval.
 pub async fn poll_device_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     device: &DeviceCodeResponse,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
@@ -111,7 +108,7 @@ pub async fn poll_device_code(
 /// Test-injectable variant of [`poll_device_code`] so unit tests can drive the
 /// `authorization_pending` / `slow_down` branches without real waits.
 pub async fn poll_device_code_with<S, Fut>(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     device: &DeviceCodeResponse,
     sleep: S,
@@ -140,20 +137,17 @@ where
             cfg.client_id,
             crate::oauth::token::percent_encode_form_value(device.device_code.expose_secret())
         );
-        let response = client
-            .post(cfg.device_token_url.as_ref())
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Accept", "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| {
-                crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
-            })?;
+        let request =
+            crate::http::Request::new(muta_net::Method::POST, cfg.device_token_url.as_ref())
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("accept", "application/json")
+                .raw_body(body);
+        let response = client.send(request).await.map_err(|e| {
+            crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
+        })?;
 
-        let status = response.status();
-        let text =
-            crate::oauth::token::read_response_text(response, "device token response").await?;
+        let status = response.status;
+        let text = response.body;
 
         match classify_token_response(status.as_u16(), &text) {
             TokenPollOutcome::Success(tokens) => return Ok(tokens),

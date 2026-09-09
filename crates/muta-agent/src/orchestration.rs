@@ -1043,6 +1043,11 @@ pub async fn execute_round(
         .unwrap_or_else(|| agent.round_count());
 
     let admitted_session_id = session.id().await;
+    let prompt_for_titler = if !input.hidden && resumed_point.is_none() {
+        Some(input.prompt.clone())
+    } else {
+        None
+    };
     // Build `round_history` — the round's working scratch — from the session's
     // authoritative `model_window` plus the new user message (ADR-0048). A
     // `/retry` resume instead re-seeds from the stopped round's checkpoint
@@ -1105,19 +1110,14 @@ pub async fn execute_round(
         })
         .await?;
 
-    // Session digest (ADR-0193): the Round-EOL phase (ADR-0183 phase 5) owns
-    // the primary trigger — the digest fires at round convergence, when the
-    // transcript ends at a settled boundary and the process-alive probability
-    // is highest. Admission is only the *catch-up checkpoint*: a session
-    // re-entering with a digest whose anchor lags the transcript (the EOL
-    // task lost its race with process exit, or a crash between convergence
-    // and persistence) is repaired here, blocking, before the new round's
-    // work begins. Hidden control rounds and `/retry` resumes never trigger.
-    if !input.hidden
-        && resumed_point.is_none()
-        && let Err(error) = agent.run_eol_digest_maintenance(&session).await
-    {
-        tracing::warn!(%error, "session digest catch-up failed");
+    // Session Title (ADR-0022 on-demand refinement): asynchronously generate a concise
+    // session title concurrently upon admission of the first user prompt. Runs in
+    // the background without blocking TTFT or waiting for round convergence.
+    if let Some(prompt) = prompt_for_titler {
+        let (_, has_title) = session.title().await;
+        if !has_title {
+            agent.spawn_session_titler(Arc::clone(&session), prompt);
+        }
     }
 
     // Install the mid-round save point (ADR-0048) so every ReAct-turn boundary
@@ -1536,12 +1536,8 @@ pub async fn execute_round(
         );
     }
 
-    // Round-EOL digest (ADR-0193): fire the fifth aspect phase at
-    // convergence, after the terminal commit above has landed the settled
-    // round tail. Never fired for failed/interrupted rounds — those park a
-    // retry point instead; the next convergence or admission catch-up owns
-    // their digest.
-    fire_eol_session_digest(Arc::clone(&agent), Arc::clone(&session));
+    // Phase 5: Round EOL Aspect Hook (ADR-0183)
+    agent.aspects().fire_round_eol(&agent, Arc::clone(&session));
 
     if emit_round_completed {
         let _ = tx.send(round_response(
@@ -1556,19 +1552,6 @@ pub async fn execute_round(
         ));
     }
     Ok(RoundCompletion::Completed)
-}
-
-/// Fire-and-forget Round-EOL digest maintenance (ADR-0193). Called at round
-/// convergence — after the final commit has landed the settled assistant
-/// reply and before the completed-round hand-off — so every digest terminates
-/// at a semantic boundary instead of mid-thought, and a session that is never
-/// resumed still carries its final round in its working-memory projection.
-/// Routed through the aspect engine's fifth-phase entry
-/// (`AspectEngine::fire_round_eol`), which delegates to the shared CAS
-/// routine; a concurrent refresh or a provider failure loses silently and
-/// keeps the previous digest.
-fn fire_eol_session_digest(agent: Arc<Agent>, session: Arc<SessionStore>) {
-    agent.aspects().fire_round_eol(&agent, session);
 }
 
 fn send_context_projection(
@@ -1616,7 +1599,7 @@ async fn estimate_off_executor(agent: &Arc<Agent>, messages: &[Message]) -> Requ
         })
 }
 
-/// Session-weight estimate (nested runner children included — the
+/// Session-weight estimate (nested subagent children included — the
 /// pressure/prune number, **not** the wire estimate) on the blocking pool,
 /// through the shared content-addressed weights cache. Companion to
 /// [`estimate_off_executor`]: BPE tokenization never runs on the async
@@ -1806,12 +1789,12 @@ pub fn relay_agent_event(
         AgentEvent::StdinRequest(request) => {
             round_response(session_id, RoundEvent::StdinRequest(request))
         }
-        AgentEvent::Runner {
+        AgentEvent::Subagent {
             parent_call_id,
             event,
         } => round_response(
             session_id,
-            RoundEvent::EnvoyCompat {
+            RoundEvent::SubagentStep {
                 parent_call_id,
                 event,
             },
@@ -1932,22 +1915,19 @@ pub fn send_compaction(
 }
 
 #[cfg(test)]
-mod digest_tests {
+mod title_tests {
     use super::*;
     use crate::AgentIdentity;
     use async_trait::async_trait;
-    use muta_contracts::{Message, ModelRequest, ProviderStreamEvent, Role, SessionDigest};
+    use muta_contracts::{Message, ModelRequest, ProviderStreamEvent, Role};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A provider that answers only the non-streaming `chat` (the Chronicler's
-    /// path) with a fixed digest JSON, counting consults so tests can assert
-    /// the refresh throttle.
-    struct DigestProvider {
+    struct TitleProvider {
         consults: AtomicUsize,
     }
 
     #[async_trait]
-    impl muta_contracts::Provider for DigestProvider {
+    impl muta_contracts::Provider for TitleProvider {
         async fn chat(
             &self,
             _request: ModelRequest,
@@ -1955,7 +1935,7 @@ mod digest_tests {
             self.consults.fetch_add(1, Ordering::SeqCst);
             Ok(muta_contracts::ProviderCompletion::message(Message::new(
                 Role::Assistant,
-                "{\"title\":\"Fixing the build\",\"intent\":\"User wants CI green.\",\"history\":[\"Reproduced the failing test\"]}",
+                "Fixing the build",
             )))
         }
         async fn stream_chat(
@@ -1990,22 +1970,10 @@ mod digest_tests {
         }
     }
 
-    async fn fresh_digest_session() -> AutoCleanArcSession {
+    async fn fresh_title_session() -> AutoCleanArcSession {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SessionStore::for_path(dir.path().join("session.json")));
         AutoCleanArcSession(store, dir)
-    }
-
-    /// The digest trigger is fire-and-forget (spawned); poll until it lands.
-    async fn await_digest(session: &SessionStore) -> SessionDigest {
-        for _ in 0..200 {
-            let (digest, _) = session.digest().await;
-            if let Some(digest) = digest {
-                return digest;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("digest never landed");
     }
 
     async fn await_title(session: &SessionStore) -> (Option<String>, bool) {
@@ -2019,16 +1987,10 @@ mod digest_tests {
         session.title().await
     }
 
-    /// The EOL-phase trigger: a session with no digest gets one at round
-    /// convergence, and the picker title mirrors it (not manual).
     #[tokio::test]
-    async fn digest_generated_at_round_eol_and_title_mirrors() {
-        let session = fresh_digest_session().await;
-        session
-            .replace_messages(vec![Message::new(Role::User, "hello there")])
-            .await
-            .unwrap();
-        let provider = Arc::new(DigestProvider {
+    async fn session_title_spawned_concurrently_on_first_prompt() {
+        let session = fresh_title_session().await;
+        let provider = Arc::new(TitleProvider {
             consults: AtomicUsize::new(0),
         });
         let agent = Arc::new(Agent::new(
@@ -2037,65 +1999,24 @@ mod digest_tests {
             AgentIdentity::default(),
         ));
 
-        fire_eol_session_digest(agent.clone(), session.clone());
-        let digest = await_digest(&session).await;
-        assert_eq!(digest.title, "Fixing the build");
-        assert_eq!(digest.intent, "User wants CI green.");
-        assert_eq!(digest.history.len(), 1);
+        let (title, has_title) = session.title().await;
+        assert!(title.is_none());
+        assert!(!has_title);
+
+        agent.spawn_session_titler(session.clone(), "Fix production memory leak".into());
         let (title, has_title) = await_title(&session).await;
         assert_eq!(title.as_deref(), Some("Fixing the build"));
-        // A non-NULL title is terminal: the has-title flag doubles as the
-        // former manual-lock signal (ADR-0186).
         assert!(has_title);
-
-        // No transcript growth since the anchor → the throttle skips the
-        // Chronicler entirely.
-        fire_eol_session_digest(agent, session.clone());
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
     }
 
-    /// A manually locked title is never overwritten (ADR-0022 lock rule),
-    /// but the digest's intent/history still refresh.
     #[tokio::test]
-    async fn manual_title_lock_pins_only_the_title() {
-        let session = fresh_digest_session().await;
-        session
-            .replace_messages(vec![Message::new(Role::User, "hello")])
-            .await
-            .unwrap();
+    async fn manual_title_lock_is_not_overwritten_by_spawn_session_titler() {
+        let session = fresh_title_session().await;
         session
             .set_title(Some("My own title".into()), true)
             .await
             .unwrap();
-        let agent = Arc::new(Agent::new(
-            Arc::new(DigestProvider {
-                consults: AtomicUsize::new(0),
-            }),
-            Vec::new(),
-            AgentIdentity::default(),
-        ));
-        fire_eol_session_digest(agent, session.clone());
-        let digest = await_digest(&session).await;
-        assert_eq!(
-            digest.title, "Fixing the build",
-            "the digest itself stores its own title"
-        );
-        let (title, manual) = session.title().await;
-        assert_eq!(title.as_deref(), Some("My own title"), "manual title wins");
-        assert!(manual, "manual flag survives");
-    }
-
-    /// Growth past the stored anchor refreshes the digest at the next EOL
-    /// (and only then).
-    #[tokio::test]
-    async fn digest_refreshes_after_growth_threshold() {
-        let session = fresh_digest_session().await;
-        session
-            .replace_messages(vec![Message::new(Role::User, "start")])
-            .await
-            .unwrap();
-        let provider = Arc::new(DigestProvider {
+        let provider = Arc::new(TitleProvider {
             consults: AtomicUsize::new(0),
         });
         let agent = Arc::new(Agent::new(
@@ -2103,154 +2024,12 @@ mod digest_tests {
             Vec::new(),
             AgentIdentity::default(),
         ));
-
-        fire_eol_session_digest(agent.clone(), session.clone());
-        await_digest(&session).await;
-        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
-
-        // Below-threshold growth: no refresh.
-        session
-            .replace_messages(vec![
-                Message::new(Role::User, "start"),
-                Message::new(Role::Assistant, "small step"),
-            ])
-            .await
-            .unwrap();
-        fire_eol_session_digest(agent.clone(), session.clone());
+        agent.spawn_session_titler(session.clone(), "Hello".into());
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
-
-        // Past-threshold growth: exactly one refresh.
-        let big = "x".repeat(crate::session_digest::DIGEST_REFRESH_DELTA_CHARS + 100);
-        session
-            .replace_messages(vec![
-                Message::new(Role::User, "start"),
-                Message::new(Role::Assistant, big),
-            ])
-            .await
-            .unwrap();
-        fire_eol_session_digest(agent, session.clone());
-        // The digest from round one is already stored; wait for the second
-        // consult itself.
-        for _ in 0..200 {
-            if provider.consults.load(Ordering::SeqCst) == 2 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(provider.consults.load(Ordering::SeqCst), 2);
-    }
-
-    /// A stale-anchored session repaired at admission: the catch-up path
-    /// (blocking, admission-side) lands a missing digest exactly like the
-    /// EOL phase does, with the title fall-out (ADR-0193 Decision 2).
-    #[tokio::test]
-    async fn admission_catch_up_repairs_missing_digest() {
-        let session = fresh_digest_session().await;
-        session
-            .replace_messages(vec![Message::new(Role::User, "hello")])
-            .await
-            .unwrap();
-        let agent = Arc::new(Agent::new(
-            Arc::new(DigestProvider {
-                consults: AtomicUsize::new(0),
-            }),
-            Vec::new(),
-            AgentIdentity::default(),
-        ));
-
-        let landed = agent.run_eol_digest_maintenance(&session).await.unwrap();
-        assert!(landed, "catch-up on an anchorless session must generate");
-        let (digest, anchor) = session.digest().await;
-        assert!(digest.is_some(), "catch-up persisted the digest");
-        assert!(anchor.is_some(), "catch-up established the watermark");
-        let (title, _) = session.title().await;
-        assert_eq!(title.as_deref(), Some("Fixing the build"));
-
-        // Immediately re-running repairs nothing (throttled) and consults
-        // nothing new — the single DigestProvider consult is all there is.
-        let landed_again = agent.run_eol_digest_maintenance(&session).await.unwrap();
-        assert!(!landed_again, "throttled: no growth since the anchor");
-    }
-
-    /// The anchor CAS: a writer holding a superseded anchor loses the
-    /// compare-and-set, persists nothing, and the winner's state survives
-    /// (ADR-0193 Decision 3 — the single-flight discipline).
-    #[tokio::test]
-    async fn cas_loser_discards_its_result() {
-        let session = fresh_digest_session().await;
-        session
-            .replace_messages(vec![Message::new(Role::User, "hello")])
-            .await
-            .unwrap();
-        let agent = Arc::new(Agent::new(
-            Arc::new(DigestProvider {
-                consults: AtomicUsize::new(0),
-            }),
-            Vec::new(),
-            AgentIdentity::default(),
-        ));
-
-        // Winner: first generation with the true anchor (None → Some).
-        let won = agent.run_eol_digest_maintenance(&session).await.unwrap();
-        assert!(won);
-        let (_, anchor) = session.digest().await;
-        let anchor = anchor.expect("winner established the anchor");
-
-        // Loser: a task that snapshotted the *pre-winner* state (anchor
-        // None), generated while the winner persisted, and now attempts its
-        // stale write. The CAS must reject it.
-        let loser = agent
-            .generate_digest(&session.full_transcript().await, None)
-            .await
-            .expect("loser generated its digest");
-        let rejected = session
-            .set_digest_if_anchor(Some(loser), Some(u64::MAX), None)
-            .await
-            .unwrap();
-        assert!(!rejected, "stale anchor must lose the CAS");
-        let (digest, stored_anchor) = session.digest().await;
-        assert_eq!(
-            stored_anchor.as_ref(),
-            Some(&anchor),
-            "the winner's anchor survives the loser"
-        );
-        assert!(digest.is_some(), "the winner's digest survives the loser");
-        // The stale anchor value must never have landed.
-        assert_ne!(stored_anchor, Some(u64::MAX));
-    }
-
-    #[test]
-    fn refresh_decision_is_pure_and_predictable() {
-        let digest = SessionDigest {
-            title: "T".to_string(),
-            intent: "I".to_string(),
-            history: Vec::new(),
-        };
-        // No digest yet → always.
-        assert!(crate::session_digest::digest_refresh_needed(None, None, 0));
-        // Anchored digest → growth-gated.
-        assert!(!crate::session_digest::digest_refresh_needed(
-            Some(&digest),
-            Some(1_000),
-            1_000
-        ));
-        assert!(!crate::session_digest::digest_refresh_needed(
-            Some(&digest),
-            Some(1_000),
-            crate::session_digest::DIGEST_REFRESH_DELTA_CHARS
-        ));
-        assert!(crate::session_digest::digest_refresh_needed(
-            Some(&digest),
-            Some(1_000),
-            crate::session_digest::DIGEST_REFRESH_DELTA_CHARS + 1_000
-        ));
-        // Missing anchor (legacy data) → refresh once to establish it.
-        assert!(crate::session_digest::digest_refresh_needed(
-            Some(&digest),
-            None,
-            0
-        ));
+        let (title, manual) = session.title().await;
+        assert_eq!(title.as_deref(), Some("My own title"));
+        assert!(manual);
+        assert_eq!(provider.consults.load(Ordering::SeqCst), 0);
     }
 }
 

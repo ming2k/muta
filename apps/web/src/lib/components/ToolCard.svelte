@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { RunnerExecution, LiveToolExecution } from "../stores/daemon.svelte.js";
+  import type { SubagentExecution, LiveToolExecution } from "../stores/daemon.svelte.js";
   import { t } from "../i18n.svelte.js";
 
   interface Props {
@@ -14,7 +14,7 @@
      A tool that is still running, or that failed, opens itself so attention
      goes where it is needed. */
   let expanded = $state(false);
-  let runnerExpanded = $state(false);
+  let subagentExpanded = $state(false);
   let userToggled = $state(false);
 
   $effect(() => {
@@ -57,11 +57,11 @@
     tool.status === "running" ? tool.stdout || tool.stderr : "",
   );
 
-  function runnerSummary(runner: RunnerExecution): string {
+  function subagentSummary(subagent: SubagentExecution): string {
     const parts: string[] = [];
-    if (runner.profile) parts.push(runner.profile);
-    if (runner.activity) parts.push(runner.activity);
-    const running = runner.tools.filter((t2) => t2.status === "running").length;
+    if (subagent.profile) parts.push(subagent.profile);
+    if (subagent.activity) parts.push(subagent.activity);
+    const running = subagent.tools.filter((t2) => t2.status === "running").length;
     if (running > 0) parts.push(t("toolsRunning")(running));
     return parts.join(" · ") || t("working");
   }
@@ -110,19 +110,19 @@
         </div>
       {/if}
 
-      {#if tool.runner}
-        {@const runner = tool.runner}
-        <div class="runner-block">
-          <button class="runner-header" onclick={() => (runnerExpanded = !runnerExpanded)}>
-            <span class="runner-icon">⎇</span>
-            <span class="runner-title">runner — {runnerSummary(runner)}</span>
-            <span class="chevron">{runnerExpanded ? "−" : "+"}</span>
+      {#if tool.subagent}
+        {@const subagent = tool.subagent}
+        <div class="subagent-block">
+          <button class="subagent-header" onclick={() => (subagentExpanded = !subagentExpanded)}>
+            <span class="subagent-icon">⎇</span>
+            <span class="subagent-title">subagent — {subagentSummary(subagent)}</span>
+            <span class="chevron">{subagentExpanded ? "−" : "+"}</span>
           </button>
-          {#if runnerExpanded}
-            <div class="runner-content">
-              {#each runner.tools as sub (sub.id)}
-                <div class="runner-tool">
-                  <div class="runner-tool-head">
+          {#if subagentExpanded}
+            <div class="subagent-content">
+              {#each subagent.tools as sub (sub.id)}
+                <div class="subagent-tool">
+                  <div class="subagent-tool-head">
                     <span class="name sub-name">{sub.name}</span>
                     <span class="sub-status status-{sub.status}">
                       {sub.status === "running" ? `${t("running")}…` : `${t("done")} (${sub.durationMs ?? 0}ms)`}
@@ -133,23 +133,23 @@
                   {/if}
                 </div>
               {/each}
-              {#if runner.streamingReasoning}
-                <details class="runner-reasoning" open>
+              {#if subagent.streamingReasoning}
+                <details class="subagent-reasoning" open>
                   <summary>{t("thinking")}…</summary>
-                  <pre class="runner-reasoning-text">{runner.streamingReasoning}</pre>
+                  <pre class="subagent-reasoning-text">{subagent.streamingReasoning}</pre>
                 </details>
               {/if}
-              {#each runner.reasoning as trace, i (i)}
-                <details class="runner-reasoning">
+              {#each subagent.reasoning as trace, i (i)}
+                <details class="subagent-reasoning">
                   <summary>{t("thinking")}</summary>
-                  <pre class="runner-reasoning-text">{trace}</pre>
+                  <pre class="subagent-reasoning-text">{trace}</pre>
                 </details>
               {/each}
-              {#if runner.streamingText}
-                <pre class="runner-stream">{runner.streamingText}</pre>
+              {#if subagent.streamingText}
+                <pre class="subagent-stream">{subagent.streamingText}</pre>
               {/if}
-              {#if runner.text}
-                <pre class="runner-text">{runner.text}</pre>
+              {#if subagent.text}
+                <pre class="subagent-text">{subagent.text}</pre>
               {/if}
             </div>
           {/if}
@@ -291,13 +291,13 @@
     color: var(--text-primary);
   }
 
-  .runner-block {
+  .subagent-block {
     margin-top: 0.5rem;
     border-left: 2px solid var(--line-strong);
     padding-left: 0.6rem;
   }
 
-  .runner-header {
+  .subagent-header {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -311,31 +311,31 @@
     text-align: left;
   }
 
-  .runner-icon {
+  .subagent-icon {
     color: var(--accent-warning);
   }
 
-  .runner-title {
+  .subagent-title {
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .runner-content {
+  .subagent-content {
     padding: 0.35rem 0 0.1rem;
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
   }
 
-  .runner-tool {
+  .subagent-tool {
     background: var(--bg-surface-hover);
     border-radius: var(--radius-sm);
     padding: 0.35rem 0.5rem;
   }
 
-  .runner-tool-head {
+  .subagent-tool-head {
     display: flex;
     justify-content: space-between;
     gap: 0.5rem;
@@ -346,7 +346,7 @@
     font-weight: 600;
   }
 
-  .runner-tool pre {
+  .subagent-tool pre {
     margin-top: 0.25rem;
     max-height: 120px;
     overflow-y: auto;
@@ -358,13 +358,13 @@
     color: var(--text-muted);
   }
 
-  .runner-stream {
+  .subagent-stream {
     color: var(--text-muted);
     max-height: 140px;
     overflow-y: auto;
   }
 
-  .runner-reasoning summary {
+  .subagent-reasoning summary {
     cursor: pointer;
     color: var(--text-muted);
     font-size: 0.7rem;
@@ -372,13 +372,13 @@
     user-select: none;
   }
 
-  .runner-reasoning-text {
+  .subagent-reasoning-text {
     color: var(--text-muted);
     max-height: 160px;
     overflow-y: auto;
   }
 
-  .runner-text {
+  .subagent-text {
     color: var(--text-secondary);
     max-height: 200px;
     overflow-y: auto;

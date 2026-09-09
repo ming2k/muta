@@ -732,18 +732,19 @@ components:
         - $ref: '#/components/schemas/RequestPermissionReply'
         - $ref: '#/components/schemas/RequestUserQuestionReply'
         - $ref: '#/components/schemas/RequestInputReply'
-        - $ref: '#/components/schemas/RequestSwitchProvider'
-        - $ref: '#/components/schemas/RequestAddProvider'
-        - $ref: '#/components/schemas/RequestConnectProvider'
+        - $ref: '#/components/schemas/RequestSwitchConnection'
+        - $ref: '#/components/schemas/RequestAddConnection'
+        - $ref: '#/components/schemas/RequestConnectConnection'
         - $ref: '#/components/schemas/RequestAuthorizeOAuth'
-        - $ref: '#/components/schemas/RequestEditProvider'
+        - $ref: '#/components/schemas/RequestEditConnection'
+        - $ref: '#/components/schemas/RequestRenameConnection'
         - $ref: '#/components/schemas/RequestIncludeModel'
         - $ref: '#/components/schemas/RequestExcludeModel'
         - $ref: '#/components/schemas/RequestClearModelRule'
         - $ref: '#/components/schemas/RequestSetModelCapabilities'
-        - $ref: '#/components/schemas/RequestEditProviderModel'
+        - $ref: '#/components/schemas/RequestEditConnectionModel'
         - $ref: '#/components/schemas/RequestEditModelReasoning'
-        - $ref: '#/components/schemas/RequestDeleteProvider'
+        - $ref: '#/components/schemas/RequestDeleteConnection'
         - $ref: '#/components/schemas/RequestToggleFavorite'
         - $ref: '#/components/schemas/RequestSetDefaultModel'
         - $ref: '#/components/schemas/RequestDeleteSession'
@@ -845,47 +846,50 @@ components:
             parent_call_id: { type: [string, 'null'] }
           additionalProperties: false
       additionalProperties: false
-    RequestSwitchProvider:
+    RequestSwitchConnection:
       type: object
-      required: [SwitchProvider]
+      required: [SwitchConnection]
       properties:
-        SwitchProvider:
+        SwitchConnection:
           type: object
-          required: [provider_type, model, api_key, base_url]
+          required: [provider, model, api_key, base_url]
           properties:
-            provider_type: { type: string }
+            provider: { type: string, description: Model provider id (ADR-0201). }
             model: { type: string }
             api_key: { type: [string, 'null'] }
             base_url: { type: [string, 'null'] }
           additionalProperties: false
       additionalProperties: false
-    RequestAddProvider:
+    RequestAddConnection:
       type: object
-      required: [AddProvider]
+      required: [AddConnection]
       properties:
-        AddProvider:
+        AddConnection:
           type: object
-          required: [name, protocol, base_url, api_key, user_agent, models, auth, preset_id]
+          required: [name, provider, protocol, base_url, user_agent, api_key, models, auth, client_identity]
           properties:
-            name: { type: string }
-            protocol: { type: string, enum: [openai, anthropic, gemini] }
-            base_url: { type: string }
-            api_key: { type: string }
+            name:
+              type: string
+              description: Connection identity; unique, compared case-insensitively.
+            provider: { type: string, description: Model provider id. }
+            protocol: { $ref: '#/components/schemas/WireProtocolOverride' }
+            base_url: { type: [string, 'null'] }
             user_agent: { type: [string, 'null'] }
-            models: { type: array, minItems: 1, items: { type: string } }
-            auth: { $ref: '#/components/schemas/ChannelAuth' }
-            preset_id: { type: [string, 'null'] }
+            api_key: { type: string }
+            models: { type: array, items: { type: string } }
+            auth: { $ref: '#/components/schemas/ConnectionAuth' }
+            client_identity: { type: [object, 'null'] }
           additionalProperties: false
       additionalProperties: false
-    RequestConnectProvider:
+    RequestConnectConnection:
       type: object
-      required: [ConnectProvider]
+      required: [ConnectConnection]
       properties:
-        ConnectProvider:
+        ConnectConnection:
           type: object
-          required: [id, method]
+          required: [name, method]
           properties:
-            id: { type: string }
+            name: { type: string }
             method: { $ref: '#/components/schemas/LoginMethod' }
           additionalProperties: false
       additionalProperties: false
@@ -898,24 +902,41 @@ components:
           required: [method, auth]
           properties:
             method: { $ref: '#/components/schemas/LoginMethod' }
-            auth: { $ref: '#/components/schemas/ChannelAuth' }
+            auth: { $ref: '#/components/schemas/ConnectionAuth' }
           additionalProperties: false
       additionalProperties: false
-    RequestEditProvider:
+    RequestEditConnection:
       type: object
-      required: [EditProvider]
+      required: [EditConnection]
       properties:
-        EditProvider:
+        EditConnection:
           type: object
-          required: [id, name, protocol, base_url, api_key]
+          required: [name, provider, protocol, base_url, api_key, client_identity]
           properties:
-            id: { type: string }
             name: { type: string }
-            protocol: { type: string }
-            base_url: { type: string }
+            provider: { type: string, description: Model provider id. }
+            protocol: { $ref: '#/components/schemas/WireProtocolOverride' }
+            base_url: { type: [string, 'null'] }
             api_key: { type: string }
+            client_identity: { type: [object, 'null'] }
           additionalProperties: false
       additionalProperties: false
+    RequestRenameConnection:
+      type: object
+      required: [RenameConnection]
+      properties:
+        RenameConnection:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string }
+            to: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    WireProtocolOverride:
+      description: Canonical wire protocol, or null to inherit the provider default.
+      type: [string, 'null']
+      enum: [openai-chat-completions, openai-responses, anthropic-messages, google-generate-content, null]
     RequestIncludeModel:
       type: object
       required: [IncludeModel]
@@ -956,18 +977,19 @@ components:
           properties: { scope: { type: object }, model_id: { type: string }, overrides: { type: object } }
           additionalProperties: false
       additionalProperties: false
-    RequestEditProviderModel:
+    RequestEditConnectionModel:
       type: object
-      required: [EditProviderModel]
+      required: [EditConnectionModel]
       properties:
-        EditProviderModel:
+        EditConnectionModel:
           type: object
-          required: [provider_id, model, effort, thinking]
+          required: [connection, model, effort, thinking, overrides]
           properties:
-            provider_id: { type: string }
+            connection: { type: string }
             model: { type: string }
             effort: { type: [string, 'null'] }
             thinking: { type: [boolean, 'null'] }
+            overrides: { type: [object, 'null'] }
           additionalProperties: false
       additionalProperties: false
     RequestEditModelReasoning:
@@ -983,12 +1005,12 @@ components:
             thinking: { type: [boolean, 'null'] }
           additionalProperties: false
       additionalProperties: false
-    RequestDeleteProvider: { $ref: '#/components/schemas/SingleIdRequest' }
+    RequestDeleteConnection: { $ref: '#/components/schemas/SingleIdRequest' }
     SingleIdRequest:
       oneOf:
         - type: object
-          required: [DeleteProvider]
-          properties: { DeleteProvider: { $ref: '#/components/schemas/IdPayload' } }
+          required: [DeleteConnection]
+          properties: { DeleteConnection: { $ref: '#/components/schemas/NamePayload' } }
           additionalProperties: false
         - type: object
           required: [ToggleFavorite]
@@ -1002,6 +1024,11 @@ components:
           required: [DeleteSession]
           properties: { DeleteSession: { $ref: '#/components/schemas/IdPayload' } }
           additionalProperties: false
+    NamePayload:
+      type: object
+      required: [name]
+      properties: { name: { type: string } }
+      additionalProperties: false
     IdPayload:
       type: object
       required: [id]
@@ -1115,11 +1142,14 @@ components:
       additionalProperties: false
     RequestUpdateWebSearchConfig:
       description: |
-        PATCH the `[websearch]` table: absent fields keep their values. Behavior
-        fields persist to config.toml; API keys persist to credentials.toml and
-        an empty-string value CLEARS the stored key. The daemon validates,
-        persists, hot-applies to the live web tools, and replies with
-        ResponseWebSearchConfigUpdated (key presence only).
+        Compare-and-swap PATCH of the singleton `[web]` selection: absent
+        behavior fields keep their values. Behavior persists to config.toml;
+        provider-scoped credentials persist to credentials.toml and an empty
+        value clears the stored credential. The daemon validates, persists,
+        hot-applies one resolved snapshot to the live tools, and replies with
+        the authoritative post-update view. Stale revisions are rejected. A
+        request changes behavior fields or one credential, never both, so each
+        acknowledged update has one atomic persistence target.
       type: object
       required: [UpdateWebSearchConfig]
       properties:
@@ -1127,39 +1157,84 @@ components:
       additionalProperties: false
     WebSearchConfigUpdate:
       type: object
+      required: [expected_revision]
       properties:
-        provider: { type: string, enum: [exa, parallel, duckduckgo, ddg, searxng, tavily, bocha] }
-        fallback: { type: string, description: 'Empty string disables the fallback.' }
-        reader: { type: string, enum: [jina] }
+        expected_revision:
+          type: integer
+          minimum: 0
+          description: Revision returned by the last query or successful update.
+        provider: { $ref: '#/components/schemas/WebSearchProvider' }
+        reader: { $ref: '#/components/schemas/WebReaderProvider' }
         proxy: { type: string, description: 'Empty string clears it.' }
         timeout_secs: { type: integer, minimum: 1 }
-        searxng_url: { type: string, description: 'Required when a backend is searxng; empty clears.' }
-        exa_api_key: { type: string }
-        parallel_api_key: { type: string }
-        tavily_api_key: { type: string }
-        bocha_api_key: { type: string }
-        jina_api_key: { type: string }
+        searxng_url: { type: string, description: 'Required when search is searxng; empty clears.' }
+        credential: { $ref: '#/components/schemas/WebCredentialUpdate' }
+      additionalProperties: false
+    WebCredentialUpdate:
+      type: object
+      required: [axis, provider_id, value]
+      properties:
+        axis: { $ref: '#/components/schemas/WebProviderAxis' }
+        provider_id:
+          type: string
+          description: Must identify an advertised provider on the given axis.
+        value:
+          type: string
+          description: Plaintext request-only value; empty clears it and responses never echo it.
+      additionalProperties: false
+    WebProviderAxis:
+      type: string
+      enum: [Search, Reader]
+    WebSearchProvider:
+      type: string
+      enum: [disabled, exa, parallel, duckduckgo, searxng, tavily, bocha]
+    WebReaderProvider:
+      type: string
+      enum: [disabled, jina]
+    WebCredentialRequirement:
+      type: string
+      enum: [None, Optional, Required]
+    WebCredentialStatus:
+      type: string
+      enum: [NotRequired, Environment, Stored, OptionalMissing, RequiredMissing]
+    WebEndpointRequirement:
+      type: string
+      enum: [Fixed, UserSupplied]
+    WebProviderCapability:
+      type: object
+      required: [axis, id, display_name, description, credential, endpoint]
+      properties:
+        axis: { $ref: '#/components/schemas/WebProviderAxis' }
+        id: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        credential: { $ref: '#/components/schemas/WebCredentialRequirement' }
+        endpoint: { $ref: '#/components/schemas/WebEndpointRequirement' }
+        default_endpoint: { type: string }
+        default_env_var: { type: string }
       additionalProperties: false
     WebSearchConfigView:
       description: |
-        The effective `[websearch]` configuration with every API key reduced to
-        a boolean presence flag — plaintext secrets never cross the wire.
+        Authoritative singleton web configuration. Credential readiness reports
+        provenance/requirements without sending plaintext secrets. Capabilities
+        are daemon-authored so frontends cannot advertise nonexistent backends.
       type: object
       required:
-        [provider, fallback, reader, timeout_secs, exa_api_key_set, parallel_api_key_set,
-         tavily_api_key_set, bocha_api_key_set, jina_api_key_set]
+        [revision, provider, reader, timeout_secs, search_credential,
+         reader_credential, capabilities]
       properties:
-        provider: { type: string }
-        fallback: { type: string }
-        reader: { type: string }
+        revision: { type: integer, minimum: 0 }
+        provider: { $ref: '#/components/schemas/WebSearchProvider' }
+        reader: { $ref: '#/components/schemas/WebReaderProvider' }
         proxy: { type: string }
         timeout_secs: { type: integer, minimum: 1 }
         searxng_url: { type: string }
-        exa_api_key_set: { type: boolean }
-        parallel_api_key_set: { type: boolean }
-        tavily_api_key_set: { type: boolean }
-        bocha_api_key_set: { type: boolean }
-        jina_api_key_set: { type: boolean }
+        search_credential: { $ref: '#/components/schemas/WebCredentialStatus' }
+        reader_credential: { $ref: '#/components/schemas/WebCredentialStatus' }
+        capabilities:
+          type: array
+          items: { $ref: '#/components/schemas/WebProviderCapability' }
+      additionalProperties: false
     RequestRefreshProviderModels:
       type: object
       required: [RefreshProviderModels]
@@ -1776,7 +1851,7 @@ components:
         next_id: { type: integer, minimum: 1 }
         updated_at_round: { type: integer, minimum: 0 }
       additionalProperties: false
-    ChannelAuth: { enum: [ApiKey, XaiOAuth, ChatGptOAuth, CopilotOAuth, AntigravityOAuth] }
+    ConnectionAuth: { enum: [ApiKey, XaiOAuth, ChatGptOAuth, CopilotOAuth, AntigravityOAuth] }
     LoginMethod: { enum: [device, browser] }
     ConnectStatus:
       oneOf:

@@ -13,7 +13,7 @@ pub(super) fn draw_appearance_detail(
     body: Rect,
     props: &mut SettingsProps<'_>,
     focused: bool,
-) {
+) -> Option<Rect> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = None;
 
@@ -99,5 +99,5 @@ pub(super) fn draw_appearance_detail(
         props.detail_scroll,
         selected_line,
         props.theme,
-    );
+    )
 }

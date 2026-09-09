@@ -1,6 +1,6 @@
 //! The [`Agent`] orchestration type and its supporting machinery.
 //!
-//! The type definition, builder, runner handle, queue plumbing, the free
+//! The type definition, builder, subagent handle, queue plumbing, the free
 //! helper functions shared across the split, and the embedded tests. The
 //! `impl Agent` blocks are split by concern into sibling modules:
 //! `state` (configuration/identity), `steering` (rounds/queues/interrupts),
@@ -14,59 +14,59 @@ use muta_contracts::human_request::{
 
 use futures::future::BoxFuture;
 
-/// Role-reanchoring note appended to a successful runner's tool-result text in
+/// Role-reanchoring note appended to a successful subagent's tool-result text in
 /// the master's transcript. Counters "role bleed": after a run of read-only
-/// delegations the model may over-generalize the runner's read-only framing onto
+/// delegations the model may over-generalize the subagent's read-only framing onto
 /// the master itself. The note pins the boundary explicitly and
 /// unconditionally — it does not rely on a `[hooks]` entry, so the guarantee is
 /// structural.
-const RUNNER_REANCHOR_OK: &str = "\
-[system] The read-only / toolset-scoped framing above applies to the runner only. \
-You (the master agent) retain your full toolset — including write and edit tools \
+const SUBAGENT_REANCHOR_OK: &str = "\
+[system] The read-only / toolset-scoped framing above applies to the subagent only. \
+You (the parent agent) retain your full toolset — including write and edit tools \
 and the shell — across this delegation. Perform any edits or writes yourself; the \
-runner cannot.";
+subagent cannot.";
 
-/// Same role-reanchoring for a *failed* runner. Reaffirms the boundary and nudges
-/// the master toward acting directly rather than re-delegating a failing
+/// Same role-reanchoring for a *failed* subagent. Reaffirms the boundary and nudges
+/// the parent toward acting directly rather than re-delegating a failing
 /// sub-task.
-const RUNNER_REANCHOR_FAILED: &str = "\
-[system] That runner could not complete its sub-task. Its read-only / toolset-scoped \
-framing does not transfer to you: you (the master agent) retain your full toolset \
+const SUBAGENT_REANCHOR_FAILED: &str = "\
+[system] That subagent could not complete its sub-task. Its read-only / toolset-scoped \
+framing does not transfer to you: you (the parent agent) retain your full toolset \
 — including write and edit tools and the shell. Act directly on the findings above, \
 or re-delegate with a narrower scope.";
 
-/// Same role-reanchoring for an *interrupted* runner: stopped by the user, not
-/// failed. The partial findings above are real work; the master may continue
+/// Same role-reanchoring for an *interrupted* subagent: stopped by the user, not
+/// failed. The partial findings above are real work; the parent may continue
 /// them directly or re-delegate, and stays accountable for the outcome.
-const RUNNER_REANCHOR_INTERRUPTED: &str = "\
-[system] That runner was interrupted mid-task (stopped by the user before it finished). \
+const SUBAGENT_REANCHOR_INTERRUPTED: &str = "\
+[system] That subagent was interrupted mid-task (stopped by the user before it finished). \
 Its partial findings above are real work, and its read-only / toolset-scoped framing \
-does not transfer to you: you (the master agent) retain your full toolset — \
+does not transfer to you: you (the parent agent) retain your full toolset — \
 including write and edit tools and the shell. Continue the work directly from where \
 it stopped, or re-delegate with a narrower scope.";
 
-/// Build the model-visible text for an runner tool result: the runner's summary
+/// Build the model-visible text for a subagent tool result: the subagent's summary
 /// wrapped in the standard `[<tool> result]:` header, followed by a
-/// deterministic role-reanchoring note (`RUNNER_REANCHOR_OK` on success,
-/// `RUNNER_REANCHOR_FAILED` on `failed`, `RUNNER_REANCHOR_INTERRUPTED` on
+/// deterministic role-reanchoring note (`SUBAGENT_REANCHOR_OK` on success,
+/// `SUBAGENT_REANCHOR_FAILED` on `failed`, `SUBAGENT_REANCHOR_INTERRUPTED` on
 /// `interrupted`). This is the single choke point where
-/// an runner's read-only framing enters the master's transcript, so the
+/// a subagent's read-only framing enters the parent's transcript, so the
 /// re-anchor is applied here unconditionally — it cannot be forgotten by a
 /// missing `[hooks]` config. Extracted from [`Agent::record_tool_result`] so the
 /// contract (the anchor is present, and its tone tracks the failure flag) is
 /// unit-testable without a full `Agent` fixture.
-pub(crate) fn runner_result_text(
+pub(crate) fn subagent_result_text(
     name: &str,
     summary: &str,
     failed: bool,
     interrupted: bool,
 ) -> String {
     let reanchor = if interrupted {
-        RUNNER_REANCHOR_INTERRUPTED
+        SUBAGENT_REANCHOR_INTERRUPTED
     } else if failed {
-        RUNNER_REANCHOR_FAILED
+        SUBAGENT_REANCHOR_FAILED
     } else {
-        RUNNER_REANCHOR_OK
+        SUBAGENT_REANCHOR_OK
     };
     format!("[{name} result]:\n{summary}\n\n{reanchor}")
 }
@@ -205,7 +205,7 @@ pub struct Agent {
     /// never re-reads the project config mid-session.
     additional_workspace_roots: Vec<std::path::PathBuf>,
     /// Workspace authority is orthogonal to interaction posture. Shared with
-    /// spawned runners so delegation cannot silently widen the parent's grant.
+    /// spawned subagents so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
     /// Session-scoped workspace confinement handle.
     confinement: muta_contracts::SharedConfinement,
@@ -233,7 +233,7 @@ pub struct Agent {
     /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
     /// on, ADR-0148 relaxed the trip point); seeded from
     /// `[master.doom_guard]` in `config.toml` and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] for runners and the review
+    /// [`muta_contracts::DoomGuardConfig::disabled`] for subagents and the review
     /// diagnostic. Held behind an `Arc<RwLock>` because master-profile
     /// overlays can replace the configuration atomically; the per-round guard
     /// reads it when `RoundState` is constructed.
@@ -250,7 +250,7 @@ pub struct Agent {
     /// authorize destructive commands like `git reset --hard`.
     bash_policy: std::sync::RwLock<crate::bash_policy::BashPolicy>,
     /// Runtime operation boundary for this agent (ADR-0028). The main agent is
-    /// unrestricted ([`muta_contracts::OperationScope::unrestricted`]); an runner
+    /// unrestricted ([`muta_contracts::OperationScope::unrestricted`]); a subagent
     /// carries the scope resolved from its profile's `write_paths` and
     /// `command_allowlist` grants. Enforced at the `execute_tool` funnel for
     /// every admitted tool whose [`muta_contracts::ScopeTarget`] falls outside the
@@ -258,7 +258,7 @@ pub struct Agent {
     /// prompt.
     operation_scope: std::sync::Mutex<muta_contracts::OperationScope>,
     /// Lifecycle event hooks (ADR-0025). Installed once at startup from the
-    /// `[hooks]` config by the CLI; empty by default (runners, tests). Read
+    /// `[hooks]` config by the CLI; empty by default (subagents, tests). Read
     /// at the PreToolUse / PostToolUse / Stop insertion points. Held as a
     /// swappable `Arc` behind a `Mutex` so [`Agent::set_hooks`] can replace the
     /// whole registry without the insertion points holding the lock across the
@@ -267,8 +267,8 @@ pub struct Agent {
     /// Inbound steering inbox — the down-direction of full-duplex (ADR-0029).
     /// `None` for agents that were never given a handle (the top-level agent
     /// driven directly by the harness, legacy tests); lazily created by
-    /// [`Agent::install_inbox`], which a spawned runner's dispatcher
-    /// (`RunnerTool`) calls so the parent can steer it mid-round. The driver loop
+    /// [`Agent::install_inbox`], which a spawned subagent's dispatcher
+    /// (`SubagentTool`) calls so the parent can steer it mid-round. The driver loop
     /// `take`s the receiver at round entry and drains it at every ReAct-turn
     /// boundary (see [`Agent::drain_inbox`]). Carries only the
     /// "new-input / control" class ([`AgentOp`]); the request/reply class
@@ -278,7 +278,7 @@ pub struct Agent {
     inbox_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<AgentOp>>>,
     inbox_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<AgentOp>>>,
     /// Inbound steering and follow-up queues for the currently running master/side round.
-    /// This is deliberately separate from the runner `AgentOp` inbox: submit,
+    /// This is deliberately separate from the subagent `AgentOp` inbox: submit,
     /// cancel, and boundary admission all take this one mutex, which gives the
     /// UI an exact answer in the cancellation-vs-admission race. `None` means
     /// the round is not accepting queued messages.
@@ -311,7 +311,7 @@ pub struct Agent {
     /// durably appends the round's new messages to the session log so a crash
     /// after a side-effecting tool call leaves the transcript in sync with the
     /// filesystem instead of rewinding to the previous turn. `None` for
-    /// runners, the review diagnostic, and tests — they have no session of
+    /// subagents, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the turn boundary is a plain no-op there.
     turn_persist: std::sync::Mutex<Option<TurnPersistFn>>,
     /// Request-scoped projector. The agent owns its lifecycle and supplies live
@@ -322,7 +322,7 @@ pub struct Agent {
     /// `[tool_variants."<model-id>"]` config via
     /// [`Agent::set_variant_selection`] and re-seeded on model switch so the
     /// resolved toolset always tracks the live model. Held behind an `Arc` so a
-    /// spawned runner — which is an agent on the *same* model — can inherit
+    /// spawned subagent — which is an agent on the *same* model — can inherit
     /// the same overrides by sharing this handle (see
     /// [`Agent::variant_selection_handle`]); the agent decides scope, the
     /// model decides variant.
@@ -340,7 +340,7 @@ pub struct Agent {
     /// Token-source accounting: running tally of how many tokens each
     /// provider+model reported authoritatively (upstream `usage`) vs. how many
     /// were filled in by the local estimator. Shared with the TUI so the
-    /// token-source report modal renders live. `None` for runners/tests that
+    /// token-source report modal renders live. `None` for subagents/tests that
     /// don't surface the report.
     token_ledger: std::sync::Mutex<Option<Arc<muta_contracts::TokenSourceLedger>>>,
     /// Content-addressed per-message token weights (see
@@ -360,43 +360,43 @@ pub struct Agent {
 /// Capability handle for steering a running agent from the outside — the
 /// parent's down-direction of full-duplex (ADR-0029). Cheap to clone (one
 /// `Weak` + one `mpsc::Sender`); obtained from [`Agent::install_inbox`] on an
-/// `Arc<Agent>` (a spawned runner) and typically lodged in a
-/// [`crate::runner_tool::RunnerRegistry`] keyed by the parent tool-call id so
+/// `Arc<Agent>` (a spawned subagent) and typically lodged in a
+/// [`crate::subagent_tool::SubagentRegistry`] keyed by the parent tool-call id so
 /// the harness can look it up when a request surfaces.
 ///
 /// Two classes of operation, deliberately split:
 ///
-/// - **Steering** ([`AgentOp`], via [`RunnerHandle::submit`]): inject a new
+/// - **Steering** ([`AgentOp`], via [`SubagentHandle::submit`]): inject a new
 ///   user message, a hidden inter-agent note, or interrupt/shutdown. Routed
 ///   through the agent's inbox and applied at the next ReAct-turn boundary —
 ///   safe to defer because nothing is blocked on it.
-/// - **Request/reply** ([`RunnerHandle::reply_permission`] /
-///   [`RunnerHandle::reply_user_question`]): resolve a permission broker or
-///   `ask_user` oneshot the runner is parked on **right now**, mid-tool.
+/// - **Request/reply** ([`SubagentHandle::reply_permission`] /
+///   [`SubagentHandle::reply_user_question`]): resolve a permission broker or
+///   `ask_user` oneshot the subagent is parked on **right now**, mid-tool.
 ///   These bypass the inbox and call the agent's shared-state resolvers
 ///   directly — a queued reply would deadlock the parked tool.
 ///
 /// The `Weak<Agent>` means the handle observes the agent's lifetime: once the
-/// runner's round ends and the dispatcher drops its `Arc`, every method
+/// subagent's round ends and the dispatcher drops its `Arc`, every method
 /// returns `false` / `None` instead of erroring, so a late reply from the UI
-/// after the runner finished degrades gracefully.
+/// after the subagent finished degrades gracefully.
 #[derive(Clone)]
-pub struct RunnerHandle {
+pub struct SubagentHandle {
     weak: std::sync::Weak<Agent>,
     ops: mpsc::UnboundedSender<AgentOp>,
 }
 
-impl RunnerHandle {
+impl SubagentHandle {
     /// Submit a steering [`AgentOp`] into the agent's inbox. Returns `false`
     /// if the agent has been dropped (receiver gone) — the op is discarded.
     pub fn submit(&self, op: AgentOp) -> bool {
         self.ops.send(op).is_ok()
     }
 
-    /// Resolve a permission broker request the runner is parked on. Returns
+    /// Resolve a permission broker request the subagent is parked on. Returns
     /// `false` if the agent was dropped or no matching pending request exists.
     /// This is the down-direction counterpart to an up-going
-    /// [`AgentEvent::PermissionRequest`] / [`RunnerEvent::PermissionRequest`].
+    /// [`AgentEvent::PermissionRequest`] / [`SubagentEvent::PermissionRequest`].
     pub fn reply_permission(&self, request_id: &str, decision: PermissionDecision) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_permission(request_id, decision)
@@ -405,10 +405,10 @@ impl RunnerHandle {
         }
     }
 
-    /// Resolve an `ask_user` request the runner is parked on. Returns
+    /// Resolve an `ask_user` request the subagent is parked on. Returns
     /// `false` if the agent was dropped or no matching pending request exists.
     /// Down-direction counterpart to an up-going
-    /// [`AgentEvent::UserQuestionRequest`] / [`RunnerEvent::UserQuestionRequest`].
+    /// [`AgentEvent::UserQuestionRequest`] / [`SubagentEvent::UserQuestionRequest`].
     /// An empty outer answer vector means the operator cancelled.
     pub fn reply_user_question(&self, request_id: &str, answers: Vec<Vec<String>>) -> bool {
         if let Some(agent) = self.weak.upgrade() {
@@ -418,9 +418,9 @@ impl RunnerHandle {
         }
     }
 
-    /// Resolve an interactive-input request the runner's `bash` is parked on
+    /// Resolve an interactive-input request the subagent's `bash` is parked on
     /// (L3.5 β). Down-direction counterpart to an up-going
-    /// [`AgentEvent::StdinRequest`] / [`RunnerEvent::StdinRequest`].
+    /// [`AgentEvent::StdinRequest`] / [`SubagentEvent::StdinRequest`].
     pub fn reply_input(&self, request_id: &str, text: String) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_input(request_id, text)
@@ -611,10 +611,10 @@ struct SessionQueues {
 /// [`Agent::execute_tool_evented`]). The executors never return
 /// `Err(HarnessError::Interrupted)` themselves anymore: when the user
 /// interrupts a turn they signal cooperatively-cancellable in-flight calls
-/// (runners), drain them within a bounded grace period, and report
+/// (subagents), drain them within a bounded grace period, and report
 /// `interrupted: true` with whatever results were recovered. The caller
 /// ([`Agent::dispatch_finalize`]) records the recovered results, then
-/// propagates the interruption itself — so an interrupted runner's partial
+/// propagates the interruption itself — so an interrupted subagent's partial
 /// transcript survives into the persisted transcript even though the round
 /// ends as interrupted.
 pub(crate) struct ConcurrentOutcome {
@@ -666,6 +666,12 @@ struct RequestAccountingGuard {
     first_output_fragment: String,
     output_events: u32,
     generation_ms: u64,
+    /// First provider stream event of *any* kind (including preamble frames).
+    /// Distinct from `first_output_at`, which waits for content.
+    first_frame_at: Option<std::time::Instant>,
+    /// The provider, so the attempt can take the transport's own timings when
+    /// it settles (ADR-0200).
+    provider: Arc<dyn Provider>,
 }
 
 impl RequestAccountingGuard {
@@ -716,6 +722,8 @@ impl RequestAccountingGuard {
             first_output_fragment: String::new(),
             output_events: 0,
             generation_ms: 0,
+            first_frame_at: None,
+            provider: Arc::clone(&agent.provider),
         }
     }
 
@@ -762,6 +770,9 @@ impl RequestAccountingGuard {
         received_at: std::time::Instant,
     ) {
         let mut fragments: Vec<&str> = Vec::new();
+        // Any event from the origin — including a preamble or usage frame —
+        // proves the server started responding.
+        self.first_frame_at.get_or_insert(received_at);
         match event {
             muta_contracts::ProviderStreamEvent::ModelCatalogEtag(_) => return,
             muta_contracts::ProviderStreamEvent::TextDelta(delta)
@@ -846,8 +857,20 @@ impl RequestAccountingGuard {
         let span = |start: Option<std::time::Instant>, end: Option<std::time::Instant>| {
             Some(end?.saturating_duration_since(start?).as_micros() as u64)
         };
+        // The transport's own phases, when the egress could observe them. Taken
+        // once per attempt, so a timing can never be attributed twice.
+        let transport = self.provider.take_transport_timings().unwrap_or_default();
         muta_contracts::RequestPerformance {
-            stream_ready_us: offset(self.stream_ready_at),
+            dns_us: transport.dns_us,
+            tcp_us: transport.tcp_us,
+            tls_us: transport.tls_us,
+            request_sent_us: transport.request_sent_us,
+            first_frame_us: offset(self.first_frame_at),
+            rtt_us: transport.rtt_us,
+            retransmits: transport.retransmits,
+            stream_ready_us: transport
+                .stream_ready_us
+                .or_else(|| offset(self.stream_ready_at)),
             ttft_us: offset(self.first_output_at),
             stream_us: span(self.first_output_at, self.last_output_at),
             tail_us: span(self.last_output_at, self.stream_end_at),
@@ -1243,7 +1266,7 @@ impl crate::permission_policy::PermissionContext for Agent {
 mod tests {
     use super::{
         RoundState, ScopedToolDisable, checkpoint_tool_signature, permission_required_output,
-        runner_result_text,
+        subagent_result_text,
     };
 
     #[test]
@@ -1317,13 +1340,13 @@ mod tests {
         assert!(!state.is_checkpoint_replay(&after_retry));
     }
 
-    /// The successful runner result carries the `[<tool> result]:` header, the
+    /// The successful subagent result carries the `[<tool> result]:` header, the
     /// original summary verbatim, and the success re-anchor note.
     #[test]
-    fn runner_result_text_reanchors_on_success() {
-        let text = runner_result_text("runner", "Found the symbol in lib.rs", false, false);
+    fn subagent_result_text_reanchors_on_success() {
+        let text = subagent_result_text("subagent", "Found the symbol in lib.rs", false, false);
         assert!(
-            text.starts_with("[runner result]:\n"),
+            text.starts_with("[subagent result]:\n"),
             "header present: {text}"
         );
         assert!(
@@ -1331,22 +1354,22 @@ mod tests {
             "summary preserved verbatim: {text}"
         );
         // The anchor must pin the master's write capability back to the
-        // master and call out the read-only scope as runner-only.
+        // master and call out the read-only scope as subagent-only.
         assert!(
-            text.contains("applies to the runner only"),
+            text.contains("applies to the subagent only"),
             "anchor scope pin missing: {text}"
         );
         assert!(
             text.contains("retain your full toolset"),
-            "master re-anchor missing: {text}"
+            "parent re-anchor missing: {text}"
         );
     }
 
-    /// A failed runner carries a different (re-delegate-or-act-directly) anchor,
+    /// A failed subagent carries a different (re-delegate-or-act-directly) anchor,
     /// and still preserves the partial summary for the master to act on.
     #[test]
-    fn runner_result_text_reanchors_on_failure() {
-        let text = runner_result_text("runner", "partial findings before crash", true, false);
+    fn subagent_result_text_reanchors_on_failure() {
+        let text = subagent_result_text("subagent", "partial findings before crash", true, false);
         assert!(
             text.contains("partial findings before crash"),
             "partial summary preserved: {text}"
@@ -1358,22 +1381,22 @@ mod tests {
         // Both anchors must re-affirm the master retains write capability.
         assert!(
             text.contains("retain your full toolset"),
-            "master re-anchor missing on failure: {text}"
+            "parent re-anchor missing on failure: {text}"
         );
         // And must NOT carry the success-only phrasing (regression guard against
-        // the success anchor leaking onto a failed runner).
+        // the success anchor leaking onto a failed subagent).
         assert!(
-            !text.contains("applies to the runner only"),
+            !text.contains("applies to the subagent only"),
             "success anchor leaked onto failure: {text}"
         );
     }
 
-    /// The re-anchor is unconditional for any runner result — a regression guard
+    /// The re-anchor is unconditional for any subagent result — a regression guard
     /// that a future refactor cannot silently drop it.
     #[test]
-    fn runner_result_text_anchor_is_unconditional() {
+    fn subagent_result_text_anchor_is_unconditional() {
         for (failed, interrupted) in [(false, false), (true, false), (false, true)] {
-            let text = runner_result_text("runner", "x", failed, interrupted);
+            let text = subagent_result_text("subagent", "x", failed, interrupted);
             assert!(
                 text.contains("[system]"),
                 "system anchor tag present (failed={failed}, interrupted={interrupted}): {text}"
@@ -1381,12 +1404,12 @@ mod tests {
         }
     }
 
-    /// An interrupted runner gets its own re-anchor: the partial findings are
+    /// An interrupted subagent gets its own re-anchor: the partial findings are
     /// real work to continue, not an error to work around — and the read-only
-    /// framing still does not transfer to the master.
+    /// framing still does not transfer to the parent.
     #[test]
-    fn runner_result_text_reanchors_interruption() {
-        let text = runner_result_text("runner", "found 2 of 5 handlers", false, true);
+    fn subagent_result_text_reanchors_interruption() {
+        let text = subagent_result_text("subagent", "found 2 of 5 handlers", false, true);
         assert!(
             text.contains("found 2 of 5 handlers"),
             "partial summary preserved: {text}"
@@ -1401,7 +1424,7 @@ mod tests {
         );
         assert!(
             text.contains("retain your full toolset"),
-            "master re-anchor missing: {text}"
+            "parent re-anchor missing: {text}"
         );
     }
 
@@ -1556,21 +1579,21 @@ mod tests {
         handle.abort();
     }
 
-    /// `apply_master_profile` must seed `skip_interactive_input` from the
+    /// `apply_preset` must seed `skip_interactive_input` from the
     /// profile's runtime config — the wiring the bootstrap path relies on.
     #[test]
-    fn apply_master_profile_seeds_skip_interactive_input() {
+    fn apply_preset_seeds_skip_interactive_input() {
         let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
-        let profile = muta_contracts::MasterPreset::with_identity(
+        let profile = muta_contracts::AgentPreset::with_identity(
             "code",
             muta_contracts::AgentIdentity::default(),
         )
-        .with_runtime_config(muta_contracts::MasterRuntimeConfig {
+        .with_runtime_config(muta_contracts::AgentRuntimeConfig {
             skip_interactive_input: true,
             ..Default::default()
         });
-        agent.apply_master_profile(&profile);
+        agent.apply_preset(&profile);
         assert!(
             agent.skip_interactive_input(),
             "profile overlay took effect"

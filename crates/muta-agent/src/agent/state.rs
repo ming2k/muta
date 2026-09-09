@@ -32,7 +32,7 @@ impl Agent {
     /// Construct an agent from a flat tool list. The tools are grouped into a
     /// [`muta_contracts::ToolSet`] (one capability per [`Tool::name`], one variant
     /// per [`Tool::variant`]) — the common case for a single-variant toolset or
-    /// an already-resolved runner toolset. Use [`Agent::from_toolset`] to
+    /// an already-resolved subagent toolset. Use [`Agent::from_toolset`] to
     /// preserve a multi-variant set so per-model variant selection can switch
     /// between variants at runtime.
     pub fn new(
@@ -140,7 +140,9 @@ impl Agent {
             project_rules: Arc::new(std::sync::RwLock::new(String::new())),
             skills_registry,
             thread_id,
-            accounting_actor_id: std::sync::Mutex::new("master".to_string()),
+            accounting_actor_id: std::sync::Mutex::new(
+                muta_contracts::token_ledger::ROOT_ACTOR_ID.to_string(),
+            ),
             context_prune_threshold_tokens: Arc::new(std::sync::Mutex::new(0)),
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
@@ -288,6 +290,7 @@ impl Agent {
                 .map(|guard| guard.preamble())
                 .unwrap_or_default(),
             tool_names,
+            has_subagent_tool: tools.iter().any(|tool| tool.spawns_subagent()),
             model_guidance,
             provider_guidance,
             project_rules: self
@@ -362,7 +365,7 @@ impl Agent {
     ) -> RequestTokenEstimate {
         let weights = self.layered_weights(request);
         // Per-message wire weight (not `estimate_tokens`, which intentionally
-        // includes persisted runner children the provider never sees).
+        // includes persisted subagent children the provider never sees).
         let history_tokens = weights.history_tokens(&request.messages);
         let prepared_message_tokens = weights.prepared_tokens();
         let tool_schema_tokens = weights.tool_schema_tokens;
@@ -405,7 +408,7 @@ impl Agent {
     }
 
     /// A shared handle to this agent's live variant selection (the **override**
-    /// axis). Handed to a spawned runner's dispatch tool so the runner — an
+    /// axis). Handed to a spawned subagent's dispatch tool so the subagent — an
     /// agent on the same model — resolves its admitted capabilities to the same
     /// variants the parent uses, tracking model switches live. The profile still
     /// owns the orthogonal **scope** axis.
@@ -417,7 +420,7 @@ impl Agent {
 
     /// Override the opt-in hard-stop budget. Mirrors `[master] hard_stop_turns`
     /// in `config.toml` but can be flipped at runtime. `0` (the default) leaves
-    /// the round uncapped, matching ADR-0009. The reviewer runner gets a
+    /// the round uncapped, matching ADR-0009. The reviewer subagent gets a
     /// tight non-zero bound so a runaway diagnostic cannot loop.
     pub fn set_hard_stop_turns(&self, turns: usize) {
         *self
@@ -440,7 +443,7 @@ impl Agent {
     /// round, if any, keeps its already-built guard state.
     ///
     /// Wired from `[master.doom_guard]` in `config.toml` at startup and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] on runners and the review
+    /// [`muta_contracts::DoomGuardConfig::disabled`] on subagents and the review
     /// diagnostic so they run unobstructed regardless of user settings.
     pub fn set_doom_guard_config(&self, config: muta_contracts::DoomGuardConfig) {
         *self
@@ -520,7 +523,7 @@ impl Agent {
     /// Install the shared token-source ledger so this agent books each turn's
     /// token counts (reported vs. estimated) into it. The embedding shares the
     /// same `Arc` with the TUI so the token-source report modal reads live.
-    /// No-op for runners/tests that never call this (the ledger stays `None`
+    /// No-op for subagents/tests that never call this (the ledger stays `None`
     /// and booking is skipped).
     pub fn install_token_ledger(&self, ledger: Arc<muta_contracts::TokenSourceLedger>) {
         *self.token_ledger.lock().unwrap_or_else(|e| e.into_inner()) = Some(ledger);
@@ -609,7 +612,7 @@ impl Agent {
 
     /// Install the lifecycle hook registry (ADR-0025). Replaces any prior
     /// registry; intended to be called once at startup after the `[hooks]`
-    /// config is parsed. Runners and tests leave the default empty registry.
+    /// config is parsed. Subagents and tests leave the default empty registry.
     pub fn set_hooks(&self, registry: crate::hooks::HookRegistry) {
         self.hooks.set(registry);
     }
@@ -618,7 +621,7 @@ impl Agent {
     /// (ADR-0048). The closure receives the current full round history and
     /// should durably append only the new tail (see
     /// `SessionStore::append_turn`). Called once by orchestration after the
-    /// agent is built and the session is open; runners and the review
+    /// agent is built and the session is open; subagents and the review
     /// diagnostic never call this, so the default `None` keeps their turn
     /// boundaries no-ops.
     pub fn set_turn_persist(&self, f: TurnPersistFn) {
@@ -626,7 +629,7 @@ impl Agent {
     }
 
     /// Fire the mid-round save point if installed. Returns `Ok(())` when no
-    /// closure is set (the runner / review / test path) so the call site
+    /// closure is set (the subagent / review / test path) so the call site
     /// stays unconditional. Invoked at the turn boundary — after a turn's
     /// tool results are in `messages` and before the next model request.
     pub(super) async fn fire_turn_persist(&self, messages: &[Message]) -> Result<(), HarnessError> {
@@ -661,7 +664,7 @@ impl Agent {
 
     /// The persisted project root — the workspace sandbox for `@file:` injection
     /// and the base relative file-tool paths resolve against. `None` when no
-    /// project was designated (runners, tests, or a detached session), in which
+    /// project was designated (subagents, tests, or a detached session), in which
     /// case file injection is disabled.
     /// Record the session's additional workspace roots (ADR-0142). Called
     /// once by the assembling bootstrap after they validate; they surface to

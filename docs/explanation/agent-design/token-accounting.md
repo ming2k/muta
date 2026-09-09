@@ -155,7 +155,7 @@ English stays close to the old `bytes / 4` number.
 ### Where the estimator is *not* used
 
 The estimator measures the **content the provider will receive** (message
-`content` + tool-call names/arguments, recursively including nested envoy
+`content` + tool-call names/arguments, recursively including nested subagent
 transcripts). It deliberately excludes:
 
 - **`reasoning_content`** (extended thinking) — never sent to the provider, so
@@ -199,7 +199,7 @@ session
               └─ attempt → state + source + input/output/cache usage
 ```
 
-The actor separates the principal from each envoy. A retry creates a new
+The actor separates the principal from each subagent. A retry creates a new
 attempt under the same round and turn because every request that reached the
 provider may be billed. Attempts move from `in_flight` to `completed`,
 `interrupted`, `failed`, or `abandoned`. An abandoned attempt is an in-flight
@@ -234,7 +234,7 @@ The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is **clickable**. Clicking it opens a centered, read-only
 **Context Usage** modal that answers only *shape* questions: what the next
 request will contain, and which rounds cost what. Speed and latency live in
-the separate [Performance report](#the-performance-report), so neither view
+the separate [Session Telemetry](#session-telemetry-and-the-latency-timeline) modal, so neither view
 has to stretch one denominator across the other's question.
 
 ```text
@@ -283,7 +283,7 @@ The report answers three questions at a glance:
 
 The detail page switches the header to a breadcrumb
 (`Context Usage › 1st round`) and lists attempts newest-first. Only the main
-conversation's own requests are counted — an envoy call is a forked sub-con-
+conversation's own requests are counted — a subagent call is a forked sub-con-
 versation whose usage belongs to that fork, so it is excluded from the round
 totals and the table:
 
@@ -322,51 +322,95 @@ wording, collapses to `green reported   yellow estimated` on narrower modals,
 and finally splits across two lines, so the explanation is never clipped
 mid-word.
 
-## The Performance report
+## Session Telemetry and the Latency Timeline
 
-Where Context Usage stops, the **Performance** report begins: click the
-latest-turn rate segment in the hint bar — between the Enter action and the
-model identity cluster — to open it. It is an independent retained panel with
-its own scroll and drill-down state, sharing nothing with Context Usage beyond
-the underlying attempt ledger. Its aggregates filter that ledger strictly: only
-the master conversation's *completed* attempts feed any rate, so failed retries
-can neither inflate nor deflate a pace figure.
+Where Context Usage stops, **Session Telemetry** begins: open it via `Ctrl+O` or
+by clicking either the context meter or the stream-rate gauge on the model bar.
+It is an independent retained panel with its own scroll and hierarchical
+drill-down state (Overview → Rounds table → Turn attempts → Attempt inspector),
+backed by the attempt ledger and the recorded transport trace ([ADR-0200](../../adr/0200-owned-transport-and-packet-level-request-trace.md)).
 
-The summary block reports three explicitly labeled scopes, never one ambiguous
-number:
+### The streaming rate: one rate, one anchor
 
-| Scope | Definition |
-|-------|------------|
-| **TTFT** | Request dispatch to the first output-bearing event of any kind (text, reasoning, or tool-call payload); session-wide median |
-| **Stream rate** | Streamed output tokens excluding the first event's tokens, divided by the first-to-last-event span; needs at least two events or it renders `–` |
-| **E2E output rate** | Completion tokens divided by dispatch-to-validated-response span; deliberately includes TTFT |
+The summary block and table rows report exactly one throughput rate:
 
-TTFT folds its per-attempt samples into a session-wide **median** rather than
-percentiles. A TUI session yields only a handful of completed attempts, and
-with nearest-rank sampling every upper percentile beyond the median collapses
-into "the worst attempt" (p95 equals max for n ≤ 20), dressing a single tail
-sample up as statistics. The median stays stable as sessions grow, while the
-tail it does not summarize remains visible row by row in the round tables
-below.
+$$\text{Streaming Rate} = \frac{\text{Completion Tokens}}{\text{First Token to Last Token Span}}$$
 
-Excluding the first event's tokens matters because chunked transports often de-
-liver several tokens in the initial payload; counting them against stream time
-would flatter fast openers. A single-event stream has no defensible pace at
-all, so it renders `–` rather than a fabricated figure. Every client-derived
-number is labeled as client-observed: it includes network transit, upstream
-queueing, and proxy buffering, because a client cannot see past its socket. No
-ping-based correction is attempted — measuring a different path does not sub-
-tract latency, it manufactures precision ([ADR-0151](../../adr/0151-request-performance-telemetry.md)).
+- **Numerator**: the attempt's completion count — the provider's authoritative
+  usage when reported, or the local estimator otherwise. A reader can verify
+  the division directly from the token count and the measured duration shown on
+  the screen.
+- **Denominator**: the monotonic span between the first and last output-bearing
+  tokens.
+- **No E2E rate**: the end-to-end rate (`tokens / e2e_duration`) is deleted from
+  all performance surfaces. It answers a different question (end-to-end goodput)
+  using the same unit (`tok/s`), polluting pace comparisons with network
+  latency, connection handshakes, and prompt prefill.
+- **Honest refusals**: single-chunk arrivals (zero span), spans under 20 ms
+  (bursts), fewer than two output events, or rates exceeding the 2,000 tok/s
+  physical ceiling render as `–` rather than substituting an E2E fallback.
+- **Session-wide aggregation**: total tokens divided by total streamed duration
+  across all attempts. Summing numerators and denominators preserves mathematical
+  reproducibility instead of letting short turns distort a simple mean.
 
-Below the summary sit the round table (**Round**, **State**, **First** out-
-put time, **Stream**, **E2E**) and its drill-down (**Turn**, **State**,
-**TTFT**, **Stream**, **E2E**), newest-first, with retries keeping their
-own rows and timings. A dash means *unmeasured* — never zero.
+Latency is folded into a session-wide **median** rather than an average or high
+percentile. Because interactive sessions yield modest turn counts, upper
+percentiles collapse to the worst attempt (e.g. $p95 = \max$ for $N \le 20$),
+exaggerating single outliers. The median tracks typical responsiveness while the
+drill-down table preserves the tail attempt by attempt.
 
-The sample also travels as structured data: each completed principal turn
-pushes a compact snapshot on the round-event channel so the hint segment up-
-dates live, and attaching to or resuming a session replays the newest stored
-sample from its durable record without waiting for fresh traffic.
+### The Latency Timeline (Enter to turn end)
+
+The attempt inspector (L3) renders the complete lifecycle of a turn from the
+moment the prompt is submitted to the validated response:
+
+```text
+LATENCY TIMELINE
+  From Enter to the settled turn — one row per stage
+
+    0.00s ● Enter                you submitted the prompt
+  │
+    0.41s ● Request dispatched   0.41s local: queue, context projection, hooks
+  │
+    0.43s ● Connection ready     reused pooled connection — no handshake
+  │
+    0.55s ● Request sent         upload complete after 0.12s
+  │
+    1.44s ● Response headers     server accepted the request · 1.03s from dispatch
+  │
+    1.45s ● Server started       first frame from the origin · 1.04s from dispatch
+  │
+    2.19s ● First token          TTFT 1.64s after the request was sent · 2.19s from dispatch
+  │
+    3.87s ● Last token           streamed 1.68s · 210 tok @ 125.0 tok/s
+  │
+    3.88s ● Stream closed        0.01s after the last token
+  │
+    3.89s ■ Turn end             validated after 3.48s
+  socket: RTT 42ms · retransmits 0
+```
+
+1. **Enter → Request dispatched**: tracked by the TUI composer (`last_submit_ms`)
+   against ledger start (`started_at_ms`). Captures local daemon overhead
+   (IPC queueing, skill/file context projection, TurnStart hooks) that was
+   previously unobservable.
+2. **Connection ready**: DNS, TCP, and TLS phases measured individually on cold
+   connections, or labeled as `reused pooled connection` when served from the
+   keep-alive pool.
+3. **Request sent**: marks the instant the last byte of the HTTP request was
+   handed to the kernel.
+4. **TTFT anchor**: TTFT is reported from **Request sent → First token** (the
+   network transit, server queue, and prefill duration), alongside total wait
+   from dispatch. This eliminates local serialization and connection setup
+   from cross-provider model latency comparisons.
+5. **Server started**: first origin protocol frame received (preamble or usage
+   chunk), proving the server has begun streaming.
+6. **Kernel socket telemetry**: live RTT and retransmit counts polled via
+   `TCP_INFO` (Linux L1 tap) ground perceived stalls in physical network facts.
+
+The latest turn's streaming rate updates live in the model bar, and reattaching
+to an existing session replays the newest stored sample without waiting for fresh
+traffic.
 
 ## Current context vs. request usage
 

@@ -32,13 +32,13 @@ pub struct KimiUsageFetcher;
 
 #[async_trait]
 impl ProviderUsageFetcher for KimiUsageFetcher {
-    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
-        preset_id == Some("kimi") || base_url.contains("moonshot.cn")
+    fn matches(&self, provider: &str, base_url: &str) -> bool {
+        provider == "kimi" || base_url.contains("moonshot.cn")
     }
 
     async fn fetch_usage(
         &self,
-        client: &reqwest::Client,
+        client: &crate::http::Http,
         base_url: &str,
         api_key: &str,
     ) -> Result<ProviderUsage, String> {
@@ -50,23 +50,23 @@ impl ProviderUsageFetcher for KimiUsageFetcher {
             "https://api.moonshot.cn/v1/users/me/balance".to_string()
         };
 
+        let auth = format!("Bearer {api_key}");
         let resp = client
-            .get(&endpoint)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
+            .get(
+                &endpoint,
+                &[
+                    ("authorization", auth.as_str()),
+                    ("accept", "application/json"),
+                ],
+            )
             .await
             .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP {status}: {text}"));
+        if !resp.is_success() {
+            return Err(format!("HTTP {}: {}", resp.status, resp.body));
         }
 
-        let body: KimiBalanceResponse = resp
-            .json()
-            .await
+        let body: KimiBalanceResponse = serde_json::from_str(&resp.body)
             .map_err(|e| format!("Failed to parse Kimi balance response: {e}"))?;
 
         parse_kimi_balance(body)

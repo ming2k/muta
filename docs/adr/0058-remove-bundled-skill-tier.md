@@ -59,6 +59,6 @@ project-local discovery behavior is unchanged.
 
 ## References
 
-- [ADR-0013](0013-skills-xdg-paths-and-bundled-embed.md)
+- [ADR-0013](archive/0013-skills-xdg-paths-and-bundled-embed.md)
 - [Skills](../explanation/agent-design/skills.md)
 - [Paths](../reference/paths.md)

@@ -1,10 +1,7 @@
 # ADR-0047: Round contains turn (vocabulary swap)
 
-Date: 2026-07-XX
-
-## Status
-
-Accepted
+- **Status:** Accepted
+- **Date:** 2026-07-XX
 
 ## Context
 

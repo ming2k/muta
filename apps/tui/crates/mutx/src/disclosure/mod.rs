@@ -1,9 +1,9 @@
 //! Disclosure state machine and presentation primitives.
 //!
 //! A **disclosure** is any collapsible block in the transcript — a tool step, a
-//! runner task, or a reasoning trace — sharing one summary/body model and one
+//! subagent task, or a reasoning trace — sharing one summary/body model and one
 //! color contract. (The leaf renderers keep their kind-specific names —
-//! [`draw_tool_step`], [`draw_reasoning_trace`], [`draw_runner_inline_step`] —
+//! [`draw_tool_step`], [`draw_reasoning_trace`], [`draw_subagent_inline_step`] —
 //! since only a tool call really reads as a "step"; this module is the umbrella
 //! abstraction over all three.) Historically each kind computed its
 //! summary-line color from a tangle of ad-hoc flags (`expanded`, `focused`,
@@ -60,7 +60,7 @@ use super::Theme;
 pub(crate) mod renderers;
 mod state;
 pub use renderers::{
-    StickyStep, draw_command_result, draw_reasoning_trace, draw_runner_inline_step,
-    draw_sticky_summary_if_needed, draw_tool_step,
+    StickyStep, draw_command_result, draw_reasoning_trace, draw_sticky_summary_if_needed,
+    draw_subagent_inline_step, draw_tool_step,
 };
 pub use state::{Disclosure, Interaction, summary_text_color};

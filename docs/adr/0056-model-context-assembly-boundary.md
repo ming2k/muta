@@ -101,7 +101,7 @@ and title prompts remain separate by design.
 
 ## References
 
-- [ADR-0039](0039-unified-prompt-registry.md)
+- [ADR-0039](archive/0039-unified-prompt-registry.md)
 - [ADR-0040](0040-session-state-and-context-projection.md)
 - [ADR-0050](0050-non-driving-command-echoes.md)
 - [Model context](../explanation/agent-design/model-context.md)

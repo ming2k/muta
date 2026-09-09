@@ -1029,19 +1029,19 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
             )
             .to_string();
         }
-        // Runner transcripts: render a bounded view of the nested work so
+        // Subagent transcripts: render a bounded view of the nested work so
         // the summarizer can capture what each `task` call actually did
         // (otherwise the LLM only sees "[task result]:\n<final text>" and
-        // cannot decide whether the runner's tool usage is worth mentioning
+        // cannot decide whether the subagent's tool usage is worth mentioning
         // in the anchored summary). The nested view is hard-capped to avoid
-        // blowing the budget on a single runner that ran for 30 turns.
+        // blowing the budget on a single subagent that ran for 30 turns.
         if let Some(children) = &message.children
             && !children.is_empty()
         {
             let nested =
-                serialize_runner_transcript_for_summary(children, SUMMARY_RUNNER_CAP_TOKENS);
+                serialize_subagent_transcript_for_summary(children, SUMMARY_SUBAGENT_CAP_TOKENS);
             if !nested.is_empty() {
-                body.push_str("\n[runner transcript]\n");
+                body.push_str("\n[subagent transcript]\n");
                 body.push_str(&nested);
             }
         }
@@ -1075,17 +1075,17 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
     )
 }
 
-/// Per-runner token cap when rendering the nested transcript into the
-/// summarizer prompt (ADR-0120). Large enough to surface the runner's task,
+/// Per-subagent token cap when rendering the nested transcript into the
+/// summarizer prompt (ADR-0120). Large enough to surface the subagent's task,
 /// its key tool calls, and its conclusion; small enough that a turn with
-/// five runners cannot crowd out the rest of the conversation.
-const SUMMARY_RUNNER_CAP_TOKENS: usize = 500;
+/// five subagents cannot crowd out the rest of the conversation.
+const SUMMARY_SUBAGENT_CAP_TOKENS: usize = 500;
 
-/// Render an runner's nested transcript as a compact summarizer-facing view.
-/// Recursive: an runner's own `task` results (sub-runners) are rendered
+/// Render a subagent's nested transcript as a compact summarizer-facing view.
+/// Recursive: a subagent's own `task` results (sub-subagents) are rendered
 /// one level deeper with an even smaller cap. Depth is bounded in practice by
-/// the `RunnerTool` excluding itself from the sub-toolset.
-fn serialize_runner_transcript_for_summary(children: &[Message], budget: usize) -> String {
+/// the `SubagentTool` excluding itself from the sub-toolset.
+fn serialize_subagent_transcript_for_summary(children: &[Message], budget: usize) -> String {
     let mut lines: Vec<String> = Vec::new();
     for message in children {
         let Some(label) = label_for(message.role) else {
@@ -1105,13 +1105,13 @@ fn serialize_runner_transcript_for_summary(children: &[Message], budget: usize) 
             .to_string();
         }
         // One level deeper, with a much smaller cap, so we never spend more
-        // than ~25% of the parent runner's budget on a single sub-runner.
+        // than ~25% of the parent subagent's budget on a single sub-subagent.
         if let Some(nested) = &message.children
             && !nested.is_empty()
         {
-            let inner = serialize_runner_transcript_for_summary(nested, (budget / 4).max(125));
+            let inner = serialize_subagent_transcript_for_summary(nested, (budget / 4).max(125));
             if !inner.is_empty() {
-                body.push_str("\n[sub-runner transcript]\n");
+                body.push_str("\n[sub-subagent transcript]\n");
                 body.push_str(&inner);
             }
         }

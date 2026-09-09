@@ -1,11 +1,11 @@
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use muta_contracts::{SharedWebSearchConfig, Tool, WebSearchConfig};
+use muta_contracts::{SharedWebConfig, Tool, WebReaderProvider, WebRuntimeConfig};
 use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
-use crate::tools::web::client::{UNTRUSTED_PREFIX, UNTRUSTED_SUFFIX, http_client};
+use crate::tools::web::client::{UNTRUSTED_PREFIX, UNTRUSTED_SUFFIX};
 use crate::tools::web::snapshot::{WebSnapshotResult, take_snapshot};
 
 pub const WEB_READER_MAX_TOKENS: usize = 4_000;
@@ -18,45 +18,61 @@ struct WebReaderArgs {
     raw: Option<bool>,
 }
 
+type CachedClient = (
+    u64,
+    Result<std::sync::Arc<crate::tools::web::http::WebHttp>, String>,
+);
+
 /// Read a web page URL and extract its clean Markdown content via the configured Reader.
 pub struct WebReaderTool {
-    config: SharedWebSearchConfig,
-    client: RwLock<Option<(String, Result<reqwest::Client, String>)>>,
+    config: SharedWebConfig,
+    client: RwLock<Option<CachedClient>>,
 }
 
 impl WebReaderTool {
     pub fn new() -> Self {
-        Self::with_config(WebSearchConfig::default())
+        Self::with_config(WebRuntimeConfig::default())
     }
-    pub fn with_config(config: WebSearchConfig) -> Self {
-        Self::with_shared_config(SharedWebSearchConfig::new(config))
+    pub fn with_config(config: WebRuntimeConfig) -> Self {
+        Self::with_shared_config(SharedWebConfig::new(config))
     }
-    pub fn with_shared_config(config: SharedWebSearchConfig) -> Self {
+    pub fn with_shared_config(config: SharedWebConfig) -> Self {
         Self {
             config,
             client: RwLock::new(None),
         }
     }
 
-    pub fn client(&self) -> Result<reqwest::Client, String> {
-        let snapshot = self.config.get();
-        let sig = snapshot.signature();
+    pub fn client(&self) -> Result<std::sync::Arc<crate::tools::web::http::WebHttp>, String> {
+        let (revision, snapshot) = self.config.snapshot();
+        self.client_for(revision, &snapshot)
+    }
+
+    /// Resolve the HTTP client against the exact runtime snapshot used by the
+    /// rest of one operation. This prevents a hot update from mixing a reader
+    /// built at revision N+1 with proxy/timeout state built at revision N.
+    fn client_for(
+        &self,
+        revision: u64,
+        snapshot: &WebRuntimeConfig,
+    ) -> Result<std::sync::Arc<crate::tools::web::http::WebHttp>, String> {
         {
             let guard = self
                 .client
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some((cached_sig, built)) = guard.as_ref()
-                && *cached_sig == sig
+            if let Some((cached_revision, built)) = guard.as_ref()
+                && *cached_revision == revision
             {
                 return built.clone().map_err(|e| e.clone());
             }
         }
-        let built = http_client(&snapshot);
+        let built =
+            crate::tools::web::http::WebHttp::new(&snapshot.behavior).map(std::sync::Arc::new);
         *self
             .client
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((sig, built.clone()));
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((revision, built.clone()));
         built.map_err(|e| e.clone())
     }
 
@@ -66,7 +82,8 @@ impl WebReaderTool {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<WebSnapshotResult, String> {
-        let client = self.client()?;
+        let (revision, snapshot) = self.config.snapshot();
+        let client = self.client_for(revision, &snapshot)?;
         take_snapshot(&client, url, etag, last_modified).await
     }
 }
@@ -84,18 +101,7 @@ impl Tool for WebReaderTool {
     }
     fn is_available(&self) -> bool {
         let snapshot = self.config.get();
-        let reader = snapshot.reader.trim();
-        if reader.is_empty() || reader == "none" || reader == "disabled" || reader == "(none)" {
-            return false;
-        }
-        match reader {
-            "jina" => snapshot
-                .jina_api_key
-                .as_ref()
-                .map(|k| !k.expose_secret().trim().is_empty())
-                .unwrap_or(false),
-            _ => true,
-        }
+        matches!(snapshot.behavior.reader, WebReaderProvider::Jina)
     }
     fn description(&self) -> &str {
         "Read a web page and return its text content as clean Markdown."
@@ -112,8 +118,8 @@ impl Tool for WebReaderTool {
         }
         crate::tools::ssrf::assert_public_url(url).await?;
         let raw = args.raw.unwrap_or(false);
-        let client = self.client()?;
-        let snapshot = self.config.get();
+        let (revision, snapshot) = self.config.snapshot();
+        let client = self.client_for(revision, &snapshot)?;
         let reader = crate::tools::reader::build_reader(&snapshot);
         let reader_name = reader.name();
         let output = reader.read(&client, url, raw).await?;

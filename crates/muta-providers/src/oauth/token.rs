@@ -112,7 +112,7 @@ pub fn build_authorize_url(
 
 /// Exchange an authorization code for a token set (browser / manual flow).
 pub async fn exchange_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     code: &str,
     pkce: &PkceCodes,
@@ -159,7 +159,7 @@ pub async fn exchange_code(
 
 /// Refresh a rotated access token from a refresh_token.
 pub async fn refresh_access_token(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     refresh_token: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
@@ -197,7 +197,7 @@ pub async fn refresh_access_token(
 }
 
 async fn execute_token_request(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     params: &[(&str, &str)],
     basic_auth: Option<&str>,
@@ -205,27 +205,26 @@ async fn execute_token_request(
     match cfg.token_format {
         TokenRequestFormat::FormUrlEncoded => {
             let body = serde_urlencoded(params);
-            let mut req = client
-                .post(cfg.token_url.as_ref())
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .header("Accept", "application/json")
-                .body(body);
+            let mut req = crate::http::Request::new(muta_net::Method::POST, cfg.token_url.as_ref())
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("accept", "application/json")
+                .raw_body(body);
 
             if let Some(ua) = &cfg.user_agent {
-                req = req.header("User-Agent", ua.as_ref());
+                req = req.header("user-agent", ua.as_ref());
             }
             if let Some(auth) = basic_auth {
-                req = req.header("Authorization", auth);
+                req = req.header("authorization", auth);
             }
             for (k, v) in &cfg.extra_headers {
                 req = req.header(k.as_ref(), v.as_ref());
             }
 
-            let resp = req.send().await.map_err(|e| {
+            let resp = client.send(req).await.map_err(|e| {
                 crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
             })?;
-            let status = resp.status();
-            let text = read_response_text(resp, "token response").await?;
+            let status = resp.status;
+            let text = resp.body;
             if !status.is_success() {
                 return Err(crate::oauth::AuthError::TokenEndpoint {
                     status: status.as_u16(),
@@ -242,27 +241,26 @@ async fn execute_token_request(
             for (k, v) in params {
                 map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
             }
-            let mut req = client
-                .post(cfg.token_url.as_ref())
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
+            let mut req = crate::http::Request::new(muta_net::Method::POST, cfg.token_url.as_ref())
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
                 .json(&serde_json::Value::Object(map));
 
             if let Some(ua) = &cfg.user_agent {
-                req = req.header("User-Agent", ua.as_ref());
+                req = req.header("user-agent", ua.as_ref());
             }
             if let Some(auth) = basic_auth {
-                req = req.header("Authorization", auth);
+                req = req.header("authorization", auth);
             }
             for (k, v) in &cfg.extra_headers {
                 req = req.header(k.as_ref(), v.as_ref());
             }
 
-            let resp = req.send().await.map_err(|e| {
+            let resp = client.send(req).await.map_err(|e| {
                 crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
             })?;
-            let status = resp.status();
-            let text = read_response_text(resp, "token response").await?;
+            let status = resp.status;
+            let text = resp.body;
             if !status.is_success() {
                 return Err(crate::oauth::AuthError::TokenEndpoint {
                     status: status.as_u16(),
@@ -321,20 +319,20 @@ pub fn percent_encode_form_pairs(pairs: &[(&str, &str)]) -> String {
 }
 
 pub(crate) async fn post_form(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     url: &str,
     body: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
+    let request = crate::http::Request::new(muta_net::Method::POST, url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .raw_body(body.to_string());
     let response = client
-        .post(url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("Accept", "application/json")
-        .body(body.to_string())
-        .send()
+        .send(request)
         .await
         .map_err(|e| crate::oauth::AuthError::Transport(format!("token request failed: {e}")))?;
-    let status = response.status();
-    let text = read_response_text(response, "token response").await?;
+    let status = response.status;
+    let text = response.body;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
@@ -403,44 +401,51 @@ pub fn chatgpt_account_id(token: &str) -> Option<String> {
 
 /// Fetch Google UserInfo (email, name, sub, picture) using access token.
 pub async fn fetch_google_userinfo(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     access_token: &str,
 ) -> Result<GoogleUserInfo, crate::oauth::AuthError> {
+    let request = crate::http::Request::new(muta_net::Method::GET, GOOGLE_USERINFO_URL)
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("accept", "application/json");
     let resp = client
-        .get(GOOGLE_USERINFO_URL)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Accept", "application/json")
-        .send()
+        .send(request)
         .await
         .map_err(|e| crate::oauth::AuthError::Transport(format!("userinfo request failed: {e}")))?;
 
-    if resp.status().is_success() {
-        let info = resp
-            .json::<GoogleUserInfo>()
-            .await
+    if resp.is_success() {
+        let info = serde_json::from_str::<GoogleUserInfo>(&resp.body)
             .map_err(|e| crate::oauth::AuthError::Decode(format!("userinfo parse failed: {e}")))?;
         Ok(info)
     } else {
-        let status = resp.status().as_u16();
         Err(crate::oauth::AuthError::TokenEndpoint {
-            status,
-            body: read_response_text(resp, "userinfo error response").await?,
+            status: resp.status.as_u16(),
+            body: resp.body,
         })
     }
 }
 
-pub(crate) async fn read_response_text(
-    response: reqwest::Response,
-    context: &str,
-) -> Result<String, crate::oauth::AuthError> {
-    response.text().await.map_err(|error| {
-        crate::oauth::AuthError::Transport(format!("could not read {context}: {error}"))
-    })
+/// POST a JSON body with the Antigravity headers.
+async fn antigravity_post(
+    client: &crate::http::Http,
+    url: &str,
+    access_token: &str,
+    body: &serde_json::Value,
+    what: &str,
+) -> Result<crate::http::Reply, crate::oauth::AuthError> {
+    let request = crate::http::Request::new(muta_net::Method::POST, url)
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("user-agent", ANTIGRAVITY_USER_AGENT)
+        .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
+        .json(body);
+    client
+        .send(request)
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("{what} failed: {e}")))
 }
 
 /// Discover or onboard the user's Antigravity `cloudaicompanionProject`.
 pub async fn resolve_antigravity_project(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     access_token: &str,
 ) -> Result<String, crate::oauth::AuthError> {
     let load_body = serde_json::json!({
@@ -453,19 +458,17 @@ pub async fn resolve_antigravity_project(
         }
     });
 
-    let resp = client
-        .post(ANTIGRAVITY_LOAD_CODE_ASSIST_URL)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
-        .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
-        .header("Content-Type", "application/json")
-        .json(&load_body)
-        .send()
-        .await
-        .map_err(|e| crate::oauth::AuthError::Transport(format!("loadCodeAssist failed: {e}")))?;
+    let resp = antigravity_post(
+        client,
+        ANTIGRAVITY_LOAD_CODE_ASSIST_URL,
+        access_token,
+        &load_body,
+        "loadCodeAssist",
+    )
+    .await?;
 
-    if resp.status().is_success()
-        && let Ok(val) = resp.json::<serde_json::Value>().await
+    if resp.is_success()
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp.body)
     {
         if let Some(p) = extract_cloudaicompanion_project(&val) {
             tracing::info!(project = %p, "resolved existing Antigravity cloudaicompanionProject");
@@ -505,19 +508,17 @@ pub async fn resolve_antigravity_project(
             }
         });
 
-        let onboard_resp = client
-            .post(ANTIGRAVITY_ONBOARD_USER_URL)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .header("User-Agent", ANTIGRAVITY_USER_AGENT)
-            .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
-            .header("Content-Type", "application/json")
-            .json(&onboard_body)
-            .send()
-            .await
-            .map_err(|e| crate::oauth::AuthError::Transport(format!("onboardUser failed: {e}")))?;
+        let onboard_resp = antigravity_post(
+            client,
+            ANTIGRAVITY_ONBOARD_USER_URL,
+            access_token,
+            &onboard_body,
+            "onboardUser",
+        )
+        .await?;
 
-        if onboard_resp.status().is_success() {
-            if let Ok(onboard_val) = onboard_resp.json::<serde_json::Value>().await
+        if onboard_resp.is_success() {
+            if let Ok(onboard_val) = serde_json::from_str::<serde_json::Value>(&onboard_resp.body)
                 && let Some(p) = extract_cloudaicompanion_project(&onboard_val)
             {
                 tracing::info!(project = %p, tier = %tier_id, "onboarded Antigravity cloudaicompanionProject");
@@ -525,17 +526,16 @@ pub async fn resolve_antigravity_project(
             }
 
             // If onboardUser completed, retry loadCodeAssist to read the freshly provisioned project
-            if let Ok(second_resp) = client
-                .post(ANTIGRAVITY_LOAD_CODE_ASSIST_URL)
-                .header("Authorization", format!("Bearer {access_token}"))
-                .header("User-Agent", ANTIGRAVITY_USER_AGENT)
-                .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
-                .header("Content-Type", "application/json")
-                .json(&load_body)
-                .send()
-                .await
-                && second_resp.status().is_success()
-                && let Ok(second_val) = second_resp.json::<serde_json::Value>().await
+            if let Ok(second_resp) = antigravity_post(
+                client,
+                ANTIGRAVITY_LOAD_CODE_ASSIST_URL,
+                access_token,
+                &load_body,
+                "loadCodeAssist",
+            )
+            .await
+                && second_resp.is_success()
+                && let Ok(second_val) = serde_json::from_str::<serde_json::Value>(&second_resp.body)
                 && let Some(p) = extract_cloudaicompanion_project(&second_val)
             {
                 tracing::info!(project = %p, "resolved newly onboarded Antigravity cloudaicompanionProject");
@@ -549,7 +549,7 @@ pub async fn resolve_antigravity_project(
 
 /// Retrieve user quota summary from Google Antigravity CodeAssist backend.
 pub async fn retrieve_antigravity_quota_summary(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     access_token: &str,
     project: Option<&str>,
 ) -> Result<crate::usage::AntigravityQuotaSummaryResponse, crate::oauth::AuthError> {
@@ -557,34 +557,27 @@ pub async fn retrieve_antigravity_quota_summary(
         "project": project.unwrap_or("")
     });
 
-    let resp = client
-        .post(ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
-        .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
-        .header("Content-Type", "application/json")
-        .json(&req_body)
-        .send()
-        .await
-        .map_err(|e| {
-            crate::oauth::AuthError::Transport(format!("retrieveUserQuotaSummary failed: {e}"))
-        })?;
+    let resp = antigravity_post(
+        client,
+        ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL,
+        access_token,
+        &req_body,
+        "retrieveUserQuotaSummary",
+    )
+    .await?;
 
-    if resp.status().is_success() {
-        let quota = resp
-            .json::<crate::usage::AntigravityQuotaSummaryResponse>()
-            .await
-            .map_err(|e| {
+    if resp.is_success() {
+        serde_json::from_str::<crate::usage::AntigravityQuotaSummaryResponse>(&resp.body).map_err(
+            |e| {
                 crate::oauth::AuthError::Decode(format!(
                     "retrieveUserQuotaSummary parse failed: {e}"
                 ))
-            })?;
-        Ok(quota)
+            },
+        )
     } else {
-        let status = resp.status().as_u16();
         Err(crate::oauth::AuthError::TokenEndpoint {
-            status,
-            body: read_response_text(resp, "retrieveUserQuotaSummary error response").await?,
+            status: resp.status.as_u16(),
+            body: resp.body,
         })
     }
 }

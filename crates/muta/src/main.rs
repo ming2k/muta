@@ -9,8 +9,10 @@ mod status;
 
 /// This CLI's identity, handed to the engine as its opening system prompt.
 /// Lives here (not in `muta-agent`) so the engine stays identity-agnostic
-/// and a different frontend could reuse it as another agent.
-use crate::identity::{DaemonUiBridge, master_code, muta_identity};
+/// and a different frontend could reuse it as another agent. The shipped
+/// identity is deliberately empty, so the prompt opens at the host
+/// environment — see the `identity` module docs.
+use crate::identity::{DaemonUiBridge, agent_code};
 use cli::{CliArgs, DaemonAction, McpAction, Mode};
 
 use std::path::PathBuf;
@@ -267,8 +269,8 @@ async fn run_daemon_foreground(flags: DaemonStart) -> Result<(), Box<dyn std::er
         .unwrap_or(muta_runtime::startup::env_default_port());
     let outcome = muta_runtime::host::run_with_gate(
         muta_runtime::host::HostIdentity {
-            identity: muta_identity(),
-            master: master_code(),
+            identity: muta_contracts::AgentIdentity::default(),
+            preset: agent_code(),
             ui: Arc::new(DaemonUiBridge),
         },
         muta_runtime::host::HostOptions {

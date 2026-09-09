@@ -1,11 +1,10 @@
 //! Bocha backend — hosted AI search REST API (requires an API key). Directly
 //! reachable from mainland China networks (unlike Exa/Parallel/Tavily), which
-//! makes it a good key-based fallback that survives proxy outages.
+//! makes it a useful key-based provider when proxy access is unavailable.
 
 use super::{ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
-
-const BOCHA_URL: &str = "https://api.bochaai.com/v1/web-search";
+use muta_contracts::BOCHA_SEARCH_ENDPOINT;
 
 pub(crate) struct BochaProvider {
     pub api_key: Option<String>,
@@ -25,7 +24,7 @@ impl SearchProvider for BochaProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let key = self
@@ -36,30 +35,33 @@ impl SearchProvider for BochaProvider {
             .ok_or_else(|| {
                 "Bocha backend selected but `[websearch].bocha_api_key` is not set.".to_string()
             })?;
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_str(&format!("Bearer {key}"))
+                .map_err(|_| "Bocha key is not a valid header value".to_string())?,
+        );
         let response = client
-            .post(BOCHA_URL)
-            .bearer_auth(key)
-            .json(&serde_json::json!({
-                "query": query,
-                "summary": true,
-                "freshness": "noLimit",
-                "count": 10
-            }))
-            .send()
+            .post_json(
+                BOCHA_SEARCH_ENDPOINT,
+                headers,
+                &serde_json::json!({
+                    "query": query,
+                    "summary": true,
+                    "freshness": "noLimit",
+                    "count": 10
+                }),
+            )
             .await
             .map_err(|e| format!("Bocha request failed: {e}"))?;
-        let status = response.status();
+        let status = response.status;
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
             return Err(format!(
                 "Bocha returned HTTP {status} (check bocha_api_key): {}",
-                body.chars().take(300).collect::<String>()
+                response.body.chars().take(300).collect::<String>()
             ));
         }
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read Bocha response: {e}"))?;
+        let body = response.body;
         let json: serde_json::Value =
             serde_json::from_str(&body).map_err(|e| format!("Bocha returned invalid JSON: {e}"))?;
         let results = json

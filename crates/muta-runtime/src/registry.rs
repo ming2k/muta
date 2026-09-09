@@ -2,7 +2,7 @@ use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
 use crate::serve::{AttachAction, AttachSyncBuffer, is_attach_sync_event};
-use muta_agent::{Agent, AgentIdentity, MasterPreset};
+use muta_agent::{Agent, AgentIdentity, AgentPreset};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
     PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
@@ -27,7 +27,7 @@ pub(crate) fn unix_epoch_ms() -> u64 {
 #[derive(Clone)]
 pub struct HostParams {
     pub identity: AgentIdentity,
-    pub master: MasterPreset,
+    pub preset: AgentPreset,
     pub ui: Arc<dyn UiBridge>,
 }
 pub struct HostedSession {
@@ -1134,7 +1134,7 @@ impl SessionRegistry {
     ) -> Result<BoundSession, AssembleErr> {
         let HostParams {
             identity,
-            master,
+            preset,
             ui,
         } = self.params.as_ref().ok_or(AssembleErr::NoHost)?.clone();
         // The session's lifetime token (ADR-0125): shared by the driver
@@ -1148,7 +1148,7 @@ impl SessionRegistry {
         let human_channel = Arc::new(muta_contracts::human_request::HumanChannelAccountant::new());
         let boot = bootstrap::assemble(BootstrapParams {
             identity,
-            master,
+            preset,
             ui,
             startup,
             project_root: Some(project_root.clone()),

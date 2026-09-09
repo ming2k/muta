@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::anchor::{AnchorTarget, AnchoredBox, compute_anchored_rect};
 use crate::{Flex, FlexItem, Rect};
 
 /// An instance token. Tokens are never reused, including after aborted frames.
@@ -34,22 +35,26 @@ pub enum PointerPolicy {
 
 /// Placement is separate from logical ownership. Viewport placement is the
 /// explicit escape hatch for popups that outgrow their owner's clipping box.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LayoutBox {
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum LayoutBox<K = ()> {
     #[default]
     Fill,
     /// Absolute terminal coordinates, clipped by the parent's content box.
     Placed(Rect),
     /// Absolute terminal coordinates clipped only by the viewport.
     Viewport(Rect),
+    /// Anchored to a target rectangle or scene node, clipped only by the viewport.
+    Anchored(AnchoredBox<K>),
 }
+
+impl<K: Copy> Copy for LayoutBox<K> {}
 
 /// A declaration, not the lifetime owner of a component's state.
 #[derive(Clone, Debug)]
 pub struct Component<K> {
     pub key: K,
     pub parent: Option<K>,
-    pub layout: LayoutBox,
+    pub layout: LayoutBox<K>,
     pub input: InputPolicy,
     pub pointer: PointerPolicy,
     pub focusable: bool,
@@ -60,7 +65,7 @@ pub struct Component<K> {
 }
 
 impl<K> Component<K> {
-    pub fn new(key: K, parent: Option<K>, layout: LayoutBox) -> Self {
+    pub fn new(key: K, parent: Option<K>, layout: LayoutBox<K>) -> Self {
         Self {
             key,
             parent,
@@ -116,6 +121,7 @@ pub enum UiError {
     DuplicateKey,
     MissingParent,
     MissingNode,
+    MissingAnchor,
     NoPendingFrame,
     InvalidFocus,
     InvalidCapture,
@@ -324,10 +330,25 @@ impl<K: Clone + Eq + Hash> Scene<K> {
                 clip: self.viewport,
             },
         };
-        let (bounds, clip) = match component.layout {
+        let (bounds, clip) = match &component.layout {
             LayoutBox::Fill => (parent.bounds, parent.clip),
-            LayoutBox::Placed(bounds) => (bounds, parent.clip.intersection(bounds)),
-            LayoutBox::Viewport(bounds) => (bounds, self.viewport.intersection(bounds)),
+            LayoutBox::Placed(bounds) => (*bounds, parent.clip.intersection(*bounds)),
+            LayoutBox::Viewport(bounds) => (*bounds, self.viewport.intersection(*bounds)),
+            LayoutBox::Anchored(anchored) => {
+                let target_rect = match &anchored.target {
+                    AnchorTarget::Rect(r) => *r,
+                    AnchorTarget::Node(k) => self.rect(k).ok_or(UiError::MissingAnchor)?,
+                };
+                let bounds = compute_anchored_rect(
+                    target_rect,
+                    self.viewport,
+                    anchored.content_size,
+                    anchored.placement,
+                    anchored.alignment,
+                    &anchored.constraints,
+                );
+                (bounds, self.viewport.intersection(bounds))
+            }
         };
         let layout = NodeLayout { bounds, clip };
         let index = self.nodes.len();
@@ -452,6 +473,77 @@ mod tests {
         assert_eq!(
             scene.keyboard_path_for(focused, FAMILY_TRANSCRIPT),
             vec![&Key::Transcript]
+        );
+    }
+
+    #[test]
+    fn layout_box_anchored_resolves_against_node_geometry() {
+        use crate::anchor::{
+            AnchorAlignment, AnchorConstraints, AnchorPlacement, AnchorTarget, AnchoredBox,
+        };
+
+        let mut scene = Scene {
+            viewport: Rect::new(0, 0, 100, 30),
+            ..Default::default()
+        };
+
+        // Root
+        let root = Component::new(
+            Key::Transcript,
+            None,
+            LayoutBox::Placed(Rect::new(0, 0, 100, 30)),
+        );
+        scene.push(NodeId(1), root).unwrap();
+
+        // Target row in list
+        let row = Component::new(
+            Key::Sheet,
+            Some(Key::Transcript),
+            LayoutBox::Placed(Rect::new(20, 10, 40, 2)),
+        );
+        scene.push(NodeId(2), row).unwrap();
+
+        // Anchored popover targeting Key::Sheet
+        let anchored = AnchoredBox {
+            target: AnchorTarget::Node(Key::Sheet),
+            placement: AnchorPlacement::Bottom,
+            alignment: AnchorAlignment::Start,
+            content_size: (30, 8),
+            constraints: AnchorConstraints::default(),
+        };
+        let popover = Component::new(
+            Key::Modal,
+            Some(Key::Transcript),
+            LayoutBox::Anchored(anchored),
+        );
+        let layout = scene.push(NodeId(3), popover).unwrap();
+
+        assert_eq!(layout.bounds, Rect::new(20, 12, 30, 8));
+        assert_eq!(layout.clip, Rect::new(20, 12, 30, 8));
+    }
+
+    #[test]
+    fn layout_box_anchored_missing_anchor_returns_error() {
+        use crate::anchor::{
+            AnchorAlignment, AnchorConstraints, AnchorPlacement, AnchorTarget, AnchoredBox,
+        };
+
+        let mut scene = Scene {
+            viewport: Rect::new(0, 0, 100, 30),
+            ..Default::default()
+        };
+
+        let anchored = AnchoredBox {
+            target: AnchorTarget::Node(Key::Sheet),
+            placement: AnchorPlacement::Bottom,
+            alignment: AnchorAlignment::Start,
+            content_size: (30, 8),
+            constraints: AnchorConstraints::default(),
+        };
+        let popover = Component::new(Key::Modal, None, LayoutBox::Anchored(anchored));
+        assert_eq!(
+            scene.push(NodeId(1), popover).unwrap_err(),
+            UiError::MissingAnchor
         );
     }
 }

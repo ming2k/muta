@@ -43,11 +43,16 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod anchor;
 pub mod backend;
 pub mod driver;
 pub mod glyph;
 pub mod profile;
 
+pub use anchor::{
+    AnchorAlignment, AnchorConstraints, AnchorPlacement, AnchorTarget, AnchoredBox,
+    compute_anchored_rect,
+};
 pub use backend::Backend;
 mod cell;
 pub mod diff;

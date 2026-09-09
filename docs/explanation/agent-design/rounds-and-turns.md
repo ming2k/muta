@@ -199,10 +199,10 @@ paths — and any future tool source — pass through identical checks:
    round-ending failure.
 2. **Write-scope gate.** A per-agent `WriteScope` boundary filters write tools
    whose target is outside the agent's granted paths — the main agent is
-   unrestricted, an envoy is scoped by its profile. In-scope calls pass; an
+   unrestricted, a subagent is scoped by its profile. In-scope calls pass; an
    out-of-scope call is routed to the broker for the user to approve (or block
    outright in delegated mode, where no human can answer). See
-   [ADR-0028](../../adr/0028-capability-allocation-scoped-writes.md).
+   [ADR-0028](../../adr/archive/0028-capability-allocation-scoped-writes.md).
 3. **Permission broker.** Write-capable calls are authorized against a
    scoped rule set. A cached *always* rule skips the prompt; otherwise
    the call waits for a decision, and a denial comes back as a result
@@ -264,8 +264,8 @@ round ends, the live turn detail collapses into the user-visible exchange.
 Durable mid-round save points mean a resumed session may recover committed
 tool work without pretending the interrupted round reached a normal answer.
 
-An envoy runs its own round with its own independent turn sequence; the
-parent's turn is parked while the child works. See [Envoys](envoys.md).
+An subagent runs its own round with its own independent turn sequence; the
+parent's turn is parked while the child works. See [Subagents](subagents.md).
 
 ## A round of several turns
 
@@ -300,6 +300,6 @@ call, the round closes.
   splits in two (native vs fallback)
 - [Guided decoding](../guided-decoding.md) — the constrained-decoding
   layer that produces valid native calls
-- [Envoys](envoys.md) — independent child rounds and turn sequences
+- [Subagents](subagents.md) — independent child rounds and turn sequences
   for child agents
 - [How to add a tool](../../how-to/add-a-tool.md) — adding a new tool

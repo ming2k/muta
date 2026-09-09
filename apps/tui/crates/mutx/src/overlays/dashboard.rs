@@ -299,7 +299,7 @@ pub fn draw_dashboard(
 
 /// The dashboard's head row: `DASHBOARD` identity and scope on the left, a
 /// live session-count summary on the right. Matches the head chrome every
-/// other view (session / runner / btw) carries on its first row.
+/// other view (session / subagent / btw) carries on its first row.
 fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme: &Theme) {
     let needing = rows
         .iter()
@@ -709,7 +709,7 @@ fn render_footer(
     let width = rect.width as usize;
 
     if prompting {
-        // Inline prompt inside the 3-row Runner-style bar:
+        // Inline prompt inside the 3-row Subagent-style bar:
         let (label, hint) = if prompt_create_new {
             ("New session task: ", " (Enter create  Esc cancel)")
         } else {

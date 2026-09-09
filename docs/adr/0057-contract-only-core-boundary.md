@@ -116,6 +116,6 @@ behavior, tool behavior, and user-visible output do not change.
 ## References
 
 - [ADR-0005](0005-strict-layering-and-renames.md)
-- [ADR-0035](0035-application-layer-split.md)
+- [ADR-0035](archive/0035-application-layer-split.md)
 - [ADR-0056](0056-model-context-assembly-boundary.md)
 - [Crate layering](../explanation/crate-layering.md)

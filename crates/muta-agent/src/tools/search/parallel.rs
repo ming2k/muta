@@ -5,8 +5,7 @@
 
 use super::{ProviderOutput, SearchProvider, mcp_tools_call};
 use async_trait::async_trait;
-
-const PARALLEL_URL: &str = "https://search.parallel.ai/mcp";
+use muta_contracts::PARALLEL_SEARCH_ENDPOINT;
 const PARALLEL_TOOL: &str = "web_search";
 
 pub(crate) struct ParallelProvider {
@@ -27,7 +26,7 @@ impl SearchProvider for ParallelProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let mut headers: Vec<(String, String)> =
@@ -42,7 +41,7 @@ impl SearchProvider for ParallelProvider {
         }
         let text = mcp_tools_call(
             client,
-            PARALLEL_URL,
+            PARALLEL_SEARCH_ENDPOINT,
             PARALLEL_TOOL,
             serde_json::json!({
                 "objective": query,

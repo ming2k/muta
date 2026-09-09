@@ -14,16 +14,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use muta_agent::tools::{WebReaderTool, WebSearchTool};
-use muta_contracts::{Tool, WebSearchConfig};
+use muta_contracts::{Tool, WebConfig, WebReaderProvider, WebRuntimeConfig};
 
 /// Shape a config mirroring the developer workstation: socks5 proxy, Exa
-/// primary + Parallel fallback, Jina reader.
-fn proxied_config() -> WebSearchConfig {
-    WebSearchConfig {
-        proxy: Some("socks5h://127.0.0.1:1080".into()),
-        timeout_secs: 30,
-        reader: "jina".into(),
-        ..WebSearchConfig::default()
+/// one selected search provider plus the independently selected Jina reader.
+fn proxied_config() -> WebRuntimeConfig {
+    WebRuntimeConfig {
+        behavior: WebConfig {
+            proxy: Some("socks5h://127.0.0.1:1080".into()),
+            timeout_secs: 30,
+            reader: WebReaderProvider::Jina,
+            ..WebConfig::default()
+        },
+        search_credential: None,
+        reader_credential: None,
     }
 }
 

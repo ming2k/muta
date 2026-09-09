@@ -577,7 +577,21 @@ fn draw_composer_impl(
         // wrapped line intersects it to find its own highlighted slice. The
         // composer records itself as a single block at `INPUT_MSG_IDX` /
         // block 0, so a drag or triple-click inside the box resolves here.
-        let sel_range = block_selection_range(selection, INPUT_MSG_IDX, 0);
+        let input_range_sel = match selection {
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } if anchor_byte != head_byte => Some((
+                (*anchor_byte).min(*head_byte),
+                (*anchor_byte).max(*head_byte),
+            )),
+            _ => None,
+        };
+        let sel_range = if input_range_sel.is_none() {
+            block_selection_range(selection, INPUT_MSG_IDX, 0)
+        } else {
+            None
+        };
         let selected_bg = theme.selected();
         let text_fg = theme.fg();
         let base_text = Style::default().bg(panel_bg).fg(text_fg);
@@ -611,7 +625,17 @@ fn draw_composer_impl(
             } else {
                 vec![indent.clone()]
             };
-            let selected = line_selection(sel_range, wl);
+            let selected = if let Some((sel_start, sel_end)) = input_range_sel {
+                let lo = sel_start.max(wl.start_byte);
+                let hi = sel_end.min(wl.end_byte);
+                if lo < hi {
+                    Some((lo - wl.start_byte, hi - wl.start_byte))
+                } else {
+                    None
+                }
+            } else {
+                line_selection(sel_range, wl)
+            };
             // A resolved `/command` token is accented from the input's first
             // byte; clamp to this wrapped row so the accent stops at the wrap
             // boundary instead of bleeding into the argument text.

@@ -82,12 +82,12 @@ fn enter_shell(input: &mut String) -> InputAction {
     )
 }
 
-fn key_in_view(code: KeyCode, in_runner_view: bool, input: &mut String) -> InputAction {
+fn key_in_view(code: KeyCode, in_subagent_view: bool, input: &mut String) -> InputAction {
     key_in_view_with(code, input, move |dispatch| {
         // Surface dispatch keys off the explicit view (ADR-0172), not the
         // legacy flags.
-        dispatch.view = if in_runner_view {
-            crate::surfaces::View::Runner
+        dispatch.view = if in_subagent_view {
+            crate::surfaces::View::Subagent
         } else {
             crate::surfaces::View::Session
         };

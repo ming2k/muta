@@ -4,7 +4,7 @@
 //!
 //! - A [`View`] is an **independent full-screen destination** — the user
 //!   stands *in* a view and the terminal is the view (`Session`,
-//!   `Dashboard`, `Settings`, `Runner`, `Side`).
+//!   `Dashboard`, `Settings`, `Subagent`, `Side`).
 //! - A [`PanelId`] names a **retained modal** — one of the browse overlays
 //!   (help, tools, …) that floats over whatever view is
 //!   active. Retention (cursor/scroll/drafts via [`PanelRegistry`]) is
@@ -28,10 +28,10 @@ pub(crate) type ViewId = View;
 pub(crate) type ModalId = PanelId;
 
 /// An independent, full-screen destination (ADR-0141). The set is closed:
-/// everything else is an overlay. `Session` is the home view; `Runner` and
+/// everything else is an overlay. `Session` is the home view; `Subagent` and
 /// `Side` are session-scoped contexts whose *frame data* (zoom stack, side
 /// session id) still lives on `App` — the router owns only which view is
-/// active, so `App::in_runner_view()` / `App::in_side_view()` are derived
+/// active, so `App::in_subagent_view()` / `App::in_side_view()` are derived
 /// from the router instead of scattered booleans and stack emptiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum View {
@@ -44,9 +44,9 @@ pub enum View {
     /// The full-screen settings center (`/config` / `/settings`, was
     /// `ViewId::Config`).
     Settings,
-    /// Zoomed into an runner task's transcript (was the bare
+    /// Zoomed into a subagent task's transcript (was the bare
     /// `App::focus_stack` side channel).
-    Runner,
+    Subagent,
     /// An aside's transcript (was the bare `App::in_side_view` flag).
     Side,
 }
@@ -59,7 +59,7 @@ impl View {
     /// their existing modal-render arms.
     pub fn modal(self) -> Modal {
         match self {
-            Self::Session | Self::Runner | Self::Side => Modal::None,
+            Self::Session | Self::Subagent | Self::Side => Modal::None,
             Self::Dashboard => Modal::Host,
             Self::Settings => Modal::Config,
         }
@@ -71,7 +71,7 @@ impl View {
             Self::Session => "Session",
             Self::Dashboard => "Session dashboard",
             Self::Settings => "Settings",
-            Self::Runner => "Runner task",
+            Self::Subagent => "Subagent task",
             Self::Side => "Aside",
         }
     }
@@ -82,7 +82,7 @@ impl View {
             Self::Session => "Esc  home",
             Self::Dashboard => "/dashboard",
             Self::Settings => "/config  /settings",
-            Self::Runner => "zoom an runner task",
+            Self::Subagent => "zoom a subagent task",
             Self::Side => "focus an aside",
         }
     }
@@ -205,7 +205,7 @@ impl PanelId {
             PanelId::Btw => "/btw",
             PanelId::Models => "/models",
             PanelId::Connections => "/connections",
-            PanelId::HistorySearch => "Ctrl+R",
+            PanelId::HistorySearch => "Ctrl-r",
             PanelId::Queue => "/queue",
             PanelId::Sessions => "/sessions",
             PanelId::Tree => "/tree",
@@ -291,7 +291,7 @@ pub(crate) struct SurfaceRouter {
     /// Bounded return stack for transient surfaces (sheets over sheets,
     /// the switcher over whatever was up).
     returns: Vec<Surface>,
-    /// Where Esc from a scoped view (`Runner`/`Side`) or a destination view
+    /// Where Esc from a scoped view (`Subagent`/`Side`) or a destination view
     /// opened *over* a scoped view returns to. Only scoped views are ever
     /// pushed here; draining it lands on `View::Session`.
     view_back: Vec<View>,
@@ -342,7 +342,7 @@ impl SurfaceRouter {
     }
 
     /// The full-screen view beneath any overlay. This — not stack
-    /// emptiness or a boolean — is what `App::in_runner_view()` /
+    /// emptiness or a boolean — is what `App::in_subagent_view()` /
     /// `App::in_side_view()` derive from (ADR-0141).
     pub(crate) fn active_view(&self) -> View {
         self.view
@@ -365,11 +365,11 @@ impl SurfaceRouter {
     }
 
     /// Navigate to a full-screen view, replacing any overlay. Leaving a
-    /// scoped view (`Runner`/`Side`) remembers it so closing the
+    /// scoped view (`Subagent`/`Side`) remembers it so closing the
     /// destination returns to it, exactly as the transcript-level state on
     /// `App` used to survive `show_chat` by accident.
     pub(crate) fn show_view(&mut self, view: View) {
-        if view != self.view && matches!(self.view, View::Runner | View::Side) {
+        if view != self.view && matches!(self.view, View::Subagent | View::Side) {
             self.view_back.push(self.view);
             if self.view_back.len() > SURFACE_STACK_CAP {
                 self.view_back.remove(0);
@@ -382,7 +382,7 @@ impl SurfaceRouter {
 
     /// Esc from a full-screen view: return to the scoped view it was
     /// opened over, else the session (home). Also the drain target when an
-    /// runner zoom stack or side view exits.
+    /// subagent zoom stack or side view exits.
     pub(crate) fn back_view(&mut self) -> View {
         self.view = self.view_back.pop().unwrap_or(View::Session);
         self.overlay = Overlay::None;
@@ -402,7 +402,7 @@ impl SurfaceRouter {
 
     /// Float a retained panel over the current view. The view beneath is
     /// untouched, so hiding the panel reveals it again — a panel may be
-    /// open over any view, including `Runner` and `Side`.
+    /// open over any view, including `Subagent` and `Side`.
     pub(crate) fn show_panel(&mut self, id: PanelId) {
         self.overlay = Overlay::Panel(id);
         self.returns.clear();
@@ -594,7 +594,7 @@ impl PanelRegistry {
 
     /// Quick-switcher rows (ADR-0139/0141): switchable views first —
     /// `Session` is the home you are never more than an Esc away from and
-    /// `Runner`/`Side` are session-scoped contexts entered from the
+    /// `Subagent`/`Side` are session-scoped contexts entered from the
     /// transcript, so none of the three are switcher rows — then open
     /// panels in MRU order, then every other panel in display order (the
     /// not-yet-opened ones are still listed so the switcher doubles as
@@ -765,27 +765,27 @@ mod tests {
     #[test]
     fn hiding_a_panel_reveals_the_view_beneath() {
         let mut router = SurfaceRouter::new();
-        router.show_view(View::Runner);
+        router.show_view(View::Subagent);
         router.show_panel(PanelId::Models);
         assert_eq!(
             router.active_view(),
-            View::Runner,
+            View::Subagent,
             "view survives the panel"
         );
         router.hide_panel();
-        assert_eq!(router.active_view(), View::Runner);
+        assert_eq!(router.active_view(), View::Subagent);
         assert_eq!(router.active_panel(), None);
     }
 
     #[test]
     fn destination_over_scoped_view_returns_to_it() {
         let mut router = SurfaceRouter::new();
-        router.show_view(View::Runner);
+        router.show_view(View::Subagent);
         router.show_view(View::Dashboard);
         assert_eq!(router.active_view(), View::Dashboard);
         assert_eq!(
             router.back_view(),
-            View::Runner,
+            View::Subagent,
             "dashboard hides to the zoom"
         );
         assert_eq!(router.back_view(), View::Session, "zoom drains to home");
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn scoped_views_project_to_no_modal() {
         assert_eq!(View::Session.modal(), Modal::None);
-        assert_eq!(View::Runner.modal(), Modal::None);
+        assert_eq!(View::Subagent.modal(), Modal::None);
         assert_eq!(View::Side.modal(), Modal::None);
         assert_eq!(View::Dashboard.modal(), Modal::Host);
         assert_eq!(View::Settings.modal(), Modal::Config);

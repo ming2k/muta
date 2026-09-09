@@ -2,9 +2,8 @@
 //!
 //! Each backend implements the `SearchProvider` trait and lives in its own
 //! module (`exa`, `parallel`, `duckduckgo`, `searxng`, `tavily`). The tool layer
-//! ([`crate::tools::WebSearchTool`]) is a thin shell that delegates to a primary
-//! provider and an optional fallback, both built from `[websearch]` config via
-//! the `build_provider` factory. Adding a new backend is one new module + one
+//! ([`crate::tools::WebSearchTool`]) is a thin shell that delegates to the one
+//! provider selected in `[web]` via the `build_provider` factory. Adding a new backend is one new module + one
 //! match arm in `build_provider`; the tool and the other backends never
 //! change.
 //!
@@ -15,7 +14,7 @@
 //! `searxng`) in `config.toml` if that matters.
 
 use async_trait::async_trait;
-use muta_contracts::WebSearchConfig;
+use muta_contracts::{WebRuntimeConfig, WebSearchProvider};
 
 pub mod bocha;
 pub mod duckduckgo;
@@ -53,36 +52,24 @@ pub(crate) enum ProviderOutput {
 /// The plugin contract. A backend turns a query into either structured hits
 /// or a pre-rendered blob; the tool layer owns formatting and budgets.
 /// Implementations own their HTTP shape and parsing; the tool layer only
-/// handles argument parsing, client/proxy setup, and fallback.
+/// handles argument parsing and client/proxy setup.
 #[async_trait]
 pub(crate) trait SearchProvider: Send + Sync {
     /// Human-readable label included in the result header, e.g. `"Exa"`.
     fn name(&self) -> &'static str;
     /// Run the search, or return an error describing what went wrong
     /// (surfaced verbatim to the model/user).
-    async fn search(&self, client: &reqwest::Client, query: &str)
-    -> Result<ProviderOutput, String>;
+    async fn search(
+        &self,
+        client: &crate::tools::web::http::WebHttp,
+        query: &str,
+    ) -> Result<ProviderOutput, String>;
     /// Duplicate the provider. Providers are tiny config-carrying structs
-    /// (connection state lives in the shared `reqwest::Client`), so the web
-    /// tool's signature-keyed chain cache can hand each call a consistent
+    /// (connection state lives in the shared HTTP handle), so the web
+    /// tool's revision-keyed chain cache can hand each call a consistent
     /// chain snapshot even while a config reload swaps the cache.
     fn clone_box(&self) -> Box<dyn SearchProvider>;
 }
-
-/// Names `build_provider` recognizes. Used by config validation to warn on
-/// typos instead of silently falling back to Exa.
-pub(super) const KNOWN_PROVIDERS: &[&str] = &[
-    "exa",
-    "parallel",
-    "duckduckgo",
-    "ddg",
-    "searxng",
-    "tavily",
-    "bocha",
-    "none",
-    "(none)",
-    "disabled",
-];
 
 #[derive(Clone)]
 struct DisabledSearchProvider;
@@ -94,7 +81,7 @@ impl SearchProvider for DisabledSearchProvider {
     }
     async fn search(
         &self,
-        _client: &reqwest::Client,
+        _client: &crate::tools::web::http::WebHttp,
         _query: &str,
     ) -> Result<ProviderOutput, String> {
         Err("websearch is disabled in configuration".to_string())
@@ -104,56 +91,23 @@ impl SearchProvider for DisabledSearchProvider {
     }
 }
 
-/// Build a provider by its config name. Unknown names fall back to Exa (the
-/// default) rather than erroring at construction time, so a typo never leaves
-/// the tool without a working backend; misconfiguration surfaces at call time
-/// from the provider that needs the missing field (e.g. SearXNG/Tavily keys).
-///
-/// Keys are exposed from their redacted config wrapper here, at the tool
-/// boundary: the `pub(crate)` provider structs hold plain `String`s and never
-/// derive `Debug`, so the plaintext cannot leak through formatting.
-pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn SearchProvider> {
-    let trimmed = name.trim();
-    if trimmed == "none" || trimmed == "(none)" || trimmed == "disabled" {
-        return Box::new(DisabledSearchProvider);
-    }
-    if !KNOWN_PROVIDERS.contains(&name) {
-        tracing::warn!(
-            backend = name,
-            fallback = "exa",
-            "[websearch] unknown backend '{name}' — falling back to Exa. \
-             Known backends: exa, parallel, duckduckgo, searxng, tavily, bocha."
-        );
-    }
-    match name {
-        "parallel" => Box::new(parallel::ParallelProvider {
-            api_key: cfg
-                .parallel_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string()),
+/// Construct exactly the typed backend selected in the resolved snapshot.
+/// There is deliberately no unknown-provider or fallback branch.
+pub(crate) fn build_provider(cfg: &WebRuntimeConfig) -> Box<dyn SearchProvider> {
+    let api_key = cfg
+        .search_credential
+        .as_ref()
+        .map(|key| key.expose_secret().to_string());
+    match cfg.behavior.provider {
+        WebSearchProvider::Disabled => Box::new(DisabledSearchProvider),
+        WebSearchProvider::Exa => Box::new(exa::ExaProvider { api_key }),
+        WebSearchProvider::Parallel => Box::new(parallel::ParallelProvider { api_key }),
+        WebSearchProvider::DuckDuckGo => Box::new(duckduckgo::DdgProvider),
+        WebSearchProvider::Searxng => Box::new(searxng::SearxngProvider {
+            url: cfg.behavior.searxng_url.clone(),
         }),
-        "duckduckgo" | "ddg" => Box::new(duckduckgo::DdgProvider),
-        "searxng" => Box::new(searxng::SearxngProvider {
-            url: cfg.searxng_url.clone(),
-        }),
-        "tavily" => Box::new(tavily::TavilyProvider {
-            api_key: cfg
-                .tavily_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string()),
-        }),
-        "bocha" => Box::new(bocha::BochaProvider {
-            api_key: cfg
-                .bocha_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string()),
-        }),
-        _ => Box::new(exa::ExaProvider {
-            api_key: cfg
-                .exa_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string()),
-        }),
+        WebSearchProvider::Tavily => Box::new(tavily::TavilyProvider { api_key }),
+        WebSearchProvider::Bocha => Box::new(bocha::BochaProvider { api_key }),
     }
 }
 
@@ -238,7 +192,7 @@ pub(super) fn cap_output(text: &str) -> String {
 /// single-JSON and Server-Sent-Events (`data: {...}`) response shapes used by
 /// the Exa and Parallel endpoints.
 pub(super) async fn mcp_tools_call(
-    client: &reqwest::Client,
+    client: &crate::tools::web::http::WebHttp,
     url: &str,
     tool: &str,
     arguments: serde_json::Value,
@@ -250,36 +204,30 @@ pub(super) async fn mcp_tools_call(
         "method": "tools/call",
         "params": { "name": tool, "arguments": arguments }
     });
-    let mut request = client
-        .post(url)
-        .header(
-            reqwest::header::ACCEPT,
-            "application/json, text/event-stream",
-        )
-        .json(&body);
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json, text/event-stream"),
+    );
     for (name, value) in extra_headers {
-        if let Ok(v) = reqwest::header::HeaderValue::from_str(value)
-            && let Ok(n) = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+        if let Ok(v) = http::header::HeaderValue::from_str(value)
+            && let Ok(n) = http::header::HeaderName::from_bytes(name.as_bytes())
         {
-            request = request.header(n, v);
+            headers.insert(n, v);
         }
     }
-    let response = request
-        .send()
+    let response = client
+        .post_json(url, headers, &body)
         .await
         .map_err(|e| format!("{tool} request failed: {e}"))?;
-    let status = response.status();
+    let status = response.status;
     if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
         return Err(format!(
             "{tool} returned HTTP {status}: {}",
-            text.chars().take(300).collect::<String>()
+            response.body.chars().take(300).collect::<String>()
         ));
     }
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("{tool} response read failed: {e}"))?;
+    let text = response.body;
     extract_mcp_text(&text).ok_or_else(|| format!("{tool} returned no content (HTTP {status})"))
 }
 
@@ -425,9 +373,20 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_defaults_to_exa_for_unknown_name() {
-        let cfg = WebSearchConfig::default();
-        let p = build_provider(&cfg, "totally-bogus");
-        assert_eq!(p.name(), "Exa");
+    fn an_unknown_provider_name_is_rejected_at_parse_time() {
+        let error = toml::from_str::<muta_contracts::WebConfig>("provider = \"totally-bogus\"")
+            .expect_err("unknown providers must not parse");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported web search provider"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn the_default_provider_is_exa() {
+        let cfg = muta_contracts::WebRuntimeConfig::default();
+        assert_eq!(build_provider(&cfg).name(), "Exa");
     }
 }

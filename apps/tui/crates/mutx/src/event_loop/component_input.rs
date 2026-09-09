@@ -8,10 +8,15 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::components::dropdown::DropdownEventOutcome;
+use crate::input::readline::{
+    cursor_line_down, cursor_line_end, cursor_line_start, cursor_line_up, next_grapheme_char_index,
+    next_word_end, normalize_cursor_char_index, normalized_cursor_byte, prev_word_start,
+    previous_grapheme_char_index,
+};
 use crate::input::{self};
 use crate::model::selection::{SelectionState, floor_grapheme_boundary, inclusive_grapheme_end};
 use crate::ui;
-use crate::{App, Modal, ProviderDeleteChoice, SelectionEdge};
+use crate::{App, ProviderDeleteChoice, SelectionEdge};
 
 /// Offer an event to the handlers on the scene-resolved keyboard path.
 pub(crate) fn route(
@@ -34,21 +39,111 @@ pub(crate) fn route(
     None
 }
 
-/// Probe a raw input event against an active **whole-input selection**.
+/// Probe a raw input event against the composer's text selection and navigation.
 fn handle_input_selection(app: &mut App, event: &Event) -> Option<input::InputAction> {
-    if !app.input_selection_relays_arrows() {
-        return None;
-    }
     let Event::Key(key) = event else {
         return None;
     };
     if !matches!(key.kind, KeyEventKind::Press) {
         return None;
     }
+    if app.caret_owner() != crate::CaretOwner::Composer {
+        return None;
+    }
 
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let word_chord = key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+    if shift {
+        let is_nav = matches!(
+            key.code,
+            KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+        );
+        if is_nav {
+            let anchor_byte = match app.selection {
+                SelectionState::InputRange { anchor_byte, .. } => anchor_byte,
+                SelectionState::Range { anchor, .. }
+                    if anchor.message_idx == crate::render::INPUT_MSG_IDX =>
+                {
+                    anchor.byte_offset
+                }
+                _ => normalized_cursor_byte(&app.input, app.cursor_position),
+            };
+
+            let new_pos = match key.code {
+                KeyCode::Left => {
+                    if word_chord {
+                        normalize_cursor_char_index(
+                            &app.input,
+                            prev_word_start(&app.input, app.cursor_position),
+                        )
+                    } else {
+                        previous_grapheme_char_index(&app.input, app.cursor_position)
+                    }
+                }
+                KeyCode::Right => {
+                    if word_chord {
+                        normalize_cursor_char_index(
+                            &app.input,
+                            next_word_end(&app.input, app.cursor_position),
+                        )
+                    } else {
+                        next_grapheme_char_index(&app.input, app.cursor_position)
+                    }
+                }
+                KeyCode::Up => {
+                    let mut target = app.cursor_position;
+                    if cursor_line_up(&app.input, &mut target) {
+                        target
+                    } else {
+                        0
+                    }
+                }
+                KeyCode::Down => {
+                    let mut target = app.cursor_position;
+                    if cursor_line_down(&app.input, &mut target) {
+                        target
+                    } else {
+                        app.input.chars().count()
+                    }
+                }
+                KeyCode::Home => {
+                    let mut target = app.cursor_position;
+                    cursor_line_start(&app.input, &mut target);
+                    target
+                }
+                KeyCode::End => {
+                    let mut target = app.cursor_position;
+                    cursor_line_end(&app.input, &mut target);
+                    target
+                }
+                _ => app.cursor_position,
+            };
+
+            app.set_cursor(new_pos);
+            let head_byte = normalized_cursor_byte(&app.input, new_pos);
+            if anchor_byte == head_byte {
+                app.selection = SelectionState::None;
+            } else {
+                app.selection = SelectionState::InputRange {
+                    anchor_byte,
+                    head_byte,
+                };
+            }
+            return Some(input::InputAction::None);
+        }
+    }
+
+    if !app.has_input_selection() {
+        return None;
+    }
 
     let step_from_head = |app: &mut App, forward: bool, word: bool| {
         app.adopt_caret_from_input_selection(SelectionEdge::Head);
@@ -103,7 +198,17 @@ fn handle_input_selection(app: &mut App, event: &Event) -> Option<input::InputAc
             Some(input::InputAction::None)
         }
         (KeyCode::Home, _) => {
-            if let Some((start, _)) = app.selection.active_normalized_range() {
+            if let SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } = app.selection
+            {
+                let lo = anchor_byte.min(head_byte).min(app.input.len());
+                let pos = app.input[..lo].chars().count();
+                app.selection = SelectionState::None;
+                app.drag.cancel();
+                app.set_cursor(pos);
+            } else if let Some((start, _)) = app.selection.active_normalized_range() {
                 let byte =
                     floor_grapheme_boundary(&app.input, start.byte_offset).min(app.input.len());
                 let pos = app.input[..byte].chars().count();
@@ -116,7 +221,17 @@ fn handle_input_selection(app: &mut App, event: &Event) -> Option<input::InputAc
             Some(input::InputAction::None)
         }
         (KeyCode::End, _) => {
-            if let Some((_, end)) = app.selection.active_normalized_range() {
+            if let SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } = app.selection
+            {
+                let hi = anchor_byte.max(head_byte).min(app.input.len());
+                let pos = app.input[..hi].chars().count();
+                app.selection = SelectionState::None;
+                app.drag.cancel();
+                app.set_cursor(pos);
+            } else if let Some((_, end)) = app.selection.active_normalized_range() {
                 let byte = inclusive_grapheme_end(&app.input, end.byte_offset).min(app.input.len());
                 let pos = app.input[..byte].chars().count();
                 app.selection = SelectionState::None;
@@ -125,6 +240,11 @@ fn handle_input_selection(app: &mut App, event: &Event) -> Option<input::InputAc
             } else {
                 app.adopt_caret_from_input_selection(SelectionEdge::Head);
             }
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Esc, _) => {
+            app.selection = SelectionState::None;
+            app.drag.cancel();
             Some(input::InputAction::None)
         }
         (KeyCode::Backspace | KeyCode::Delete, _) => {
@@ -173,103 +293,25 @@ fn handle_config_dropdown(app: &mut App, event: &Event) -> Option<input::InputAc
         }
         DropdownEventOutcome::Confirmed(payload) => {
             let ctx = dropdown.context.as_deref().unwrap_or("");
+            let revision = app.websearch_config.as_ref().map(|config| config.revision);
             match ctx {
                 "websearch_provider" => {
-                    if payload == "add_new" {
-                        let add_dropdown =
-                            crate::views::settings::build_add_web_connection_dropdown(0);
-                        let anchor = crate::components::dropdown::DropdownAnchor::center_screen();
-                        app.config_dropdown = Some((add_dropdown, anchor));
-                        return Some(input::InputAction::None);
-                    }
-                    app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                        Box::new(muta_contracts::WebSearchConfigUpdate {
-                            provider: Some(payload),
-                            ..Default::default()
-                        }),
-                    ));
-                }
-                "websearch_reader" => {
-                    if payload == "add_new" {
-                        let add_dropdown =
-                            crate::views::settings::build_add_web_connection_dropdown(1);
-                        let anchor = crate::components::dropdown::DropdownAnchor::center_screen();
-                        app.config_dropdown = Some((add_dropdown, anchor));
-                        return Some(input::InputAction::None);
-                    }
-                    app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
-                        Box::new(muta_contracts::WebSearchConfigUpdate {
-                            reader: Some(payload),
-                            ..Default::default()
-                        }),
-                    ));
-                }
-                "add_search_connection" => {
-                    let (name, needs_key) = match payload.as_str() {
-                        "tavily" => ("Tavily AI Search", true),
-                        "bocha" => ("Bocha AI Search", true),
-                        "searxng" => ("SearXNG Instance", false),
-                        "parallel" => ("Parallel Search", true),
-                        "custom-search" => ("Custom Search Relay", true),
-                        _ => ("Exa Search", true),
-                    };
-                    if needs_key {
-                        app.push_transient_surface(Modal::ModelEditor);
-                        app.editor_target = Some(format!("web_search:{}", payload));
-                        app.editor_model = name.to_string();
-                        app.editor_key.clear();
-                        app.editor_field = 0;
-                        app.input.clear();
-                        app.set_cursor(0);
-                    } else {
-                        let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
-                        let new_conn = muta_contracts::WebSearchConnection {
-                            id: id.clone(),
-                            name: Some(name.to_string()),
-                            preset_id: Some(payload),
-                            api_key_env: None,
-                            base_url: None,
-                            custom_headers: None,
-                            enabled: true,
-                        };
+                    if let (Some(revision), Ok(provider)) = (revision, payload.parse()) {
                         app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
                             Box::new(muta_contracts::WebSearchConfigUpdate {
-                                upsert_search_connection: Some(new_conn),
-                                provider: Some(id),
+                                expected_revision: revision,
+                                provider: Some(provider),
                                 ..Default::default()
                             }),
                         ));
                     }
                 }
-                "add_reader_connection" => {
-                    let (name, needs_key) = match payload.as_str() {
-                        "firecrawl" => ("Firecrawl Reader", true),
-                        "custom-reader" => ("Custom Web Reader", true),
-                        _ => ("Jina Reader", true),
-                    };
-                    if needs_key {
-                        app.push_transient_surface(Modal::ModelEditor);
-                        app.editor_target = Some(format!("web_reader:{}", payload));
-                        app.editor_model = name.to_string();
-                        app.editor_key.clear();
-                        app.editor_field = 0;
-                        app.input.clear();
-                        app.set_cursor(0);
-                    } else {
-                        let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
-                        let new_conn = muta_contracts::WebReaderConnection {
-                            id: id.clone(),
-                            name: Some(name.to_string()),
-                            preset_id: Some(payload),
-                            api_key_env: None,
-                            base_url: None,
-                            custom_headers: None,
-                            enabled: true,
-                        };
+                "websearch_reader" => {
+                    if let (Some(revision), Ok(reader)) = (revision, payload.parse()) {
                         app.send_intent(muta_contracts::AgentRequest::UpdateWebSearchConfig(
                             Box::new(muta_contracts::WebSearchConfigUpdate {
-                                upsert_reader_connection: Some(new_conn),
-                                reader: Some(id),
+                                expected_revision: revision,
+                                reader: Some(reader),
                                 ..Default::default()
                             }),
                         ));

@@ -1,9 +1,9 @@
-//! Session-level AI title: domain vocabulary for the titling envoy
+//! Session-level AI title: domain vocabulary for the titling subagent
 //! (ADR-0022).
 //!
-//! Follows the bounded-envoy split of the retired `session_review` (ADR-0016):
+//! Follows the bounded-subagent split of the retired `session_review` (ADR-0016):
 //! domain types and pure helpers live here in `muta-contracts`, while the
-//! LLM-backed runner that drives the `TITLE` profile lives in
+//! LLM-backed subagent that drives the `TITLE` profile lives in
 //! `muta-agent`. There is no trait here because a
 //! title is a single concept rather than a set of extensible dimensions — the
 //! only shared logic is the pure post-processing that turns a model's free-form
@@ -11,7 +11,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Generation is *generate-once-then-stable*: the runner fires automatically on
+//! Generation is *generate-once-then-stable*: the subagent fires automatically on
 //! the first turn (when the transcript holds exactly one real user message)
 //! and on demand via `/title`. Whether a stored title may be overwritten by AI
 //! generation is a persistence concern, not a domain one — since ADR-0186 a

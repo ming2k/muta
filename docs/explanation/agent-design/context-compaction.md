@@ -80,7 +80,7 @@ prune.
 `run_compaction` takes a `CompactionHooks` implementation. `pre_compact` returns
 a `CompactionDecision` that can **veto** a compaction (or inject context) before
 it happens; `post_compact` observes the committed checkpoint. The interactive
-runner supplies `RelayCompactionHooks`, which is also what turns a committed
+subagent supplies `RelayCompactionHooks`, which is also what turns a committed
 compaction into the user-facing `AgentResponse::Compacted` event via
 `send_compaction`. These names stay in the `Compaction*` family on purpose:
 only the summarizing layer emits `Compacted`, so the vocabulary is accurate
@@ -105,7 +105,7 @@ that notice knows a real summarization happened.
 - **Manual.** `/compact` (`BuiltinCmd::Compact`) runs the exact same operation
   on demand, independent of the threshold.
 - **Reactive overflow recovery.** If a provider reports context overflow
-  *before* any `ToolCall` event, the runner may compact and retry the same
+  *before* any `ToolCall` event, the subagent may compact and retry the same
   logical round once (`compacted_after_overflow`). Overflow *after* tool activity
   is terminal, so tool side effects are never replayed.
 

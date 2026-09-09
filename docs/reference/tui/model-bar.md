@@ -50,21 +50,20 @@ width that still shows more than one of them.
 | Model name | `brand` + BOLD, leftmost |
 | Instance suffix | `@<instance>` in `muted`, after the effort tag — the provider instance's display name, so identical models served by different instances stay attributable (mirrors the `· <provider>` suffix in the Models picker) |
 | Reasoning effort | `{effort}` in `info` + BOLD, right after the model name — only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
-| Context usage | Right cluster, first gauge: committed AI-visible context only — `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); live composer drafts are excluded. Click (or `Ctrl+O`) opens the token-source report |
-| Stream rate | Right cluster, last gauge: latest completed principal turn's client-observed rate, `47.8 tok/s` in `text_muted`; hidden entirely until a defensible sample exists, refreshed by each completed turn. Click (or `Ctrl+S`) opens the Performance report |
-| Keycap hints | `Ctrl+O` / `Ctrl+S` in `muted`, one space after their gauge's value; the hint sits inside the gauge's click rect (one click target per drill-down); first to drop under width pressure |
+| Context usage | Right cluster, first gauge: committed AI-visible context only — `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); live composer drafts are excluded. Click (or `Ctrl+O`) opens Session Telemetry |
+| Stream rate | Right cluster, last gauge: latest completed principal turn's client-observed rate, `47.8 tok/s` in `text_muted`; hidden entirely until a defensible sample exists, refreshed by each completed turn. Click (or `Ctrl+O`) opens Session Telemetry |
+| Keycap hints | `Ctrl+O` in `muted`, one space after the gauges; the hint sits inside the gauge's click rect (unified click target for the telemetry modal); first to drop under width pressure |
 | Background | `surface` |
 
 ## Keyboard
 
 | Key | Action |
-|-----|--------|
-| `Ctrl+O` | Open the context/token usage report (`OpenTokenReport`) |
-| `Ctrl+S` | Open the latest-turn performance report (`OpenPerformanceReport`) |
+|---|---|
+| `Ctrl+O` | Open the unified session telemetry modal (`OpenTelemetry`) |
 
-Both are `NoModal`-gated global bindings (they do not fire while another modal
-owns the surface) and are declared in the shared keymap registry, so they
-appear in the Help modal alongside the other Ctrl-row chords.
+This is a `NoModal`-gated global binding (it does not fire while another modal
+owns the surface) and is declared in the shared keymap registry, so it
+appears in the Help modal alongside the other Ctrl-row chords.
 
 ## Visibility
 
@@ -75,6 +74,5 @@ rows).
 ## Source
 
 `draw_model_bar` / `ModelBarProps` in `chrome.rs`; the returned rects are the
-context meter's click target (gauge + `Ctrl+O` hint; opens the token-source
-report) and the rate segment's click target (gauge + `Ctrl+S` hint; opens the
-Performance report).
+context meter and rate segment click targets (opening the unified Session
+Telemetry modal).

@@ -44,7 +44,7 @@ impl Tool for MeshSendTool {
             "properties": {
                 "recipient_station": {
                     "type": "string",
-                    "enum": ["hypervisor", "master", "runner", "session", "subtask"],
+                    "enum": ["hypervisor", "session", "subtask"],
                     "description": "Station of the recipient agent"
                 },
                 "recipient_session": {
@@ -75,7 +75,6 @@ impl Tool for MeshSendTool {
 
         let station_str = args["recipient_station"]
             .as_str()
-            .or_else(|| args["recipient_tier"].as_str())
             .ok_or("Missing 'recipient_station'")?;
         let session = args["recipient_session"]
             .as_str()
@@ -89,9 +88,9 @@ impl Tool for MeshSendTool {
         let body = args["body"].as_str().ok_or("Missing 'body'")?;
 
         let station = match station_str {
-            "hypervisor" | "supervisor" => MeshStation::Hypervisor,
-            "session" | "master" => MeshStation::Session,
-            "subtask" | "runner" => MeshStation::Subtask,
+            "hypervisor" => MeshStation::Hypervisor,
+            "session" => MeshStation::Session,
+            "subtask" => MeshStation::Subtask,
             other => return Err(format!("Unknown recipient_station: '{other}'")),
         };
 
@@ -165,7 +164,7 @@ impl Tool for MeshListPeersTool {
     }
 
     fn description(&self) -> &str {
-        "Discover active agents registered in the mesh tracker. Allows finding same-station peers (e.g. other masters), subordinate runners, or all registered endpoints."
+        "Discover active agents registered in the mesh tracker. Allows finding same-station peers (e.g. other masters), subordinate subagents, or all registered endpoints."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -249,13 +248,13 @@ mod tests {
     #[tokio::test]
     async fn mesh_send_tool_success() {
         let tracker = MeshTracker::new();
-        let master_addr = MeshAddress::master("session_1");
+        let master_addr = MeshAddress::session_root("session_1");
         let mut mailbox = MeshMailbox::spawn(tracker.clone(), master_addr.clone(), None);
 
         let tool = MeshSendTool::new(tracker.clone(), Some(MeshAddress::hypervisor("daemon")));
 
         let args = json!({
-            "recipient_station": "master",
+            "recipient_station": "session",
             "recipient_session": "session_1",
             "recipient_agent": "session_1",
             "message_type": "instruction",
@@ -278,9 +277,9 @@ mod tests {
     #[tokio::test]
     async fn mesh_list_peers_tool_filtering() {
         let tracker = MeshTracker::new();
-        let m1 = MeshAddress::master("s1");
-        let m2 = MeshAddress::master("s2");
-        let r1 = MeshAddress::runner("s1", "r1");
+        let m1 = MeshAddress::session_root("s1");
+        let m2 = MeshAddress::session_root("s2");
+        let r1 = MeshAddress::subagent("s1", "r1");
 
         let _mb1 = MeshMailbox::spawn(tracker.clone(), m1.clone(), None);
         let _mb2 = MeshMailbox::spawn(tracker.clone(), m2.clone(), None);

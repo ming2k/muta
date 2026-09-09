@@ -128,7 +128,7 @@ recommendation may never masquerade as a human decision.
 Whether a request may park at all is decided by the **human channel**:
 each attaching client declares a posture (`Interactive` or `Autonomous`) in
 its `Select` frame; the session folds declarations with OR (one interactive
-watcher suffices); envoys inherit their parent's channel. Parking on the
+watcher suffices); subagents inherit their parent's channel. Parking on the
 user requires an interactive channel:
 
 - **Permission / interactive input** with no interactive channel: fail

@@ -2,7 +2,7 @@
 //! factory consumed by the orchestration layer.
 //!
 //! The registry is split one file per provider: each module holds the
-//! provider's model constants, its [`ProviderPresetSpec`] entry, and (for
+//! provider's model constants, its [`ModelProviderSpec`] entry, and (for
 //! the two legacy OpenAI-compatible presets) its [`OpenAiProviderSpec`] entry.
 //! This file keeps the shared types, the aggregate tables, and the factory.
 
@@ -19,6 +19,7 @@ mod anthropic;
 mod antigravity_oauth;
 mod chatgpt;
 mod copilot;
+mod custom;
 mod custom_baselines;
 mod deepseek;
 mod google;
@@ -49,36 +50,24 @@ use anthropic::anthropic_model_max_tokens;
 /// Whether, and from which source, a preset connection refreshes its live
 /// model catalog over the network.
 ///
-/// A preset's compiled-in baseline ([`ProviderPresetSpec::baselines`] /
-/// [`ProviderPresetSpec::models`]) is always the offline floor. When a
-/// `LiveCatalog` is set, the network layer is layered **on top**: the live
-/// source refreshes the id set, and the baseline still supplies the wire /
-/// capability fallback. `None` means no network layer — the connection uses
-/// the compiled baseline directly.
+/// A provider's compiled-in baseline ([`ModelProviderSpec::baselines`] /
+/// [`ModelProviderSpec::models`]) is always the offline floor. When a
+/// The single remote model-catalog source for a provider (ADR-0203).
+///
+/// Ingested as an overlay on top of the provider's compiled baseline.
+/// `None` means no network synchronization — the provider uses the
+/// compiled baseline directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LiveCatalog {
-    /// The provider's **own** model-catalog endpoint. The concrete request
-    /// shape is the declared [`DiscoveryProtocol`] — a provider whose catalog
-    /// endpoint deviates from the standard wire-derived shape (ChatGPT's
-    /// Codex backend, Google's Antigravity cloudcode surface) declares its
-    /// own scheme here rather than being sniffed from auth or URL.
-    ProviderEndpoint(DiscoveryProtocol),
-    /// A third-party catalog entry (e.g. the `opencode-go` entry on
-    /// models.dev), keyed by the provider id in that catalog.
+pub enum RemoteCatalogSource {
+    /// The provider's own model-catalog endpoint.
+    Endpoint(DiscoveryProtocol),
+    /// A structured third-party catalog (e.g. models.dev), keyed by provider ID.
     ModelsDev { provider: &'static str },
-    /// The provider's own endpoint first, falling back to a models.dev entry
-    /// when the first-party catalog fails (unreachable, empty, or unauthable).
-    /// This is the "official upstream first, third-party catalog as the
-    /// resilience net" shape: the first-party list stays authoritative when it
-    /// works, and the models.dev entry (intersected with the compiled baseline
-    /// unless fitting) covers the gap otherwise.
-    ProviderEndpointWithFallback {
-        /// First-party request shape, as in [`Self::ProviderEndpoint`].
-        protocol: DiscoveryProtocol,
-        /// models.dev provider id consulted when the first-party fetch fails.
-        fallback_provider: &'static str,
-    },
+    /// No remote network sync; compiled baseline is authoritative.
+    None,
 }
+
+pub use RemoteCatalogSource as LiveCatalog;
 
 /// Specification for an OpenAI-compatible provider.
 ///
@@ -124,25 +113,22 @@ pub fn openai_provider_spec(id: &str) -> Option<&'static OpenAiProviderSpec> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Provider presets — the seed spec for a user-added connection
+// Model providers — the definition of one upstream service surface
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// The reconciliation-relevant subset of an add-connection preset.
+/// The reconciliation-relevant definition of one model provider.
 ///
-/// A connection created from a preset records the preset's stable
-/// [`id`](ProviderPresetSpec::id) on its `UserProviderConfig`. At startup the
-/// catalog uses the preset protocol and seed `models` to reconcile the
-/// connection. Fixed connections mirror the seed list; API-discovered
-/// connections retain only provider-advertised ids known to the client for
-/// that protocol. This struct is the source of truth for that mapping; it
-/// intentionally lives in `muta-providers` (where the model constants live)
-/// so the reconciliation layer in `muta-agent` and the UI presets in
-/// `mutx::tui` both read one table. The UI-only fields (label /
-/// description / placeholders) are **not** duplicated here.
-pub struct ProviderPresetSpec {
-    /// Stable identifier persisted on the connection (`preset_id`). Never
-    /// reused and never renamed once shipped — it is the durable join key
-    /// between a connection and its preset.
+/// A connection records its provider's stable [`id`](ModelProviderSpec::id).
+/// At startup the catalog uses the provider protocol and baseline `models` to
+/// reconcile the connection. This struct is the source of truth for that
+/// mapping; it intentionally lives in `muta-providers` (where the model
+/// constants live) so the reconciliation layer in `muta-agent` and the UI in
+/// `mutx` both read one table. The UI-only fields (label / description /
+/// placeholders) are **not** duplicated here.
+pub struct ModelProviderSpec {
+    /// Stable identifier of this service surface (ADR-0201). Never reused and
+    /// never renamed once shipped — it is the durable join key between a
+    /// connection and its model provider.
     pub id: &'static str,
     /// The connection-level default endpoint this preset's routes reach.
     pub base_url: &'static str,
@@ -160,31 +146,13 @@ pub struct ProviderPresetSpec {
     /// The model ids the preset initially seeds, in display/activation order.
     /// Fixed connections continue to mirror this list.
     pub models: &'static [&'static str],
-    /// Whether this preset layers a **live model-catalog source** on top of
-    /// its compiled baseline ([`LiveCatalog`]).
-    ///
-    /// When `Some`, a connection created from this preset defaults to
-    /// `ModelSource::Api` (live availability intersected with the client model
-    /// registry, retaining the last valid subset on error). When `None`, the
-    /// connection always uses the compiled baseline snapshot. A preset is
-    /// `None` when its model list is derived at runtime (opencode-go), since a
-    /// live overwrite would regress it. The source is pluggable: the provider's
-    /// own endpoint ([`LiveCatalog::ProviderEndpoint`]) or a third-party
-    /// catalog ([`LiveCatalog::ModelsDev`]).
-    pub live_catalog: Option<LiveCatalog>,
-    /// Whether live discovery may **fit capability metadata** for model ids the
-    /// client registry does not know — materializing them as channels with
-    /// their advertised context window, reasoning, vision, and effort tiers
-    /// (persisted per connection, then overlaid onto model resolution; see
-    /// `muta_contracts::model::register_fitted_models`).
-    ///
-    /// This is a trust decision, not a technical one: it is enabled only for
-    /// official first-party endpoints whose `/models` advertises real
-    /// capability fields (the Kimi Code platform). Arbitrary relays must never
-    /// get it — a malicious or sloppy relay could otherwise inflate a model's
-    /// context window or claim vision support the model lacks. When `false`,
-    /// discovery keeps only registry-known ids (the historical behavior).
-    pub fitting: bool,
+    /// Remote model-catalog source layered on top of the compiled baseline (ADR-0203).
+    pub catalog_source: RemoteCatalogSource,
+    /// Factory-recommended client emulation profile (ADR-0164, ADR-0203).
+    pub default_client_profile: muta_contracts::ClientPreset,
+    /// Whether this provider strictly requires its recommended client profile
+    /// to avoid 403 / anti-bot WAF rejections (e.g. Codex, Copilot, Antigravity).
+    pub client_profile_sensitive: bool,
     /// Per-model wire-format overrides for a multi-transport preset. A preset
     /// whose default route is OpenAI chat-completions but serves some models
     /// over another wire (opencode-go's `minimax-*` over Anthropic
@@ -204,49 +172,52 @@ pub(crate) const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptC
     muta_contracts::PromptCacheSpec::UNSUPPORTED
 }
 
-/// The single registry of provider presets offered when adding a connection.
+/// The single registry of model providers.
 ///
 /// Each entry's `id` MUST be unique. The set is the source of truth shared by
-/// the add-connection UI and the catalog's model reconciliation — a preset id
-/// recorded on a user connection resolves back to its entry here. Each entry
-/// lives beside its provider's model constants in the per-provider modules.
-pub const PROVIDER_PRESET_SPECS: &[ProviderPresetSpec] = &[
-    openai::PRESET_SPEC,
-    anthropic::PRESET_SPEC,
-    google::PRESET_SPEC,
-    deepseek::PRESET_SPEC,
-    xai::PRESET_SPEC,
-    chatgpt::PRESET_SPEC,
-    copilot::PRESET_SPEC,
-    kimi::PRESET_SPEC,
-    zai::PRESET_SPEC,
-    opencode_go::PRESET_SPEC,
-    antigravity_oauth::PRESET_SPEC,
+/// the add-connection UI and the catalog's model reconciliation — the
+/// `provider` recorded on a connection resolves back to its entry here. Each
+/// entry lives beside its provider's model constants in the per-provider
+/// modules.
+pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
+    openai::MODEL_PROVIDER_SPEC,
+    anthropic::MODEL_PROVIDER_SPEC,
+    google::MODEL_PROVIDER_SPEC,
+    deepseek::MODEL_PROVIDER_SPEC,
+    xai::MODEL_PROVIDER_SPEC,
+    chatgpt::MODEL_PROVIDER_SPEC,
+    copilot::MODEL_PROVIDER_SPEC,
+    kimi::MODEL_PROVIDER_SPEC,
+    zai::MODEL_PROVIDER_SPEC,
+    opencode_go::MODEL_PROVIDER_SPEC,
+    antigravity_oauth::MODEL_PROVIDER_SPEC,
+    custom::MODEL_PROVIDER_SPEC,
 ];
 
-/// Look up a preset spec by its stable id. Exact match only.
-pub fn provider_preset_spec(id: &str) -> Option<&'static ProviderPresetSpec> {
-    PROVIDER_PRESET_SPECS.iter().find(|spec| spec.id == id)
+/// Look up a model provider spec by its stable id. Exact match only.
+pub fn model_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
+    MODEL_PROVIDER_SPECS.iter().find(|spec| spec.id == id)
 }
 
-/// Resolve the transport endpoint for **one model** of a preset — the route
-/// the catalog materializes at runtime (routes are derived, never persisted).
+/// Resolve the transport endpoint for **one model** of a model provider — the
+/// route the catalog materializes at runtime (routes are derived, never
+/// persisted).
 ///
 /// Returns `(protocol, base_url, user_agent)` where `protocol` is one of the
 /// wire-protocol labels `"openai"` / `"openai-responses"` / `"anthropic"` /
-/// `"google"`. Most presets serve every model over one endpoint; the
+/// `"google"`. Most providers serve every model over one endpoint; the
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
-/// protocol vary per model. `None` means the preset id is unknown.
+/// protocol vary per model. `None` means the provider id is unknown.
 pub fn route_for_model(
-    preset_id: &str,
+    provider_id: &str,
     model_id: &str,
 ) -> Option<(
     muta_contracts::WireProtocol,
     &'static str,
     Option<&'static str>,
 )> {
-    let spec = provider_preset_spec(preset_id)?;
+    let spec = model_provider_spec(provider_id)?;
     // A preset may pin some families to a non-default wire (opencode-go's
     // minimax over Anthropic /messages). Consulted before the model registry,
     // so a fitted/remote advertisement can never re-route a pinned family.
@@ -267,10 +238,7 @@ pub fn route_for_model(
         };
         return Some((*protocol, base_url, spec.user_agent));
     }
-    if spec
-        .live_catalog
-        .is_some_and(|live| matches!(live, LiveCatalog::ModelsDev { .. }))
-    {
+    if matches!(spec.catalog_source, RemoteCatalogSource::ModelsDev { .. }) {
         let protocol = muta_contracts::model::resolve(model_id).protocol;
         let base_url = match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => {
@@ -507,31 +475,45 @@ mod spec_tests {
     use super::*;
 
     #[test]
-    fn provider_preset_specs_have_unique_nonempty_ids() {
-        // Preset ids are the durable join key between a connection and its
-        // preset, so they must be unique and non-empty.
-        let mut ids: Vec<&str> = PROVIDER_PRESET_SPECS.iter().map(|spec| spec.id).collect();
+    fn model_provider_specs_have_unique_nonempty_ids() {
+        // Provider ids are the durable join key between a connection and its
+        // model provider, so they must be unique and non-empty.
+        let mut ids: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id).collect();
         ids.sort_unstable();
         assert!(
             ids.iter().all(|id| !id.is_empty()),
-            "preset ids must be non-empty"
+            "provider ids must be non-empty"
         );
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
-        assert!(dups.is_empty(), "duplicate preset ids: {dups:?}");
+        assert!(dups.is_empty(), "duplicate provider ids: {dups:?}");
     }
 
     #[test]
-    fn provider_preset_spec_resolves_each_known_id() {
-        // The reconciliation layer resolves a connection's preset_id back to a
+    fn model_provider_spec_resolves_each_known_id() {
+        // The reconciliation layer resolves a connection's provider back to a
         // spec here; every id in the table must round-trip.
-        for spec in PROVIDER_PRESET_SPECS {
-            let resolved = provider_preset_spec(spec.id).expect("id resolves");
+        for spec in MODEL_PROVIDER_SPECS {
+            let resolved = model_provider_spec(spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
-            assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
+            // `custom` is the one provider with an open model universe.
+            if spec.id != "custom" {
+                assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
+            }
         }
-        // Unknown ids resolve to None (graceful: an unknown preset_id leaves
-        // the connection untouched).
-        assert!(provider_preset_spec("does-not-exist").is_none());
+        // Unknown ids resolve to None; the loader rejects them (ADR-0201 INV-2).
+        assert!(model_provider_spec("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn registry_covers_the_contract_provider_id_vocabulary() {
+        // The persisted provider vocabulary is contract data (ADR-0201); the
+        // registry must cover it exactly, or a stored connection could name a
+        // provider this build cannot drive.
+        let mut registry: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id).collect();
+        let mut contract: Vec<&str> = muta_contracts::model_providers::MODEL_PROVIDER_IDS.to_vec();
+        registry.sort_unstable();
+        contract.sort_unstable();
+        assert_eq!(registry, contract);
     }
 
     #[test]
@@ -558,7 +540,7 @@ mod spec_tests {
         }
 
         let mut seen: HashMap<&str, (&str, String)> = HashMap::new();
-        for spec in PROVIDER_PRESET_SPECS {
+        for spec in MODEL_PROVIDER_SPECS {
             for m in spec.baselines {
                 let sig = signature(m);
                 if let Some((first_provider, first_sig)) = seen.insert(m.id, (spec.id, sig)) {
@@ -576,11 +558,11 @@ mod spec_tests {
     }
 
     #[test]
-    fn preset_models_are_covered_by_the_local_baseline_table() {
-        // Every id a preset seeds must have baseline metadata in the same
+    fn provider_models_are_covered_by_the_local_baseline_table() {
+        // Every id a provider seeds must have baseline metadata in the same
         // provider file's local table — that table is what the reconciliation
         // layer intersects live discovery against.
-        for spec in PROVIDER_PRESET_SPECS {
+        for spec in MODEL_PROVIDER_SPECS {
             let baseline_ids: std::collections::HashSet<&str> =
                 spec.baselines.iter().map(|m| m.id).collect();
             for id in spec.models {
@@ -599,7 +581,7 @@ mod spec_tests {
         // non-default wire. Every override id must resolve (so routing never
         // depends on an unregistered model) and the pin must be consistent
         // with route_for_model.
-        let spec = provider_preset_spec("opencode-go").expect("opencode-go preset");
+        let spec = model_provider_spec("opencode-go").expect("opencode-go provider");
         assert!(
             !spec.wire_overrides.is_empty(),
             "go preset must pin families"

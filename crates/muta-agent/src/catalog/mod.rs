@@ -55,12 +55,12 @@ pub fn default_provider_id(config: &Config) -> &str {
     default_connection_id(config)
 }
 
-/// The effective default connection id.
+/// The effective default connection name.
 pub fn effective_default_connection_id(config: &Config, stores: &Stores) -> String {
     stores
         .connections
         .effective_default(&config.default_connection)
-        .map(|p| p.id.clone())
+        .map(|p| p.name.clone())
         .unwrap_or_default()
 }
 

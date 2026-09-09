@@ -100,7 +100,7 @@ pub(crate) async fn request_wake_turn(env: &MailboxEnv, session_id: &str, digest
             session_id,
             crate::side::SideEnv {
                 side: &env.side,
-                master: &env.agent,
+                agent: &env.agent,
                 primary_session: &env.session,
                 primary_lifecycle: &env.lifecycle,
                 tx: &env.tx,

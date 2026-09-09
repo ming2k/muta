@@ -88,7 +88,7 @@ impl Agent {
     }
 
     /// ADR-0141: declare this agent's human-channel posture. Attaching
-    /// clients' declarations are OR-ed at the session level; runners inherit
+    /// clients' declarations are OR-ed at the session level; subagents inherit
     /// their parent's posture at spawn.
     pub fn set_human_posture(&self, posture: muta_contracts::human_request::HumanChannelPosture) {
         self.interaction.set_human_posture(posture);
@@ -136,8 +136,8 @@ impl Agent {
     }
 
     /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
-    /// unrestricted; `RunnerTool` sets the scope resolved from the bound
-    /// runner profile on the child before it runs.
+    /// unrestricted; `SubagentTool` sets the scope resolved from the bound
+    /// subagent profile on the child before it runs.
     pub fn set_operation_scope(&self, scope: muta_contracts::OperationScope) {
         *self
             .operation_scope
@@ -145,26 +145,24 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner()) = scope;
     }
 
-    /// Apply a declarative master profile (ADR-0053) — set every knob a
-    /// [`muta_contracts::MasterPreset`] declares in one call. The
-    /// master-side mirror of how `RunnerTool` binds an
-    /// [`muta_contracts::RunnerPreset`].
+    /// Apply a declarative agent preset (ADR-0053) — set every knob an
+    /// [`muta_contracts::AgentPreset`] declares in one call.
     ///
     /// Sets: the capability scope ([`Self::set_agent_selection`]), the
     /// write/command boundary ([`Self::set_operation_scope`]), and the runtime
     /// execution knobs (`hard_stop` / doom guard / model-stdin /
-    /// attended flag). The profile's [`muta_contracts::AgentIdentity`] is **not**
+    /// attended flag). The preset's [`muta_contracts::AgentIdentity`] is **not**
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
     /// `from_toolset`. A role whose identity should differ per instance composes
-    /// [`muta_contracts::MasterPreset::with_identity`] before construction.
+    /// [`muta_contracts::AgentPreset::with_identity`] before construction.
     ///
     /// The archetype / kind of this agent, derived purely from its [`ExecutionPolicy`] (ADR-0183).
     pub fn kind(&self) -> muta_contracts::AgentKind {
         if self.is_root() {
-            muta_contracts::AgentKind::Master
+            muta_contracts::AgentKind::Root
         } else {
-            muta_contracts::AgentKind::Runner
+            muta_contracts::AgentKind::Subagent
         }
     }
 
@@ -172,12 +170,12 @@ impl Agent {
     pub fn set_kind(&self, kind: muta_contracts::AgentKind) {
         let mut policy = self.execution_policy();
         match kind {
-            muta_contracts::AgentKind::Master => {
+            muta_contracts::AgentKind::Root => {
                 policy.depth = 0;
                 policy.allow_human_interaction = true;
                 policy.lifecycle = muta_contracts::ContextLifecycle::DurableSession;
             }
-            muta_contracts::AgentKind::Runner => {
+            muta_contracts::AgentKind::Subagent => {
                 if policy.depth == 0 {
                     policy.depth = 1;
                 }
@@ -225,26 +223,14 @@ impl Agent {
         }
     }
 
-    /// Apply a master preset delegation (e.g. Developer vs Code Analyst)
-    /// to adjust declared tool availability.
-    /// Apply an agent delegation policy (ADR-0183).
+    /// Apply an agent delegation policy (ADR-0183) to adjust declared tool availability.
     pub fn apply_delegation(&self, delegation: &muta_contracts::DelegationPolicy) {
         self.set_agent_selection(delegation.selection());
-    }
-
-    /// Legacy alias for [`Self::apply_delegation`].
-    pub fn apply_master_delegation(&self, delegation: &muta_contracts::MasterPresetDelegation) {
-        self.apply_delegation(delegation);
     }
 
     /// Apply a declarative agent preset (ADR-0183).
     pub fn apply_preset(&self, preset: &muta_contracts::AgentPreset) {
         self.apply_profile(preset);
-    }
-
-    /// Legacy alias for [`Self::apply_preset`].
-    pub fn apply_master_preset(&self, preset: &muta_contracts::MasterPreset) {
-        self.apply_preset(preset);
     }
 
     /// Idempotent over defaults: applies an [`muta_contracts::AgentPreset`] (ADR-0183).
@@ -257,11 +243,6 @@ impl Agent {
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);
-    }
-
-    /// Legacy alias for [`Self::apply_profile`].
-    pub fn apply_master_profile(&self, profile: &muta_contracts::MasterPreset) {
-        self.apply_profile(profile);
     }
 
     /// Replace this agent's identity (name + mission, or a persona override).
@@ -278,11 +259,6 @@ impl Agent {
         let profile = muta_contracts::AgentPreset::for_role(resolved, &base);
         self.apply_profile(&profile);
         Some(resolved)
-    }
-
-    /// Legacy alias for [`Self::apply_role`].
-    pub fn apply_master_role(&self, role: &str) -> Option<muta_contracts::MasterPresetId> {
-        self.apply_role(role)
     }
 
     /// Snapshot of this agent's operation boundary. Used by the `execute_tool`
@@ -421,7 +397,7 @@ impl Agent {
         self.permissions.revoke_allowed(tool, scope)
     }
 
-    /// Install (or reuse) the steering inbox and return a [`RunnerHandle`]
+    /// Install (or reuse) the steering inbox and return a [`SubagentHandle`]
     /// the caller can steer the agent with mid-turn — the entry point of
     /// full-duplex (ADR-0029). Requires `Arc<Self>` because the handle holds a
     /// `Weak<Agent>` so it can observe the agent's lifetime without keeping it
@@ -433,7 +409,7 @@ impl Agent {
     /// directly by the harness never calls this and stays non-steerable by an
     /// inbox — its interrupt path is the `CancellationToken` passed to the run,
     /// and its permission/ask_user replies go through the harness directly.
-    pub fn install_inbox(self: &Arc<Self>) -> RunnerHandle {
+    pub fn install_inbox(self: &Arc<Self>) -> SubagentHandle {
         let mut tx_guard = self.inbox_tx.lock().unwrap_or_else(|e| e.into_inner());
         let tx = match tx_guard.clone() {
             Some(existing) => existing,
@@ -445,14 +421,14 @@ impl Agent {
                 tx
             }
         };
-        RunnerHandle {
+        SubagentHandle {
             weak: Arc::downgrade(self),
             ops: tx,
         }
     }
 
     /// Submit a steering [`AgentOp`] without going through a handle. Equivalent
-    /// to [`RunnerHandle::submit`] but usable when the caller already holds a
+    /// to [`SubagentHandle::submit`] but usable when the caller already holds a
     /// reference to the agent rather than a handle (e.g. the top-level harness
     /// steering the primary session). Returns `false` if no inbox was ever
     /// installed ([`Agent::install_inbox`] was not called) or the receiver was
@@ -760,7 +736,7 @@ impl Agent {
             match op {
                 AgentOp::Steer(text) => {
                     messages.push(crate::conversation_context::visible_user(
-                        InjectionKind::RunnerSteer,
+                        InjectionKind::SubagentSteer,
                         text,
                     ));
                 }

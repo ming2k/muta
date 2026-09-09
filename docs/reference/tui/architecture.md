@@ -130,11 +130,11 @@ receives only the router's `Modal` projection. Lifecycle code operates on
 modal back to a surface.
 
 Under ADR-0141 a **view** is an independent full-screen destination
-(`Session`, `Dashboard`, `Settings`, `Envoy`, `Side`) and a **panel** is a
+(`Session`, `Dashboard`, `Settings`, `Subagent`, `Side`) and a **panel** is a
 retained modal — one of the browse overlays (help, activity, todos, tools,
-…) floating over the active view. Envoy zoom and the aside view route
+…) floating over the active view. Subagent zoom and the aside view route
 through the router as views (`App::focus_stack` / `side_session_id` remain
-frame data), so `in_envoy_view()` / `in_side_view()` derive from the router
+frame data), so `in_subagent_view()` / `in_side_view()` derive from the router
 instead of scattered booleans and stack emptiness.
 
 All entry paths converge on the event loop's `enter_panel` / `enter_view`

@@ -1,5 +1,6 @@
 pub mod client;
 pub mod html;
+pub mod http;
 pub mod reader;
 pub mod search;
 pub mod snapshot;
@@ -13,12 +14,12 @@ pub use search::WebSearchTool;
 pub use snapshot::{WebPageSnapshot, WebSnapshotResult};
 
 muta_contracts::register_tool!(WebReaderFactory => |ctx| {
-    ctx.get::<muta_contracts::SharedWebSearchConfig>()
+    ctx.get::<muta_contracts::SharedWebConfig>()
         .cloned()
         .map(WebReaderTool::with_shared_config)
         .unwrap_or_else(|| {
             WebReaderTool::with_config(
-                ctx.get::<muta_contracts::WebSearchConfig>()
+                ctx.get::<muta_contracts::WebRuntimeConfig>()
                     .cloned()
                     .unwrap_or_default(),
             )
@@ -26,12 +27,12 @@ muta_contracts::register_tool!(WebReaderFactory => |ctx| {
 });
 
 muta_contracts::register_tool!(WebSearchFactory => |ctx| {
-    ctx.get::<muta_contracts::SharedWebSearchConfig>()
+    ctx.get::<muta_contracts::SharedWebConfig>()
         .cloned()
         .map(WebSearchTool::with_shared_config)
         .unwrap_or_else(|| {
             WebSearchTool::with_config(
-                ctx.get::<muta_contracts::WebSearchConfig>()
+                ctx.get::<muta_contracts::WebRuntimeConfig>()
                     .cloned()
                     .unwrap_or_default(),
             )

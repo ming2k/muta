@@ -21,7 +21,7 @@ fn test_extract_telemetry_rounds_filters_terminal_only() {
                     round: 1,
                     turn: 1,
                     attempt: 1,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),
@@ -39,7 +39,7 @@ fn test_extract_telemetry_rounds_filters_terminal_only() {
                     round: 1,
                     turn: 1,
                     attempt: 2,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),
@@ -77,7 +77,7 @@ fn test_extract_telemetry_rounds_filters_terminal_only() {
     assert_eq!(r1.completion_tokens, 200);
     assert_eq!(r1.cache_read_tokens, 800);
     assert_eq!(r1.cache_hit_rate(), 80.0);
-    assert!(r1.preferred_tps().is_some());
+    assert!(r1.stream_tps().is_some());
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn test_telemetry_round_and_turn_helpers() {
                     round: 2,
                     turn: 1,
                     attempt: 1,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),
@@ -122,7 +122,7 @@ fn test_telemetry_round_and_turn_helpers() {
                     round: 1,
                     turn: 1,
                     attempt: 1,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),
@@ -181,6 +181,7 @@ fn test_build_attempt_inspector_waterfall_nodes() {
                 ..Default::default()
             }),
             e2e_duration_ms: 3500,
+            started_at_ms: 0,
         }],
     }];
 
@@ -193,6 +194,7 @@ fn test_build_attempt_inspector_waterfall_nodes() {
             ..Default::default()
         },
         100,
+        None,
         &theme,
     );
 
@@ -211,16 +213,21 @@ fn test_build_attempt_inspector_waterfall_nodes() {
     assert!(full_text.contains("Target:  claude-3-7-sonnet @ anthropic"));
     assert!(full_text.contains("CONTEXT SPACE"));
     assert!(full_text.contains("75.0% Cache Hit"));
-    assert!(full_text.contains("LATENCY TIMELINE WATERFALL"));
-    assert!(full_text.contains("Request Dispatched"));
-    assert!(full_text.contains("Connect & Handshake"));
-    assert!(full_text.contains("Stream Ready"));
-    assert!(full_text.contains("Prefill & Server Queue"));
-    assert!(full_text.contains("First Token Arrived"));
-    assert!(full_text.contains("Stream Decode"));
-    assert!(full_text.contains("Last Token Received"));
-    assert!(full_text.contains("Tail & Commit"));
-    assert!(full_text.contains("Request Completed"));
+    // The timeline names every stage from dispatch to the settled turn.
+    assert!(full_text.contains("LATENCY TIMELINE"));
+    for stage in [
+        "Request dispatched",
+        "Connection ready",
+        "Request sent",
+        "Response headers",
+        "Server started",
+        "First token",
+        "Last token",
+        "Stream closed",
+        "Turn end",
+    ] {
+        assert!(full_text.contains(stage), "missing stage: {stage}");
+    }
 }
 
 #[test]
@@ -257,6 +264,7 @@ fn test_build_overview_and_sticky_table_headers() {
                 ..Default::default()
             }),
             e2e_duration_ms: 3500,
+            started_at_ms: 0,
         }],
     }];
 
@@ -311,9 +319,9 @@ fn test_build_overview_and_sticky_table_headers() {
     assert!(ov_text.contains("Grand Total"));
     assert!(ov_text.contains("4.3k (4,300)"));
     assert!(ov_text.contains("75.0% hit rate"));
-    assert!(ov_text.contains("STREAM PERFORMANCE & ACTIVITY"));
-    assert!(ov_text.contains("100.0 tok/s"));
-    assert!(ov_text.contains("280ms"));
+    assert!(ov_text.contains("STREAMING PERFORMANCE"));
+    assert!(ov_text.contains("Streaming Rate"));
+    assert!(ov_text.contains("TTFT (median)"));
 
     // 2. Test Rounds Sticky Table (Header is separated from Rows)
     let (header, rows, follow) = build_rounds_table(&rounds, 0, 80, &theme);
@@ -397,15 +405,14 @@ fn test_telemetry_burst_arrival_defensible_tps_fallback() {
             ..Default::default()
         }),
         e2e_duration_ms: 1500,
+        started_at_ms: 0,
     };
 
-    let preferred = burst_attempt.preferred_tps();
-    assert!(preferred.is_some());
-    let tps = preferred.unwrap();
-    assert!(tps < 2000.0, "TPS must not explode to 1,000,000: {tps}");
+    // A burst has no defensible rate: there is exactly one scheme, and it
+    // refuses rather than substituting a different question's answer.
     assert!(
-        (tps - 133.33).abs() < 1.0,
-        "Expected e2e fallback ~133.3 tok/s, got {tps}"
+        burst_attempt.stream_tps().is_none(),
+        "a sub-20 ms span must report no rate"
     );
 
     let rounds = vec![TelemetryRound {
@@ -419,9 +426,9 @@ fn test_telemetry_burst_arrival_defensible_tps_fallback() {
         attempts: vec![burst_attempt],
     }];
 
-    let round_tps = rounds[0].preferred_tps().unwrap();
-    assert!(round_tps < 2000.0);
-    assert!((round_tps - 133.33).abs() < 1.0);
+    // A single sub-20 ms span has no defensible rate: the round reports `–`
+    // rather than falling back to an end-to-end number.
+    assert!(rounds[0].stream_tps().is_none());
 
     let report = TokenSourceReport::default();
     let overview = build_overview_body(&report, &rounds, ContextUsageProps::default(), 80, &theme);
@@ -431,8 +438,8 @@ fn test_telemetry_burst_arrival_defensible_tps_fallback() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        ov_text.contains("133.3 tok/s"),
-        "Overview must show defensible TPS: {ov_text}"
+        ov_text.contains("Streaming Rate") && ov_text.contains("–"),
+        "Overview must show the rate column with an honest dash: {ov_text}"
     );
 }
 
@@ -462,7 +469,7 @@ fn test_round_turns_sorted_descending_and_turn_labels() {
                     round: 4,
                     turn: 1,
                     attempt: 1,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),
@@ -478,7 +485,7 @@ fn test_round_turns_sorted_descending_and_turn_labels() {
                     round: 4,
                     turn: 2,
                     attempt: 1,
-                    actor_id: "master".to_string(),
+                    actor_id: "root".to_string(),
                 },
                 provider: "anthropic".to_string(),
                 model: "claude-3-7-sonnet".to_string(),

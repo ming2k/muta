@@ -1,6 +1,6 @@
 //! Shared domain and wire contracts for the muta agent stack: the `Provider`
 //! and `Tool` capability traits, conversation and tool-output types, the
-//! context-pressure model, repeat/todo values, runner profiles,
+//! context-pressure model, repeat/todo values, subagent profiles,
 //! skills/MCP config schemas, and the events exchanged by sessions and
 //! frontends.
 //!
@@ -75,8 +75,8 @@ pub mod channel_auth;
 pub mod client_identity;
 pub mod connection_auth;
 pub mod connection_detail;
+pub mod model_providers;
 pub mod provider_auth;
-pub mod provider_presets;
 pub mod provider_state;
 pub use client_identity::{
     ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile, ClientProfileSpec,
@@ -104,16 +104,18 @@ pub mod execution_policy;
 pub mod hazard;
 pub use hazard::*;
 pub mod job;
-pub mod master;
 pub mod mesh;
-pub mod runner;
+pub mod subagent;
 pub use agent_kind::{AgentKind, MeshStation};
-pub use agent_preset::{AgentPreset, AgentPresetId, AgentRuntimeConfig, DelegationPolicy};
+pub use agent_preset::{
+    AGENT_CODE_ANALYST, AGENT_DEVELOPER, AgentPreset, AgentPresetDelegation, AgentPresetId,
+    AgentRuntimeConfig, DelegationPolicy, PRESET_CODE_ANALYST, PRESET_DEVELOPER,
+};
 pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
 pub use cognitive::{
     CognitiveModelPreference, CognitiveTask, EnvironmentReminderOutput, EnvironmentSensorInput,
     EnvironmentSensorTask, ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput,
-    PreFlightRouterTask, SessionDigest, SessionDigestInput, SessionDigestTask, StreamLoopChannel,
+    PreFlightRouterTask, SessionDigest, SessionTitleInput, SessionTitleTask, StreamLoopChannel,
     StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
 };
 pub use execution_policy::{ContextLifecycle, ExecutionPolicy, PolicyViolation};
@@ -129,8 +131,8 @@ pub use token_ledger::{
     BeginRequestParams, MAX_PLAUSIBLE_STREAM_TPS, MIN_DEFENSIBLE_STREAM_SPAN_US,
     PerformanceTimingSource, RequestPerformance, RequestUsageKey, RequestUsageRecord,
     RequestUsageSource, RequestUsageStatus, StreamTokenSource, TokenSourceLedger,
-    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TurnPerformanceSnapshot,
-    UsageStatSink, latest_turn_performance,
+    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TransportTimings,
+    TurnPerformanceSnapshot, UsageStatSink, latest_turn_performance,
 };
 pub mod usage_stats;
 pub use usage_stats::{
@@ -181,10 +183,11 @@ pub use events::{
     NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
     ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RetryResolution, RoundEvent,
-    RoundInterrupt, RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot,
-    SessionDetail, SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply,
-    StdinRequest, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
-    UserQuestionRequest, WebSearchConfigUpdate, WebSearchConfigView,
+    RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail,
+    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest,
+    SubagentEvent, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
+    UserQuestionRequest, WebConfigUpdate, WebConfigView, WebCredentialUpdate,
+    WebSearchConfigUpdate, WebSearchConfigView,
 };
 pub use provider_state::{
     CONTINUATION_ARTIFACT_KEY, ContextRelation, ContextRevision, ContinuationCursor,
@@ -194,9 +197,9 @@ pub use provider_state::{
     read_continuation_cursor, request_envelope_fingerprint, select_request_delivery,
     semantic_context_head, write_continuation_cursor,
 };
-pub use runner::{
-    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset,
-    RunnerPresetPool, ToolPolicy,
+pub use subagent::{
+    SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_MCP_SPECIALIST, SUBAGENT_TITLE, SubagentPreset,
+    SubagentPresetPool, ToolPolicy,
 };
 pub mod monitor;
 pub use hooks::{
@@ -207,16 +210,12 @@ pub use job::{
     AdoptionInfo, BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, CrateChildBridge,
     JobId, JobKind, JobSpec, JobState, Readiness, RestartPolicy,
 };
-pub use master::{
-    MASTER_CODE_ANALYST, MASTER_DEVELOPER, MasterPreset, MasterPresetDelegation, MasterPresetId,
-    MasterRuntimeConfig,
-};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    BaselineModels, CapabilityOverrides, DeclaredModel, FittedModel, Model, ModelCapabilities,
-    ModelScopeConfig, ModelTargetScope, RemoteModelMetadata, RouteCapabilities, WireProtocol,
-    baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
-    sanitize_model_id,
+    BaselineModels, CapabilityOverrides, ConnectionFilterPolicy, DeclaredModel, FittedModel, Model,
+    ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig, ModelTargetScope, NamedFilterPolicy,
+    RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models, model_by_id,
+    register_fitted_models, resolve as resolve_model, sanitize_model_id, simple_glob_matches,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,
@@ -245,8 +244,11 @@ pub use tool_registry::{
 };
 pub mod wire;
 pub use web_config::{
-    SharedWebSearchConfig, WebReaderConnection, WebReaderPreset, WebReaderPresets, WebSearchConfig,
-    WebSearchConnection, WebSearchPreset, WebSearchPresets,
+    BOCHA_SEARCH_ENDPOINT, DUCKDUCKGO_HTML_ENDPOINT, DUCKDUCKGO_LITE_ENDPOINT, EXA_SEARCH_ENDPOINT,
+    JINA_READER_ENDPOINT, PARALLEL_SEARCH_ENDPOINT, SharedWebConfig, TAVILY_SEARCH_ENDPOINT,
+    WebConfig, WebCredentialRequirement, WebCredentialStatus, WebEndpointRequirement,
+    WebProviderAxis, WebProviderCapability, WebReaderProvider, WebRuntimeConfig, WebSearchProvider,
+    web_provider_capabilities,
 };
 pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,

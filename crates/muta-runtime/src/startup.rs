@@ -347,7 +347,7 @@ define_builtin_commands! {
         ],
     },
     Jobs = "/jobs" : {
-        summary: "Inspect and manage background processes and sub-runners",
+        summary: "Inspect and manage background processes and sub-subagents",
         usage: ["/jobs", "/jobs kill <id>", "/jobs logs <id>"],
         examples: [
             ("/jobs", "List all active and recent background jobs"),

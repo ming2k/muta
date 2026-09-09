@@ -15,10 +15,35 @@ use serde::{Deserialize, Serialize};
 /// (new variants an older peer cannot deserialize — not additive),
 /// `TokenUsage.reasoning_tokens`, `ToolOutput::Shell.detached_job_id`
 /// (additive sidecars riding the same bump).
-pub const PROTOCOL_VERSION: u32 = 5;
+///
+/// v6 (ADR-0201): the connection vocabulary is re-keyed. `AddProvider` /
+/// `EditProvider` / `ConnectProvider` / `DeleteProvider` / `SwitchProvider` /
+/// `EditProviderModel` become `AddConnection` / `EditConnection` /
+/// `ConnectConnection` / `DeleteConnection` / `SwitchConnection` /
+/// `EditConnectionModel`; `RenameConnection` is new; `preset_id` becomes
+/// `provider`; `ConnectionDetail` drops `id`; `ModelTargetScope::Preset`
+/// becomes `Provider`. A v5 peer cannot deserialize any of these, so the
+/// minimum served version moves with it.
+///
+/// v7 (ADR-0183): the subagent/subagent vocabulary is retired for the homogeneous
+/// agent model. Renamed wire/persisted tags: `AgentKind::Subagent` →
+/// `AgentKind::Subagent`, `AgentEvent::Subagent` → `AgentEvent::Subagent`,
+/// `ToolOutput::Subagent` → `ToolOutput::Subagent`, `SubagentEvent` →
+/// `SubagentEvent`, `RoundEvent::SubagentStep` → `RoundEvent::SubagentStep`,
+/// `MeshMessage::SubagentEol` → `MeshMessage::SubagentEol`, and
+/// `InjectionKind::{SubagentTask, SubagentSteer}` →
+/// `InjectionKind::{SubagentTask, SubagentSteer}`. Records carrying the old
+/// tags deserialize as unknown payloads (the persistence layer preserves them
+/// opaquely) instead of failing the session. Legacy tool-name aliases
+/// (`spawn_agent`, `delegate_code`, `delegate_mcp`, …) are deleted; the canonical
+/// names are `spawn_agent`, `delegate_code`, and `delegate_mcp`.
+pub const PROTOCOL_VERSION: u32 = 7;
 
-/// Minimum served wire protocol version.
-pub const MIN_PROTOCOL_VERSION: u32 = 1;
+/// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
+/// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the
+/// previous tags cannot deserialize these shapes and must be rejected at
+/// handshake rather than misinterpreted.
+pub const MIN_PROTOCOL_VERSION: u32 = 7;
 
 /// Stable machine-readable error codes.
 pub const ERR_PROTOCOL_MISMATCH: &str = "protocol_mismatch";

@@ -1,12 +1,13 @@
 //! Runtime derivation of connection entries — channels are derived, never
 //! persisted.
 //!
-//! A connection declares *who* it connects to (preset + credential + client identity + optional
-//! overrides). This module derives the concrete routes — one per model, each
-//! with its transport/endpoint/credential/reasoning — from that declaration
-//! plus the preset registry and the discovery cache. Nothing here is written
-//! back; the stores stay the single source of truth and two connections of the
-//! same preset never duplicate or drift a route set.
+//! A connection declares *who* it connects to (model provider + credential +
+//! client identity + optional overrides). This module derives the concrete
+//! routes — one per model, each with its transport/endpoint/credential/
+//! reasoning — from that declaration plus the model provider registry and the
+//! discovery cache. Nothing here is written back; the stores stay the single
+//! source of truth and two connections to the same provider never duplicate or
+//! drift a route set.
 //!
 //! Resolution precedence is the single source of truth shared by startup and
 //! runtime switching (ADR-0002): env var (`api_key_env`) →
@@ -16,14 +17,16 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::model::CapabilityOverrides;
 use muta_contracts::{
-    AnthropicMessagesDialect, ClientProfile, ConnectionAuth, Effort, GoogleGenerateContentDialect,
-    OpenAiChatDialect, OpenAiResponsesDialect, ReasoningMode, SecretString, WireProtocol,
+    AnthropicMessagesDialect, ClientProfile, ConnectionAuth, ConnectionFilterPolicy, Effort,
+    GoogleGenerateContentDialect, NamedFilterPolicy, OpenAiChatDialect, OpenAiResponsesDialect,
+    ReasoningMode, SecretString, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
-use muta_persistence::connections::{Connection, Connections};
-use muta_persistence::presets::Presets;
+use muta_persistence::connections::Connection;
+use muta_persistence::connections::Connections;
+use muta_persistence::model_providers::ModelProviders;
 use muta_persistence::route_settings::RouteSettingsStore;
-use muta_providers::{provider_preset_spec, route_for_model as preset_route};
+use muta_providers::{RemoteCatalogSource, model_provider_spec, route_for_model as provider_route};
 
 pub(super) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -54,8 +57,8 @@ pub fn derive_entry(
         .map(|model| derive_channel(connection, model, cache, routes, creds))
         .collect();
     ProviderEntry {
-        id: connection.id.clone(),
-        name: connection.display_name().to_string(),
+        id: connection.name.clone(),
+        name: connection.name.clone(),
         description: String::new(),
         channels,
         default_channel: 0,
@@ -63,61 +66,76 @@ pub fn derive_entry(
     }
 }
 
-/// The model ids a connection serves, in picker order (ADR-0199).
+/// The model ids a connection serves, in picker order (ADR-0199, ADR-0201).
 /// Evaluates the 3-step Set Delta Algebra:
-/// 1. S_base = (Baseline ∩ Discovery) or snapshot for preset connections; empty for pure-custom.
-/// 2. S_preset = (S_base ∪ Preset.include) \ Preset.exclude
-/// 3. S_effective = (S_preset ∪ Instance.include) \ Instance.exclude
+/// 1. S_base = (Baseline ∩ Discovery) or snapshot for the provider.
+/// 2. S_provider = (S_base ∪ Provider.include) \ Provider.exclude
+/// 3. S_effective = (S_provider ∪ Connection.include) \ Connection.exclude
 pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<String> {
-    let presets = Presets::load();
-    route_models_with_presets(connection, cache, &presets)
+    let providers = ModelProviders::load();
+    route_models_with_providers(connection, cache, &providers)
 }
 
-/// Route models evaluated with explicit preset configurations.
-pub fn route_models_with_presets(
+/// Route models evaluated with explicit model provider configurations.
+pub fn route_models_with_providers(
     connection: &Connection,
     cache: &DiscoveryCache,
-    presets: &Presets,
+    providers: &ModelProviders,
 ) -> Vec<String> {
-    let mut models = if let Some(pid) = connection.preset_id.as_deref() {
-        let Some(spec) = provider_preset_spec(pid) else {
-            return Vec::new();
-        };
-        if spec.live_catalog.is_some() {
-            // Prefer the last successful live list (already intersected /
-            // fitted by discovery); fall back to the preset snapshot.
-            if let Some(discovered) = cache.connection_models.get(&connection.id)
-                && !discovered.is_empty()
-            {
-                discovered.clone()
-            } else {
-                spec.models.iter().map(|m| (*m).to_string()).collect()
-            }
+    let Some(spec) = model_provider_spec(&connection.provider) else {
+        // The loader rejects an unknown provider before this runs (ADR-0201
+        // INV-2); deriving nothing is the safe floor if one slips through.
+        return Vec::new();
+    };
+    let mut models = if spec.catalog_source != RemoteCatalogSource::None {
+        // Prefer the last successful live list (derived from single-source remote sync overlaid onto baseline);
+        // fall back to the provider's compiled baseline.
+        if let Some(discovered) = cache.connection_models.get(&connection.name)
+            && !discovered.is_empty()
+        {
+            discovered.clone()
         } else {
             spec.models.iter().map(|m| (*m).to_string()).collect()
         }
     } else {
-        Vec::new()
+        spec.models.iter().map(|m| (*m).to_string()).collect()
     };
 
-    // Preset delta application
-    if let Some(pid) = connection.preset_id.as_deref()
-        && let Some(preset_scope) = presets.get(pid)
-    {
-        for id in preset_scope.included_ids() {
+    // Connection pipe admission gate (ADR-0203):
+    // 1. Filter candidates through the connection pipe valve
+    let is_custom = connection.provider == muta_persistence::connections::CUSTOM_PROVIDER;
+    let filter_policy = connection
+        .models
+        .filter
+        .as_ref()
+        .cloned()
+        .unwrap_or(if is_custom {
+            ConnectionFilterPolicy::Named(NamedFilterPolicy::All)
+        } else {
+            ConnectionFilterPolicy::Named(NamedFilterPolicy::Baseline)
+        });
+    let baseline_ids: std::collections::HashSet<&str> =
+        spec.baselines.iter().map(|m| m.id).collect();
+    models.retain(|id| filter_policy.admits(id, baseline_ids.contains(id.as_str())));
+
+    // 2. Provider delta application (from model_providers.toml)
+    if let Some(provider_scope) = providers.get(&connection.provider) {
+        for id in provider_scope.included_ids() {
             if !models.contains(&id) {
                 models.push(id);
             }
         }
-        models.retain(|m| !preset_scope.is_excluded(m));
+        models.retain(|m| !provider_scope.is_excluded(m));
     }
 
-    // Instance delta application
+    // 3. Connection sovereign injection (inject bypasses filter unconditionally!)
     for id in connection.models.included_ids() {
         if !models.contains(&id) {
             models.push(id);
         }
     }
+
+    // 4. Connection absolute block (block prunes unconditionally!)
     models.retain(|m| !connection.models.is_excluded(m));
 
     models
@@ -133,18 +151,18 @@ pub fn derive_channel(
     creds: &Credentials,
 ) -> Channel {
     // 4-layer descending capability cascade (ADR-0199):
-    // Instance Overrides > Preset Overrides > Discovery Advertised Metadata > Baseline Registry Spec
-    let presets = Presets::load();
-    let preset_scope = connection.preset_id.as_deref().and_then(|p| presets.get(p));
+    // Connection Overrides > Provider Overrides > Discovery Advertised Metadata > Baseline Registry Spec
+    let providers = ModelProviders::load();
+    let provider_scope = providers.get(&connection.provider);
 
-    let mut remote = cache.remote_metadata_for(&connection.id, model).cloned();
-    if let Some(preset_declared) = preset_scope.and_then(|p| p.find_included(model)) {
+    let mut remote = cache.remote_metadata_for(&connection.name, model).cloned();
+    if let Some(provider_declared) = provider_scope.and_then(|p| p.find_included(model)) {
         let r = remote.get_or_insert_with(Default::default);
-        r.context_window = preset_declared.context_window.or(r.context_window);
-        r.max_output_tokens = preset_declared.max_output_tokens.or(r.max_output_tokens);
-        r.thinking = preset_declared.thinking.or(r.thinking);
-        r.vision = preset_declared.vision.or(r.vision);
-        r.tool_call = preset_declared.tool_call.or(r.tool_call);
+        r.context_window = provider_declared.context_window.or(r.context_window);
+        r.max_output_tokens = provider_declared.max_output_tokens.or(r.max_output_tokens);
+        r.thinking = provider_declared.thinking.or(r.thinking);
+        r.vision = provider_declared.vision.or(r.vision);
+        r.tool_call = provider_declared.tool_call.or(r.tool_call);
     }
     if let Some(declared) = connection.models.find_included(model) {
         let r = remote.get_or_insert_with(Default::default);
@@ -155,10 +173,10 @@ pub fn derive_channel(
         r.tool_call = declared.tool_call.or(r.tool_call);
     }
 
-    let route_settings = routes.settings_for(&connection.id, model);
+    let route_settings = routes.settings_for(&connection.name, model);
 
     let mut effective_overrides = CapabilityOverrides::default();
-    if let Some(po) = preset_scope.and_then(|p| p.overrides.get(model)) {
+    if let Some(po) = provider_scope.and_then(|p| p.overrides.get(model)) {
         effective_overrides = effective_overrides.merge_with(po);
     }
     if let Some(io) = connection.models.overrides.get(model) {
@@ -168,11 +186,8 @@ pub fn derive_channel(
         effective_overrides = effective_overrides.merge_with(ro);
     }
     let user_overrides = (!effective_overrides.is_empty()).then_some(effective_overrides);
-    let prompt_cache = connection
-        .preset_id
-        .as_deref()
-        .and_then(provider_preset_spec)
-        .map(|preset| (preset.prompt_cache)(model).materialize())
+    let prompt_cache = model_provider_spec(&connection.provider)
+        .map(|provider| (provider.prompt_cache)(model).materialize())
         .unwrap_or_else(muta_contracts::PromptCacheCapabilities::unsupported);
     let prompt_cache_preference = route_settings
         .and_then(|settings| settings.prompt_cache)
@@ -191,7 +206,7 @@ pub fn derive_channel(
     let credentials: std::sync::Arc<dyn muta_contracts::CredentialSource> =
         if connection.auth.is_oauth() {
             std::sync::Arc::new(muta_providers::oauth::OAuthCredentialSource::new(
-                &connection.id,
+                &connection.name,
                 connection.auth,
             ))
         } else {
@@ -259,7 +274,7 @@ pub fn derive_channel(
                     base_url,
                     client_profile,
                     effort,
-                    dialect: if connection.preset_id.as_deref() == Some("deepseek") {
+                    dialect: if connection.provider == "deepseek" {
                         OpenAiResponsesDialect::DeepSeek
                     } else {
                         OpenAiResponsesDialect::Standard
@@ -288,50 +303,37 @@ pub fn derive_channel(
     }
 }
 
-/// The base transport for a non-OAuth connection: preset route (always derived
-/// from the hardcoded preset spec) or the pure-custom declaration.
-#[allow(clippy::expect_used)] // `route_models` validates preset IDs before this derivation step.
+/// The base transport for a non-OAuth connection: the model provider's route
+/// (derived from its hardcoded spec), with the connection's optional
+/// `protocol` / `base_url` / `user_agent` overrides applied on top.
+#[allow(clippy::expect_used)] // `provider` is validated at load (ADR-0201 INV-2).
 fn base_route(connection: &Connection, model: &str) -> (WireProtocol, String, ClientProfile) {
-    if let Some(pid) = connection.preset_id.as_deref() {
-        let preset = provider_preset_spec(pid)
-            .expect("route_models rejects unknown provider presets before route derivation");
-        let (protocol, preset_base_url, preset_ua) =
-            preset_route(pid, model).unwrap_or((preset.protocol, "", preset.user_agent));
-        let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-            ClientProfile::from_user_agent(ua)
-        } else if connection.client_identity != ClientProfile::Native {
-            connection.client_identity.clone()
-        } else if let Some(pua) = preset_ua {
-            ClientProfile::from_user_agent(pua)
-        } else {
-            connection.client_identity.clone()
-        };
-        let base_url = if preset_base_url.is_empty() {
-            connection
-                .base_url
-                .clone()
-                .filter(|url| !url.trim().is_empty())
-                .unwrap_or_else(|| default_endpoint(protocol))
-        } else {
-            preset_base_url.to_string()
-        };
-        (protocol, base_url, client_profile)
+    let spec = model_provider_spec(&connection.provider)
+        .expect("connection provider is validated at load (ADR-0201 INV-2)");
+    let (provider_protocol, provider_base_url, provider_ua) =
+        provider_route(&connection.provider, model).unwrap_or((spec.protocol, "", spec.user_agent));
+    let protocol = connection.protocol.unwrap_or(provider_protocol);
+    let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
+        ClientProfile::from_user_agent(ua)
+    } else if connection.client_identity != ClientProfile::Native {
+        connection.client_identity.clone()
+    } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {
+        ClientProfile::from(spec.default_client_profile)
+    } else if let Some(pua) = provider_ua {
+        ClientProfile::from_user_agent(pua)
     } else {
-        let protocol = connection
-            .protocol
-            .unwrap_or(WireProtocol::OpenAiChatCompletions);
-        let base_url = connection
+        connection.client_identity.clone()
+    };
+    let base_url = if provider_base_url.is_empty() {
+        connection
             .base_url
             .clone()
-            .filter(|u| !u.trim().is_empty())
-            .unwrap_or_else(|| default_endpoint(protocol));
-        let client_profile = if let Some(ua) = connection.user_agent.as_deref() {
-            ClientProfile::from_user_agent(ua)
-        } else {
-            connection.client_identity.clone()
-        };
-        (protocol, base_url, client_profile)
-    }
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| default_endpoint(protocol))
+    } else {
+        provider_base_url.to_string()
+    };
+    (protocol, base_url, client_profile)
 }
 
 /// Copilot OAuth routes select their wire family from the model's advertised
@@ -375,7 +377,7 @@ fn copilot_route(
     }
 }
 
-/// A transport's default endpoint when a custom connection omits one.
+/// A transport's default endpoint when a `custom` connection omits one.
 pub fn default_endpoint(protocol: WireProtocol) -> String {
     match protocol {
         WireProtocol::GoogleGenerateContent => "http://localhost:8080/v1beta".to_string(),
@@ -395,7 +397,7 @@ pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> Secre
         return muta_providers::oauth::AuthStore::load()
             .map_err(|error| {
                 tracing::error!(
-                    connection_id = %connection.id,
+                    connection = %connection.name,
                     error = %error,
                     "could not read OAuth credentials"
                 );
@@ -404,7 +406,7 @@ pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> Secre
             .ok()
             .and_then(|store| {
                 store
-                    .get(&connection.id)
+                    .get(&connection.name)
                     .map(|tokens| tokens.access.clone())
             })
             .unwrap_or_default();
@@ -415,5 +417,5 @@ pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> Secre
     {
         return SecretString::from(value);
     }
-    creds.api_key(&connection.id).cloned().unwrap_or_default()
+    creds.api_key(&connection.name).cloned().unwrap_or_default()
 }

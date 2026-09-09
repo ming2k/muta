@@ -17,11 +17,12 @@ no server — one static bundle that talks to the daemon directly.
   distinct command blocks (`RoundEvent::CommandResult`, ADR-0091).
 - **Blocking prompts** — permission approvals (`Once` / `Always` / `Reject`),
   `ask_user` questions, and interactive-command input are answered inline,
-  including requests raised by **envoys** (`RoundEvent::Envoy`, ADR-0029):
-  the reply's `parent_call_id` is routed back to the parked child agent, so a
-  session never hangs silently on an approval wall.
-- **Envoy nesting** — a `task` tool card expands into the child agent's live
-  profile, activity, streaming text, and nested tool calls.
+  including requests raised by **subagents** (`RoundEvent::SubagentStep`,
+  ADR-0029): the reply's `parent_call_id` is routed back to the parked child
+  agent, so a session never hangs silently on an approval wall.
+- **Subagent nesting** — a `spawn_agent` / `delegate_code` tool card expands
+  into the child agent's live profile, activity, streaming text, and nested
+  tool calls.
 - **Model switching** — the header shows the active provider/model and opens
   a picker rendered from the `ProviderPicker` snapshot (favorites,
   effort/thinking flags, key readiness); selecting a model sends

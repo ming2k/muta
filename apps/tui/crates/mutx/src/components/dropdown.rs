@@ -6,6 +6,9 @@
 //! badges, shortcuts, multi-line descriptions, and scroll indicators.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mutx_engine::anchor::{
+    AnchorAlignment, AnchorConstraints, AnchorPlacement, compute_anchored_rect,
+};
 use mutx_engine::{
     Alignment, Block as RtBlock, BorderType, Borders, Clear, Frame, Line, Modifier, Paragraph,
     Rect, Span, Style,
@@ -97,6 +100,17 @@ pub enum DropdownPlacement {
     Below,
     /// Center the popup in the middle of the available screen area.
     CenterScreen,
+}
+
+impl From<DropdownPlacement> for AnchorPlacement {
+    fn from(p: DropdownPlacement) -> Self {
+        match p {
+            DropdownPlacement::Auto => AnchorPlacement::AutoVertical,
+            DropdownPlacement::Above => AnchorPlacement::Top,
+            DropdownPlacement::Below => AnchorPlacement::Bottom,
+            DropdownPlacement::CenterScreen => AnchorPlacement::CenterViewport,
+        }
+    }
 }
 
 /// Geometry and anchoring configuration for the dropdown.
@@ -487,54 +501,18 @@ pub fn compute_dropdown_rect(
         .max(anchor.target_rect.width)
         .min(max_avail_width);
 
-    match anchor.placement {
-        DropdownPlacement::CenterScreen => {
-            let x = screen_area.x + (screen_area.width.saturating_sub(width)) / 2;
-            let y = screen_area.y + (screen_area.height.saturating_sub(height)) / 2;
-            Rect::new(x, y, width, height)
-        }
-        DropdownPlacement::Above => {
-            let x = anchor
-                .target_rect
-                .x
-                .min(screen_area.x + screen_area.width.saturating_sub(width));
-            let y = anchor.target_rect.y.saturating_sub(height);
-            Rect::new(x.max(screen_area.x), y.max(screen_area.y), width, height)
-        }
-        DropdownPlacement::Below => {
-            let x = anchor
-                .target_rect
-                .x
-                .min(screen_area.x + screen_area.width.saturating_sub(width));
-            let y = (anchor.target_rect.y + anchor.target_rect.height)
-                .min(screen_area.y + screen_area.height.saturating_sub(height));
-            Rect::new(x.max(screen_area.x), y, width, height)
-        }
-        DropdownPlacement::Auto => {
-            let space_below = (screen_area.y + screen_area.height)
-                .saturating_sub(anchor.target_rect.y + anchor.target_rect.height);
-            let space_above = anchor.target_rect.y.saturating_sub(screen_area.y);
+    let constraints = AnchorConstraints::new()
+        .with_width_bounds(width, max_avail_width)
+        .with_height_bounds(height, max_avail_height);
 
-            let place_below = space_below >= height || space_below >= space_above;
-            let x = anchor
-                .target_rect
-                .x
-                .min(screen_area.x + screen_area.width.saturating_sub(width));
-
-            let y = if place_below {
-                (anchor.target_rect.y + anchor.target_rect.height)
-                    .min(screen_area.y + screen_area.height.saturating_sub(height))
-            } else {
-                anchor
-                    .target_rect
-                    .y
-                    .saturating_sub(height)
-                    .max(screen_area.y)
-            };
-
-            Rect::new(x.max(screen_area.x), y, width, height)
-        }
-    }
+    compute_anchored_rect(
+        anchor.target_rect,
+        screen_area,
+        (width, height),
+        anchor.placement.into(),
+        AnchorAlignment::Start,
+        &constraints,
+    )
 }
 
 /// Render the floating dropdown popup overlay on top of the frame.
@@ -544,9 +522,9 @@ pub fn draw_dropdown<T>(
     anchor: &DropdownAnchor,
     theme: &Theme,
     screen_area: Rect,
-) {
+) -> Rect {
     if screen_area.width < 10 || screen_area.height < 5 {
-        return;
+        return Rect::default();
     }
 
     let has_descriptions = state.items.iter().any(|it| it.description.is_some());
@@ -558,7 +536,7 @@ pub fn draw_dropdown<T>(
     );
 
     if popup_area.width == 0 || popup_area.height == 0 {
-        return;
+        return Rect::default();
     }
 
     // 1. Clear background under popup to avoid bleed-through
@@ -783,6 +761,8 @@ pub fn draw_dropdown<T>(
         Paragraph::new(footer_line).alignment(Alignment::Right),
         footer_rect,
     );
+
+    popup_area
 }
 
 #[cfg(test)]

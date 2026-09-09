@@ -1,12 +1,12 @@
-//! `RunnerTool` — spawns a read-only exploration runner for research subtasks.
+//! `SubagentTool` — spawns a read-only exploration subagent for research subtasks.
 //!
 //! Lives in `muta-agent` proper (not the [`crate::tools`] module) because it
 //! constructs an
-//! [`crate::Agent`] internally: spawning an runner is an orchestration
+//! [`crate::Agent`] internally: spawning a subagent is an orchestration
 //! concern, not a domain-tool concern. The other tools (Bash/Read/Web/…)
 //! stay in [`crate::tools`] and remain pure trait implementations.
 //!
-//! Admission of tools to the runner is driven by [`muta_contracts::RUNNER_EXPLORE`]
+//! Admission of tools to the subagent is driven by [`muta_contracts::SUBAGENT_EXPLORE`]
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
@@ -15,16 +15,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use muta_contracts::{RunnerPreset, Tool};
+use muta_contracts::{SubagentPreset, Tool};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::{Agent, RunnerHandle};
+use crate::agent::{Agent, SubagentHandle};
 
 /// Canonical tool name for spawning a delegated child agent (ADR-0183).
 pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
-/// Legacy alias tool name for backward compatibility.
-pub const SPAWN_RUNNER_LEGACY_NAME: &str = "spawn_runner";
 
 /// Canonical description of the default `spawn_agent` dispatch tool (ADR-0183).
 pub const SPAWN_AGENT_TOOL_DESCRIPTION: &str = "\
@@ -33,10 +31,7 @@ context window and return a consolidated summary. Set 'role' to 'explore' for re
 research (default), 'code' for full implementation and testing, 'mcp' for specialized \
 tool integrations, or 'skill' for skill discovery, inspection, and domain guideline synthesis.";
 
-/// Legacy alias for [`SPAWN_AGENT_TOOL_DESCRIPTION`].
-pub const RUNNER_TOOL_DESCRIPTION: &str = SPAWN_AGENT_TOOL_DESCRIPTION;
-
-/// Canonical description of the write-capable `delegate_code` / `runner_code` dispatch tool.
+/// Canonical description of the write-capable `delegate_code` dispatch tool.
 pub const DELEGATE_CODE_TOOL_DESCRIPTION: &str = "\
 Delegate a well-scoped software-engineering task to a child agent that \
 implements the change end to end — it reads the relevant code, edits files, \
@@ -49,27 +44,21 @@ for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
-/// Legacy alias for [`DELEGATE_CODE_TOOL_DESCRIPTION`].
-pub const RUNNER_CODE_TOOL_DESCRIPTION: &str = DELEGATE_CODE_TOOL_DESCRIPTION;
-
 /// Canonical description of the MCP-specialist dispatch tool.
 pub const DELEGATE_MCP_TOOL_DESCRIPTION: &str = "\
 Delegate a specialized integration task (e.g. database operations, external API calls, \
 or third-party MCP tool interactions) to a dedicated child agent. The child agent runs in an isolated \
 sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
 
-/// Legacy alias for [`DELEGATE_MCP_TOOL_DESCRIPTION`].
-pub const RUNNER_MCP_TOOL_DESCRIPTION: &str = DELEGATE_MCP_TOOL_DESCRIPTION;
-
-/// Retry settings for a runner, inherited from the session's provider retry configuration.
+/// Retry settings for a subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunnerRetryConfig {
+pub struct SubagentRetryConfig {
     pub max_attempts: usize,
     pub base_ms: u64,
     pub max_ms: u64,
 }
 
-impl Default for RunnerRetryConfig {
+impl Default for SubagentRetryConfig {
     fn default() -> Self {
         Self {
             max_attempts: 30,
@@ -79,26 +68,26 @@ impl Default for RunnerRetryConfig {
     }
 }
 
-/// Live runner handles keyed by the parent tool-call id — the lookup table
+/// Live subagent handles keyed by the parent tool-call id — the lookup table
 /// that lets the harness route a down-direction reply (a permission decision
 /// or `ask_user` answer the user gave in the TUI) back into the specific
-/// running runner that surfaced the request. Full-duplex (ADR-0029).
+/// running subagent that surfaced the request. Full-duplex (ADR-0029).
 ///
 /// The `task` tool populates this when it spawns a child (and clears the entry
 /// when the child finishes); the harness reads it when it needs to reply to a
-/// `RunnerEvent::PermissionRequest` / `UserQuestionRequest` that arrived
+/// `SubagentEvent::PermissionRequest` / `UserQuestionRequest` that arrived
 /// nested under a given `parent_call_id`. Entries are best-effort: a late reply
 /// after the child already finished finds no entry (or a dead handle) and
 /// degrades to a no-op rather than erroring.
 #[derive(Default)]
-pub struct RunnerRegistry {
-    map: std::sync::Mutex<std::collections::HashMap<String, RunnerHandle>>,
+pub struct SubagentRegistry {
+    map: std::sync::Mutex<std::collections::HashMap<String, SubagentHandle>>,
 }
 
-impl RunnerRegistry {
-    /// Register a steering handle for the runner spawned by the
+impl SubagentRegistry {
+    /// Register a steering handle for the subagent spawned by the
     /// `parent_call_id` tool call. Replaces any prior entry for that id.
-    pub fn register(&self, parent_call_id: &str, handle: RunnerHandle) {
+    pub fn register(&self, parent_call_id: &str, handle: SubagentHandle) {
         // Poison-recovery idiom (codebase convention): a panic in another
         // holder poisoned the lock; recover the inner data rather than
         // panicking on a second, downstream error.
@@ -108,10 +97,10 @@ impl RunnerRegistry {
             .insert(parent_call_id.to_string(), handle);
     }
 
-    /// Look up the handle for a live runner by its parent tool-call id.
+    /// Look up the handle for a live subagent by its parent tool-call id.
     /// Returns a cloned handle (cheap) so the caller can reply without holding
     /// the lock.
-    pub fn get(&self, parent_call_id: &str) -> Option<RunnerHandle> {
+    pub fn get(&self, parent_call_id: &str) -> Option<SubagentHandle> {
         self.map
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -119,7 +108,7 @@ impl RunnerRegistry {
             .cloned()
     }
 
-    /// Remove the entry for a finished runner. Called when the `task` tool
+    /// Remove the entry for a finished subagent. Called when the `task` tool
     /// returns, so the registry never accumulates dead handles for completed
     /// calls (a handle whose `Weak` already expired is harmless but useless).
     pub fn remove(&self, parent_call_id: &str) {
@@ -130,28 +119,21 @@ impl RunnerRegistry {
     }
 }
 
-/// Canonical alias for [`RunnerTool`] under the homogeneous agent architecture (ADR-0183).
-pub type SubAgentTool = RunnerTool;
-/// Canonical alias for [`RunnerRegistry`] under the homogeneous agent architecture (ADR-0183).
-pub type SubAgentRegistry = RunnerRegistry;
-/// Canonical alias for [`RunnerOutcome`] under the homogeneous agent architecture (ADR-0183).
-pub type SubAgentOutcome = RunnerOutcome;
-
-/// Spawn a read-only exploration runner to handle a research sub-task.
+/// Spawn a read-only exploration subagent to handle a research sub-task.
 ///
-/// The runner runs the same provider with the tools admitted by the bound
-/// [`RunnerPreset`] (today always [`muta_contracts::RUNNER_EXPLORE`]): read-only, non-interactive,
+/// The subagent runs the same provider with the tools admitted by the bound
+/// [`SubagentPreset`] (today always [`muta_contracts::SUBAGENT_EXPLORE`]): read-only, non-interactive,
 /// non-recursive. Its final answer is returned to the calling agent, which
 /// stays in control of any write operations and any questions for the user.
-pub struct RunnerTool {
+pub struct SubagentTool {
     provider: Arc<dyn muta_contracts::Provider>,
     toolset: muta_contracts::ToolSet,
-    profile: &'static RunnerPreset,
+    profile: &'static SubagentPreset,
     /// The tool name the model calls this dispatch tool by. The default (set by
-    /// [`RunnerTool::new`]) is `"runner"` for the read-only research role; a
-    /// second instance bound to a write-capable profile (e.g. [`muta_contracts::RUNNER_CODE`]) takes a
-    /// distinct name like `"runner_code"` so it registers as its own capability
-    /// alongside the read-only `runner`, instead of colliding on the name.
+    /// [`SubagentTool::new`]) is `"subagent"` for the read-only research role; a
+    /// second instance bound to a write-capable profile (e.g. [`muta_contracts::SUBAGENT_CODE`]) takes a
+    /// distinct name like `"delegate_code"` so it registers as its own capability
+    /// alongside the read-only `subagent`, instead of colliding on the name.
     tool_name: &'static str,
     /// Human-facing description surfaced to the model as the tool's purpose.
     /// Defaults to the read-only research framing; a write-capable instance
@@ -160,49 +142,49 @@ pub struct RunnerTool {
     tool_description: &'static str,
     /// Shared handle to the parent agent's variant selection (the **override**
     /// axis). Bound after the parent agent is built (see
-    /// [`RunnerTool::bind_variant_selection`]). At spawn the child resolves
+    /// [`SubagentTool::bind_variant_selection`]). At spawn the child resolves
     /// its scoped capabilities to the model's chosen variants by snapshotting
-    /// this, so an runner — an agent on the same model — inherits the parent's
+    /// this, so a subagent — an agent on the same model — inherits the parent's
     /// overrides. `None` (the default, e.g. in tests) means default variants.
     parent_variants:
         std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::VariantSelection>>>>,
     /// Live workspace authority inherited from the parent. Delegation may
-    /// narrow this through the runner's operation scope, never widen it.
+    /// narrow this through the subagent's operation scope, never widen it.
     parent_workspace_security:
         std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>>>,
     /// ADR-0141: the parent's human-channel accountant, inherited by every
-    /// spawned runner so a child's posture tracks the session's live OR over
-    /// attached clients (an interactive session's runner can ask the user;
+    /// spawned subagent so a child's posture tracks the session's live OR over
+    /// attached clients (an interactive session's subagent can ask the user;
     /// an autonomous one's child never parks on a missing human).
     parent_human_channel:
         std::sync::Mutex<Option<Arc<muta_contracts::human_request::HumanChannelAccountant>>>,
-    /// Full-duplex handle registry (ADR-0029): each spawned runner's
-    /// [`RunnerHandle`] is lodged here keyed by the parent tool-call id, so
+    /// Full-duplex handle registry (ADR-0029): each spawned subagent's
+    /// [`SubagentHandle`] is lodged here keyed by the parent tool-call id, so
     /// the harness can route a user's permission / `ask_user` reply back down
     /// into the exact child that surfaced the request. Owned by the tool and
-    /// exposed via [`RunnerTool::registry`] so the binary that constructs the
+    /// exposed via [`SubagentTool::registry`] so the binary that constructs the
     /// tool (and drives the harness) can hand the same `Arc` to the harness.
-    registry: Arc<RunnerRegistry>,
-    accounting: std::sync::Mutex<Option<RunnerAccountingContext>>,
+    registry: Arc<SubagentRegistry>,
+    accounting: std::sync::Mutex<Option<SubagentAccountingContext>>,
     /// Live child cancellation tokens keyed by the parent tool-call id — the
     /// cooperative-cancel arm of interruption (the counterpoint to dropping
     /// the child future). `call_structured_with_events` stores the token each
-    /// spawned runner runs under; the harness's executor calls
+    /// spawned subagent runs under; the harness's executor calls
     /// [`Tool::request_cancel`] when the user interrupts the turn, which
     /// cancels the stored token. The child's round loop observes it at its
     /// next safe boundary, returns its partial transcript through
-    /// `run_runner_outcome`, and the parent records it instead of losing it.
+    /// `run_subagent_outcome`, and the parent records it instead of losing it.
     /// Entries are removed when the child's run ends, so a late
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
-    /// Master preset delegation policy gating which runner presets may be dispatched.
-    parent_delegation: std::sync::Mutex<Option<muta_contracts::MasterPresetDelegation>>,
+    /// Agent preset delegation policy gating which subagent presets may be dispatched.
+    parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentPresetDelegation>>,
     /// Parent execution policy enforcing recursion limits and depth bounds (ADR-0183).
     parent_execution_policy: std::sync::Mutex<Option<muta_contracts::ExecutionPolicy>>,
     /// Live source of MCP tools published to the parent's dynamic sink (ADR-0138).
-    /// `None` (tests, MCP-less sessions) means the mcp_specialist runner sees no
+    /// `None` (tests, MCP-less sessions) means the mcp_specialist subagent sees no
     /// MCP tools. Bound by bootstrap after the MCP runtime publishes its first
-    /// snapshot; consulted when the runner spawns so the child always sees the
+    /// snapshot; consulted when the subagent spawns so the child always sees the
     /// *current* toolset, not a stale bootstrap-time copy.
     mcp_tool_source: std::sync::Mutex<Option<Arc<dyn muta_contracts::DynamicToolSource>>>,
     /// The session's workspace root, captured at bootstrap so the child's
@@ -210,25 +192,25 @@ pub struct RunnerTool {
     /// project — not the daemon process's cwd (ADR-0096). `None` falls back
     /// to the process cwd (tests, single-project processes).
     workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
-    retry_config: std::sync::Mutex<RunnerRetryConfig>,
+    retry_config: std::sync::Mutex<SubagentRetryConfig>,
 }
 
 #[derive(Clone)]
-struct RunnerAccountingContext {
+struct SubagentAccountingContext {
     ledger: Arc<muta_contracts::TokenSourceLedger>,
     session_id: Arc<std::sync::Mutex<Option<String>>>,
     round_counter: Arc<std::sync::Mutex<u64>>,
 }
 
-impl RunnerTool {
+impl SubagentTool {
     /// `toolset` should be the parent agent's full capability set; `profile`
-    /// declares what the spawned runner may actually use (admission + variant
-    /// pins + framing). The caller binds the role explicitly — `&RUNNER_EXPLORE` for
-    /// the `spawn_runner` tool.
+    /// declares what the spawned subagent may actually use (admission + variant
+    /// pins + framing). The caller binds the role explicitly — `&SUBAGENT_EXPLORE` for
+    /// the `spawn_agent` tool.
     pub fn new(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static RunnerPreset,
+        profile: &'static SubagentPreset,
     ) -> Self {
         Self::named(
             provider,
@@ -239,13 +221,13 @@ impl RunnerTool {
         )
     }
 
-    /// Like [`new`](Self::new) but shares an existing [`RunnerRegistry`] instead
+    /// Like [`new`](Self::new) but shares an existing [`SubagentRegistry`] instead
     /// of creating a fresh one.
     pub fn with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static RunnerPreset,
-        registry: Arc<RunnerRegistry>,
+        profile: &'static SubagentPreset,
+        registry: Arc<SubagentRegistry>,
     ) -> Self {
         Self::named_with_registry(
             provider,
@@ -261,12 +243,12 @@ impl RunnerTool {
     pub fn mcp_specialist(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        registry: Arc<RunnerRegistry>,
+        registry: Arc<SubagentRegistry>,
     ) -> Self {
         Self::named_with_registry(
             provider,
             toolset,
-            &muta_contracts::RUNNER_MCP_SPECIALIST,
+            &muta_contracts::SUBAGENT_MCP_SPECIALIST,
             "delegate_mcp",
             DELEGATE_MCP_TOOL_DESCRIPTION,
             registry,
@@ -274,15 +256,15 @@ impl RunnerTool {
     }
 
     /// Build a dispatch tool under an explicit name and description. This is
-    /// how a second, write-capable runner dispatch tool is constructed: a
-    /// profile like [`muta_contracts::RUNNER_CODE`] is paired with a distinct tool name
-    /// (e.g. `"runner_code"`) and a description that tells the model this is the
-    /// delegation path for implementation work. The read-only `runner` tool and
+    /// how a second, write-capable subagent dispatch tool is constructed: a
+    /// profile like [`muta_contracts::SUBAGENT_CODE`] is paired with a distinct tool name
+    /// (e.g. `"delegate_code"`) and a description that tells the model this is the
+    /// delegation path for implementation work. The read-only `subagent` tool and
     /// a named variant coexist as separate capabilities in the parent toolset.
     pub fn named(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static RunnerPreset,
+        profile: &'static SubagentPreset,
         tool_name: &'static str,
         tool_description: &'static str,
     ) -> Self {
@@ -295,14 +277,14 @@ impl RunnerTool {
             parent_variants: std::sync::Mutex::new(None),
             parent_workspace_security: std::sync::Mutex::new(None),
             parent_human_channel: std::sync::Mutex::new(None),
-            registry: Arc::new(RunnerRegistry::default()),
+            registry: Arc::new(SubagentRegistry::default()),
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             parent_delegation: std::sync::Mutex::new(None),
             parent_execution_policy: std::sync::Mutex::new(None),
             mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
-            retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
+            retry_config: std::sync::Mutex::new(SubagentRetryConfig::default()),
         }
     }
 
@@ -312,10 +294,10 @@ impl RunnerTool {
     pub fn named_with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static RunnerPreset,
+        profile: &'static SubagentPreset,
         tool_name: &'static str,
         tool_description: &'static str,
-        registry: Arc<RunnerRegistry>,
+        registry: Arc<SubagentRegistry>,
     ) -> Self {
         Self {
             provider,
@@ -333,12 +315,12 @@ impl RunnerTool {
             parent_execution_policy: std::sync::Mutex::new(None),
             mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
-            retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
+            retry_config: std::sync::Mutex::new(SubagentRetryConfig::default()),
         }
     }
 
-    /// Bind the master preset delegation policy to enforce allowed runner profiles.
-    pub fn bind_master_delegation(&self, delegation: muta_contracts::MasterPresetDelegation) {
+    /// Bind the agent preset delegation policy to enforce allowed subagent profiles.
+    pub fn bind_delegation(&self, delegation: muta_contracts::AgentPresetDelegation) {
         *self
             .parent_delegation
             .lock()
@@ -354,11 +336,11 @@ impl RunnerTool {
     }
 
     /// Bind a live source of the parent's dynamic (MCP) tools, consulted when
-    /// an mcp_specialist runner spawns (ADR-0138 §2). The snapshot is read at
+    /// an mcp_specialist subagent spawns (ADR-0138 §2). The snapshot is read at
     /// spawn — not at bind — so periodic MCP re-discovery (McpCatalog's 10-min
     /// refresh, `/mcp` reconnects) reaches subsequent children without
     /// re-binding. `None`-bound (the default) also leaves the mcp_specialist
-    /// runner with no MCP tools.
+    /// subagent with no MCP tools.
     pub fn bind_dynamic_tool_source(&self, source: Arc<dyn muta_contracts::DynamicToolSource>) {
         *self
             .mcp_tool_source
@@ -366,7 +348,7 @@ impl RunnerTool {
             .unwrap_or_else(|e| e.into_inner()) = Some(source);
     }
 
-    /// Pin the session's workspace root so spawned runners resolve relative
+    /// Pin the session's workspace root so spawned subagents resolve relative
     /// `write_paths` (ADR-0028) against the session's project rather than the
     /// daemon process's cwd (ADR-0096). Called by the bootstrap right after
     /// construction; `None` (the default) keeps the process-cwd fallback.
@@ -378,7 +360,7 @@ impl RunnerTool {
     }
 
     /// Bind the parent's session-scoped accounting handles. Each spawned
-    /// runner gets its own actor id while sharing the session ledger, so nested
+    /// subagent gets its own actor id while sharing the session ledger, so nested
     /// provider requests are visible without colliding with the principal's
     /// round/turn numbers.
     pub fn bind_accounting(
@@ -388,7 +370,7 @@ impl RunnerTool {
         round_counter: Arc<std::sync::Mutex<u64>>,
     ) {
         *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(RunnerAccountingContext {
+            Some(SubagentAccountingContext {
                 ledger,
                 session_id,
                 round_counter,
@@ -396,9 +378,9 @@ impl RunnerTool {
     }
 
     /// Bind the parent agent's variant-selection handle (the **override** axis)
-    /// so spawned runners inherit the model's tool overrides. Called once,
+    /// so spawned subagents inherit the model's tool overrides. Called once,
     /// after the parent agent is constructed (the agent owns the handle). When
-    /// unbound, runners use each capability's default variant.
+    /// unbound, subagents use each capability's default variant.
     pub fn bind_variant_selection(
         &self,
         handle: Arc<std::sync::Mutex<muta_contracts::VariantSelection>>,
@@ -409,8 +391,8 @@ impl RunnerTool {
             .unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
-    /// ADR-0141: bind the session's channel accountant; spawned runners
-    /// inherit it (see the `run_runner` wiring of
+    /// ADR-0141: bind the session's channel accountant; spawned subagents
+    /// inherit it (see the `run_subagent` wiring of
     /// `Agent::set_human_channel_accountant`).
     pub fn bind_human_channel(
         &self,
@@ -451,40 +433,31 @@ impl RunnerTool {
             .unwrap_or_default()
     }
 
-    /// Bind the parent's provider retry settings so spawned runners inherit
+    /// Bind the parent's provider retry settings so spawned subagents inherit
     /// the session's retry budget and backoff parameters.
     pub fn bind_retry_policy(&self, max_attempts: usize, base_ms: u64, max_ms: u64) {
-        *self.retry_config.lock().unwrap_or_else(|e| e.into_inner()) = RunnerRetryConfig {
+        *self.retry_config.lock().unwrap_or_else(|e| e.into_inner()) = SubagentRetryConfig {
             max_attempts: max_attempts.clamp(1, 60),
             base_ms,
             max_ms,
         };
     }
 
-    /// The shared handle registry for runners spawned by this tool. The
+    /// The shared handle registry for subagents spawned by this tool. The
     /// binary passes this `Arc` to the harness so a user reply in the TUI can
-    /// be routed back into the live child (ADR-0029). Each `RunnerTool` instance
+    /// be routed back into the live child (ADR-0029). Each `SubagentTool` instance
     /// owns its own registry (children of different dispatch tools are
     /// disjoint), which is fine because the harness that needs to reply is the
     /// same one that constructed the tool.
-    pub fn registry(&self) -> Arc<RunnerRegistry> {
+    pub fn registry(&self) -> Arc<SubagentRegistry> {
         self.registry.clone()
     }
 }
 
 #[async_trait]
-impl Tool for RunnerTool {
+impl Tool for SubagentTool {
     fn name(&self) -> &str {
         self.tool_name
-    }
-
-    fn aliases(&self) -> &'static [&'static str] {
-        match self.tool_name {
-            "spawn_agent" => &["spawn_runner"],
-            "delegate_code" => &["runner_code"],
-            "delegate_mcp" => &["runner_mcp"],
-            _ => &[],
-        }
     }
 
     fn description(&self) -> &str {
@@ -501,7 +474,6 @@ impl Tool for RunnerTool {
                     "enum": ["explore", "code", "mcp", "skill"],
                     "description": "Optional sub-agent role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), 'mcp' (specialized tool integration), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
                 },
-                "preset": { "type": "string", "description": "Legacy alias for role." },
                 "background": {
                     "type": "boolean",
                     "description": "Set to true to dispatch this sub-agent asynchronously in the background. Only supported for read-only roles ('explore', 'skill'). You will be notified automatically when the exploration completes."
@@ -512,17 +484,13 @@ impl Tool for RunnerTool {
     }
 
     /// Whether invoking this tool spawns a nested sub-agent (ADR-0183).
+    /// `spawn_agent` does; subagent presets exclude it to prevent unbounded
+    /// recursion.
     fn spawns_subagent(&self) -> bool {
         true
     }
 
-    /// `task` spawns an runner; runner profiles exclude it to prevent
-    /// unbounded recursion.
-    fn spawns_runner(&self) -> bool {
-        true
-    }
-
-    /// The runner's in-flight call owns a partial transcript worth preserving,
+    /// The subagent's in-flight call owns a partial transcript worth preserving,
     /// so the harness routes turn cancellation through
     /// [`Tool::request_cancel`] instead of dropping the future: the child
     /// stops at its next safe boundary, returns its partial work, and the
@@ -533,7 +501,7 @@ impl Tool for RunnerTool {
 
     /// Cancel the live child spawned by the `call_id` call. The child's round
     /// loop observes its token at the next safe boundary and returns its
-    /// partial transcript through `run_runner_outcome`, so the parent executor
+    /// partial transcript through `run_subagent_outcome`, so the parent executor
     /// can drain it instead of dropping it. Returns `false` for an unknown or
     /// already-finished call — the harness then falls back to the drop path.
     fn request_cancel(&self, call_id: &str) -> bool {
@@ -551,27 +519,27 @@ impl Tool for RunnerTool {
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        self.run_runner(None, arguments, Box::new(|_| {})).await
+        self.run_subagent(None, arguments, Box::new(|_| {})).await
     }
 
     async fn call_with_events<'a>(
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
     ) -> Result<String, String> {
-        self.run_runner(Some(call_id), arguments, on_event).await
+        self.run_subagent(Some(call_id), arguments, on_event).await
     }
 
     async fn call_structured_with_events<'a>(
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
         _on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
         _stdin: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {
-        // Run the runner, streaming its lifecycle as RunnerEvents to the
+        // Run the subagent, streaming its lifecycle as SubagentEvents to the
         // parent harness (so the live TUI builds the nested view in real
         // time), then return a structured payload carrying the full transcript
         // + real token usage so the parent can persist children and account
@@ -581,8 +549,8 @@ impl Tool for RunnerTool {
         // handle in the registry (ADR-0029) so a user reply can flow back down
         // into this exact child while it runs.
         //
-        // Failure path: an runner that hit the 32-turn limit, repeated-call
-        // guard, or a provider error returns an Runner payload too — the
+        // Failure path: a subagent that hit the 32-turn limit, repeated-call
+        // guard, or a provider error returns a Subagent payload too — the
         // structured `failed` flag is set so the UI classifies it as Failed
         // without text-sniffing, and the partial transcript is preserved so
         // the user can resume into the half-finished work and the real token
@@ -591,18 +559,18 @@ impl Tool for RunnerTool {
         // input-validation errors (bad JSON, missing fields) propagate as
         // `Err`, because they have no partial transcript worth keeping.
         let outcome = self
-            .run_runner_outcome(Some(call_id), arguments, on_event)
+            .run_subagent_outcome(Some(call_id), arguments, on_event)
             .await?;
         let summary = if outcome.final_content.trim().is_empty() {
             if outcome.failed {
-                "(runner failed before producing an answer)".to_string()
+                "(subagent failed before producing an answer)".to_string()
             } else {
-                "(runner returned no answer)".to_string()
+                "(subagent returned no answer)".to_string()
             }
         } else {
             outcome.final_content.trim().to_string()
         };
-        Ok(muta_contracts::ToolOutput::Runner {
+        Ok(muta_contracts::ToolOutput::Subagent {
             summary,
             messages: outcome.messages,
             usage: outcome.token_usage,
@@ -615,36 +583,36 @@ impl Tool for RunnerTool {
 
 /// Internal result of running a sub-agent. Bundles everything the parent
 /// harness needs to persist the nested transcript and account for real cost.
-pub struct RunnerOutcome {
+pub struct SubagentOutcome {
     messages: Vec<muta_contracts::Message>,
     token_usage: muta_contracts::TokenUsage,
     /// Final assistant content, mirrored for convenience so the parent doesn't
     /// have to scan `messages` for the last Assistant turn.
     final_content: String,
-    /// Whether the runner terminated abnormally (hit its turn cap,
+    /// Whether the subagent terminated abnormally (hit its turn cap,
     /// repeated-call guard, or a provider error). Drives the structured
-    /// `failed` flag on the returned [`muta_contracts::ToolOutput::Runner`]
+    /// `failed` flag on the returned [`muta_contracts::ToolOutput::Subagent`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
     failed: bool,
-    /// Whether the runner was stopped by the parent before finishing (the turn
+    /// Whether the subagent was stopped by the parent before finishing (the turn
     /// was cancelled). Distinct from `failed`: the partial transcript is
     /// preserved either way, but interruption is a user-initiated stop that
     /// the model should treat as resumable work, not a sub-task error.
     interrupted: bool,
-    /// The runner's own generation time (summed across its completed provider
+    /// The subagent's own generation time (summed across its completed provider
     /// requests). Folded into the parent round's `generation_ms` so the
-    /// throughput denominator matches its numerator scope (runner output
+    /// throughput denominator matches its numerator scope (subagent output
     /// tokens already reach the parent via `token_usage`).
     generation_ms: u64,
 }
 
-impl RunnerTool {
-    async fn run_runner_outcome<'a>(
+impl SubagentTool {
+    async fn run_subagent_outcome<'a>(
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        mut on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
-    ) -> Result<RunnerOutcome, String> {
+        mut on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
+    ) -> Result<SubagentOutcome, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let description = args["description"]
@@ -661,11 +629,10 @@ impl RunnerTool {
 
         let requested_preset = args
             .get("role")
-            .or_else(|| args.get("preset"))
             .and_then(|p| p.as_str())
             .unwrap_or(self.profile.name);
         let profile =
-            muta_contracts::RunnerPresetPool::find(requested_preset).unwrap_or(self.profile);
+            muta_contracts::SubagentPresetPool::find(requested_preset).unwrap_or(self.profile);
 
         let is_background = args
             .get("background")
@@ -673,7 +640,7 @@ impl RunnerTool {
             .unwrap_or(false);
         if is_background && profile.name != "explore" && profile.name != "skill" {
             return Err(format!(
-                "Background execution is only permitted for read-only runners ('explore', 'skill') to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
+                "Background execution is only permitted for read-only subagents ('explore', 'skill') to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
                 profile.name
             ));
         }
@@ -683,11 +650,11 @@ impl RunnerTool {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            && !delegation.admits_runner(profile.name)
+            && !delegation.admits_subagent(profile.name)
         {
             return Err(format!(
-                "Master preset '{}' does not admit runner preset '{}'. Admitted presets: {:?}",
-                delegation.preset_id, profile.name, delegation.runner_presets
+                "Agent preset '{}' does not admit subagent preset '{}'. Admitted presets: {:?}",
+                delegation.preset_id, profile.name, delegation.subagent_presets
             ));
         }
 
@@ -705,25 +672,25 @@ impl RunnerTool {
         }
 
         // Announce the bound profile name first so the parent harness / TUI
-        // can label this runner by its role (explore / plan / verify / …)
-        // rather than a generic "Runner". Emitted before the child runs.
-        on_event(muta_contracts::RunnerEvent::Started {
+        // can label this subagent by its role (explore / plan / verify / …)
+        // rather than a generic "Subagent". Emitted before the child runs.
+        on_event(muta_contracts::SubagentEvent::Started {
             profile: profile.name.to_string(),
         });
 
-        // Resolve the pool for this runner: profile selection ⊓ model selection.
-        // The runner is an agent on the *same* model as the parent, so it carries
+        // Resolve the pool for this subagent: profile selection ⊓ model selection.
+        // The subagent is an agent on the *same* model as the parent, so it carries
         // the parent's model (capability limits + variant overrides). The profile
         // contributes the role scope and any variant pins; the model contributes
         // its variant overrides (snapshotted from the parent) and its hard
-        // capability limits. `resolve_tools` composes both and applies the runner
+        // capability limits. `resolve_tools` composes both and applies the subagent
         // runtime hard rules (no recursion / control-flow / blocking-on-user).
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
         let mut sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
 
-        // ADR-0138 §2: the mcp_specialist envoy receives the session's live
+        // ADR-0138 §2: the mcp_specialist subagent receives the session's live
         // dynamic (MCP) toolset on top of the static snapshot. Reading the
         // source at spawn (not at bind) means McpCatalog's periodic
         // re-discovery and `/mcp` reconnects reach later children without
@@ -749,11 +716,13 @@ impl RunnerTool {
             }
         }
 
-        // The runner's identity *is* its profile's system prompt — that is the
-        // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
+        // The subagent's identity *is* its preset's task prompt — that is the
+        // role framing for this child (e.g. SUBAGENT_EXPLORE's research mission),
+        // while posture (no human interaction, ephemeral scratchpad, depth cap)
+        // is enforced by the execution policy below, not by prose.
         let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
-        let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
-        runner.set_kind(muta_contracts::AgentKind::Runner);
+        let mut subagent = Agent::new(self.provider.clone(), sub_tools, identity);
+        subagent.set_kind(muta_contracts::AgentKind::Subagent);
         let parent_policy = self
             .parent_execution_policy
             .lock()
@@ -770,7 +739,7 @@ impl RunnerTool {
                 tool_policy: Some(profile.tool_policy),
                 max_children_budget: 0,
             });
-        runner.set_execution_policy(child_policy);
+        subagent.set_execution_policy(child_policy);
 
         if let Some(handle) = self
             .parent_workspace_security
@@ -779,9 +748,9 @@ impl RunnerTool {
             .as_ref()
             .cloned()
         {
-            runner.bind_workspace_security_handle(handle);
+            subagent.bind_workspace_security_handle(handle);
         }
-        let runner = Arc::new(runner);
+        let subagent = Arc::new(subagent);
         if let Some(accounting) = self
             .accounting
             .lock()
@@ -799,18 +768,18 @@ impl RunnerTool {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let actor = call_id
-                .map(|id| format!("runner:{id}"))
-                .unwrap_or_else(|| format!("runner:{}", uuid::Uuid::new_v4()));
-            runner.set_thread_id(session_id);
-            runner.restore_round_count(round);
-            runner.set_accounting_actor_id(actor);
-            runner.install_token_ledger(accounting.ledger);
+                .map(|id| format!("subagent:{id}"))
+                .unwrap_or_else(|| format!("subagent:{}", uuid::Uuid::new_v4()));
+            subagent.set_thread_id(session_id);
+            subagent.restore_round_count(round);
+            subagent.set_accounting_actor_id(actor);
+            subagent.install_token_ledger(accounting.ledger);
         }
-        // A `task` runner runs unobstructed: disable the deterministic
+        // A `task` subagent runs unobstructed: disable the deterministic
         // read-loop guard's nudge (ADR-0034) so a short-lived, parent-supervised
-        // runner is never steered by it. The parent and `abort` remain its
+        // subagent is never steered by it. The parent and `abort` remain its
         // backstops.
-        runner.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
+        subagent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
         // Full-duplex (ADR-0029): install the child's steering inbox and lodge
         // its handle in the registry keyed by the parent tool-call id. Now any
         // permission / `ask_user` request the child surfaces travels *up* via
@@ -819,48 +788,48 @@ impl RunnerTool {
         // resolving the child's parked oneshot. A `None` call_id (the bare
         // `call` path, no harness involvement) skips registration — there is no
         // one to reply, so the child must stay self-contained.
-        let _handle = runner.install_inbox();
+        let _handle = subagent.install_inbox();
         if let Some(id) = call_id {
             self.registry.register(id, _handle.clone());
         }
         // Full-duplex (ADR-0029): the broker gate is now profile-driven. The
         // built-in profiles keep `delegated: true` to preserve the legacy
         // autonomous contract, but a profile with `delegated: false` lets a
-        // runner's write/execute tool calls surface as
-        // `RunnerEvent::PermissionRequest` up to the parent, with the user's
+        // subagent's write/execute tool calls surface as
+        // `SubagentEvent::PermissionRequest` up to the parent, with the user's
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        runner.set_unattended(profile.unattended);
+        subagent.set_unattended(profile.unattended);
         // ADR-0141: the child inherits the parent's human-channel posture
-        // source. An interactive session's runners can ask the user through
+        // source. An interactive session's subagents can ask the user through
         // the parent's channel (permission requests flow up via
-        // RunnerEvent); an autonomous parent's children never park on a
+        // SubagentEvent); an autonomous parent's children never park on a
         // human that is not there — they fail closed / settle by labeled
         // policy in the child, instead of deadlocking the parent's tool
         // call on an unanswerable question.
         if let Some(accountant) = self.parent_human_channel() {
-            runner.set_human_channel_accountant(accountant);
+            subagent.set_human_channel_accountant(accountant);
         }
         // Resolve the bound profile's write grant (ADR-0028) against the
         // session's workspace root (falling back to the process cwd when no
-        // root was captured) and set it on the child. All built-in profiles
-        // (RUNNER_EXPLORE/RUNNER_TITLE: empty `write_paths`) resolve to
-        // `WriteScope::None`, consistent with their admission (no write tools
-        // admitted anyway).
+        // root was captured) and set it on the child. All built-in presets
+        // (SUBAGENT_EXPLORE/SUBAGENT_TITLE: empty `write_paths`) resolve to an
+        // empty `OperationScope`, consistent with their admission (no write
+        // tools admitted anyway).
         let cwd = self
             .workspace_root
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        runner.set_operation_scope(profile.resolve_operation_scope(&cwd));
-        // Runners are short-lived and read-only by profile, and session
+        subagent.set_operation_scope(profile.resolve_operation_scope(&cwd));
+        // Subagents are short-lived and read-only by profile, and session
         // review is on-demand (`/review`) with no automatic firing — so a
-        // research runner never pays for a diagnostic and review can never
+        // research subagent never pays for a diagnostic and review can never
         // recurse. No setup needed here. ADR-0018.
 
-        // The runner's durable transcript opens with just the task as the user
+        // The subagent's durable transcript opens with just the task as the user
         // message. Request assembly composes a fresh head system message every
         // round from the profile persona (carried via `AgentIdentity`, set
         // above) and mission-neutral system-prompt policy — see ADR-0061.
@@ -872,10 +841,10 @@ impl RunnerTool {
         // itself is the user message; `description` remains a required label
         // arg (validated above) for the parent / TUI.
         let mut messages = vec![crate::conversation_context::visible_user(
-            muta_contracts::InjectionKind::RunnerTask,
+            muta_contracts::InjectionKind::SubagentTask,
             prompt,
         )];
-        // The runner runs under its own cancellation token. When the parent
+        // The subagent runs under its own cancellation token. When the parent
         // turn is interrupted, the harness's executor calls
         // [`Tool::request_cancel`] on this tool with the parent tool-call id,
         // which cancels the stored token below; the child's round loop
@@ -891,13 +860,13 @@ impl RunnerTool {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(id.to_string(), child_cancel.clone());
         }
-        // Track the runner's own ReAct position as `ModelRequestStarted`
+        // Track the subagent's own ReAct position as `ModelRequestStarted`
         // events arrive so the streamed `StreamStart` / `ToolCall` events can
         // carry it (mirroring the main session's `(round, turn)` stamping).
         let mut position: (u64, usize) = (1, 0);
         // Transient-provider-retry loop. The top-level interactive round
         // retries `HarnessError::Retryable` in `orchestration::execute_round`
-        // (config: `provider_retry_max_attempts`), but an runner runs through
+        // (config: `provider_retry_max_attempts`), but a subagent runs through
         // `run_streaming_with_events` directly and had *no* retry at all —
         // one flaky long SSE generation (the GLM `xhigh`-effort stream that
         // gets cut mid-body) killed the whole sub-task after minutes of
@@ -912,14 +881,14 @@ impl RunnerTool {
                 let clean = id.trim_start_matches("call_");
                 &clean[..clean.len().min(6)]
             })
-            .unwrap_or("runner");
-        let origin_label = format!("runner #{} · {}", short_id, profile.name);
+            .unwrap_or("subagent");
+        let origin_label = format!("subagent #{} · {}", short_id, profile.name);
 
-        let mut round = runner.begin_streaming_round();
+        let mut round = subagent.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {
             attempt += 1;
-            let run = runner
+            let run = subagent
                 .resume_streaming_with_events(&mut messages, &child_cancel, &mut round, |event| {
                     if let muta_contracts::AgentEvent::ModelRequestStarted { round, turn, .. } =
                         &event
@@ -960,14 +929,14 @@ impl RunnerTool {
                         max_attempts = retry_limit,
                         delay_ms,
                         error = %message,
-                        "runner hit a transient provider error; retrying"
+                        "subagent hit a transient provider error; retrying"
                     );
-                    on_event(muta_contracts::RunnerEvent::Notice(
+                    on_event(muta_contracts::SubagentEvent::Notice(
                         muta_contracts::AgentNotice::new(
                             muta_contracts::NoticeKind::ProviderRetry,
                             muta_contracts::NoticeSeverity::Warning,
                             format!(
-                                "Runner retrying after transient provider error \
+                                "Subagent retrying after transient provider error \
                                  ({attempt}/{retry_limit})"
                             ),
                             muta_contracts::NoticeSource::Harness,
@@ -978,7 +947,7 @@ impl RunnerTool {
                             crate::orchestration::public_retry_reason(message),
                         )),
                     ));
-                    on_event(muta_contracts::RunnerEvent::Activity(format!(
+                    on_event(muta_contracts::SubagentEvent::Activity(format!(
                         "waiting to retry ({}s)",
                         delay_ms.div_ceil(1_000)
                     )));
@@ -1008,7 +977,7 @@ impl RunnerTool {
         match result {
             Ok(result) => {
                 let final_content = result.message.content.clone();
-                Ok(RunnerOutcome {
+                Ok(SubagentOutcome {
                     messages,
                     token_usage: result.token_usage,
                     final_content,
@@ -1023,7 +992,7 @@ impl RunnerTool {
                 // error. The model must understand the sub-task was stopped by
                 // the user (resumable work), not that it failed. On a genuine
                 // failure we surface the partial transcript too — both so the
-                // parent's tool-result message carries the runner's
+                // parent's tool-result message carries the subagent's
                 // work-in-progress `children` and so the real token cost
                 // reaches the parent round's accounting; the `final_content`
                 // is prefixed `Error: …` so the failure classifier and the
@@ -1039,20 +1008,20 @@ impl RunnerTool {
                     });
                     let final_content = match partial {
                         Some(text) => format!(
-                            "Interrupted: the runner was stopped by the user before completing. \
+                            "Interrupted: the subagent was stopped by the user before completing. \
                              It ran {tool_calls} tool call(s) and produced the following partial \
                              findings:\n{text}"
                         ),
                         None => format!(
-                            "Interrupted: the runner was stopped by the user before producing any \
+                            "Interrupted: the subagent was stopped by the user before producing any \
                              findings (it ran {tool_calls} tool call(s))."
                         ),
                     };
                     tracing::info!(
                         tool_calls,
-                        "runner interrupted by parent; preserving partial transcript"
+                        "subagent interrupted by parent; preserving partial transcript"
                     );
-                    return Ok(RunnerOutcome {
+                    return Ok(SubagentOutcome {
                         messages,
                         token_usage: muta_contracts::TokenUsage::default(),
                         final_content,
@@ -1062,8 +1031,8 @@ impl RunnerTool {
                     });
                 }
                 let error_string = error.to_string();
-                tracing::warn!(error = %error_string, "runner failed; preserving partial transcript");
-                Ok(RunnerOutcome {
+                tracing::warn!(error = %error_string, "subagent failed; preserving partial transcript");
+                Ok(SubagentOutcome {
                     messages,
                     token_usage: muta_contracts::TokenUsage::default(),
                     final_content: format!("Error: {error_string}"),
@@ -1075,18 +1044,18 @@ impl RunnerTool {
         }
     }
 
-    async fn run_runner<'a>(
+    async fn run_subagent<'a>(
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
     ) -> Result<String, String> {
         let outcome = self
-            .run_runner_outcome(call_id, arguments, on_event)
+            .run_subagent_outcome(call_id, arguments, on_event)
             .await?;
         let content = outcome.final_content.trim().to_string();
         if content.is_empty() {
-            Ok("(runner returned no answer)".to_string())
+            Ok("(subagent returned no answer)".to_string())
         } else {
             Ok(content)
         }
@@ -1096,11 +1065,11 @@ impl RunnerTool {
         event: muta_contracts::AgentEvent,
         position: (u64, usize),
         origin: Option<&str>,
-        on_event: &mut dyn FnMut(muta_contracts::RunnerEvent),
+        on_event: &mut dyn FnMut(muta_contracts::SubagentEvent),
     ) {
         match event {
             muta_contracts::AgentEvent::Notice(notice) => {
-                on_event(muta_contracts::RunnerEvent::Notice(notice));
+                on_event(muta_contracts::SubagentEvent::Notice(notice));
             }
             muta_contracts::AgentEvent::ModelRequestStarted { turn, .. } => {
                 let status = if turn == 0 {
@@ -1108,40 +1077,40 @@ impl RunnerTool {
                 } else {
                     format!("waiting for model (turn {})", turn + 1)
                 };
-                on_event(muta_contracts::RunnerEvent::Activity(status));
+                on_event(muta_contracts::SubagentEvent::Activity(status));
             }
             muta_contracts::AgentEvent::AssistantDelta { delta, start } => {
                 if start {
-                    on_event(muta_contracts::RunnerEvent::StreamStart {
+                    on_event(muta_contracts::SubagentEvent::StreamStart {
                         round: position.0,
                         turn: position.1,
                     });
                 }
-                on_event(muta_contracts::RunnerEvent::StreamDelta(delta));
+                on_event(muta_contracts::SubagentEvent::StreamDelta(delta));
             }
             muta_contracts::AgentEvent::AssistantEnd(content) => {
-                on_event(muta_contracts::RunnerEvent::StreamEnd(content));
+                on_event(muta_contracts::SubagentEvent::StreamEnd(content));
             }
-            // The runner's reasoning chain, streamed live instead of surfacing
+            // The subagent's reasoning chain, streamed live instead of surfacing
             // only after a session reload.
             muta_contracts::AgentEvent::ReasoningDelta { delta, start } => {
                 if start {
-                    on_event(muta_contracts::RunnerEvent::StreamReasoningStart {
+                    on_event(muta_contracts::SubagentEvent::StreamReasoningStart {
                         round: position.0,
                         turn: position.1,
                     });
                 }
-                on_event(muta_contracts::RunnerEvent::StreamReasoningDelta(delta));
+                on_event(muta_contracts::SubagentEvent::StreamReasoningDelta(delta));
             }
             muta_contracts::AgentEvent::ReasoningEnd(content) => {
-                on_event(muta_contracts::RunnerEvent::StreamReasoningEnd(content));
+                on_event(muta_contracts::SubagentEvent::StreamReasoningEnd(content));
             }
             muta_contracts::AgentEvent::ToolCall {
                 id,
                 name,
                 arguments,
             } => {
-                on_event(muta_contracts::RunnerEvent::ToolCall {
+                on_event(muta_contracts::SubagentEvent::ToolCall {
                     id,
                     name,
                     arguments,
@@ -1156,7 +1125,7 @@ impl RunnerTool {
                 duration_ms,
                 ..
             } => {
-                on_event(muta_contracts::RunnerEvent::ToolResult {
+                on_event(muta_contracts::SubagentEvent::ToolResult {
                     id,
                     name,
                     output,
@@ -1169,20 +1138,20 @@ impl RunnerTool {
                 if request.origin.is_none() {
                     request.origin = origin.map(str::to_string);
                 }
-                on_event(muta_contracts::RunnerEvent::PermissionRequest(request));
+                on_event(muta_contracts::SubagentEvent::PermissionRequest(request));
             }
             // Same full-duplex contract as the permission arm above.
             muta_contracts::AgentEvent::UserQuestionRequest(mut request) => {
                 if request.origin.is_none() {
                     request.origin = origin.map(str::to_string);
                 }
-                on_event(muta_contracts::RunnerEvent::UserQuestionRequest(request));
+                on_event(muta_contracts::SubagentEvent::UserQuestionRequest(request));
             }
-            // An interactive `bash` inside the runner needs operator
+            // An interactive `bash` inside the subagent needs operator
             // stdin; forward the request up so the parent harness can surface
             // it, with the reply routed back down via `reply_input`.
             muta_contracts::AgentEvent::StdinRequest(request) => {
-                on_event(muta_contracts::RunnerEvent::StdinRequest(request));
+                on_event(muta_contracts::SubagentEvent::StdinRequest(request));
             }
             _ => {}
         }
@@ -1193,7 +1162,7 @@ impl RunnerTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use muta_contracts::{Message, Provider, ProviderStreamEvent, RUNNER_EXPLORE, Role};
+    use muta_contracts::{Message, Provider, ProviderStreamEvent, Role, SUBAGENT_EXPLORE};
 
     struct CannedProvider;
 
@@ -1229,7 +1198,7 @@ mod tests {
     /// Fails the first `stream_chat_events` call with a retryable transport
     /// error, succeeds afterwards — the exact shape of a GLM long SSE stream
     /// cut off mid-body (`Kind::Decode` → `[MUTA_RETRYABLE]`), which before
-    /// the runner retry loop killed the sub-task outright.
+    /// the subagent retry loop killed the sub-task outright.
     struct FlakyThenOkProvider {
         calls: std::sync::atomic::AtomicUsize,
     }
@@ -1334,7 +1303,7 @@ mod tests {
         }
     }
 
-    /// A terse `read_text` variant and a write tool, to prove an runner
+    /// A terse `read_text` variant and a write tool, to prove a subagent
     /// resolves the *model's* variant (override axis) and then narrows to the
     /// *profile's* scope (scope axis) — the two are orthogonal.
     struct TerseReadTool;
@@ -1357,21 +1326,21 @@ mod tests {
         }
     }
     #[test]
-    fn runner_inherits_model_variant_then_applies_profile_scope() {
-        // `StubWriteTool` (name "stub_write") is not in RUNNER_EXPLORE's read-only
+    fn subagent_inherits_model_variant_then_applies_profile_scope() {
+        // `StubWriteTool` (name "stub_write") is not in SUBAGENT_EXPLORE's read-only
         // scope, so it is always excluded; `read_text` has two variants.
         let toolset = muta_contracts::ToolSet::from_tools([
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(TerseReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(StubWriteTool) as std::sync::Arc<dyn Tool>,
         ]);
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             toolset,
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
-        let resolve = |tool: &RunnerTool| {
+        let resolve = |tool: &SubagentTool| {
             let model = muta_contracts::resolve_model(&CannedProvider.model());
             let model_sel = muta_contracts::ToolSelection::unrestricted()
                 .with_variants(tool.variant_snapshot());
@@ -1386,7 +1355,7 @@ mod tests {
         assert_eq!(read.map(|t| t.variant()), Some("default"));
         assert!(scoped.iter().all(|t| t.name() != "stub_write"));
 
-        // Bind a model selection pinning read_text=terse: the runner inherits
+        // Bind a model selection pinning read_text=terse: the subagent inherits
         // the override (terse), while scope is still profile-driven.
         let mut sel = muta_contracts::VariantSelection::new();
         sel.insert("read_text".to_string(), "terse".to_string());
@@ -1398,20 +1367,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_retries_after_transient_stream_failure() {
+    async fn subagent_retries_after_transient_stream_failure() {
         let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         let output = tool
             .call(r#"{"description":"find files","prompt":"where are the handlers?"}"#)
             .await
-            .expect("the runner must recover from one transient stream failure");
+            .expect("the subagent must recover from one transient stream failure");
 
         assert_eq!(
             output, "recovered",
@@ -1425,14 +1394,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_inherits_and_respects_custom_retry_policy() {
+    async fn subagent_inherits_and_respects_custom_retry_policy() {
         let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
         tool.bind_retry_policy(1, 10, 10); // only 1 attempt
 
@@ -1449,13 +1418,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_tool_runs_read_only_runner_and_returns_answer() {
-        let tool = RunnerTool::new(
+    async fn task_tool_runs_read_only_subagent_and_returns_answer() {
+        let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         let output = tool
@@ -1468,8 +1437,8 @@ mod tests {
 
     /// A provider that lets the test control when the *second* model request
     /// is in flight: the first request returns a `read_text` tool call (which
-    /// the runner executes), the second flips `second_request_started` and
-    /// then never produces a stream event — so the runner is parked mid-flight
+    /// the subagent executes), the second flips `second_request_started` and
+    /// then never produces a stream event — so the subagent is parked mid-flight
     /// until its cancellation token fires.
     struct GatedProvider {
         requests: std::sync::atomic::AtomicUsize,
@@ -1508,11 +1477,11 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                 == 0
             {
-                // First request: ask the runner to run its `read_text` tool.
+                // First request: ask the subagent to run its `read_text` tool.
                 Ok(Box::pin(stream::iter(vec![
                     Ok(ProviderStreamEvent::ToolCallDelta {
                         index: 0,
-                        id: Some("runner_inner_1".to_string()),
+                        id: Some("subagent_inner_1".to_string()),
                         name: Some("read_text".to_string()),
                         arguments: "{}".to_string(),
                     }),
@@ -1521,8 +1490,8 @@ mod tests {
                     )),
                 ])))
             } else {
-                // Second request: tell the test the runner is mid-flight, then
-                // stall forever. The runner's streaming loop races its
+                // Second request: tell the test the subagent is mid-flight, then
+                // stall forever. The subagent's streaming loop races its
                 // cancellation token against `stream.next()`, so cancelling
                 // the child token resolves this immediately.
                 let _ = self.second_request_started.send(true);
@@ -1532,50 +1501,50 @@ mod tests {
     }
 
     /// Regression for cooperative interruption: when the parent cancels a
-    /// running runner, the partial transcript is preserved as an *interrupted*
+    /// running subagent, the partial transcript is preserved as an *interrupted*
     /// outcome (not dropped, not a failure). The child's completed tool call,
     /// the task message, and a model-facing "Interrupted:" summary all survive
     /// so the parent can record them and the user can resume.
     #[tokio::test]
-    async fn interrupting_runner_preserves_partial_transcript() {
+    async fn interrupting_subagent_preserves_partial_transcript() {
         let (started_tx, started_rx) = tokio::sync::watch::channel(false);
         let provider = std::sync::Arc::new(GatedProvider {
             requests: std::sync::atomic::AtomicUsize::new(0),
             second_request_started: started_tx,
         });
-        let tool = std::sync::Arc::new(RunnerTool::new(
+        let tool = std::sync::Arc::new(SubagentTool::new(
             provider,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         ));
 
         let tool_for_run = tool.clone();
         let run = tokio::spawn(async move {
             tool_for_run
-                .run_runner_outcome(
+                .run_subagent_outcome(
                     Some("call_interrupt"),
                     r#"{"description":"interrupt me","prompt":"find the handlers"}"#,
-                    Box::new(|_event: muta_contracts::RunnerEvent| {}),
+                    Box::new(|_event: muta_contracts::SubagentEvent| {}),
                 )
                 .await
         });
 
-        // Wait until the runner is genuinely mid-flight (its second model
+        // Wait until the subagent is genuinely mid-flight (its second model
         // request is in the air), then interrupt it the way the harness's
         // executor does: via `Tool::request_cancel` keyed by the call id.
         let mut started_rx = started_rx;
         started_rx
             .changed()
             .await
-            .expect("runner reached its second request");
+            .expect("subagent reached its second request");
         assert!(
             tool.request_cancel("call_interrupt"),
-            "an in-flight runner must accept the cancel request"
+            "an in-flight subagent must accept the cancel request"
         );
 
-        let outcome = run.await.expect("runner run task").expect("outcome");
+        let outcome = run.await.expect("subagent run task").expect("outcome");
         assert!(outcome.interrupted, "interruption must be flagged");
         assert!(!outcome.failed, "interruption is not a failure");
         assert!(
@@ -1601,23 +1570,23 @@ mod tests {
         );
     }
 
-    /// The runner persona belongs to the immutable provider request, not its
+    /// The subagent persona belongs to the immutable provider request, not its
     /// durable child transcript. The delegated task remains a user message.
     #[tokio::test]
-    async fn runner_head_system_message_has_no_dead_task_line() {
+    async fn subagent_head_system_message_has_no_dead_task_line() {
         let provider = std::sync::Arc::new(RecordingProvider::default());
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
         let outcome = tool
-            .run_runner_outcome(
+            .run_subagent_outcome(
                 None,
                 r#"{"description":"find files","prompt":"where are the handlers?"}"#,
-                Box::new(|_event: muta_contracts::RunnerEvent| {}),
+                Box::new(|_event: muta_contracts::SubagentEvent| {}),
             )
             .await
             .unwrap();
@@ -1627,11 +1596,11 @@ mod tests {
             .lock()
             .unwrap()
             .clone()
-            .expect("runner request captured");
+            .expect("subagent request captured");
         let system_content = request.instructions.render_combined();
         assert!(
-            system_content.starts_with("You are a focused research runner"),
-            "system instructions should open with the RUNNER_EXPLORE persona"
+            system_content.starts_with("You are a delegated research subagent"),
+            "system instructions should open with the SUBAGENT_EXPLORE task prompt"
         );
         assert!(
             !system_content.contains("Task: find files"),
@@ -1654,16 +1623,16 @@ mod tests {
                 .origin
                 .as_ref()
                 .map(|origin| origin.kind),
-            Some(muta_contracts::InjectionKind::RunnerTask)
+            Some(muta_contracts::InjectionKind::SubagentTask)
         );
     }
 
     #[tokio::test]
     async fn task_tool_rejects_missing_fields() {
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
         assert!(tool.call(r#"{"description":"x"}"#).await.is_err());
         assert!(tool.call(r#"{"prompt":"x"}"#).await.is_err());
@@ -1704,13 +1673,13 @@ mod tests {
         }
     }
 
-    /// ADR-0138 §2: an mcp_specialist runner spawned with a bound dynamic
+    /// ADR-0138 §2: an mcp_specialist subagent spawned with a bound dynamic
     /// source receives its MCP tools alongside the static capability set, and
     /// the injection reads the source *at spawn* — a tool published after
     /// binding still reaches a later child. Static-name collisions are
     /// resolved first-wins (static wins), matching sink-side advertisement.
     #[tokio::test]
-    async fn mcp_specialist_runner_receives_live_dynamic_tools() {
+    async fn mcp_specialist_subagent_receives_live_dynamic_tools() {
         // A provider that records every ModelRequest it serves, so the test can
         // assert on the tool_specs the *child* actually received.
         #[derive(Default)]
@@ -1756,17 +1725,17 @@ mod tests {
             // Collides with a static tool name: static must win.
             std::sync::Arc::new(DynamicMcpTool("read_text")) as Arc<dyn Tool>,
         ]));
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::RUNNER_MCP_SPECIALIST,
+            &muta_contracts::SUBAGENT_MCP_SPECIALIST,
         );
         tool.bind_dynamic_tool_source(live as Arc<dyn muta_contracts::DynamicToolSource>);
 
         let _summary = tool
             .call(r#"{"description":"mcp","prompt":"use the dynamic tools","role":"mcp"}"#)
             .await
-            .expect("runner dispatch succeeds");
+            .expect("subagent dispatch succeeds");
 
         let specs = provider.specs.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
@@ -1800,38 +1769,38 @@ mod tests {
     #[test]
     fn explore_profile_excludes_user_write_and_recursion_using_real_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let runner_tool = RunnerTool::new(
+        let subagent_tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
-            std::sync::Arc::new(runner_tool),
+            std::sync::Arc::new(subagent_tool),
         ]);
 
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let admitted = RUNNER_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let admitted = SUBAGENT_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let admitted_names: Vec<&str> = admitted.iter().map(|t| t.name()).collect();
 
         assert_eq!(admitted_names, vec!["read_text"]);
     }
 
-    /// Cross-cut regression: `RUNNER_EXPLORE` admits only its whitelisted read tools —
+    /// Cross-cut regression: `SUBAGENT_EXPLORE` admits only its whitelisted read tools —
     /// `ask_user`, the non-whitelisted write stub, and recursion are all
     /// excluded. The read stub is admitted because it is named `read_text`,
     /// which is in [`READ_ONLY_TOOLS`].
     #[test]
     fn explore_profile_excludes_bash_writes_user_and_recursion() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let runner_tool = RunnerTool::new(
+        let subagent_tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1839,19 +1808,19 @@ mod tests {
             std::sync::Arc::new(crate::tools::ExecuteCommandTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
-            std::sync::Arc::new(runner_tool),
+            std::sync::Arc::new(subagent_tool),
         ]);
 
-        // RUNNER_EXPLORE: only the whitelisted read tool survives (bash, ask_user,
+        // SUBAGENT_EXPLORE: only the whitelisted read tool survives (bash, ask_user,
         // the write stub, and recursion are all excluded).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let explore_selected = RUNNER_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let explore_selected = SUBAGENT_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let explore_names: Vec<&str> = explore_selected.iter().map(|t| t.name()).collect();
         assert_eq!(explore_names, vec!["read_text"]);
     }
 
-    /// A write-capable `runner_code` tool (bound to [`muta_contracts::RUNNER_CODE`])
+    /// A write-capable `delegate_code` tool (bound to [`muta_contracts::SUBAGENT_CODE`])
     /// admits the edit surface a coder needs. Built with the real tools the
     /// harness registers so a future capability regression is caught here —
     /// mirrors `explore_profile_excludes_bash_writes_user_and_recursion` for
@@ -1859,12 +1828,12 @@ mod tests {
     #[test]
     fn code_profile_admits_edit_surface_using_real_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let runner_code_arc = std::sync::Arc::new(RunnerTool::named(
+        let delegate_code_arc = std::sync::Arc::new(SubagentTool::named(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::RUNNER_CODE,
-            "runner_code",
-            "coding runner",
+            &muta_contracts::SUBAGENT_CODE,
+            "delegate_code",
+            "coding subagent",
         ));
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1873,24 +1842,26 @@ mod tests {
             std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
             std::sync::Arc::new(crate::tools::EditTextTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
-            runner_code_arc.clone() as std::sync::Arc<dyn Tool>,
+            delegate_code_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);
 
-        // RUNNER_CODE admits bash, write_file, edit_text, and the read tools; it
-        // excludes the runner dispatch tool itself (recursion).
+        // SUBAGENT_CODE admits bash, write_file, edit_text, and the read tools; it
+        // excludes the subagent dispatch tool itself (recursion).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let selected = muta_contracts::RUNNER_CODE.resolve_tools(&toolset, &model, &model_sel);
+        let selected = muta_contracts::SUBAGENT_CODE.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
         assert!(names.contains("run_command"));
         assert!(names.contains("write_file"));
         assert!(names.contains("edit_text"));
-        assert!(!names.contains("runner_code"), "recursion must be excluded");
-        assert!(!names.contains("spawn_runner"));
+        assert!(
+            !names.contains("delegate_code"),
+            "recursion must be excluded"
+        );
 
         // The tool surfaces under its own name.
-        assert_eq!(runner_code_arc.name(), "runner_code");
+        assert_eq!(delegate_code_arc.name(), "delegate_code");
     }
 
     /// Two dispatch tools sharing one registry is the load-bearing property
@@ -1901,21 +1872,21 @@ mod tests {
     #[test]
     fn named_with_registry_shares_the_registry_across_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let explore = RunnerTool::new(
+        let explore = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
         let shared = explore.registry();
-        let code = RunnerTool::named_with_registry(
+        let code = SubagentTool::named_with_registry(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::RUNNER_CODE,
-            "runner_code",
-            "coding runner",
+            &muta_contracts::SUBAGENT_CODE,
+            "delegate_code",
+            "coding subagent",
             shared.clone(),
         );
-        // Same Arc<RunnerRegistry> — the driver hands one to the harness, and
+        // Same Arc<SubagentRegistry> — the driver hands one to the harness, and
         // children of either tool land in the same table.
         assert!(
             std::sync::Arc::ptr_eq(&explore.registry(), &code.registry()),
@@ -1925,26 +1896,27 @@ mod tests {
         // coexist in a parent toolset without one shadowing the other.
         assert_ne!(explore.name(), code.name());
         assert_eq!(explore.name(), "spawn_agent");
-        assert!(explore.matches_name("spawn_runner"));
+        assert!(!explore.matches_name("delegate_code"));
 
-        let mcp = RunnerTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
+        let mcp =
+            SubagentTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
         assert_eq!(mcp.name(), "delegate_mcp");
-        assert!(mcp.matches_name("runner_mcp"));
+        assert!(!mcp.matches_name("spawn_agent"));
     }
 
     #[tokio::test]
-    async fn skill_runner_role_execution() {
+    async fn skill_subagent_role_execution() {
         let provider = std::sync::Arc::new(CannedProvider);
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         let summary = tool
             .call(r#"{"description":"find rust skill","prompt":"locate rust guidelines in .muta/skills","role":"skill"}"#)
             .await
-            .expect("skill runner dispatch succeeds");
+            .expect("skill subagent dispatch succeeds");
 
         assert_eq!(summary, "found 3 relevant files");
     }
@@ -1952,10 +1924,10 @@ mod tests {
     #[tokio::test]
     async fn execution_policy_rejects_subagent_spawning_when_depth_capped() {
         let provider = std::sync::Arc::new(CannedProvider);
-        let tool = RunnerTool::new(
+        let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &RUNNER_EXPLORE,
+            &SUBAGENT_EXPLORE,
         );
 
         // Max depth is 1, current depth is already 1 (child trying to spawn grandchild)
@@ -1970,7 +1942,7 @@ mod tests {
         tool.bind_execution_policy(capped_policy);
 
         let result = tool
-            .call(r#"{"description":"nested runner","prompt":"spawn more subagents","role":"explore"}"#)
+            .call(r#"{"description":"nested subagent","prompt":"spawn more subagents","role":"explore"}"#)
             .await;
 
         assert!(

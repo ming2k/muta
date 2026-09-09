@@ -22,7 +22,7 @@ use muta_contracts::{
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::transport::{decode_response_json, ensure_success, transport_error};
+use crate::transport::{decode_response_json, ensure_success};
 use crate::{Client, ClientProfile, Endpoint};
 
 pub mod echo;
@@ -154,13 +154,11 @@ impl OpenAiChatCompletionsProvider {
         &self,
         body: &serde_json::Value,
         auth: &ResolvedAuth,
-    ) -> reqwest::RequestBuilder {
-        let mut req = self
-            .client
-            .http()
-            .post(self.endpoint.base_url())
-            .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
-            .json(body);
+    ) -> crate::request::RequestBuilder {
+        let mut req =
+            crate::request::RequestBuilder::new(http::Method::POST, self.endpoint.base_url())
+                .header(http::header::USER_AGENT, self.endpoint.user_agent())
+                .json(body);
         let copilot = self.dialect == muta_contracts::OpenAiChatDialect::Copilot;
         for (name, value) in request::headers(auth.token.expose_secret(), copilot) {
             req = req.header(name, value);
@@ -186,7 +184,7 @@ impl OpenAiChatCompletionsProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
+    ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
@@ -196,12 +194,9 @@ impl OpenAiChatCompletionsProvider {
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
-        let response = req
-            .send()
-            .await
-            .map_err(|error| transport_error(self.label(), error))?;
+        let response = self.client.send_raw(req, self.label()).await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
             tracing::warn!(
                 provider = %self.endpoint.id,
                 model = %self.endpoint.model,
@@ -217,11 +212,7 @@ impl OpenAiChatCompletionsProvider {
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
-            let retried_resp = retry_req
-                .send()
-                .await
-                .map_err(|error| transport_error(self.label(), error))?;
-            return ensure_success(retried_resp, self.label()).await;
+            return self.client.send(retry_req, self.label()).await;
         }
 
         ensure_success(response, self.label()).await
@@ -259,6 +250,10 @@ impl Provider for OpenAiChatCompletionsProvider {
 
     fn usage_supported(&self) -> bool {
         true
+    }
+
+    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
+        self.client.take_transport_timings()
     }
 
     async fn chat(
@@ -584,10 +579,10 @@ mod tests {
         let body = serde_json::json!({"model": "glm-5.2"});
         let req = provider
             .build_request_for_auth(&body, &auth)
-            .build()
+            .build("Test")
             .unwrap();
 
-        let headers = req.headers();
+        let headers = &req.headers;
         assert_eq!(
             headers.get("x-opencode-session").unwrap().to_str().unwrap(),
             "ses_wire_test_123"

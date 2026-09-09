@@ -90,7 +90,7 @@ impl ToolVerb {
             Self::Editing => "making edits",
             Self::Running => "running command",
             Self::UpdatingTasks => "updating tasks",
-            Self::Delegating => "running runner",
+            Self::Delegating => "running subagent",
             Self::Mcp => "using MCP",
             Self::Generic => "using tool",
         }
@@ -162,7 +162,7 @@ fn tool_verb(name: &str) -> ToolVerb {
         "write_file" | "edit_text" => ToolVerb::Editing,
         "run_command" | "execute_command" | "bash" => ToolVerb::Running,
         "write_todos" | "update_todo" | "todo" | "todo_update" => ToolVerb::UpdatingTasks,
-        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => ToolVerb::Delegating,
+        "spawn_agent" | "delegate_code" | "delegate_mcp" => ToolVerb::Delegating,
         n if n.starts_with("mcp__") => ToolVerb::Mcp,
         _ => ToolVerb::Generic,
     }
@@ -196,7 +196,7 @@ mod tests {
             ("making edits", Phase::Tool(ToolVerb::Editing)),
             ("running command", Phase::Tool(ToolVerb::Running)),
             ("updating tasks", Phase::Tool(ToolVerb::UpdatingTasks)),
-            ("running runner", Phase::Tool(ToolVerb::Delegating)),
+            ("running subagent", Phase::Tool(ToolVerb::Delegating)),
         ];
         for (label, expected) in known {
             assert_eq!(Phase::classify(label), expected, "label {label:?}");
@@ -211,10 +211,10 @@ mod tests {
     }
 
     /// Regression for the original sin: the transport setback must NOT own a
-    /// master phase. No emitted wire label folds to a "retrying" phase; the
+    /// workflow phase. No emitted wire label folds to a "retrying" phase; the
     /// backoff story is told exclusively by the clause channel.
     #[test]
-    fn transport_setbacks_are_never_master_phases() {
+    fn transport_setbacks_are_never_workflow_phases() {
         assert_ne!(
             Phase::classify("waiting for model").label(),
             "waiting to retry"

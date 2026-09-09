@@ -1,364 +1,454 @@
-//! Shared configuration and connection schema for the web tools.
+//! Canonical configuration contract for the two web-tool axes.
 //!
-//! Web search (breadth) and web reader (depth) are decoupled into two orthogonal
-//! sets of connections and presets:
-//! - Search connections: declarations for search backends (Exa, Tavily, Bocha, SearXNG, DuckDuckGo, custom)
-//! - Reader connections: declarations for page reader / scraper backends (Jina, Firecrawl, custom)
+//! Search and reader are deliberately finite provider selections, not user-created
+//! connection instances. Persisted behavior contains no credentials; the runtime
+//! receives a resolved snapshot with at most one credential per axis.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::fmt;
+use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A persisted Web Search Connection record (`search_connections` in `web_connections.toml`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
-#[serde(deny_unknown_fields)]
-#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct WebSearchConnection {
-    /// Stable, unique connection identifier (e.g. "exa-default", "corp-searxng").
+use crate::SecretString;
+
+pub const EXA_SEARCH_ENDPOINT: &str = "https://mcp.exa.ai/mcp";
+pub const PARALLEL_SEARCH_ENDPOINT: &str = "https://search.parallel.ai/mcp";
+pub const DUCKDUCKGO_LITE_ENDPOINT: &str = "https://lite.duckduckgo.com/lite/";
+pub const DUCKDUCKGO_HTML_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
+pub const TAVILY_SEARCH_ENDPOINT: &str = "https://api.tavily.com/search";
+pub const BOCHA_SEARCH_ENDPOINT: &str = "https://api.bochaai.com/v1/web-search";
+pub const JINA_READER_ENDPOINT: &str = "https://r.jina.ai/";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum WebProviderAxis {
+    Search,
+    Reader,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum WebCredentialRequirement {
+    None,
+    Optional,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum WebCredentialStatus {
+    NotRequired,
+    Environment,
+    Stored,
+    OptionalMissing,
+    RequiredMissing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum WebEndpointRequirement {
+    Fixed,
+    UserSupplied,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebProviderCapability {
+    pub axis: WebProviderAxis,
     pub id: String,
-    /// Human-readable display name shown in pickers and UI.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub name: Option<String>,
-    /// Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "duckduckgo").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub preset_id: Option<String>,
-    /// Optional environment variable name supplying the API key (12-factor override).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub api_key_env: Option<String>,
-    /// Custom search base URL / endpoint (e.g. SearXNG endpoint or private search cluster).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub base_url: Option<String>,
-    /// Optional custom HTTP headers sent with requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub custom_headers: Option<HashMap<String, String>>,
-    /// Whether this connection is active and enabled for search routing.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
+    pub display_name: String,
+    pub description: String,
+    pub credential: WebCredentialRequirement,
+    pub endpoint: WebEndpointRequirement,
+    pub default_endpoint: Option<String>,
+    pub default_env_var: Option<String>,
 }
 
-/// A persisted Web Reader Connection record (`reader_connections` in `web_connections.toml`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
-#[serde(deny_unknown_fields)]
-#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct WebReaderConnection {
-    /// Stable, unique connection identifier (e.g. "my-jina", "corp-firecrawl").
-    pub id: String,
-    /// Human-readable display name shown in pickers and UI.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub name: Option<String>,
-    /// Builtin preset identifier (e.g. "jina", "firecrawl").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub preset_id: Option<String>,
-    /// Optional environment variable name supplying the API key (12-factor override).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub api_key_env: Option<String>,
-    /// Custom reader base URL / endpoint (e.g. self-hosted Firecrawl or Crawl4AI).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub base_url: Option<String>,
-    /// Optional custom HTTP headers sent with requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub custom_headers: Option<HashMap<String, String>>,
-    /// Whether this connection is active and enabled for reader routing.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
+macro_rules! provider_enum {
+    ($name:ident { $($variant:ident => $id:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ts_rs::TS)]
+        #[ts(rename_all = "lowercase")]
+        #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+        pub enum $name { $($variant),+ }
+
+        impl $name {
+            pub const fn id(self) -> &'static str {
+                match self { $(Self::$variant => $id),+ }
+            }
+            pub const fn as_str(&self) -> &'static str { (*self).id() }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.id()) }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where S: Serializer { serializer.serialize_str(self.id()) }
+        }
+    };
 }
 
-fn default_true() -> bool {
-    true
-}
+provider_enum!(WebSearchProvider {
+    Disabled => "disabled",
+    Exa => "exa",
+    Parallel => "parallel",
+    DuckDuckGo => "duckduckgo",
+    Searxng => "searxng",
+    Tavily => "tavily",
+    Bocha => "bocha",
+});
 
-impl Default for WebSearchConnection {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: None,
-            preset_id: None,
-            api_key_env: None,
-            base_url: None,
-            custom_headers: None,
-            enabled: true,
+impl FromStr for WebSearchProvider {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Ok(Self::Disabled),
+            "exa" => Ok(Self::Exa),
+            "parallel" => Ok(Self::Parallel),
+            "duckduckgo" => Ok(Self::DuckDuckGo),
+            "searxng" => Ok(Self::Searxng),
+            "tavily" => Ok(Self::Tavily),
+            "bocha" => Ok(Self::Bocha),
+            other => Err(format!("unsupported web search provider `{other}`")),
         }
     }
 }
 
-impl WebSearchConnection {
-    pub fn display_name(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.id)
-    }
-
-    pub fn is_preset(&self) -> bool {
-        self.preset_id.is_some()
-    }
-}
-
-impl Default for WebReaderConnection {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: None,
-            preset_id: None,
-            api_key_env: None,
-            base_url: None,
-            custom_headers: None,
-            enabled: true,
+impl WebSearchProvider {
+    /// Parse canonical IDs plus historical config/connection spellings.
+    /// Runtime serde and wire requests intentionally use strict `FromStr`.
+    pub fn parse_legacy(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::Disabled),
+            "exa-default" => Ok(Self::Exa),
+            "parallel-default" => Ok(Self::Parallel),
+            "ddg" | "duckduckgo-default" => Ok(Self::DuckDuckGo),
+            "searxng-default" => Ok(Self::Searxng),
+            "tavily-default" => Ok(Self::Tavily),
+            "bocha-default" => Ok(Self::Bocha),
+            _ => value.parse(),
         }
     }
 }
 
-impl WebReaderConnection {
-    pub fn display_name(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.id)
-    }
-
-    pub fn is_preset(&self) -> bool {
-        self.preset_id.is_some()
-    }
-}
-
-/// Static template definition for a known builtin web search preset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WebSearchPreset {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub default_endpoint: Option<&'static str>,
-    pub requires_credential: bool,
-    pub supports_anonymous: bool,
-    pub default_env_var: Option<&'static str>,
-    pub description: &'static str,
-}
-
-/// Registry of known builtin web search presets.
-pub struct WebSearchPresets;
-
-impl WebSearchPresets {
-    pub const ALL: &'static [WebSearchPreset] = &[
-        WebSearchPreset {
-            id: "exa",
-            display_name: "Exa Search",
-            default_endpoint: Some("https://mcp.exa.ai"),
-            requires_credential: false,
-            supports_anonymous: true,
-            default_env_var: Some("EXA_API_KEY"),
-            description: "Hosted MCP AI Search · Keyless anonymous default or with Exa API key",
-        },
-        WebSearchPreset {
-            id: "parallel",
-            display_name: "Parallel Search",
-            default_endpoint: Some("https://parallel-search.mcp.ai"),
-            requires_credential: false,
-            supports_anonymous: true,
-            default_env_var: Some("PARALLEL_API_KEY"),
-            description: "Hosted MCP Search · Keyless anonymous default or with Parallel API key",
-        },
-        WebSearchPreset {
-            id: "tavily",
-            display_name: "Tavily Search",
-            default_endpoint: Some("https://api.tavily.com/search"),
-            requires_credential: true,
-            supports_anonymous: false,
-            default_env_var: Some("TAVILY_API_KEY"),
-            description: "Hosted AI search API tailored for LLM agents · Requires Tavily API key",
-        },
-        WebSearchPreset {
-            id: "bocha",
-            display_name: "Bocha AI Search",
-            default_endpoint: Some("https://api.bochaai.com/v1/ai-search"),
-            requires_credential: true,
-            supports_anonymous: false,
-            default_env_var: Some("BOCHA_API_KEY"),
-            description: "Hosted AI search API · Directly reachable in mainland China without proxy",
-        },
-        WebSearchPreset {
-            id: "searxng",
-            display_name: "SearXNG",
-            default_endpoint: None,
-            requires_credential: false,
-            supports_anonymous: true,
-            default_env_var: None,
-            description: "Self-hosted privacy meta-search engine · Requires JSON endpoint URL",
-        },
-        WebSearchPreset {
-            id: "duckduckgo",
-            display_name: "DuckDuckGo",
-            default_endpoint: Some("https://html.duckduckgo.com/html"),
-            requires_credential: false,
-            supports_anonymous: true,
-            default_env_var: None,
-            description: "Keyless direct web scraping fallback",
-        },
-    ];
-
-    pub fn find(id: &str) -> Option<&'static WebSearchPreset> {
-        let norm = id.trim().to_ascii_lowercase();
-        Self::ALL
-            .iter()
-            .find(|p| p.id.eq_ignore_ascii_case(&norm) || (norm == "ddg" && p.id == "duckduckgo"))
+impl<'de> Deserialize<'de> for WebSearchProvider {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
     }
 }
 
-/// Static template definition for a known builtin web reader preset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WebReaderPreset {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub default_endpoint: Option<&'static str>,
-    pub requires_credential: bool,
-    pub supports_anonymous: bool,
-    pub default_env_var: Option<&'static str>,
-    pub description: &'static str,
-}
+provider_enum!(WebReaderProvider {
+    Disabled => "disabled",
+    Jina => "jina",
+});
 
-/// Registry of known builtin web reader presets.
-pub struct WebReaderPresets;
+impl FromStr for WebReaderProvider {
+    type Err = String;
 
-impl WebReaderPresets {
-    pub const ALL: &'static [WebReaderPreset] = &[
-        WebReaderPreset {
-            id: "jina",
-            display_name: "Jina Reader",
-            default_endpoint: Some("https://r.jina.ai"),
-            requires_credential: false,
-            supports_anonymous: true,
-            default_env_var: Some("JINA_API_KEY"),
-            description: "Server-side JavaScript rendering, readability extraction, and Markdown conversion",
-        },
-        WebReaderPreset {
-            id: "firecrawl",
-            display_name: "Firecrawl",
-            default_endpoint: Some("https://api.firecrawl.dev/v1/scrape"),
-            requires_credential: true,
-            supports_anonymous: false,
-            default_env_var: Some("FIRECRAWL_API_KEY"),
-            description: "Hosted or self-hosted web scraping engine for LLMs",
-        },
-    ];
-
-    pub fn find(id: &str) -> Option<&'static WebReaderPreset> {
-        let norm = id.trim().to_ascii_lowercase();
-        Self::ALL.iter().find(|p| p.id.eq_ignore_ascii_case(&norm))
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Ok(Self::Disabled),
+            "jina" => Ok(Self::Jina),
+            other => Err(format!("unsupported web reader provider `{other}`")),
+        }
     }
 }
 
-/// User-tunable web-tool configuration, deserialized from `config.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl WebReaderProvider {
+    /// Parse canonical IDs plus historical config/connection spellings.
+    /// `builtin` was once advertised by a UI but never existed at runtime.
+    pub fn parse_legacy(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "builtin" => Ok(Self::Disabled),
+            "jina-default" => Ok(Self::Jina),
+            _ => value.parse(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WebReaderProvider {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl WebSearchProvider {
+    pub fn capability(self) -> Option<WebProviderCapability> {
+        let (display_name, description, credential, endpoint, default_endpoint, env) = match self {
+            Self::Disabled => return None,
+            Self::Exa => (
+                "Exa",
+                "Hosted semantic search",
+                WebCredentialRequirement::Optional,
+                WebEndpointRequirement::Fixed,
+                Some(EXA_SEARCH_ENDPOINT),
+                Some("EXA_API_KEY"),
+            ),
+            Self::Parallel => (
+                "Parallel",
+                "Hosted agent search",
+                WebCredentialRequirement::Optional,
+                WebEndpointRequirement::Fixed,
+                Some(PARALLEL_SEARCH_ENDPOINT),
+                Some("PARALLEL_API_KEY"),
+            ),
+            Self::DuckDuckGo => (
+                "DuckDuckGo",
+                "Keyless HTML search",
+                WebCredentialRequirement::None,
+                WebEndpointRequirement::Fixed,
+                Some(DUCKDUCKGO_LITE_ENDPOINT),
+                None,
+            ),
+            Self::Searxng => (
+                "SearXNG",
+                "Self-hosted privacy metasearch",
+                WebCredentialRequirement::None,
+                WebEndpointRequirement::UserSupplied,
+                None,
+                None,
+            ),
+            Self::Tavily => (
+                "Tavily",
+                "Hosted search for agents",
+                WebCredentialRequirement::Required,
+                WebEndpointRequirement::Fixed,
+                Some(TAVILY_SEARCH_ENDPOINT),
+                Some("TAVILY_API_KEY"),
+            ),
+            Self::Bocha => (
+                "Bocha",
+                "Hosted AI search",
+                WebCredentialRequirement::Required,
+                WebEndpointRequirement::Fixed,
+                Some(BOCHA_SEARCH_ENDPOINT),
+                Some("BOCHA_API_KEY"),
+            ),
+        };
+        Some(WebProviderCapability {
+            axis: WebProviderAxis::Search,
+            id: self.id().into(),
+            display_name: display_name.into(),
+            description: description.into(),
+            credential,
+            endpoint,
+            default_endpoint: default_endpoint.map(Into::into),
+            default_env_var: env.map(Into::into),
+        })
+    }
+}
+
+impl WebReaderProvider {
+    pub fn capability(self) -> Option<WebProviderCapability> {
+        match self {
+            Self::Disabled => None,
+            Self::Jina => Some(WebProviderCapability {
+                axis: WebProviderAxis::Reader,
+                id: self.id().into(),
+                display_name: "Jina Reader".into(),
+                description: "Rendered page extraction to Markdown".into(),
+                credential: WebCredentialRequirement::Optional,
+                endpoint: WebEndpointRequirement::Fixed,
+                default_endpoint: Some(JINA_READER_ENDPOINT.into()),
+                default_env_var: Some("JINA_API_KEY".into()),
+            }),
+        }
+    }
+}
+
+pub fn web_provider_capabilities() -> Vec<WebProviderCapability> {
+    [
+        WebSearchProvider::Exa,
+        WebSearchProvider::Parallel,
+        WebSearchProvider::DuckDuckGo,
+        WebSearchProvider::Searxng,
+        WebSearchProvider::Tavily,
+        WebSearchProvider::Bocha,
+    ]
+    .into_iter()
+    .filter_map(WebSearchProvider::capability)
+    .chain(
+        [WebReaderProvider::Jina]
+            .into_iter()
+            .filter_map(WebReaderProvider::capability),
+    )
+    .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct WebSearchConfig {
-    /// Primary search backend or connection id. Default is `"exa"`.
-    pub provider: String,
-    /// Optional proxy URL applied to both `read_url` and `search_web`.
+pub struct WebConfig {
+    pub provider: WebSearchProvider,
+    pub reader: WebReaderProvider,
     pub proxy: Option<String>,
-    /// Per-request timeout in seconds (default 20).
     pub timeout_secs: u64,
-    /// Exa API key (optional). Persisted in `credentials.toml [websearch]`.
-    #[serde(skip_serializing)]
-    pub exa_api_key: Option<crate::SecretString>,
-    /// Parallel Search API key (optional). Persisted in `credentials.toml [websearch]`.
-    #[serde(skip_serializing)]
-    pub parallel_api_key: Option<crate::SecretString>,
-    /// SearXNG JSON search endpoint. Required when `provider = "searxng"`.
     pub searxng_url: Option<String>,
-    /// Tavily API key. Required when `provider = "tavily"`.
-    #[serde(skip_serializing)]
-    pub tavily_api_key: Option<crate::SecretString>,
-    /// Bocha AI Search API key. Required when `provider = "bocha"`.
-    #[serde(skip_serializing)]
-    pub bocha_api_key: Option<crate::SecretString>,
-    /// Jina Reader API key (r.jina.ai). Optional.
-    #[serde(skip_serializing)]
-    pub jina_api_key: Option<crate::SecretString>,
-    /// Page-content backend used by `read_url`. Default is `"none"` (disabled).
-    pub reader: String,
 }
 
-impl WebSearchConfig {
-    pub fn secret_keys_only(&self) -> Self {
-        Self {
-            exa_api_key: self.exa_api_key.clone(),
-            parallel_api_key: self.parallel_api_key.clone(),
-            tavily_api_key: self.tavily_api_key.clone(),
-            bocha_api_key: self.bocha_api_key.clone(),
-            jina_api_key: self.jina_api_key.clone(),
-            ..Self::default()
-        }
-    }
-}
-
-impl Default for WebSearchConfig {
+impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            provider: "exa".to_string(),
+            provider: WebSearchProvider::Exa,
+            reader: WebReaderProvider::Disabled,
             proxy: None,
             timeout_secs: 20,
-            exa_api_key: None,
-            parallel_api_key: None,
             searxng_url: None,
-            tavily_api_key: None,
-            bocha_api_key: None,
-            jina_api_key: None,
-            reader: "none".to_string(),
         }
     }
 }
 
-/// A process-wide, shared, hot-reloadable handle to the effective web configuration.
-#[derive(Debug, Clone, Default)]
-pub struct SharedWebSearchConfig(Arc<std::sync::RwLock<WebSearchConfig>>);
+#[derive(Clone, Default)]
+pub struct WebRuntimeConfig {
+    pub behavior: WebConfig,
+    pub search_credential: Option<SecretString>,
+    pub reader_credential: Option<SecretString>,
+}
 
-impl SharedWebSearchConfig {
-    pub fn new(initial: WebSearchConfig) -> Self {
-        Self(Arc::new(std::sync::RwLock::new(initial)))
+impl fmt::Debug for WebRuntimeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebRuntimeConfig")
+            .field("behavior", &self.behavior)
+            .field(
+                "search_credential",
+                &self.search_credential.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "reader_credential",
+                &self.reader_credential.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedWebConfig(Arc<RwLock<VersionedWebConfig>>);
+
+#[derive(Debug, Clone)]
+struct VersionedWebConfig {
+    revision: u64,
+    config: WebRuntimeConfig,
+}
+
+impl SharedWebConfig {
+    pub fn new(initial: WebRuntimeConfig) -> Self {
+        Self(Arc::new(RwLock::new(VersionedWebConfig {
+            revision: 0,
+            config: initial,
+        })))
     }
 
-    pub fn set(&self, config: WebSearchConfig) {
-        *self
+    pub fn replace(&self, config: WebRuntimeConfig) -> u64 {
+        let mut state = self
             .0
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.revision = state.revision.saturating_add(1);
+        state.config = config;
+        state.revision
     }
 
-    pub fn get(&self) -> WebSearchConfig {
-        self.0
+    pub fn snapshot(&self) -> (u64, WebRuntimeConfig) {
+        let state = self
+            .0
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.revision, state.config.clone())
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.snapshot().0
+    }
+    pub fn get(&self) -> WebRuntimeConfig {
+        self.snapshot().1
     }
 }
 
-impl WebSearchConfig {
-    pub fn signature(&self) -> String {
-        fn key(sig: Option<&crate::SecretString>) -> String {
-            sig.map(|k| {
-                let hash = std::collections::hash_map::DefaultHasher::new();
-                let mut hasher = hash;
-                std::hash::Hash::hash_slice(k.expose_secret().as_bytes(), &mut hasher);
-                format!("{:016x}", std::hash::Hasher::finish(&hasher))
-            })
-            .unwrap_or_else(|| "-".to_string())
-        }
-        format!(
-            "v1|provider={}|reader={}|proxy={}|timeout={}|searxng_url={}|\
-             exa={}|parallel={}|tavily={}|bocha={}|jina={}",
-            self.provider,
-            self.reader,
-            self.proxy.as_deref().unwrap_or("-"),
-            self.timeout_secs,
-            self.searxng_url.as_deref().unwrap_or("-"),
-            key(self.exa_api_key.as_ref()),
-            key(self.parallel_api_key.as_ref()),
-            key(self.tavily_api_key.as_ref()),
-            key(self.bocha_api_key.as_ref()),
-            key(self.jina_api_key.as_ref()),
-        )
+impl Default for SharedWebConfig {
+    fn default() -> Self {
+        Self::new(WebRuntimeConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_aliases_are_canonicalized() {
+        assert_eq!(
+            WebSearchProvider::parse_legacy("ddg").unwrap(),
+            WebSearchProvider::DuckDuckGo
+        );
+        assert_eq!(
+            WebReaderProvider::parse_legacy("builtin").unwrap(),
+            WebReaderProvider::Disabled
+        );
+        assert!(toml::from_str::<WebConfig>("reader = 'builtin'").is_err());
+    }
+
+    #[test]
+    fn only_implemented_reader_is_advertised() {
+        let readers: Vec<_> = web_provider_capabilities()
+            .into_iter()
+            .filter(|capability| capability.axis == WebProviderAxis::Reader)
+            .map(|capability| capability.id)
+            .collect();
+        assert_eq!(readers, ["jina"]);
+    }
+
+    #[test]
+    fn capability_endpoints_share_the_runtime_constants() {
+        assert_eq!(
+            WebSearchProvider::Exa
+                .capability()
+                .unwrap()
+                .default_endpoint
+                .as_deref(),
+            Some(EXA_SEARCH_ENDPOINT)
+        );
+        assert_eq!(
+            WebSearchProvider::Parallel
+                .capability()
+                .unwrap()
+                .default_endpoint
+                .as_deref(),
+            Some(PARALLEL_SEARCH_ENDPOINT)
+        );
+        assert_eq!(
+            WebSearchProvider::Bocha
+                .capability()
+                .unwrap()
+                .default_endpoint
+                .as_deref(),
+            Some(BOCHA_SEARCH_ENDPOINT)
+        );
+        assert_eq!(
+            WebReaderProvider::Jina
+                .capability()
+                .unwrap()
+                .default_endpoint
+                .as_deref(),
+            Some(JINA_READER_ENDPOINT)
+        );
+    }
+
+    #[test]
+    fn shared_config_revision_advances_on_replace() {
+        let shared = SharedWebConfig::default();
+        assert_eq!(shared.revision(), 0);
+        assert_eq!(shared.replace(shared.get()), 1);
     }
 }

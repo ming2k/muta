@@ -1,7 +1,7 @@
 //! Agent identity: who an `Agent` (re-exported by the agent
 //! crate) is and what it is for. Pure domain vocabulary — three strings and a
 //! formatter — with no agent-layer dependencies, so it lives in core alongside
-//! the role profiles (`PrincipalProfile`, `EnvoyProfile`).
+//! the role vocabulary (`AgentPreset` in `agent_preset.rs`).
 //!
 //! Kept identity-agnostic: nothing here hardcodes "muta" or "coding". The
 //! embedding (a CLI, a server) supplies the fields, so the same engine can be
@@ -15,28 +15,36 @@
 /// values. Everything else in the system prompt (tone, todo/ask_user guidance)
 /// is mission-neutral and stays in the agent crate.
 ///
+/// Supplying an identity is optional: the shipped coding CLI supplies none, so
+/// its prompt opens at the host environment. Nothing in the harness reads the
+/// model's self-name — an identity line earns its tokens only where it changes
+/// behaviour (a subagent's task prompt, a `/role` directive).
+///
 /// The three fields compose the opening line:
-/// - [`AgentIdentity::name`] — what the agent is called ("muta" for this
-///   project; swap to repurpose the engine under a different product).
-/// - [`AgentIdentity::mission`] — what the agent is for ("an expert AI coding
-///   assistant…" for this CLI; swap for research/ops/etc.).
+/// - [`AgentIdentity::name`] — what the agent is called (e.g. `"hypervisor"`
+///   for the daemon's coordinator). Empty means "unnamed".
+/// - [`AgentIdentity::mission`] — what the agent is for (e.g. a research
+///   frontend's mission; empty means no mission framing).
 /// - [`AgentIdentity::persona`] — optional full-text override of the opening.
 ///   When set, [`AgentIdentity::preamble`] returns it verbatim and ignores
-///   `name`/`mission`. Envoys use this to inject their role's full system
-///   prompt as the identity.
+///   `name`/`mission`. Subagents use this to inject their role's full task
+///   prompt as the identity; focused roles use it for their imperative role
+///   directive.
 ///
 /// [`AgentIdentity::default`] yields empty fields (no preamble — the system
-/// prompt opens straight at the tone line); tests use it.
+/// prompt opens straight at the host-environment section); tests and the
+/// shipped CLI use it.
 #[derive(Debug, Clone, Default)]
 pub struct AgentIdentity {
-    /// What this agent is called, e.g. `"muta"`. Empty means "unnamed".
+    /// What this agent is called, e.g. `"hypervisor"`. Empty means "unnamed" —
+    /// the preamble then opens with the mission alone.
     pub name: String,
-    /// What this agent is for, e.g. `"an expert AI coding assistant with tool
-    /// access"`. Empty means "no mission framing".
+    /// What this agent is for, e.g. `"a meticulous research assistant"`. Empty
+    /// means "no mission framing".
     pub mission: String,
     /// Optional full-text identity override. When non-empty, `preamble`
-    /// returns this verbatim (used by envoys whose identity *is* their
-    /// role's full system prompt). None/empty → compose from name + mission.
+    /// returns this verbatim (used by subagents whose identity *is* their
+    /// role's full task prompt). None/empty → compose from name + mission.
     pub persona: Option<String>,
 }
 
@@ -50,9 +58,21 @@ impl AgentIdentity {
         }
     }
 
+    /// Build an identity from a mission alone, leaving the agent unnamed. The
+    /// preamble then reads `"You are {mission}."` — a compact self-description
+    /// for an embedding that wants one. (The coding CLI ships no identity at
+    /// all: its prompt opens at the host environment.)
+    pub fn from_mission(mission: impl Into<String>) -> Self {
+        Self {
+            name: String::new(),
+            mission: mission.into(),
+            persona: None,
+        }
+    }
+
     /// Build an identity whose preamble is a full persona string, ignoring
-    /// name/mission composition. Used by envoys: their identity is the
-    /// role's complete system prompt.
+    /// name/mission composition. Used by subagents and focused roles: their
+    /// identity is the role's complete task prompt or directive.
     pub fn from_persona(persona: impl Into<String>) -> Self {
         Self {
             name: String::new(),
@@ -77,5 +97,40 @@ impl AgentIdentity {
             (true, false) => format!("You are {}.", self.mission),
             (false, false) => format!("You are {}, {}.", self.name, self.mission),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentIdentity;
+
+    #[test]
+    fn default_identity_renders_no_preamble() {
+        assert_eq!(AgentIdentity::default().preamble(), "");
+    }
+
+    #[test]
+    fn mission_only_identity_opens_with_the_mission() {
+        assert_eq!(
+            AgentIdentity::from_mission("an expert AI coding assistant").preamble(),
+            "You are an expert AI coding assistant."
+        );
+    }
+
+    #[test]
+    fn named_identity_composes_name_and_mission() {
+        assert_eq!(
+            AgentIdentity::new("hypervisor", "the daemon-level coordinator").preamble(),
+            "You are hypervisor, the daemon-level coordinator."
+        );
+    }
+
+    #[test]
+    fn persona_override_is_returned_verbatim() {
+        assert_eq!(
+            AgentIdentity::from_persona("Role: code reviewer. Report findings; never apply.")
+                .preamble(),
+            "Role: code reviewer. Report findings; never apply."
+        );
     }
 }

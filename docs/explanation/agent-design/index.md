@@ -18,11 +18,11 @@ variation on these themes rather than a one-off mechanism.
 | Theme | What it means | Where it shows up |
 |-------|---------------|-------------------|
 | **Capability and access gating** | One permission surface (`ToolAccess`, ordered `Read < Execute < Write`) feeds two gates: the per-agent `WriteScope` boundary and the permission broker. A tool declares its access tier once; both gates consult it. | [Harness architecture](harness.md), [Rounds and turns](rounds-and-turns.md), [MCP servers](mcp.md) |
-| **Isolation boundaries** | Failure in one component must not topple the rest. Envoys are read-only; failed MCP servers are quarantined; each round's state is per-thread. | [Envoys](envoys.md), [MCP servers](mcp.md) |
-| **Durable vs ephemeral state** | The harness decides per concern what survives a restart. The durable session preserves the recoverable scene; the model context is a request-scoped projection; envoy context is fresh per call. | [Session persistence](session-persistence.md), [Model context](model-context.md), [Envoys](envoys.md) |
-| **Streaming and event propagation** | One event type (`AgentEvent`) flows from the agent through orchestration to the TUI; envoys re-emit the same shapes wrapped as `SubTaskEvent`. One pipeline renders everything. | [Envoys](envoys.md), [Harness architecture](harness.md) |
+| **Isolation boundaries** | Failure in one component must not topple the rest. Subagents are read-only; failed MCP servers are quarantined; each round's state is per-thread. | [Subagents](subagents.md), [MCP servers](mcp.md) |
+| **Durable vs ephemeral state** | The harness decides per concern what survives a restart. The durable session preserves the recoverable scene; the model context is a request-scoped projection; subagent context is fresh per call. | [Session persistence](session-persistence.md), [Model context](model-context.md), [Subagents](subagents.md) |
+| **Streaming and event propagation** | One event type (`AgentEvent`) flows from the agent through orchestration to the TUI; subagents re-emit the same shapes wrapped as `SubTaskEvent`. One pipeline renders everything. | [Subagents](subagents.md), [Harness architecture](harness.md) |
 | **Fallback and degradation** | Every ideal path has a defined degradation: native tool calls fall back to text parsing; a missing MCP `inputSchema` defaults to `{"type":"object"}`; the round ends on the model's natural stop unless a `Stop` hook says otherwise. The system never silently relies on the happy path. | [Rounds and turns](rounds-and-turns.md), [MCP servers](mcp.md) |
-| **Control plane vs domain** | The harness owns steering (mode, retry, loop); providers and tools own I/O. `EnvoyTool` lives in the agent crate because spawning an envoy is steering, not a domain action. | [Harness architecture](harness.md), [Envoys](envoys.md) |
+| **Control plane vs domain** | The harness owns steering (mode, retry, loop); providers and tools own I/O. `SubagentTool` lives in the agent crate because spawning a subagent is steering, not a domain action. | [Harness architecture](harness.md), [Subagents](subagents.md) |
 
 ## The canon, in reading order
 
@@ -53,7 +53,7 @@ model of one agent round.
 5. [Model context](model-context.md) — the provider-facing request view:
    rebuilt system prompt, model-visible messages, tool schemas, assistant tool
    calls, tool results, and provider-specific serialization.
-6. [Envoys](envoys.md) — the `envoy` tool's isolated child agent.
+6. [Subagents](subagents.md) — the `subagent` tool's isolated child agent.
    The reference for isolation: what is shared (the provider), what is fresh
    (history), how events stream back through one pipeline, and how a profile
    admits tools by capability axis.
@@ -101,7 +101,12 @@ deep-dive references, read as a pair:
     attributes every token as reported vs. estimated, and the report modal that
     makes that accuracy visible. Read this to understand the unit the previous
     two layers operate on.
-15. [Prompt caching](prompt-caching.md) — the cost counterpart to token
+15. [Network telemetry, TTFT, and streaming TPS](network-telemetry-and-tps.md) —
+    how muta measures latency and throughput from the client boundary: the
+    OSI/TCP observability matrix, why Packet 5 ACK is inaudible, the 9-stage
+    latency timeline (Enter to turn end), kernel `TCP_INFO` polling, and the
+    single-rate doctrine.
+16. [Prompt caching](prompt-caching.md) — the cost counterpart to token
     accounting: how a cached prefix is billed at ~0.1× (or folded into a
     discount), the three provider strategies (`Breakpoints` / `SessionKey` /
     `Automatic`), and the single rule that keeps the savings honest — every
@@ -124,7 +129,7 @@ user message
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
             ├─ [Harness] authority chain — missing grant? attended → ask; delegated → fail
-            ├─ [Envoys] if call is `envoy`: spawn isolated child,
+            ├─ [Subagents] if call is `subagent`: spawn isolated child,
             │              stream SubTaskEvent back through the same pipeline
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio
             └─ [User questions] if call is `ask_user`: block on oneshot
@@ -138,7 +143,7 @@ Every arrow is documented in one of the canon pages above.
 ## Decision history
 
 For the frozen rationale behind specific choices (why the progress panel, why
-the strict layering, why planning became an envoy and was later removed),
+the strict layering, why planning became a subagent and was later removed),
 see the [Architecture Decision Records](../../adr/). ADRs link back into this
 section for background; this section links to ADRs for the decision trail.
 

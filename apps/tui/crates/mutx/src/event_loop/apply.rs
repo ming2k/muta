@@ -127,7 +127,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             parent_call_id,
         } => {
             if let Some(parent) = parent_call_id {
-                app.runner_permission_parent
+                app.subagent_permission_parent
                     .insert(request.id.clone(), parent);
             }
             app.pending_permissions.push_back(request);
@@ -138,7 +138,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             parent_call_id,
         } => {
             if let Some(parent) = parent_call_id {
-                app.runner_question_parent
+                app.subagent_question_parent
                     .insert(request.id.clone(), parent);
             }
             app.pending_questions.push_back(request);
@@ -288,6 +288,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             true
         }
         AppMutation::SessionsOverview(sessions) => {
+            app.modal_index = app.modal_index.min(sessions.len().saturating_sub(1));
             app.sessions_overview = sessions;
             app.sessions_loading = false;
             true
@@ -313,7 +314,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             true
         }
         AppMutation::ConnectionDetail(detail) => {
-            let same_id = app.connection_detail.as_ref().map(|c| &c.id) == Some(&detail.id);
+            let same_id = app.connection_detail.as_ref().map(|c| &c.name) == Some(&detail.name);
             app.connection_detail = Some(detail);
             if !same_id {
                 app.connection_info_scroll = 0;
@@ -634,14 +635,14 @@ fn apply_transcript(app: &mut App, buffer: Buffer, edit: TranscriptEdit) -> bool
                     .iter_mut()
                     .any(|message| message.push_tool_stream(&id, &stream));
             }
-            TranscriptEdit::RunnerEvent {
+            TranscriptEdit::SubagentEvent {
                 parent_call_id,
                 event,
             } => {
                 let _ = messages
                     .iter_mut()
                     .find(|message| message.tool_step_call_id() == Some(parent_call_id.as_str()))
-                    .is_some_and(|message| message.push_runner_event(&event));
+                    .is_some_and(|message| message.push_subagent_event(&event));
             }
             TranscriptEdit::SettleInserted {
                 insert_id,
@@ -852,7 +853,7 @@ fn apply_chrome(app: &mut App, session_id: &str, edit: ChromeEdit) {
             chrome.round_started_at = None;
         }
         ChromeEdit::TurnPerformance(performance) => {
-            chrome.last_turn_performance = Some(performance);
+            chrome.last_turn_performance = Some(*performance);
         }
     }
 }

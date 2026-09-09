@@ -219,9 +219,9 @@ impl Endpoint {
     /// Attach session-affinity and request-tracking headers to an outbound HTTP request builder.
     pub fn attach_session_affinity_headers(
         &self,
-        mut req: reqwest::RequestBuilder,
+        mut req: crate::request::RequestBuilder,
         session_override: Option<&str>,
-    ) -> reqwest::RequestBuilder {
+    ) -> crate::request::RequestBuilder {
         for (name, val) in self.session_affinity_headers(session_override) {
             req = req.header(name, val);
         }

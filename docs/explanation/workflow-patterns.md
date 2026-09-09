@@ -8,7 +8,7 @@ different operational modes.
 muta is organized around a single unified binary that supports multiple
 interaction models. Rather than enforcing a rigid pairing loop, the system
 adapts to five distinct workflow patterns depending on whether the task
-requires direct human guidance, background execution, runner delegation,
+requires direct human guidance, background execution, subagent delegation,
 external tool expansion, or automated scheduling.
 
 ```text
@@ -17,7 +17,7 @@ external tool expansion, or automated scheduling.
 ├──────────────────────────────┬──────────────────────────────┤
 │ 1. Interactive Pairing Loop  │ Direct conversational coding │
 │ 2. Multi-Session Daemon      │ Detached background tasks    │
-│ 3. Runner & WIP Consensus    │ Delegated multi-agent work   │
+│ 3. Subagent & WIP Consensus    │ Delegated multi-agent work   │
 │ 4. Ecosystem & Skills        │ MCP and domain extensions    │
 │ 5. Headless Automation       │ Cron scheduling & CI monitor │
 └──────────────────────────────┴──────────────────────────────┘
@@ -62,19 +62,19 @@ one runtime. The developer can:
   session in the dashboard reconnects the interactive TUI directly to the
   persisted event stream.
 
-## Delegated runner execution and work coordination
+## Delegated subagent execution and work coordination
 
 Complex engineering tasks often benefit from dividing responsibilities
-between a primary orchestrator and specialized runners.
+between a primary orchestrator and specialized subagents.
 
 muta supports two complementary delegation patterns:
 
-- **Research Delegation (`runner` / `spawn_runner`)**: The principal agent delegates broad
+- **Research Delegation (`spawn_agent`)**: The principal agent delegates broad
   exploration, documentation indexing, or log analysis to a read-only child
-  runner. The child operates in a separate context window and returns a
+  subagent. The child operates in a separate context window and returns a
   synthesized summary without bloating the primary turn context.
-- **Implementation Delegation (`runner_code`)**: The principal delegates
-  concrete coding and testing tasks to an autonomous coding runner.
+- **Implementation Delegation (`delegate_code`)**: The principal delegates
+  concrete coding and testing tasks to an autonomous coding subagent.
 
 Note: the WIP-coordination tools (`declare_wip`/`check_wip`/`wip_done`) that
 once lived here as session-facing tools were removed; workspace-exclusivity is
@@ -117,4 +117,4 @@ CI/CD environments and background developer machines:
 - [ADR-0097: Session addressing and orchestrator console](../adr/0097-session-addressing-and-orchestrator-console.md)
 - [ADR-0100: Daemon lifecycle standard](../adr/0100-daemon-lifecycle-standard.md)
 - [ADR-0101: Daemon shutdown correctness](../adr/0101-daemon-shutdown-correctness.md)
-- [ADR-0102: Unified single-binary architecture and runtime rename](../adr/0102-unified-binary-and-runtime-rename.md)
+- [ADR-0102: Unified single-binary architecture and runtime rename](../adr/archive/0102-unified-binary-and-runtime-rename.md)

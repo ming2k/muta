@@ -180,16 +180,12 @@ pub enum ConnectionUsageState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ConnectionDetail {
-    /// Canonical connection id.
-    pub id: String,
-    /// User-visible connection name.
+    /// Connection name — the connection's identity (ADR-0201).
     pub name: String,
-    /// Preset id if created from a preset (e.g. "deepseek", "anthropic").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset_id: Option<String>,
-    /// Human-friendly preset label (e.g. "DeepSeek", "Anthropic").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset_label: Option<String>,
+    /// The model provider this connection points at (e.g. "deepseek", "anthropic").
+    pub provider: String,
+    /// Human-friendly provider label (e.g. "DeepSeek", "Anthropic").
+    pub provider_label: String,
     /// Wire protocol label (e.g. "openai", "anthropic", "google").
     pub protocol: String,
     /// Base URL endpoint.

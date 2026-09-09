@@ -56,7 +56,7 @@ pub struct DoomGuardConfig {
     /// `threshold` — the cheapest defense against variant loops
     /// (`sleep 1; make` / `sleep 2; make`) burning tokens until the context
     /// overflows. Wired through `Agent::set_doom_guard_config`; forced off
-    /// for runners and the `/review`
+    /// for subagents and the `/review`
 
     /// diagnostic regardless of user setting. Signatures are normalized
     /// (leading env assignments, timing no-ops, casing, path decoration), so
@@ -78,7 +78,7 @@ pub struct DoomGuardConfig {
 
 impl DoomGuardConfig {
     /// A disabled config with default window — the canonical "off" state used
-    /// by envoys and the `/review` diagnostic so they run unobstructed
+    /// by subagents and the `/review` diagnostic so they run unobstructed
     /// regardless of user settings.
     pub fn disabled() -> Self {
         Self {

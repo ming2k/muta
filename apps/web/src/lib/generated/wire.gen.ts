@@ -24,10 +24,10 @@ surface: NoticeSurface, title: string, body?: string, source: NoticeSource, };
 export type AgentRequest = { "Prompt": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "Steer": { session_id: string, message: QueuedMessage, } } | { "CancelSteer": { session_id: string, input_id: string, } } | { "FollowUp": { session_id: string, message: QueuedMessage, } } | { "QueueRemove": { session_id: string, input_id: string, } } | { "QueueClear": { session_id: string, } } | { "QueueReorder": { session_id: string, input_id: string, delta: number, } } | { "QueuePaused": { session_id: string, paused: boolean, } } | { "SlashCommand": string } | { "TrustWorkspace": { domains: Array<TrustDomain>, } } | { "CompleteComposer": { request_id: number, text: string, cursor: number, } } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
 /**
  * Full-duplex (ADR-0029): when the reply targets a permission
- * request surfaced by a *runner* (carried up as a
- * [`RoundEvent::EnvoyCompat`] / [`RunnerEvent::PermissionRequest`]),
+ * request surfaced by a *subagent* (carried up as a
+ * [`RoundEvent::SubagentStep`] / [`SubagentEvent::PermissionRequest`]),
  * this is the parent tool-call id the request was nested under. The
- * harness looks up the live child's `crate::RunnerHandle` in the
+ * harness looks up the live child's `crate::SubagentHandle` in the
  * task registry by this id and resolves its parked oneshot directly.
  * `None` means the request came from the top-level (or `/btw` side)
  * agent and is resolved on `context.agent` as before.
@@ -35,25 +35,21 @@ export type AgentRequest = { "Prompt": { text: string, images: Array<ImagePart>,
 parent_call_id: string | null, } } | { "UserQuestionReply": { request_id: string, answers: Array<Array<string>>, 
 /**
  * Full-duplex (ADR-0029): the parent tool-call id when the answered
- * question came from an runner's `ask_user`
- * ([`RunnerEvent::UserQuestionRequest`]); `None` for a top-level /
+ * question came from a subagent's `ask_user`
+ * ([`SubagentEvent::UserQuestionRequest`]); `None` for a top-level /
  * side agent question. See [`AgentRequest::PermissionReply`] for the
  * routing contract.
  */
-parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchProvider": { provider_type: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddProvider": { name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, user_agent: string | null, models: Array<string>, 
+parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchConnection": { provider: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddConnection": { name: string, provider: string, protocol: WireProtocol | null, base_url: string | null, user_agent: string | null, api_key: SecretString, models: Array<string>, 
 /**
  * How the connection authenticates. OAuth credentials are owned by
- * this exact connection id.
+ * this exact connection name.
  */
 auth: ConnectionAuth, 
 /**
- * The stable preset id this connection is created from.
- */
-preset_id: string | null, 
-/**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
-client_identity: ClientProfile | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditProvider": { id: string, name: string, protocol: WireProtocol, base_url: string, api_key: SecretString, client_identity: ClientProfile | null, } } | { "IncludeModel": { scope: ModelTargetScope, model: DeclaredModel, } } | { "ExcludeModel": { scope: ModelTargetScope, model_id: string, } } | { "ClearModelRule": { scope: ModelTargetScope, model_id: string, } } | { "SetModelCapabilities": { scope: ModelTargetScope, model_id: string, overrides: CapabilityOverrides, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, 
+client_identity: ClientProfile | null, } } | { "ConnectConnection": { name: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditConnection": { name: string, provider: string, protocol: WireProtocol | null, base_url: string | null, api_key: SecretString, client_identity: ClientProfile | null, } } | { "RenameConnection": { from: string, to: string, } } | { "IncludeModel": { scope: ModelTargetScope, model: DeclaredModel, } } | { "ExcludeModel": { scope: ModelTargetScope, model_id: string, } } | { "ClearModelRule": { scope: ModelTargetScope, model_id: string, } } | { "SetModelCapabilities": { scope: ModelTargetScope, model_id: string, overrides: CapabilityOverrides, } } | { "EditConnectionModel": { connection: string, model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1): `None` keeps the stored
  * overrides untouched; `Some(record)` replaces them wholesale (an
@@ -63,13 +59,13 @@ client_identity: ClientProfile | null, } } | { "ConnectProvider": { id: string, 
 overrides: CapabilityOverrides | null, } } | { "EditModelReasoning": { model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1) — same semantics as
- * [`AgentRequest::EditProviderModel::overrides`].
+ * [`AgentRequest::EditConnectionModel::overrides`].
  */
-overrides: CapabilityOverrides | null, } } | { "DeleteProvider": { id: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryConnectionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
+overrides: CapabilityOverrides | null, } } | { "DeleteConnection": { name: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryConnectionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
 /**
  * How many recent events to include in the event-log tail.
  */
-event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | "QueryInputHistory" | { "RecordInputHistory": { entries: Array<HistoryEntry>, dedup: boolean, } } | { "DeleteInputHistoryEntry": { text: string, created_at_ms: number, } } | { "QueryRouteSettings": { provider_id: string, model: string, } } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebSearchConfigUpdate };
+event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | "QueryInputHistory" | { "RecordInputHistory": { entries: Array<HistoryEntry>, dedup: boolean, } } | { "DeleteInputHistoryEntry": { text: string, created_at_ms: number, } } | { "QueryRouteSettings": { provider_id: string, model: string, } } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebConfigUpdate };
 
 /**
  * What role the connection wants to assume.
@@ -318,21 +314,17 @@ export type ConnectionAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOA
  */
 export type ConnectionDetail = { 
 /**
- * Canonical connection id.
- */
-id: string, 
-/**
- * User-visible connection name.
+ * Connection name — the connection's identity (ADR-0201).
  */
 name: string, 
 /**
- * Preset id if created from a preset (e.g. "deepseek", "anthropic").
+ * The model provider this connection points at (e.g. "deepseek", "anthropic").
  */
-preset_id?: string | null, 
+provider: string, 
 /**
- * Human-friendly preset label (e.g. "DeepSeek", "Anthropic").
+ * Human-friendly provider label (e.g. "DeepSeek", "Anthropic").
  */
-preset_label?: string | null, 
+provider_label: string, 
 /**
  * Wire protocol label (e.g. "openai", "anthropic", "google").
  */
@@ -385,6 +377,11 @@ active_model_thinking?: boolean | null,
  * Remote provider usage / quota / balance state.
  */
 usage: ConnectionUsageState, };
+
+/**
+ * The default admission gate for models passing through a connection pipe (ADR-0203).
+ */
+export type ConnectionFilterPolicy = NamedFilterPolicy | Array<string>;
 
 /**
  * State of a connection's usage / quota retrieval.
@@ -526,7 +523,7 @@ export type HookEventKind = "SessionStart" | "SessionEnd" | "UserPromptSubmit" |
  * The interactivity posture a client declares in its attach `Select` frame.
  *
  * The session's effective channel is the OR over all attached clients: one
- * interactive watcher is enough. Envoy children inherit their parent's
+ * interactive watcher is enough. Subagent children inherit their parent's
  * posture, so a question that would flow up to a nonexistent human fails
  * fast in the child instead of parking forever.
  *
@@ -563,7 +560,7 @@ data: string, };
  * doc-link in each arm is the single source of truth for "where does this
  * come from".
  */
-export type InjectionKind = { "hook": HookEventKind } | "inter_agent" | "runner_steer" | "user_steer" | "runner_task" | "session_review_input" | "implicit_skill" | "implicit_file" | "system_prompt" | "loop_review_nudge" | "compaction_checkpoint" | "hidden_round_input" | "command_echo" | "tool_image" | "system_reminder" | "untrusted_directive";
+export type InjectionKind = { "hook": HookEventKind } | "inter_agent" | "subagent_steer" | "user_steer" | "subagent_task" | "session_review_input" | "implicit_skill" | "implicit_file" | "system_prompt" | "loop_review_nudge" | "compaction_checkpoint" | "hidden_round_input" | "command_echo" | "tool_image" | "system_reminder" | "untrusted_directive";
 
 /**
  * Provenance of a message that was inserted by the harness rather than
@@ -676,7 +673,7 @@ export type KeycapThemeConfig = { key_fg: string | null, key_bg: string | null, 
 
 /**
  * Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
- * ConnectProvider`] so the TUI picks the method, not the harness.
+ * ConnectConnection`] so the TUI picks the method, not the harness.
  */
 export type LoginMethod = "device" | "browser";
 
@@ -751,29 +748,29 @@ model?: string,
  */
 effort?: string, hidden: boolean, 
 /**
- * Nested runner transcript. Populated only on the `Tool`-role result
- * message of a `task` tool call (see `RunnerTool`). Each entry is a
- * `Message` from the runner's own conversation (System, User,
+ * Nested subagent transcript. Populated only on the `Tool`-role result
+ * message of a `task` tool call (see `SubagentTool`). Each entry is a
+ * `Message` from the subagent's own conversation (System, User,
  * Assistant with tool_calls, Tool results, …), in chronological order.
- * Recursive: an runner's own `task` results carry their own `children`,
- * so arbitrarily deep runner trees round-trip through session.json.
+ * Recursive: a subagent's own `task` results carry their own `children`,
+ * so arbitrarily deep subagent trees round-trip through session.json.
  *
- * `None` for every message that is not an runner's tool result; this
+ * `None` for every message that is not a subagent's tool result; this
  * keeps the legacy flat shape unchanged for non-task messages and lets
  * old session.json files (which predate the field) deserialize as-is.
  */
 children?: Array<Message>, 
 /**
- * Metadata about the runner run that produced [`Message::children`].
+ * Metadata about the subagent run that produced [`Message::children`].
  * Populated only on the same message that has `children = Some(_)`. The
  * two fields are convention-paired (presence of one implies presence of
  * the other); they are kept separate rather than bundled into a single
- * `runner: Option<Payload>` field so the schema stays backward-
+ * `subagent: Option<Payload>` field so the schema stays backward-
  * compatible without a custom deserializer — old session.json files
- * simply have `runner_meta = None` and `children = Some(...)`, and the
+ * simply have `subagent_meta = None` and `children = Some(...)`, and the
  * harness fills in best-effort defaults on read.
  */
-runner_meta?: RunnerMeta, 
+subagent_meta?: SubagentMeta, 
 /**
  * Provenance of a harness-injected message (`None` for genuine user input,
  * assistant replies, and tool results). See [`InjectionOrigin`] / the
@@ -857,15 +854,27 @@ cache_frozen: boolean, };
 export type ModalThemeConfig = { surface: string | null, border: string | null, backdrop: string | null, dim_factor: number | null, };
 
 /**
- * Unified model scope configuration for preset-level or connection-level customization (ADR-0199).
+ * Sparse capability patch from a remote catalog or declaration (ADR-0203).
+ *
+ * Follows tristate sparse merge semantics: `None` means absent/unspecified,
+ * allowing fallthrough to the layer below; `Some(val)` overrides explicitly.
+ */
+export type ModelCapabilityPatch = { context_window: number | null, max_output_tokens: number | null, thinking: ReasoningSupport | null, vision: boolean | null, tool_call: boolean | null, effort_levels: Array<string> | null, };
+
+/**
+ * Unified model scope configuration for preset-level or connection-level customization (ADR-0199, ADR-0203).
  */
 export type ModelScopeConfig = { 
 /**
- * Explicitly declared or included models with optional capability facts.
+ * Pipeline admission filter rule (ADR-0203).
+ */
+filter?: ConnectionFilterPolicy | null, 
+/**
+ * Explicitly declared or included/injected models with optional capability facts.
  */
 include?: Array<DeclaredModel>, 
 /**
- * Explicitly excluded or hidden model ids.
+ * Explicitly excluded or blocked model ids.
  */
 exclude?: Array<string>, 
 /**
@@ -876,7 +885,7 @@ overrides?: { [key in string]: CapabilityOverrides }, };
 /**
  * Target scope for model customizations (ADR-0199).
  */
-export type ModelTargetScope = { "Preset": string } | { "Connection": string };
+export type ModelTargetScope = { "Provider": string } | { "Connection": string };
 
 /**
  * Handshake action selecting a daemon-observability stream instead of a
@@ -1042,6 +1051,11 @@ latest_output?: string | null,
  */
 log_path?: string | null, };
 
+/**
+ * Standard named pipe filter policies (ADR-0203).
+ */
+export type NamedFilterPolicy = "baseline" | "all";
+
 export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack";
 
 export type NoticeSeverity = "info" | "warning" | "error";
@@ -1110,8 +1124,8 @@ elevation: boolean,
  */
 one_off: boolean, 
 /**
- * Origin label identifying which runner produced this request (ADR-0138).
- * `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
+ * Origin label identifying which subagent produced this request (ADR-0138).
+ * `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · mcp_specialist")`.
  */
 origin?: string | null, 
 /**
@@ -1266,10 +1280,10 @@ protocol: string,
  */
 base_url: string, key_ready: boolean, 
 /**
- * The add-connection preset that birthed this connection (`"openai"`,
- * `"anthropic"`, `"deepseek"`, …), when known.
+ * The model provider this connection points at (`"openai"`,
+ * `"anthropic"`, `"deepseek"`, …).
  */
-preset_id: string, 
+provider: string, 
 /**
  * Client identity configured for this connection.
  */
@@ -1429,6 +1443,38 @@ export type ReplyProvenance = "User" | { "Policy": { policy: AutonomousFallbackP
  */
 export type RequestPerformance = { 
 /**
+ * Name resolution, when the attempt needed one.
+ */
+dns_us?: number, 
+/**
+ * TCP connect.
+ */
+tcp_us?: number, 
+/**
+ * TLS handshake.
+ */
+tls_us?: number, 
+/**
+ * Dispatch to the request's last byte handed to the kernel.
+ *
+ * The closest a client can get to "the server acknowledged my request":
+ * the peer's ACK is the kernel's business. Excludes connection setup and
+ * the upload, so it is the anchor the latency timeline's TTFT uses.
+ */
+request_sent_us?: number, 
+/**
+ * Dispatch to the first origin-emitted protocol frame of any class.
+ */
+first_frame_us?: number, 
+/**
+ * Smallest smoothed RTT observed via `TCP_INFO` (Linux, L1 tap).
+ */
+rtt_us?: number, 
+/**
+ * Retransmitted segments observed via `TCP_INFO`.
+ */
+retransmits: number, 
+/**
  * Request dispatch to the provider returning a live response stream
  * (normally HTTP response headers received).
  */
@@ -1452,7 +1498,8 @@ tail_us?: number,
 e2e_us?: number, 
 /**
  * Client-counted output tokens across streamed text, reasoning, and tool
- * payloads. Kept separate from provider-reported completion usage.
+ * payloads. Diagnostic only: the rate uses the attempt's completion count
+ * (provider reported when available), which a reader can verify.
  */
 streamed_output_tokens: number, 
 /**
@@ -1625,7 +1672,7 @@ round: number,
 /**
  * 0-indexed model-request position within `round`.
  */
-turn: number, } } | { "TurnPerformance": TurnPerformanceSnapshot } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "EnvoyCompat": { parent_call_id: string, event: RunnerEvent, } } | { "BackgroundJobStarted": BackgroundJobInfo } | { "BackgroundJobProgress": { job_id: JobId, line: string, } } | { "BackgroundJobReady": { job_id: JobId, } } | { "BackgroundJobCompleted": BackgroundJobOutcome };
+turn: number, } } | { "TurnPerformance": TurnPerformanceSnapshot } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "SubagentStep": { parent_call_id: string, event: SubagentEvent, } } | { "BackgroundJobStarted": BackgroundJobInfo } | { "BackgroundJobProgress": { job_id: JobId, line: string, } } | { "BackgroundJobReady": { job_id: JobId, } } | { "BackgroundJobCompleted": BackgroundJobOutcome };
 
 /**
  * A durable record of one round being stopped before its natural terminal
@@ -1736,63 +1783,6 @@ tool_call: boolean,
  * Extended thinking / reasoning support mode.
  */
 thinking: ReasoningSupport, };
-
-/**
- * Events emitted by an runner spawned through the `task` tool.
- *
- * These are forwarded from the child agent back to the parent harness so that
- * the TUI can render nested tool steps and streaming output inside the parent
- * tool step.
- */
-export type RunnerEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "StreamReasoningStart": { round: number, turn: number, } } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest };
-
-/**
- * Sidecar metadata for an runner run. Lives next to
- * [`Message::children`] on the same `Tool`-role result message. Captures
- * information that the live event stream knows but the bare transcript
- * cannot reconstruct on resume.
- */
-export type RunnerMeta = { 
-/**
- * The task description supplied by the parent agent (from the `task`
- * tool_call's `arguments.description` field). Cached here so the TUI
- * does not have to re-parse the JSON arguments to label the runner
- * view's navigation bar.
- */
-description?: string, 
-/**
- * Wall-clock duration of the runner run in milliseconds. Filled from
- * the parent `record_tool_result`'s `duration_ms` parameter (which
- * already measures the full runner run because the `task` tool blocks
- * until the runner finishes).
- */
-duration_ms?: number, 
-/**
- * Number of read-only tools the runner had access to. Useful as a
- * debugging signal when reviewing archived runs.
- */
-toolset_count: number, 
-/**
- * Provider / model that served the runner. Currently always equal to
- * the parent's provider/model (RunnerTool clones the parent's provider),
- * but persisted separately so a future "cheaper model for runners"
- * feature does not require a schema change.
- */
-provider?: string, model?: string, 
-/**
- * Whether the runner finished by hitting an error path (32-turn
- * limit, repeated-call guard, provider error). Mirrors
- * `ToolOutput::Runner { summary.starts_with("Error") }` but stored
- * explicitly so consumers do not have to string-sniff.
- */
-failed: boolean, 
-/**
- * Whether the runner was stopped by the parent (the turn was interrupted)
- * before completing. The partial transcript in [`Message::children`] is
- * preserved either way; this flag lets the TUI classify the restored
- * step as `Interrupted` rather than `Failed` or `Ok`.
- */
-interrupted: boolean, };
 
 /**
  * One hit from a `/search` over the session-history embedding store.
@@ -1965,6 +1955,63 @@ secret: boolean, };
 export type StreamTokenSource = "unknown" | "provider" | "cl100k";
 
 /**
+ * Events emitted by a subagent spawned through the `task` tool.
+ *
+ * These are forwarded from the child agent back to the parent harness so that
+ * the TUI can render nested tool steps and streaming output inside the parent
+ * tool step.
+ */
+export type SubagentEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "StreamReasoningStart": { round: number, turn: number, } } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest };
+
+/**
+ * Sidecar metadata for a subagent run. Lives next to
+ * [`Message::children`] on the same `Tool`-role result message. Captures
+ * information that the live event stream knows but the bare transcript
+ * cannot reconstruct on resume.
+ */
+export type SubagentMeta = { 
+/**
+ * The task description supplied by the parent agent (from the `task`
+ * tool_call's `arguments.description` field). Cached here so the TUI
+ * does not have to re-parse the JSON arguments to label the subagent
+ * view's navigation bar.
+ */
+description?: string, 
+/**
+ * Wall-clock duration of the subagent run in milliseconds. Filled from
+ * the parent `record_tool_result`'s `duration_ms` parameter (which
+ * already measures the full subagent run because the `task` tool blocks
+ * until the subagent finishes).
+ */
+duration_ms?: number, 
+/**
+ * Number of read-only tools the subagent had access to. Useful as a
+ * debugging signal when reviewing archived runs.
+ */
+toolset_count: number, 
+/**
+ * Provider / model that served the subagent. Currently always equal to
+ * the parent's provider/model (SubagentTool clones the parent's provider),
+ * but persisted separately so a future "cheaper model for subagents"
+ * feature does not require a schema change.
+ */
+provider?: string, model?: string, 
+/**
+ * Whether the subagent finished by hitting an error path (32-turn
+ * limit, repeated-call guard, provider error). Mirrors
+ * `ToolOutput::Subagent { summary.starts_with("Error") }` but stored
+ * explicitly so consumers do not have to string-sniff.
+ */
+failed: boolean, 
+/**
+ * Whether the subagent was stopped by the parent (the turn was interrupted)
+ * before completing. The partial transcript in [`Message::children`] is
+ * preserved either way; this flag lets the TUI classify the restored
+ * step as `Interrupted` rather than `Failed` or `Ok`.
+ */
+interrupted: boolean, };
+
+/**
  * Reference to the dedicated session that durably records a subagent run
  * (ADR-0186 §6). Replaces inline nested transcripts.
  */
@@ -2086,7 +2133,7 @@ export type ToolCall = { id: string, name: string, arguments: string, };
 /**
  * Typed result of a tool invocation.
  *
- * Neither `PartialEq` nor `Eq` is derived: the [`ToolOutput::Runner`]
+ * Neither `PartialEq` nor `Eq` is derived: the [`ToolOutput::Subagent`]
  * variant carries `Vec<Message>` and `Message` does not implement either
  * trait (its `Vec<ImagePart>` base64 payloads make structural equality
  * expensive and uninteresting). Compare via [`ToolOutput::to_text`] or by
@@ -2105,12 +2152,12 @@ termination: ShellTermination,
  * background-job id the child was adopted under, so the UI can point
  * at the notification target.
  */
-detached_job_id?: string | null, } } | { "Code": { lang: string | null, text: string, start_line: number, prefix: string | null, suffix: string | null, } } | { "Listing": { entries: Array<string>, } } | { "Matches": { pattern: string, lines: Array<string>, } } | { "Patch": { path: string, op: PatchOp, old: string, new: string, start_line: number, } } | { "Runner": { summary: string, messages: Array<Message>, usage: TokenUsage, 
+detached_job_id?: string | null, } } | { "Code": { lang: string | null, text: string, start_line: number, prefix: string | null, suffix: string | null, } } | { "Listing": { entries: Array<string>, } } | { "Matches": { pattern: string, lines: Array<string>, } } | { "Patch": { path: string, op: PatchOp, old: string, new: string, start_line: number, } } | { "Subagent": { summary: string, messages: Array<Message>, usage: TokenUsage, 
 /**
- * Time the runner's own provider requests spent *generating*
+ * Time the subagent's own provider requests spent *generating*
  * (completion-spanning, excluding tool execution and human pauses),
  * so the parent round can fold it into its throughput denominator.
- * Without this, the runner's output tokens would be in the parent's
+ * Without this, the subagent's output tokens would be in the parent's
  * numerator but its generation time missing from the denominator —
  * inflating the displayed tok/s for any delegating round.
  */
@@ -2207,6 +2254,15 @@ origin?: EntryOrigin, hidden: boolean,
 created_at_ms: number, payload: EntryPayload, };
 
 /**
+ * Transport-level timings an attempt observed, handed up by the egress.
+ *
+ * Deliberately separate from [`RequestPerformance`]: these come from the
+ * socket and the HTTP layer, not from the protocol adapter, and a provider
+ * that cannot supply them reports `None` rather than zero.
+ */
+export type TransportTimings = { dns_us?: number, tcp_us?: number, tls_us?: number, request_sent_us?: number, stream_ready_us?: number, rtt_us?: number, retransmits: number, };
+
+/**
  * Concrete domains for project asset trust.
  *
  * `all` is deliberately not a domain. It is a command-layer selection that
@@ -2268,7 +2324,7 @@ export type UserQuestionOption = { label: string, description?: string, };
  */
 export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>, 
 /**
- * Origin label identifying which runner produced this request (ADR-0138).
+ * Origin label identifying which subagent produced this request (ADR-0138).
  */
 origin?: string | null, };
 
@@ -2278,159 +2334,36 @@ origin?: string | null, };
 export type ViewThemeConfig = { canvas: string | null, header_bg: string | null, header_fg: string | null, };
 
 /**
- * A persisted Web Reader Connection record (`reader_connections` in `web_connections.toml`).
+ * Optimistic, partial mutation of the singleton web configuration.
  */
-export type WebReaderConnection = { 
+export type WebConfigUpdate = { 
 /**
- * Stable, unique connection identifier (e.g. "my-jina", "corp-firecrawl").
+ * Required compare-and-swap precondition. Callers must query the current
+ * view before mutating it; stale writers are rejected rather than merged.
  */
-id: string, 
-/**
- * Human-readable display name shown in pickers and UI.
- */
-name?: string, 
-/**
- * Builtin preset identifier (e.g. "jina", "firecrawl").
- */
-preset_id?: string, 
-/**
- * Optional environment variable name supplying the API key (12-factor override).
- */
-api_key_env?: string, 
-/**
- * Custom reader base URL / endpoint (e.g. self-hosted Firecrawl or Crawl4AI).
- */
-base_url?: string, 
-/**
- * Optional custom HTTP headers sent with requests.
- */
-custom_headers?: { [key in string]: string }, 
-/**
- * Whether this connection is active and enabled for reader routing.
- */
-enabled: boolean, };
+expected_revision: number, provider?: WebSearchProvider, reader?: WebReaderProvider, proxy?: string, timeout_secs?: number, searxng_url?: string, credential?: WebCredentialUpdate, };
 
-/**
- * A partial update to the `[websearch]` table. Every field is optional:
- * `None` keeps the current value, `Some` replaces it. Sent via
- * [`AgentRequest::UpdateWebSearchConfig`].
- *
- * Secrets travel in the clear on this request (the wire is the local
- * WebSocket to the user's own daemon, the same trust domain as the
- * `AddProvider`/`EditProvider` requests that carry provider API keys), but
- * they are persisted to `credentials.toml` — never `config.toml` — and are
- * **never echoed back**: the reply carries only key presence.
- */
-export type WebSearchConfigUpdate = { 
-/**
- * Primary search backend (`exa` | `parallel` | `duckduckgo` | `searxng`
- * | `tavily` | `bocha`).
- */
-provider?: string, 
-/**
- * Page-content reader used by `read_url` (`builtin` | `jina`).
- */
-reader?: string, 
-/**
- * Proxy URL applied to both tools (`http(s)://`, `socks5://`,
- * `socks5h://`). Empty string clears it.
- */
-proxy?: string, 
-/**
- * Per-request timeout in seconds (clamped to ≥ 1).
- */
-timeout_secs?: number, 
-/**
- * SearXNG JSON endpoint; required when `provider = "searxng"`.
- * Empty string clears it.
- */
-searxng_url?: string, 
-/**
- * Exa API key. Empty string clears the stored key.
- */
-exa_api_key?: string, 
-/**
- * Parallel API key. Empty string clears the stored key.
- */
-parallel_api_key?: string, 
-/**
- * Tavily API key. Empty string clears the stored key.
- */
-tavily_api_key?: string, 
-/**
- * Bocha API key. Empty string clears the stored key.
- */
-bocha_api_key?: string, 
-/**
- * Jina Reader API key. Empty string clears the stored key.
- */
-jina_api_key?: string, 
-/**
- * Optional search connection to upsert into `search_connections` in `web_connections.toml`.
- */
-upsert_search_connection?: WebSearchConnection, 
-/**
- * Optional search connection ID to delete from `web_connections.toml`.
- */
-delete_search_connection?: string, 
-/**
- * Optional reader connection to upsert into `reader_connections` in `web_connections.toml`.
- */
-upsert_reader_connection?: WebReaderConnection, 
-/**
- * Optional reader connection ID to delete from `web_connections.toml`.
- */
-delete_reader_connection?: string, };
+export type WebConfigView = { revision: number, provider: WebSearchProvider, reader: WebReaderProvider, proxy?: string, timeout_secs: number, searxng_url?: string, search_credential: WebCredentialStatus, reader_credential: WebCredentialStatus, capabilities: Array<WebProviderCapability>, };
 
-/**
- * The frontend-facing view of the effective `[websearch]` configuration.
- * Mirrors [`crate::WebSearchConfig`] with every API key reduced to a
- * boolean **presence flag** — plaintext secrets never cross the wire in
- * either reply ([`AgentResponse::WebSearchConfigSnapshot`] or
- * [`AgentResponse::WebSearchConfigUpdated`]).
- */
-export type WebSearchConfigView = { provider: string, reader: string, proxy?: string, timeout_secs: number, searxng_url?: string, exa_api_key_set: boolean, parallel_api_key_set: boolean, tavily_api_key_set: boolean, bocha_api_key_set: boolean, jina_api_key_set: boolean, 
-/**
- * Configured search connection instances from `search_connections` in `web_connections.toml`.
- */
-search_connections: Array<WebSearchConnection>, 
-/**
- * Configured reader connection instances from `reader_connections` in `web_connections.toml`.
- */
-reader_connections: Array<WebReaderConnection>, };
+export type WebCredentialRequirement = "None" | "Optional" | "Required";
 
+export type WebCredentialStatus = "NotRequired" | "Environment" | "Stored" | "OptionalMissing" | "RequiredMissing";
+
+export type WebCredentialUpdate = { axis: WebProviderAxis, provider_id: string, 
 /**
- * A persisted Web Search Connection record (`search_connections` in `web_connections.toml`).
+ * Empty clears the stored value. Secrets are never echoed in responses.
  */
-export type WebSearchConnection = { 
-/**
- * Stable, unique connection identifier (e.g. "exa-default", "corp-searxng").
- */
-id: string, 
-/**
- * Human-readable display name shown in pickers and UI.
- */
-name?: string, 
-/**
- * Builtin preset identifier (e.g. "exa", "parallel", "searxng", "tavily", "bocha", "duckduckgo").
- */
-preset_id?: string, 
-/**
- * Optional environment variable name supplying the API key (12-factor override).
- */
-api_key_env?: string, 
-/**
- * Custom search base URL / endpoint (e.g. SearXNG endpoint or private search cluster).
- */
-base_url?: string, 
-/**
- * Optional custom HTTP headers sent with requests.
- */
-custom_headers?: { [key in string]: string }, 
-/**
- * Whether this connection is active and enabled for search routing.
- */
-enabled: boolean, };
+value: string, };
+
+export type WebEndpointRequirement = "Fixed" | "UserSupplied";
+
+export type WebProviderAxis = "Search" | "Reader";
+
+export type WebProviderCapability = { axis: WebProviderAxis, id: string, display_name: string, description: string, credential: WebCredentialRequirement, endpoint: WebEndpointRequirement, default_endpoint: string | null, default_env_var: string | null, };
+
+export type WebReaderProvider = "disabled" | "jina";
+
+export type WebSearchProvider = "disabled" | "exa" | "parallel" | "duckduckgo" | "searxng" | "tavily" | "bocha";
 
 /**
  * First-class security state attached to every harness snapshot.

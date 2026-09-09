@@ -532,7 +532,7 @@ async fn tree_leaf_switch_rebuilds_transcript() {
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn runner_children_become_subagent_sessions_with_pointer() {
+async fn subagent_children_become_subagent_sessions_with_pointer() {
     let dir = temp_dir("subagent");
     let path = dir.join("session.json");
     let store = SessionStore::for_path(path.clone());
@@ -545,7 +545,7 @@ async fn runner_children_become_subagent_sessions_with_pointer() {
     let mut parent = assistant("delegating");
     parent.tool_calls = Some(vec![call.clone()]);
     let child_messages = vec![user("child task"), assistant("child done")];
-    let runner_meta = muta_contracts::message::RunnerMeta {
+    let subagent_meta = muta_contracts::message::SubagentMeta {
         description: Some("do the thing".into()),
         duration_ms: Some(1234),
         toolset_count: 3,
@@ -553,7 +553,7 @@ async fn runner_children_become_subagent_sessions_with_pointer() {
     };
     let result = Message::tool_result(&call, "[task result]:\ndone")
         .with_children(child_messages.clone())
-        .with_runner_meta(runner_meta);
+        .with_subagent_meta(subagent_meta);
 
     let mut window = store.model_window().await;
     window.push(parent);
@@ -635,4 +635,53 @@ fn excerpt_summary_respects_token_budget() {
     let summary = build_excerpt_summary(&archived, 120, None);
     assert!(!summary.is_empty());
     assert!(muta_contracts::tokenizer::count_tokens(&summary) <= 120);
+}
+
+#[tokio::test]
+async fn delete_unpersisted_active_session_resets_cleanly() {
+    let dir = temp_dir("delete_unpersisted");
+    let path = dir.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    let initial_id = store.id().await;
+
+    // The store is fresh/unpersisted: no messages have been committed.
+    let deleted = store
+        .delete(&initial_id)
+        .await
+        .expect("deleting unpersisted active session must succeed");
+    assert_eq!(deleted, initial_id);
+
+    // The active session has been reset to a fresh id.
+    let new_id = store.id().await;
+    assert_ne!(new_id, initial_id);
+}
+
+#[tokio::test]
+async fn delete_persisted_session_and_idempotent_delete() {
+    let dir = temp_dir("delete_persisted");
+    let path = dir.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    let id = store.id().await;
+
+    // Persist a message so the session is written to SQLite.
+    store
+        .replace_messages(vec![user("hello world")])
+        .await
+        .unwrap();
+
+    let deleted = store
+        .delete(&id)
+        .await
+        .expect("deleting persisted active session must succeed");
+    assert_eq!(deleted, id);
+
+    let new_id = store.id().await;
+    assert_ne!(new_id, id);
+
+    // Deleting the already-deleted full UUID is idempotent and does not error.
+    let re_deleted = store
+        .delete(&id)
+        .await
+        .expect("repeat delete of full UUID must be idempotent");
+    assert_eq!(re_deleted, id);
 }

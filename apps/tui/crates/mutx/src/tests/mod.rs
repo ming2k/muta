@@ -31,21 +31,21 @@ fn test_command_catalog() -> muta_contracts::CommandCatalog {
     muta_client::command_catalog(&[])
 }
 
-fn conversation_with_runners() -> Vec<TranscriptMessage> {
+fn conversation_with_subagents() -> Vec<TranscriptMessage> {
     let mut a = TranscriptMessage::tool_step(
         "task_a",
-        "runner",
+        "spawn_agent",
         r#"{"description":"explore a","prompt":"..."}"#,
     );
-    a.runner_children_mut()
+    a.subagent_children_mut()
         .unwrap()
         .push(TranscriptMessage::new(Role::Assistant, "child A1"));
     let mut b = TranscriptMessage::tool_step(
         "task_b",
-        "runner",
+        "spawn_agent",
         r#"{"description":"explore b","prompt":"..."}"#,
     );
-    b.runner_children_mut()
+    b.subagent_children_mut()
         .unwrap()
         .push(TranscriptMessage::new(Role::Assistant, "child B1"));
     vec![
@@ -164,6 +164,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         config_detail_scroll: 0,
         websearch_config: None,
         config_dropdown: None,
+        config_selected_rect: None,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
@@ -184,8 +185,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_permissions: std::collections::VecDeque::new(),
         pending_questions: std::collections::VecDeque::new(),
         pending_inputs: std::collections::VecDeque::new(),
-        runner_permission_parent: HashMap::new(),
-        runner_question_parent: HashMap::new(),
+        subagent_permission_parent: HashMap::new(),
+        subagent_question_parent: HashMap::new(),
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         context_tokens_by_session: HashMap::new(),
         open_sessions_signal: false,
@@ -282,6 +283,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         spinner_epoch: std::time::Instant::now(),
         carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
+        last_submit_ms: None,
         injection_stashed_input: String::new(),
         editor_target: None,
         editor_field: 0,
@@ -302,7 +304,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: Default::default(),
-        custom_preset_id: None,
+        custom_provider_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),
@@ -337,25 +339,25 @@ fn new_test_channel() -> mpsc::UnboundedSender<AgentRequest> {
     tx
 }
 
-fn openai_preset() -> &'static crate::providers::ProviderPreset {
+fn openai_template() -> &'static crate::providers::ConnectionTemplate {
     crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "openai")
-        .expect("openai preset")
+        .expect("openai template")
 }
 
-fn anthropic_preset() -> &'static crate::providers::ProviderPreset {
+fn anthropic_template() -> &'static crate::providers::ConnectionTemplate {
     crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "anthropic")
-        .expect("anthropic preset")
+        .expect("anthropic template")
 }
 
-fn antigravity_preset() -> &'static crate::providers::ProviderPreset {
+fn antigravity_template() -> &'static crate::providers::ConnectionTemplate {
     crate::PROVIDER_PRESETS
         .iter()
-        .find(|t| t.id == "antigravity-oauth")
-        .expect("antigravity preset")
+        .find(|t| t.id == "google-antigravity")
+        .expect("antigravity template")
 }
 
 fn queued_dispatch(id: &str, session_id: &str, text: &str) -> QueuedDispatch {

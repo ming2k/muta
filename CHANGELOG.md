@@ -7,6 +7,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Web search and reader now use one typed provider selection per axis
+  (ADR-0202, breaking).** The phantom web connection/preset layer is removed:
+  Settings derives its search/reader dropdowns from the daemon capability
+  catalog and exposes only provider-specific token or endpoint fields. The
+  nonexistent `builtin` reader migrates to `disabled`; Jina works anonymously;
+  Firecrawl/custom readers are not advertised until implemented. Behavior now
+  persists under `[web]`, credentials under provider-scoped `[web.search]` and
+  `[web.reader]` maps, environment credentials take precedence, and updates use
+  a revision precondition before hot-swapping one resolved snapshot. Unknown
+  providers never silently fall back. Legacy `[websearch]` and
+  `web_connections.toml` data are migrated read-only without deleting unmatched
+  records or credentials; one-shot migration state prevents a cleared token
+  from being resurrected. Behavior and credential writes are separate atomic
+  revisioned updates rather than a false cross-file transaction.
+
+- **Model provider is the service surface; a connection is a named pipe
+  (ADR-0201, breaking).** The provider vocabulary is re-keyed end to end:
+  - `Connection.preset_id` is now the required `provider`, and a connection has
+    no `id` — its `name` is the sole identifier, unique and compared
+    case-insensitively (a duplicate is rejected with a suggested alternative,
+    never silently suffixed). Renaming a connection rewrites
+    `credentials.toml`, `auth.toml`, and `config.toml`'s `default_connection`
+    in one transaction; historical session and telemetry records keep the name
+    they ran under.
+  - Provider ids are self-describing service surfaces: `chatgpt-oauth` →
+    `openai-subscription`, `antigravity-oauth` → `google-antigravity`,
+    `copilot-oauth` → `github-copilot`, `xai-oauth` → `xai`, `zai-code` →
+    `glm-cn`, and `custom-openai` → `custom`. The pure-custom connection kind
+    is gone: a bring-your-own endpoint is an ordinary connection to the
+    `custom` provider carrying its own `protocol` / `base_url`.
+  - `presets.toml` is renamed `model_providers.toml` and keyed by model
+    provider id (`[model_providers.deepseek]`). Provider-level model scopes
+    apply to every connection to that provider; a connection may narrow or
+    override the resolved set but must not invent models except under
+    `provider = "custom"`.
+  - The wire requests follow: `AddProvider` → `AddConnection`, `EditProvider` →
+    `EditConnection`, `ConnectProvider` → `ConnectConnection`,
+    `DeleteProvider` → `DeleteConnection`, `SwitchProvider` →
+    `SwitchConnection`, and `EditProviderModel` → `EditConnectionModel`, plus
+    the new `RenameConnection { from, to }`. `ModelTargetScope::Preset` becomes
+    `Provider`, and `ConnectionDetail` drops `id` and gains `provider` /
+    `provider_label`.
+  - **The wire protocol version is bumped to 6** (ADR-0134): a v5 peer cannot
+    deserialize the re-keyed connection requests, so the minimum served version
+    moves with it and the handshake rejects older clients rather than
+    misreading them.
+  - A load-time migration rewrites the old field names and provider ids and the
+    writer emits only the new names; no transitional alias survives in
+    serialization.
+
+- **The shipped agent no longer introduces itself.** The baseline system prompt
+  dropped its `"You are muta, an expert AI coding assistant with tool access."`
+  opening line: nothing in the harness reads the model's self-name, capabilities
+  are declared by the tool schemas, the environment by the host section, and the
+  work ethos by the persistence policy, so the line spent the prompt's most
+  salient slot on a label that steered no behaviour. The prompt now opens at
+  `## Host Execution Environment`. A `/role` switch (alias `/master`) still
+  steers behaviour, but as an imperative role directive
+  (`Role: software architect. …`) rather than a `"You are …"` persona, and
+  `/role code` clears it.
+
+- **Subagent prompts use the agent/subagent vocabulary (ADR-0183).** The five
+  built-in subagent task prompts opened with `"You are a … runner"`; they now
+  name the delegated-subagent role. The never-wired runner-only system-prompt
+  registry (`runner_system_prompt_registry`, section id `system.runner_role`)
+  is deleted — every agent already composes the default registry, and the
+  subagent's identity is its preset task prompt.
+
+- **The master vocabulary is retired for the homogeneous agent model (ADR-0183).**
+  The top-level agent is now consistently referred to as the root agent (`AgentKind::Root`),
+  its declarative profile is `AgentPreset` (formerly `MasterPreset`), delegation policy is
+  `AgentPresetDelegation` (`DelegationPolicy`), runtime tuning is `AgentRuntimeConfig`
+  (`MasterRuntimeConfig`), and slot management is `AgentSlot` (`MasterSlot`).
+  The inverted type alias shims and the legacy files `master.rs` and `master_slot.rs` are
+  deleted. Configuration uses `[agent]` as the canonical table with `[master]` accepted
+  on load. The mesh station for a session agent is `"session"` (`MeshAddress::session_root`),
+  and token ledger accounting uses `"root"` (`ROOT_ACTOR_ID`, with legacy `"master"` records
+  recognized transparently).
+
+- **The runner/envoy vocabulary is retired for the homogeneous agent model
+  (ADR-0183).** One cognitive entity class — `Agent`, in a root or a delegated
+  child posture — replaces the `Runner`/`Envoy` archetypes. Renamed across the
+  workspace: `RunnerPreset` → `SubagentPreset`, `RUNNER_*` → `SUBAGENT_*`,
+  `RunnerTool` → `SubagentTool`, `RunnerEvent` → `SubagentEvent`,
+  `RunnerRegistry`/`RunnerHandle` → `SubagentRegistry`/`SubagentHandle`,
+  `AgentKind::Runner` → `AgentKind::Subagent`, `AgentEvent::Runner` →
+  `AgentEvent::Subagent`, `ToolOutput::Runner` → `ToolOutput::Subagent`,
+  `RoundEvent::EnvoyCompat` → `RoundEvent::SubagentStep`, and
+  `MeshMessage::RunnerEol` → `MeshMessage::SubagentEol`; `runner.rs` is now
+  `subagent.rs` and the `runner_tool.rs` re-export shim is deleted. Legacy
+  aliases are gone: `SubAgentTool`/`SubAgentRegistry`/`SubAgentOutcome`, the
+  `spawn_runner`/`runner_code`/`runner_mcp`/`spawn_subagent`/`subagent_code`/
+  `subagent_mcp` tool names, the `preset` dispatch parameter, and the
+  `master`/`runner` mesh-station aliases; canonical names are `spawn_agent`,
+  `delegate_code`, and `delegate_mcp`. Wire protocol v7 — records carrying the
+  previous tags deserialize as unknown payloads rather than failing the
+  session. Docs: `envoys.md` → `subagents.md` (the old path survives as a
+  redirect for accepted-ADR links), `tools/envoy.md` → `tools/subagent.md`,
+  `tui/envoy-view.md` → `tui/subagent-view.md`.
+
+### Fixed
+
+- **Delegation guidance now activates from the capability, not a stale tool
+  name.** `system.delegation_guidance` was gated on tool names `runner`/`task`
+  that no dispatch tool has carried since the ADR-0183 rename, so the
+  delegation paragraph never rendered. It is now gated on
+  `Tool::spawns_subagent`, so it appears whenever a dispatch tool is admitted,
+  whatever it is called.
+- **The TUI and the mesh tool use the canonical dispatch names.** The TUI
+  recognised subagent steps by the retired `runner`/`runner_code`/`runner_mcp`
+  names (and their mesh/`subtask` aliases); they now match `spawn_agent`,
+  `delegate_code`, and `delegate_mcp`, so subagent steps render as subagent
+  steps. The mesh `send` tool accepts exactly the station names
+  `hypervisor`/`session`/`subtask` (the `supervisor`/`master`/`runner`
+  aliases and the `recipient_tier` fallback are gone).
+
 ## [0.42.2] - 2026-09-09
 
 ### Added
@@ -4741,7 +4859,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Moonshot's top-level `cached_tokens` — not just Anthropic. Moonshot/Kimi
   sessions now send the session id as `prompt_cache_key` so repeated prefixes
   hit a server-side cache at a discount. See
-  [ADR-0067](docs/adr/0067-modular-prompt-cache-control.md).
+  [ADR-0067](docs/adr/archive/0067-modular-prompt-cache-control.md).
 
 - **System-reminder dynamic injection (ADR-0068).** A two-tier XML trust model
   gives event-driven, mid-turn instructions a canonical channel: authoritative
@@ -4770,7 +4888,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus SHA-256 fallback fingerprints. The expert council runs five independent
   perspectives, a cross-examination round, and a separate meeting-manager
   synthesis while keeping all conclusions advisory and outside the order path.
-  See [ADR-0063](docs/adr/0063-intelligence-workbench-and-expert-council.md).
+  See [ADR-0063](docs/adr/archive/0063-intelligence-workbench-and-expert-council.md).
 
 - **Direct Longbridge/LongPort OpenAPI integration for `neenee-quant`.** The
   official Rust SDK now supplies real-time quotes, candlesticks, depth, live
@@ -4780,7 +4898,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before live submission, and client-side trade throttling follows LongPort's
   published limit. The quant GUI now distinguishes disarmed trading from paper
   brokerage and reports the configured live broker accurately. See
-  [ADR-0062](docs/adr/0062-longport-openapi-quant-adapter.md).
+  [ADR-0062](docs/adr/archive/0062-longport-openapi-quant-adapter.md).
 
 - **Provider-scoped remote model metadata for GitHub Copilot (ADR-0070).**
   The Copilot provider now identifies itself with the public Copilot OAuth
@@ -4840,7 +4958,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and directory changed: `[[bin]] name` is still `neenee`, so every
   invocation, alias, installer, and release artifact is untouched;
   `cargo -p neenee-cli` selects the package. See
-  [ADR-0080](docs/adr/0080-rename-neenee-to-neenee-cli.md).
+  [ADR-0080](docs/adr/archive/0080-rename-neenee-to-neenee-cli.md).
 
 - **`neenee-tui-view` merged back into the binary (ADR-0079).** The view
   crate had a single consumer and changed in near-lockstep with the shell
@@ -5833,7 +5951,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[agent]` config table is now `[principal]` (move `hard_stop_rounds` /
   `loop_review_enabled` under it — an `[agent]` table is silently ignored), and
   the `subagent` tool is renamed to `envoy`. No compatibility aliases. See
-  [ADR-0042](docs/adr/0042-principal-envoy-role-vocabulary.md).
+  [ADR-0042](docs/adr/archive/0042-principal-envoy-role-vocabulary.md).
 
 - **Question modal single-select is now live — no marker, no Space step.**
   Single-select questions drop the `●`/`○` radio dots entirely: the highlighted
@@ -6003,7 +6121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt registry (`review.persona` + `review.dimensions` + `review.json_contract`)
   installed via `Agent::set_prompt_registry`, and its transcript opens at the
   user message so the composed review prompt is rebuilt correctly every round.
-  See [ADR-0039](docs/adr/0039-unified-prompt-registry.md).
+  See [ADR-0039](docs/adr/archive/0039-unified-prompt-registry.md).
 
 ## [0.7.1] - 2026-06-27
 
@@ -6042,7 +6160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `list_positions`. The quant tools deliberately do not self-register, so a
   coding agent can never link `place_order` and a quant agent can never link
   `write_file` — domain isolation is enforced at assembly time. See
-  [ADR-0035](docs/adr/0035-application-layer-split.md).
+  [ADR-0035](docs/adr/archive/0035-application-layer-split.md).
 
 - **`QUANT` subagent profile** — a bounded subagent profile in `neenee-core`
   admitting read-only quant tools plus shared read-only inspection, while
@@ -6064,7 +6182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renamed the coding application: crate `neenee-cli` → `neenee-code`, binary
   `neenee` → `neenee-code`.** The workspace now has two domain applications
   (coding and quant), so neither carries the bare name. Every existing `neenee`
-  invocation is now `neenee-code`. See [ADR-0035](docs/adr/0035-application-layer-split.md).
+  invocation is now `neenee-code`. See [ADR-0035](docs/adr/archive/0035-application-layer-split.md).
 
 ### Fixed
 

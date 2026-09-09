@@ -49,7 +49,6 @@ pub use muta_contracts::LoginMethod;
 use muta_contracts::SecretString;
 use std::sync::{Arc, Mutex};
 
-const OAUTH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const OAUTH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DEVICE_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -137,7 +136,7 @@ pub struct OAuthLoginPrompt {
 /// blocks on a localhost callback or device-token poll.
 pub struct OAuthLoginSession {
     prompt: OAuthLoginPrompt,
-    client: reqwest::Client,
+    client: crate::http::Http,
     flow: OAuthLoginFlow,
 }
 
@@ -184,7 +183,7 @@ impl OAuthLoginSession {
 #[derive(Clone)]
 pub struct OAuth {
     config: OAuthConfig,
-    client: reqwest::Client,
+    client: crate::http::Http,
     refresh_in_flight: Arc<RefreshSlot>,
 }
 
@@ -194,19 +193,17 @@ impl OAuth {
     /// Construct with a specific provider configuration.
     #[allow(clippy::expect_used)]
     pub fn new(config: OAuthConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("muta/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(OAUTH_CONNECT_TIMEOUT)
-            .timeout(OAUTH_REQUEST_TIMEOUT)
-            .build()
-            .expect(
-                "OAuth HTTP client configuration is static and valid; client builder must succeed",
-            );
+        // The owned transport deliberately has no client-wide timeout (a
+        // streaming turn must not be cut), so the OAuth handle carries the
+        // whole-request deadline for these short control-plane flows.
+        let client = crate::http::Http::new(OAUTH_REQUEST_TIMEOUT).expect(
+            "OAuth HTTP client configuration is static and valid; client builder must succeed",
+        );
         Self::with_client(config, client)
     }
 
     /// Construct with a provider configuration and a pre-configured HTTP client.
-    pub fn with_client(config: OAuthConfig, client: reqwest::Client) -> Self {
+    pub fn with_client(config: OAuthConfig, client: crate::http::Http) -> Self {
         Self {
             config,
             client,
@@ -240,7 +237,7 @@ impl OAuth {
     }
 
     /// Borrow the HTTP client.
-    pub fn client(&self) -> &reqwest::Client {
+    pub fn client(&self) -> &crate::http::Http {
         &self.client
     }
 
@@ -522,7 +519,7 @@ impl BrowserLogin {
     }
 
     /// Wait for the callback (or manual input) and exchange the authorization code for tokens.
-    pub async fn complete(self, client: &reqwest::Client) -> Result<TokenResponse, AuthError> {
+    pub async fn complete(self, client: &crate::http::Http) -> Result<TokenResponse, AuthError> {
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(5 * 60), self.rx)
             .await
             .map_err(|_| AuthError::Timeout)?

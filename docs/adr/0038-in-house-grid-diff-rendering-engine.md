@@ -144,7 +144,7 @@ cell-level byte minimization nvim's TUI frontend does.
 
 - `crates/neenee-tui/` — the engine (`cell`, `text`, `grid`, `diff`,
   `backend`) and `tests/engine.rs` (the four-guarantee end-to-end tests).
-- [ADR-0036](0036-cjk-wide-char-ghost-cells.md) — the third-buffer fix this
+- [ADR-0036](archive/0036-cjk-wide-char-ghost-cells.md) — the third-buffer fix this
   engine supersedes (the wrapper it introduced, `wide_heal_backend.rs`, has
   been deleted).
 - neovim `src/nvim/grid_defs.h` / `screen.c` — `ScreenGrid`, per-line

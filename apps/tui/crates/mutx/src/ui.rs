@@ -48,6 +48,7 @@ pub enum UiKey {
     OauthCode,
     Toast,
     PreAttach,
+    SettingsOption(usize),
 }
 
 /// The application has one mounted UI runtime. Semantic text mappings travel
@@ -279,12 +280,19 @@ impl ComponentTree {
                 InputPolicy::Modal,
                 true,
             ),
+            UiKey::SettingsOption(_) => (
+                Some(UiKey::Modal(Modal::Config)),
+                31,
+                PointerPolicy::Target,
+                InputPolicy::Bubble,
+                true,
+            ),
         };
         // Popups and sheets retain logical ownership while escaping the
         // composer's narrow clip. All other children inherit clipping.
         let layout = if matches!(
             key,
-            UiKey::Sheet(_) | UiKey::Completion | UiKey::ProviderDelete
+            UiKey::Sheet(_) | UiKey::Completion | UiKey::ProviderDelete | UiKey::ConfigDropdown
         ) {
             LayoutBox::Viewport(rect)
         } else {

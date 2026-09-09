@@ -101,7 +101,7 @@ effort. ("不写默认没 think，写的默认有 think 且为对应 effort".)
 
 ## References
 
-- [ADR-0045](0045-extract-neenee-tui-view.md) — established effort/thinking as
+- [ADR-0045](archive/0045-extract-neenee-tui-view.md) — established effort/thinking as
   per-model properties; this ADR completes that move by making them the *only*
   surface and flipping the default to opt-in.
 - `crates/neenee-providers/src/anthropic_compat.rs` — `ThinkingConfig::for_model`

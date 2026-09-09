@@ -76,7 +76,7 @@ have not stabilized interfaces for independent versioning.
 
 ## References
 
-- [ADR-0062](0062-longport-openapi-quant-adapter.md) — superseded (quant removed).
-- [ADR-0063](0063-intelligence-workbench-and-expert-council.md) — superseded (quant removed).
-- [ADR-0064](0064-product-family-workspace-layout.md) — superseded (the product-family layout this flattens).
+- [ADR-0062](archive/0062-longport-openapi-quant-adapter.md) — superseded (quant removed).
+- [ADR-0063](archive/0063-intelligence-workbench-and-expert-council.md) — superseded (quant removed).
+- [ADR-0064](archive/0064-product-family-workspace-layout.md) — superseded (the product-family layout this flattens).
 - [Workspace layout](../dev/workspace-layout.md)

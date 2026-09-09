@@ -53,7 +53,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
 | Tool step | [tool-step.md](tui/tool-step.md) |
 | Thinking step | [thinking-step.md](tui/thinking-step.md) |
 | Step state machine | [step-state.md](tui/step-state.md) |
-| Envoy view | [envoy-view.md](tui/envoy-view.md) |
+| Subagent view | [subagent-view.md](tui/subagent-view.md) |
 | Activity bar | [activity-bar.md](tui/activity-bar.md) |
 | Queue bar | [queue-bar.md](tui/queue-bar.md) |
 | Model bar | [model-bar.md](tui/model-bar.md) |

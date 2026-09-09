@@ -73,18 +73,18 @@ pub enum InjectionKind {
     /// Visible parent→child steering payload (`AgentOp::InjectUserMessage`,
     /// codex `inject_if_running` analogue). Site: `Agent::drain_inbox`.
     /// Lands as a *visible* user message, hence distinct from `InterAgent`.
-    RunnerSteer,
+    SubagentSteer,
     /// Visible human-authored steering input admitted into the principal (or a
-    /// side conversation) at a safe turn boundary. Unlike `RunnerSteer`, the
+    /// side conversation) at a safe turn boundary. Unlike `SubagentSteer`, the
     /// author is the user; the origin records its mid-round placement so a
     /// restored transcript can render it as an insert rather than a new round.
     UserSteer,
-    /// The initial visible task handed to a newly spawned runner. Unlike
-    /// `RunnerSteer`, this opens the child transcript rather than steering an
-    /// already-running child. Site: `RunnerTool::run`.
-    RunnerTask,
+    /// The initial visible task handed to a newly spawned subagent. Unlike
+    /// `SubagentSteer`, this opens the child transcript rather than steering an
+    /// already-running child. Site: `SubagentTool::run`.
+    SubagentTask,
     /// Legacy: the transcript snapshot once handed to the bounded
-    /// session-review runner (the `/review` diagnostic, now retired). No
+    /// session-review subagent (the `/review` diagnostic, now retired). No
     /// production site constructs it anymore; the variant stays so old
     /// session files carrying injected rows still deserialize.
     SessionReviewInput,
@@ -212,28 +212,28 @@ pub struct Message {
     pub effort: Option<String>,
     #[serde(default)]
     pub hidden: bool,
-    /// Nested runner transcript. Populated only on the `Tool`-role result
-    /// message of a `task` tool call (see `RunnerTool`). Each entry is a
-    /// `Message` from the runner's own conversation (System, User,
+    /// Nested subagent transcript. Populated only on the `Tool`-role result
+    /// message of a `task` tool call (see `SubagentTool`). Each entry is a
+    /// `Message` from the subagent's own conversation (System, User,
     /// Assistant with tool_calls, Tool results, …), in chronological order.
-    /// Recursive: an runner's own `task` results carry their own `children`,
-    /// so arbitrarily deep runner trees round-trip through session.json.
+    /// Recursive: a subagent's own `task` results carry their own `children`,
+    /// so arbitrarily deep subagent trees round-trip through session.json.
     ///
-    /// `None` for every message that is not an runner's tool result; this
+    /// `None` for every message that is not a subagent's tool result; this
     /// keeps the legacy flat shape unchanged for non-task messages and lets
     /// old session.json files (which predate the field) deserialize as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<Message>>,
-    /// Metadata about the runner run that produced [`Message::children`].
+    /// Metadata about the subagent run that produced [`Message::children`].
     /// Populated only on the same message that has `children = Some(_)`. The
     /// two fields are convention-paired (presence of one implies presence of
     /// the other); they are kept separate rather than bundled into a single
-    /// `runner: Option<Payload>` field so the schema stays backward-
+    /// `subagent: Option<Payload>` field so the schema stays backward-
     /// compatible without a custom deserializer — old session.json files
-    /// simply have `runner_meta = None` and `children = Some(...)`, and the
+    /// simply have `subagent_meta = None` and `children = Some(...)`, and the
     /// harness fills in best-effort defaults on read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_meta: Option<RunnerMeta>,
+    pub subagent_meta: Option<SubagentMeta>,
     /// Provenance of a harness-injected message (`None` for genuine user input,
     /// assistant replies, and tool results). See [`InjectionOrigin`] / the
     /// closed [`InjectionKind`] classifier. `#[serde(default,
@@ -279,7 +279,7 @@ pub struct Message {
     pub cache_frozen: bool,
 }
 
-/// Sidecar metadata for an runner run. Lives next to
+/// Sidecar metadata for a subagent run. Lives next to
 /// [`Message::children`] on the same `Tool`-role result message. Captures
 /// information that the live event stream knows but the bare transcript
 /// cannot reconstruct on resume.
@@ -287,38 +287,38 @@ pub struct Message {
 // Every `Option` field here skips serialization when `None`, so the key is
 // absent on the wire (never an explicit `null`).
 #[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct RunnerMeta {
+pub struct SubagentMeta {
     /// The task description supplied by the parent agent (from the `task`
     /// tool_call's `arguments.description` field). Cached here so the TUI
-    /// does not have to re-parse the JSON arguments to label the runner
+    /// does not have to re-parse the JSON arguments to label the subagent
     /// view's navigation bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Wall-clock duration of the runner run in milliseconds. Filled from
+    /// Wall-clock duration of the subagent run in milliseconds. Filled from
     /// the parent `record_tool_result`'s `duration_ms` parameter (which
-    /// already measures the full runner run because the `task` tool blocks
-    /// until the runner finishes).
+    /// already measures the full subagent run because the `task` tool blocks
+    /// until the subagent finishes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
-    /// Number of read-only tools the runner had access to. Useful as a
+    /// Number of read-only tools the subagent had access to. Useful as a
     /// debugging signal when reviewing archived runs.
     #[serde(default)]
     pub toolset_count: u32,
-    /// Provider / model that served the runner. Currently always equal to
-    /// the parent's provider/model (RunnerTool clones the parent's provider),
-    /// but persisted separately so a future "cheaper model for runners"
+    /// Provider / model that served the subagent. Currently always equal to
+    /// the parent's provider/model (SubagentTool clones the parent's provider),
+    /// but persisted separately so a future "cheaper model for subagents"
     /// feature does not require a schema change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Whether the runner finished by hitting an error path (32-turn
+    /// Whether the subagent finished by hitting an error path (32-turn
     /// limit, repeated-call guard, provider error). Mirrors
-    /// `ToolOutput::Runner { summary.starts_with("Error") }` but stored
+    /// `ToolOutput::Subagent { summary.starts_with("Error") }` but stored
     /// explicitly so consumers do not have to string-sniff.
     #[serde(default)]
     pub failed: bool,
-    /// Whether the runner was stopped by the parent (the turn was interrupted)
+    /// Whether the subagent was stopped by the parent (the turn was interrupted)
     /// before completing. The partial transcript in [`Message::children`] is
     /// preserved either way; this flag lets the TUI classify the restored
     /// step as `Interrupted` rather than `Failed` or `Ok`.
@@ -353,7 +353,7 @@ impl Message {
             effort: None,
             hidden: false,
             children: None,
-            runner_meta: None,
+            subagent_meta: None,
             origin: None,
             timestamp: Some(unix_now()),
             sent_at_ms: None,
@@ -454,7 +454,7 @@ impl Message {
             effort: None,
             hidden: false,
             children: None,
-            runner_meta: None,
+            subagent_meta: None,
             origin: None,
             timestamp: Some(unix_now()),
             sent_at_ms: None,
@@ -462,11 +462,11 @@ impl Message {
         }
     }
 
-    /// Attach an runner's full internal transcript to a `Tool`-role result
+    /// Attach a subagent's full internal transcript to a `Tool`-role result
     /// message. Builder-style companion to [`Message::tool_result`]. Storing
     /// the nested transcript on the result message (rather than on the
     /// assistant `tool_calls` message) keeps the data close to where it was
-    /// produced and lets resume reconstruct the runner view by reading a
+    /// produced and lets resume reconstruct the subagent view by reading a
     /// single message.
     pub fn with_children(mut self, children: Vec<Message>) -> Self {
         self.children = if children.is_empty() {
@@ -477,19 +477,19 @@ impl Message {
         self
     }
 
-    /// Attach runner sidecar metadata to a `Tool`-role result message.
+    /// Attach subagent sidecar metadata to a `Tool`-role result message.
     /// Pair with [`Message::with_children`]; the two fields travel together
     /// but are kept separate for schema-backward-compat (see
-    /// [`Message::runner_meta`] docs).
-    pub fn with_runner_meta(mut self, meta: RunnerMeta) -> Self {
-        self.runner_meta = Some(meta);
+    /// [`Message::subagent_meta`] docs).
+    pub fn with_subagent_meta(mut self, meta: SubagentMeta) -> Self {
+        self.subagent_meta = Some(meta);
         self
     }
 
     /// Project this message to its provider-**wire** form: the minimal shape a
     /// provider request body serializes. Strips every out-of-band field —
-    /// nested runner [`children`](Self::children),
-    /// [`runner_meta`](Self::runner_meta), injection [`origin`](Self::origin),
+    /// nested subagent [`children`](Self::children),
+    /// [`subagent_meta`](Self::subagent_meta), injection [`origin`](Self::origin),
     /// [`hidden`](Self::hidden), [`provider`](Self::provider)/[`model`](Self::model)
     /// attribution, [`provider_meta`](Self::provider_meta), and the storage/UI
     /// sidecars [`content_blob`](Self::content_blob)/[`display_content`](Self::display_content) — keeping only
@@ -519,7 +519,7 @@ impl Message {
             effort: None,
             hidden: false,
             children: None,
-            runner_meta: None,
+            subagent_meta: None,
             origin: None,
             timestamp: None,
             sent_at_ms: None,
@@ -593,12 +593,12 @@ mod tests {
 
     #[test]
     fn children_round_trip_through_json() {
-        // A tool result with an runner transcript must survive a
+        // A tool result with a subagent transcript must survive a
         // serialise → deserialise round trip with the nested messages intact,
-        // including their own nested children (sub-runners).
+        // including their own nested children (sub-subagents).
         let call = ToolCall {
             id: "call_root".to_string(),
-            name: "runner".to_string(),
+            name: "subagent".to_string(),
             arguments: "{}".to_string(),
         };
         let nested_call = ToolCall {
@@ -608,9 +608,9 @@ mod tests {
         };
         let inner_child = Message::new(Role::Tool, "match at a.rs:1")
             .with_children(vec![Message::new(Role::Assistant, "deeply nested note")]);
-        let runner_transcript = vec![
-            Message::new(Role::System, "runner system"),
-            Message::new(Role::User, "runner task"),
+        let subagent_transcript = vec![
+            Message::new(Role::System, "subagent system"),
+            Message::new(Role::User, "subagent task"),
             Message {
                 role: Role::Assistant,
                 content: String::new(),
@@ -626,7 +626,7 @@ mod tests {
                 effort: None,
                 hidden: false,
                 children: None,
-                runner_meta: None,
+                subagent_meta: None,
                 origin: None,
                 timestamp: None,
                 sent_at_ms: None,
@@ -635,7 +635,7 @@ mod tests {
             inner_child,
         ];
         let parent = Message::tool_result(&call, "[task result]:\nfound it")
-            .with_children(runner_transcript);
+            .with_children(subagent_transcript);
 
         let json = serde_json::to_string_pretty(&parent).unwrap();
         let restored: Message = serde_json::from_str(&json).unwrap();
@@ -643,12 +643,15 @@ mod tests {
         assert_eq!(restored.tool_call_id.as_deref(), Some("call_root"));
         let children = restored.children.expect("children round-trip");
         assert_eq!(children.len(), 4);
-        // The grep call inside the runner kept its tool_calls.
+        // The grep call inside the subagent kept its tool_calls.
         assert!(children[2].tool_calls.is_some());
-        // The inner Tool message kept its own nested children (sub-runner).
+        // The inner Tool message kept its own nested children (sub-subagent).
         let inner = &children[3];
         assert_eq!(inner.role, Role::Tool);
-        assert!(inner.children.is_some(), "sub-runner children must survive");
+        assert!(
+            inner.children.is_some(),
+            "sub-subagent children must survive"
+        );
         assert_eq!(inner.children.as_ref().unwrap().len(), 1);
     }
 
@@ -656,7 +659,7 @@ mod tests {
     fn with_children_empty_vec_is_none() {
         let call = ToolCall {
             id: "c".to_string(),
-            name: "runner".to_string(),
+            name: "subagent".to_string(),
             arguments: "{}".to_string(),
         };
         let m = Message::tool_result(&call, "x").with_children(Vec::new());
@@ -668,7 +671,7 @@ mod tests {
 
     #[test]
     fn to_wire_strips_children_and_sidecars_keeps_wire_fields() {
-        // A Tool-role runner result carries a heavy nested transcript + meta +
+        // A Tool-role subagent result carries a heavy nested transcript + meta +
         // attribution + origin. `to_wire` must drop all of those (the provider
         // never sees them) while keeping role/content/tool_call_id. This is the
         // contract `/debug preview` relies on to dump the real request body
@@ -676,22 +679,25 @@ mod tests {
         // durable-session sidecars.
         let call = ToolCall {
             id: "c".to_string(),
-            name: "runner".to_string(),
+            name: "subagent".to_string(),
             arguments: "{}".to_string(),
         };
-        let m = Message::tool_result(&call, "[runner result]: summary")
-            .with_children(vec![Message::new(Role::Assistant, "runner internal turn")])
-            .with_runner_meta(RunnerMeta::default())
+        let m = Message::tool_result(&call, "[subagent result]: summary")
+            .with_children(vec![Message::new(
+                Role::Assistant,
+                "subagent internal turn",
+            )])
+            .with_subagent_meta(SubagentMeta::default())
             .with_attribution("kimi", "kimi-code")
-            .with_origin(InjectionOrigin::new(InjectionKind::RunnerSteer))
+            .with_origin(InjectionOrigin::new(InjectionKind::SubagentSteer))
             .with_sent_at_ms(1_700_000_000_123);
 
         let w = m.to_wire();
         assert_eq!(w.role, Role::Tool);
-        assert_eq!(w.content, "[runner result]: summary");
+        assert_eq!(w.content, "[subagent result]: summary");
         assert_eq!(w.tool_call_id.as_deref(), Some("c"));
         assert!(w.children.is_none(), "children must be stripped");
-        assert!(w.runner_meta.is_none(), "runner_meta must be stripped");
+        assert!(w.subagent_meta.is_none(), "subagent_meta must be stripped");
         assert!(
             w.provider.is_none() && w.model.is_none(),
             "attribution stripped"
@@ -793,8 +799,8 @@ mod tests {
             InjectionKind::Hook(HookEventKind::Turn),
             InjectionKind::Hook(HookEventKind::TurnStart),
             InjectionKind::InterAgent,
-            InjectionKind::RunnerSteer,
-            InjectionKind::RunnerTask,
+            InjectionKind::SubagentSteer,
+            InjectionKind::SubagentTask,
             InjectionKind::SessionReviewInput,
             InjectionKind::ImplicitSkill,
             InjectionKind::SystemPrompt,

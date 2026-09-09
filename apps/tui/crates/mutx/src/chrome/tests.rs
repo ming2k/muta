@@ -108,7 +108,7 @@ fn tilde_home_shortens_a_home_rooted_path() {
 
 #[test]
 fn backoff_clause_renders_beside_status_and_degrades_narrow() {
-    // Master label keeps the workflow story; the transport countdown is a
+    // Root status label keeps the workflow story; the transport countdown is a
     // separate, muted clause — never replacing the label.
     let wide = activity_row_text_with_clause(
         100,
@@ -121,7 +121,7 @@ fn backoff_clause_renders_beside_status_and_degrades_narrow() {
     assert!(wide.contains("retry 2/8 (next in 4s)"), "{wide:?}");
 
     // Under width pressure the compact attempt counter survives and the
-    // master label is still intact.
+    // status label is still intact.
     let narrow = activity_row_text_with_clause(
         48,
         "waiting for model",
@@ -166,7 +166,7 @@ fn activity_bar_carries_no_todos_badge() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(!text.contains("todos"), "badge leaked onto bar: {text:?}");
-    assert!(!text.contains("Ctrl+T"), "hint leaked onto bar: {text:?}");
+    assert!(!text.contains("Ctrl-t"), "hint leaked onto bar: {text:?}");
 }
 
 #[test]
@@ -304,12 +304,12 @@ fn model_bar_orders_context_speed_then_model() {
     let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
     assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
     // Progressive disclosure: single unified keycap trails the telemetry cluster.
-    let telemetry_key = wide.find("Ctrl+O").expect("telemetry keycap hint shown");
+    let telemetry_key = wide.find("Ctrl-o").expect("telemetry keycap hint shown");
     assert!(
         rate_pos < telemetry_key,
         "keycap trails the gauges: {wide:?}"
     );
-    let conn_key = wide.find("Ctrl+N").expect("connection keycap hint shown");
+    let conn_key = wide.find("Ctrl-n").expect("connection keycap hint shown");
     assert!(
         inst_pos < conn_key,
         "connection keycap trails the identity cluster: {wide:?}"
@@ -318,7 +318,7 @@ fn model_bar_orders_context_speed_then_model() {
     // right edge (mirrored `inner` indent).
     assert!(
         wide.trim_end()
-            .ends_with("kimi-k2.7-code max @kimi-code Ctrl+N"),
+            .ends_with("kimi-k2.7-code max @kimi-code Ctrl-n"),
         "identity must end at the right edge: {wide:?}"
     );
 
@@ -330,7 +330,7 @@ fn model_bar_orders_context_speed_then_model() {
         "rate gauge must hide without a sample: {cold:?}"
     );
     assert!(
-        cold.contains("(0%)") && cold.contains("Ctrl+O"),
+        cold.contains("(0%)") && cold.contains("Ctrl-o"),
         "context gauge and single telemetry keycap survive: {cold:?}"
     );
 
@@ -339,7 +339,7 @@ fn model_bar_orders_context_speed_then_model() {
     // gauges, model name, and effort tag survive in order.
     let narrow = row_text(52, Some(47.8));
     assert!(
-        !narrow.contains("Ctrl+O"),
+        !narrow.contains("Ctrl-o"),
         "keycap hint hides first: {narrow:?}"
     );
     assert!(
@@ -436,7 +436,7 @@ fn model_bar_renders_unavailable_model_indicator() {
             ModelBarProps {
                 current_model: "old-delisted-model",
                 model_available: false,
-                provider_name: Some("zai-code"),
+                provider_name: Some("glm-cn"),
                 ..Default::default()
             },
             &theme,
@@ -484,7 +484,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
     // the inner indent, one cell in.
     assert_eq!(ctx.x, 1, "gauges must lead the row from the left indent");
     // Rects carry their gauge segment text; the trailing gauge includes
-    // the single Ctrl+O keycap hint.
+    // the single Ctrl-o keycap hint.
     let buf = terminal.buffer();
     let slice = |r: Rect| -> String {
         (r.x..r.x + r.width)
@@ -492,10 +492,10 @@ fn model_bar_click_rects_follow_context_speed_order() {
             .collect::<String>()
     };
     assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
-    assert_eq!(slice(perf), "47.8 tok/s Ctrl+O", "rate rect mismatch");
+    assert_eq!(slice(perf), "47.8 tok/s Ctrl-o", "rate rect mismatch");
     assert_eq!(
         slice(conn),
-        "kimi-k2.7-code Ctrl+N",
+        "kimi-k2.7-code Ctrl-n",
         "connection rect mismatch"
     );
     // The identity cluster sits right of the gauges, pinned to the row's
@@ -507,8 +507,8 @@ fn model_bar_click_rects_follow_context_speed_order() {
         "identity must sit right of the gauges: {row:?}"
     );
     assert_eq!(
-        &row[80 - 1 - "kimi-k2.7-code Ctrl+N".len()..80 - 1],
-        "kimi-k2.7-code Ctrl+N",
+        &row[80 - 1 - "kimi-k2.7-code Ctrl-n".len()..80 - 1],
+        "kimi-k2.7-code Ctrl-n",
         "model must end at the right indent: {row:?}"
     );
 }
@@ -1158,15 +1158,15 @@ fn queue_bar_previews_next_item_with_count_and_text() {
     assert!(text.contains("FOLLOW-UPS 1"), "row was {text:?}");
     assert!(!text.contains(":"), "time label leaked: {text:?}");
     // Legend: the keycap unit is same-rank peers (R2) — joined by plain
-    // whitespace, never a `·`. `Ctrl+P` no longer rides the top-level bar
+    // whitespace, never a `·`. `Ctrl-p` no longer rides the top-level bar
     // (it now opens the Command Palette); the only bar affordance is
-    // `Ctrl+Q expand`, since the block toggle lives inside the queue panel.
+    // `Ctrl-q expand`, since the block toggle lives inside the queue panel.
     assert!(
-        text.contains("Ctrl+Q expand"),
+        text.contains("Ctrl-q expand"),
         "expand affordance missing: {text:?}"
     );
     assert!(
-        !text.contains("Ctrl+P"),
+        !text.contains("Ctrl-p"),
         "top-level block toggle moved into the queue panel: {text:?}"
     );
     assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");

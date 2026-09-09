@@ -292,6 +292,10 @@ impl App {
                 anchor.message_idx == crate::render::INPUT_MSG_IDX
                     && head.message_idx == crate::render::INPUT_MSG_IDX
             }
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } => anchor_byte != head_byte,
             SelectionState::None => false,
         }
     }
@@ -311,6 +315,18 @@ impl App {
                 SelectionEdge::Tail => 0,
                 SelectionEdge::Head => self.input.chars().count(),
             },
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } => {
+                let byte = match edge {
+                    SelectionEdge::Tail => *anchor_byte,
+                    SelectionEdge::Head => *head_byte,
+                };
+                let byte = crate::model::selection::floor_grapheme_boundary(&self.input, byte)
+                    .min(self.input.len());
+                self.input[..byte].chars().count()
+            }
             SelectionState::Range { anchor, head } => {
                 let cursor = match edge {
                     SelectionEdge::Tail => *anchor,
@@ -360,6 +376,21 @@ impl App {
                 self.selection = SelectionState::None;
                 self.drag.cancel();
                 self.set_cursor(0);
+                true
+            }
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } => {
+                let start = (*anchor_byte).min(*head_byte).min(self.input.len());
+                let end = (*anchor_byte).max(*head_byte).min(self.input.len());
+                if start < end {
+                    self.input.replace_range(start..end, "");
+                }
+                let new_cursor = self.input[..start].chars().count();
+                self.selection = SelectionState::None;
+                self.drag.cancel();
+                self.set_cursor(new_cursor);
                 true
             }
             SelectionState::Range { .. } => {
@@ -421,7 +452,7 @@ impl App {
             if self.active_composer_extension()
                 == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
             {
-                return if self.in_runner_view() {
+                return if self.in_subagent_view() {
                     CaretOwner::None
                 } else {
                     CaretOwner::Composer
@@ -475,10 +506,10 @@ impl App {
         }
         // No modal: the composer owns the caret unless a transcript step has
         // keyboard focus, the pointer parked attention on the transcript
-        // (ADR-0174 browse focus), or we are zoomed into an runner task
+        // (ADR-0174 browse focus), or we are zoomed into a subagent task
         // (which has no input line at all — its footer collapses to zero
         // height).
-        if self.focused_target.is_some() || self.transcript_focused || self.in_runner_view() {
+        if self.focused_target.is_some() || self.transcript_focused || self.in_subagent_view() {
             CaretOwner::None
         } else {
             CaretOwner::Composer

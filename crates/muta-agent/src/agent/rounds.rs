@@ -911,7 +911,7 @@ impl Agent {
                     provider_meta: None,
                     hidden: false,
                     children: None,
-                    runner_meta: None,
+                    subagent_meta: None,
                     origin: None,
                     timestamp: None,
                     sent_at_ms: None,
@@ -953,7 +953,7 @@ impl Agent {
                     .and_then(|meta| meta.artifacts.take()),
                 hidden: false,
                 children: None,
-                runner_meta: None,
+                subagent_meta: None,
                 origin: None,
                 timestamp: Some(muta_contracts::todos::unix_now()),
                 sent_at_ms: None,
@@ -1085,9 +1085,9 @@ impl Agent {
     /// (the caller should loop again), `false` when the round is complete.
     ///
     /// `cancel` makes tool execution cooperative: if the turn is interrupted
-    /// mid-flight, cooperatively-cancellable calls (runners) are drained and
+    /// mid-flight, cooperatively-cancellable calls (subagents) are drained and
     /// their partial results recorded into `messages` before this returns
-    /// `Err(HarnessError::Interrupted)` — so interrupted runner work survives
+    /// `Err(HarnessError::Interrupted)` — so interrupted subagent work survives
     /// into the persisted transcript. Every other already-announced
     /// [`AgentEvent::ToolCall`] is paired with a terminal
     /// [`AgentEvent::ToolCancelled`] before this returns.
@@ -1269,7 +1269,7 @@ impl Agent {
                     .execute_tool_evented(&call, &call_id, cancel, on_event)
                     .await?;
                 if outcome.interrupted {
-                    // Record a drained result (an interrupted runner's partial
+                    // Record a drained result (an interrupted subagent's partial
                     // transcript) before ending the round as interrupted.
                     if let Some(result) = outcome.result {
                         let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
@@ -1355,27 +1355,27 @@ impl Agent {
             emit_event,
         } = record;
         let text = result.to_text();
-        // Cost attribution: an runner's true token consumption can be 100x
+        // Cost attribution: a subagent's true token consumption can be 100x
         // the byte-estimate of its final summary, so accumulate the real
         // `TokenUsage` it reported. For every other tool the byte-estimate
         // remains the only signal we have.
         if checkpoint_replay {
             // The short checkpoint reference is new model-visible context,
-            // but the original tool (especially an runner) did no new work, so
+            // but the original tool (especially a subagent) did no new work, so
             // do not attribute its nested usage a second time.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
-        } else if let Some((_sub_messages, sub_usage)) = result.runner_payload() {
+        } else if let Some((_sub_messages, sub_usage)) = result.subagent_payload() {
             state.token_usage.total_tokens += sub_usage.total_tokens;
             state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
             state.token_usage.completion_tokens += sub_usage.completion_tokens;
-            // The runner's output tokens are in the numerator above; fold its
+            // The subagent's output tokens are in the numerator above; fold its
             // own generation time into the denominator too, so the round's
             // throughput stays scoped-consistent (no inflated tok/s for
-            // delegating rounds). Tool execution inside the runner is already
+            // delegating rounds). Tool execution inside the subagent is already
             // excluded from this figure.
             state.generation_ms = state
                 .generation_ms
-                .saturating_add(result.runner_generation_ms());
+                .saturating_add(result.subagent_generation_ms());
             // Still count the summary bytes that the parent model will
             // actually re-read on the next turn.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
@@ -1401,38 +1401,38 @@ impl Agent {
                 duration_ms,
             });
         }
-        // For runner results, attach the nested transcript as `children` on
-        // the persisted Tool-role message so resume can rebuild the runner
+        // For subagent results, attach the nested transcript as `children` on
+        // the persisted Tool-role message so resume can rebuild the subagent
         // view without a live event stream. The nested `Message`s already
         // self-contain their own tool_calls / tool_call_id / children, so
-        // arbitrarily deep runner trees round-trip through session.json.
-        // Sidecar `runner_meta` captures what the live event stream knew but
+        // arbitrarily deep subagent trees round-trip through session.json.
+        // Sidecar `subagent_meta` captures what the live event stream knew but
         // the bare transcript cannot reconstruct on resume: duration, the
         // task description, the toolset size, and explicit failed /
-        // interrupted flags. The runner result text is built by
-        // `runner_result_text`, which appends a deterministic
+        // interrupted flags. The subagent result text is built by
+        // `subagent_result_text`, which appends a deterministic
         // role-reanchoring note at this single choke point (see its doc for
-        // the "role bleed" rationale). For non-runner results the plain header
+        // the "role bleed" rationale). For non-subagent results the plain header
         // is used unchanged.
-        let tool_message = match result.runner_payload() {
+        let tool_message = match result.subagent_payload() {
             Some((sub_messages, _)) => {
-                let meta = crate::message::RunnerMeta {
+                let meta = crate::message::SubagentMeta {
                     duration_ms: Some(duration_ms),
                     failed: result.is_error(),
-                    interrupted: result.runner_interrupted(),
+                    interrupted: result.subagent_interrupted(),
                     ..Default::default()
                 };
                 Message::tool_result(
                     call,
-                    runner_result_text(
+                    subagent_result_text(
                         &call.name,
                         &text,
                         result.is_error(),
-                        result.runner_interrupted(),
+                        result.subagent_interrupted(),
                     ),
                 )
                 .with_children(sub_messages.to_vec())
-                .with_runner_meta(meta)
+                .with_subagent_meta(meta)
             }
             None => Message::tool_result(call, format!("[{} result]:\n{}", call.name, text)),
         };

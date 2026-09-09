@@ -2,7 +2,9 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::tools::*;
-    use muta_contracts::{Tool, WebSearchConfig, truncate_utf8};
+    use muta_contracts::{
+        Tool, WebConfig, WebReaderProvider, WebRuntimeConfig, WebSearchProvider, truncate_utf8,
+    };
 
     #[test]
     fn html_to_text_handles_multibyte_before_script_tags() {
@@ -21,8 +23,8 @@ mod tests {
 
     #[test]
     fn websearch_config_defaults_to_exa() {
-        let cfg = WebSearchConfig::default();
-        assert_eq!(cfg.provider, "exa");
+        let cfg = WebConfig::default();
+        assert_eq!(cfg.provider, WebSearchProvider::Exa);
         assert!(cfg.proxy.is_none());
         assert_eq!(cfg.timeout_secs, 20);
     }
@@ -35,8 +37,8 @@ mod tests {
             timeout_secs = 8
             searxng_url = "http://localhost:8080/search"
         "#;
-        let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.provider, "searxng");
+        let cfg: WebConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.provider, WebSearchProvider::Searxng);
         assert_eq!(cfg.proxy.as_deref(), Some("socks5h://127.0.0.1:1080"));
         assert_eq!(cfg.timeout_secs, 8);
         assert_eq!(
@@ -47,57 +49,35 @@ mod tests {
 
     #[test]
     fn bocha_backend_parses_from_toml_and_builds() {
-        let toml = r#"
-            provider = "bocha"
-            bocha_api_key = "sk-test-bocha"
-        "#;
-        let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.provider, "bocha");
+        // Credentials live in the runtime config now (they come from
+        // credentials.toml, never from the behavior section).
+        let cfg: WebConfig = toml::from_str("provider = \"bocha\"").unwrap();
+        assert_eq!(cfg.provider, WebSearchProvider::Bocha);
+        let runtime = WebRuntimeConfig {
+            behavior: cfg,
+            search_credential: Some(muta_contracts::SecretString::new("sk-test-bocha")),
+            reader_credential: None,
+        };
         assert_eq!(
-            cfg.bocha_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string())
-                .as_deref(),
-            Some("sk-test-bocha")
-        );
-        assert_eq!(
-            crate::tools::search::build_provider(&cfg, "bocha").name(),
+            crate::tools::search::build_provider(&runtime).name(),
             "Bocha"
         );
     }
 
     #[test]
-    fn reader_field_parses_and_defaults_to_none() {
-        let cfg = WebSearchConfig::default();
-        assert_eq!(cfg.reader, "none");
-        assert!(cfg.jina_api_key.is_none());
+    fn reader_field_parses_and_defaults_to_disabled() {
+        let cfg = WebConfig::default();
+        assert_eq!(cfg.reader, WebReaderProvider::Disabled);
 
-        let toml = r#"
-            reader = "jina"
-            jina_api_key = "jina-test-key"
-        "#;
-        let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.reader, "jina");
-        assert_eq!(
-            cfg.jina_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string())
-                .as_deref(),
-            Some("jina-test-key"),
-            "deserialization still accepts the inline spelling (legacy files)"
-        );
+        let cfg: WebConfig = toml::from_str("reader = \"jina\"").unwrap();
+        assert_eq!(cfg.reader, WebReaderProvider::Jina);
+
         // Secrets never serialize into config.toml (behavior-only contract);
-        // they persist in credentials.toml instead. A config round-trip
-        // therefore drops them by design — see the persistence crate's
-        // websearch-keys migration tests for the full path.
+        // they persist in credentials.toml instead.
         let reencoded = toml::to_string(&cfg).unwrap();
-        assert!(
-            !reencoded.contains("jina-test-key"),
-            "secret leaked through config serialization: {reencoded}"
-        );
-        let reloaded: WebSearchConfig = toml::from_str(&reencoded).unwrap();
-        assert_eq!(reloaded.reader, "jina");
-        assert!(reloaded.jina_api_key.is_none());
+        assert!(!reencoded.contains("api_key"));
+        let reloaded: WebConfig = toml::from_str(&reencoded).unwrap();
+        assert_eq!(reloaded.reader, WebReaderProvider::Jina);
     }
 
     #[tokio::test]

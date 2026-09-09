@@ -1,12 +1,12 @@
-//! Contextual first-row header for every view — plus the Runner
+//! Contextual first-row header for every view — plus the Subagent
 //! page's permanent key-legend footer.
 //!
-//! Every view — Main (session), `/btw`, Runner, Settings, and future focused pages —
+//! Every view — Main (session), `/btw`, Subagent, Settings, and future focused pages —
 //! shares one layout rule for the head row: identity and view-specific
 //! context on the left, mode / index metadata on the right. Navigation
 //! shortcuts do **not** live on the head row; the aside view carries them on
-//! its second header row (ADR-0103 §3) and the Runner page on its permanent
-//! three-row footer ([`draw_runner_footer`]) instead. Row 2 is demand-driven
+//! its second header row (ADR-0103 §3) and the Subagent page on its permanent
+//! three-row footer ([`draw_subagent_footer`]) instead. Row 2 is demand-driven
 //! (ADR-0104): it exists only while the view has something to say that no
 //! other surface already says. Keeping this outside disclosure rendering
 //! also leaves one clear extension point for future focused pages.
@@ -14,7 +14,7 @@
 use mutx_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{RunnerBarInfo, STEP_MIN_WIDTH, TRANSCRIPT_H_INSET, Theme};
+use super::{STEP_MIN_WIDTH, SubagentBarInfo, TRANSCRIPT_H_INSET, Theme};
 
 pub(crate) enum ViewHeader<'a> {
     /// The Main session view: `SESSION` identity, the session's persistent-id
@@ -24,7 +24,7 @@ pub(crate) enum ViewHeader<'a> {
     /// The `/btw` aside view (ADR-0103): identity + parent status on row 1;
     /// its shortcuts live on row 2 via [`draw_view_header_hints`].
     Btw(BtwHead),
-    Runner(&'a RunnerBarInfo),
+    Subagent(&'a SubagentBarInfo),
     /// Full-screen Settings View (ADR-0141): `SETTINGS` identity.
     Settings,
 }
@@ -48,8 +48,8 @@ pub(crate) struct BtwHead {
 /// that are either global (`F1 help` — every modal footer and the Help modal
 /// own that discovery) or already carried by a *more specific* surface: the
 /// main view's interrupt lives on the activity bar (which spells the real
-/// double-Esc arming, `Esc Esc interrupt`), and the Runner page's legend
-/// lives on its permanent footer ([`draw_runner_footer`]).
+/// double-Esc arming, `Esc Esc interrupt`), and the Subagent page's legend
+/// lives on its permanent footer ([`draw_subagent_footer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewHints<'a> {
     /// Which view the legend belongs to — decides the keycap set.
@@ -77,8 +77,8 @@ impl ViewHints<'_> {
     ///   `F5 asides` are exactly the affordances this row exists for).
     /// - **Btw**: always — `Ctrl+C back` is the view's single exit, and
     ///   no other surface repeats it.
-    /// - **Runner**: never — its permanent footer already carries the same
-    ///   legend (`draw_runner_footer`), so a row-2 copy would duplicate the
+    /// - **Subagent**: never — its permanent footer already carries the same
+    ///   legend (`draw_subagent_footer`), so a row-2 copy would duplicate the
     ///   exact keycaps one screen apart.
     pub(crate) fn has_content(&self) -> bool {
         if self.breadcrumbs.is_some() {
@@ -87,7 +87,7 @@ impl ViewHints<'_> {
         match self.kind {
             ViewKind::Session => self.asides.is_some(),
             ViewKind::Btw | ViewKind::Settings => true,
-            ViewKind::Runner => false,
+            ViewKind::Subagent => false,
         }
     }
 }
@@ -104,7 +104,7 @@ pub(crate) struct AsidesChip {
 pub(crate) enum ViewKind {
     Session,
     Btw,
-    Runner,
+    Subagent,
     Settings,
 }
 
@@ -113,7 +113,7 @@ impl From<&ViewHeader<'_>> for ViewKind {
         match header {
             ViewHeader::Session(_) => ViewKind::Session,
             ViewHeader::Btw(_) => ViewKind::Btw,
-            ViewHeader::Runner(_) => ViewKind::Runner,
+            ViewHeader::Subagent(_) => ViewKind::Subagent,
             ViewHeader::Settings => ViewKind::Settings,
         }
     }
@@ -146,7 +146,7 @@ struct HeaderContent {
     /// dimmed). Empty when the variant has none.
     tag: String,
     /// Optional `[ROLE]`-style tag rendered in the brand tone right after the
-    /// identity tag (the Runner page's role). Empty when absent.
+    /// identity tag (the Subagent page's role). Empty when absent.
     badge: String,
     primary: String,
     meta: String,
@@ -154,12 +154,12 @@ struct HeaderContent {
 }
 
 /// Draw a single contextual header row. The primary action is always retained
-/// on narrow terminals; descriptive text truncates first, while Runner sibling
+/// on narrow terminals; descriptive text truncates first, while Subagent sibling
 /// shortcuts appear when there is enough room for them to remain legible.
 ///
 /// The band's background spans the rect's full width — the head is top-level
 /// chrome pinned to the terminal's top edge, so its `body` surface reaches
-/// both edges like the Runner key-legend band at the bottom edge. The *text*
+/// both edges like the Subagent key-legend band at the bottom edge. The *text*
 /// keeps the shared [`TRANSCRIPT_H_INSET`] horizontal inset (rendered as pad
 /// spans) so it stays aligned with the transcript band below.
 pub(crate) fn draw_view_header(
@@ -197,7 +197,7 @@ pub(crate) fn draw_view_header(
                 action,
             }
         }
-        // Runner and /btw are contextual views that replace the session head.
+        // Subagent and /btw are contextual views that replace the session head.
         ViewHeader::Btw(head) => HeaderContent {
             title: " /btw ",
             tag: String::new(),
@@ -208,13 +208,13 @@ pub(crate) fn draw_view_header(
             // the row-2 legend (ADR-0103 §3), so "Esc back" is gone here.
             action: String::new(),
         },
-        // The Runner head shares the Session head's shape: uppercase identity
+        // The Subagent head shares the Session head's shape: uppercase identity
         // + `[ROLE]` tag + task title on the left, and pure index metadata on
         // the right — the sibling count `(i/n)`, shown only when there is
-        // more than one sibling. Navigation shortcuts moved to the Runner
-        // page's permanent footer (see `draw_runner_footer`).
-        ViewHeader::Runner(bar) => HeaderContent {
-            title: " ENVOY ",
+        // more than one sibling. Navigation shortcuts moved to the Subagent
+        // page's permanent footer (see `draw_subagent_footer`).
+        ViewHeader::Subagent(bar) => HeaderContent {
+            title: " SUBAGENT ",
             tag: String::new(),
             badge: bar
                 .role
@@ -261,7 +261,7 @@ pub(crate) fn draw_view_header(
     };
     // The session mode flag (`DELEGATED`) reads as a persistent safety state,
     // so it takes the warning tone; every other variant's right side is quiet
-    // metadata (the `/btw` return hint, the Runner sibling count).
+    // metadata (the `/btw` return hint, the Subagent sibling count).
     let action_style = if matches!(header, ViewHeader::Session(_)) {
         fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
     } else {
@@ -395,7 +395,7 @@ pub(crate) fn draw_view_header_hints(
             let note = hints.parent_note.trim();
             (!note.is_empty()).then(|| note.to_string())
         }
-        ViewKind::Runner | ViewKind::Settings => None,
+        ViewKind::Subagent | ViewKind::Settings => None,
     };
 
     let pairs: Vec<crate::components::keycap::KeyAffordance> = match hints.kind {
@@ -428,7 +428,7 @@ pub(crate) fn draw_view_header_hints(
             }
             pairs
         }
-        ViewKind::Runner => Vec::new(),
+        ViewKind::Subagent => Vec::new(),
         ViewKind::Settings => vec![crate::components::keycap::KeyAffordance::from_key(
             crate::keymap::Key::CTRL_X,
             "menu",
@@ -441,9 +441,10 @@ pub(crate) fn draw_view_header_hints(
         loop {
             let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
             let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
-            let needed =
-                note_width + pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
-            if needed <= width.saturating_sub(2 * ENVOY_FOOTER_MARGIN_MIN) || chosen.len() <= 1 {
+            let needed = note_width
+                + pairs_width
+                + SUBAGENT_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
+            if needed <= width.saturating_sub(2 * SUBAGENT_FOOTER_MARGIN_MIN) || chosen.len() <= 1 {
                 break;
             }
             chosen.pop();
@@ -453,10 +454,10 @@ pub(crate) fn draw_view_header_hints(
 
     let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
     let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
-    let gaps =
-        ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };
+    let gaps = SUBAGENT_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1)
+        + if note.is_some() { 4 } else { 0 };
     let content_width = note_width + pairs_width + gaps;
-    let margin = ((width.saturating_sub(content_width)) / 2).max(ENVOY_FOOTER_MARGIN_MIN);
+    let margin = ((width.saturating_sub(content_width)) / 2).max(SUBAGENT_FOOTER_MARGIN_MIN);
 
     let mut spans = vec![Span::styled(" ".repeat(margin), fill)];
     if let Some(note) = note {
@@ -464,7 +465,7 @@ pub(crate) fn draw_view_header_hints(
     }
     for (i, affordance) in chosen.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
+            spans.push(Span::styled(" ".repeat(SUBAGENT_FOOTER_PAIR_GAP), fill));
         }
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         spans.push(key_span);
@@ -478,11 +479,11 @@ pub(crate) fn draw_view_header_hints(
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
-/// Draw the Runner page's permanent three-row footer.
-pub(crate) fn draw_runner_footer(
+/// Draw the Subagent page's permanent three-row footer.
+pub(crate) fn draw_subagent_footer(
     frame: &mut Frame,
     rect: Rect,
-    info: &RunnerBarInfo,
+    info: &SubagentBarInfo,
     theme: &Theme,
 ) {
     if rect.height == 0 {
@@ -503,14 +504,14 @@ pub(crate) fn draw_runner_footer(
     }
 
     let content_len: usize = pairs.iter().map(|a| a.width()).sum::<usize>()
-        + ENVOY_FOOTER_PAIR_GAP * pairs.len().saturating_sub(1);
+        + SUBAGENT_FOOTER_PAIR_GAP * pairs.len().saturating_sub(1);
     let width = rect.width as usize;
     let margin = (width.saturating_sub(content_len)) / 2;
 
     let mut spans: Vec<Span<'static>> = vec![Span::styled(" ".repeat(margin), fill)];
     for (i, affordance) in pairs.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
+            spans.push(Span::styled(" ".repeat(SUBAGENT_FOOTER_PAIR_GAP), fill));
         }
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         spans.push(key_span);
@@ -530,8 +531,8 @@ pub(crate) fn draw_runner_footer(
     frame.render_widget(Paragraph::new(footer_lines), rect);
 }
 
-const ENVOY_FOOTER_PAIR_GAP: usize = 3;
-const ENVOY_FOOTER_MARGIN_MIN: usize = 2;
+const SUBAGENT_FOOTER_PAIR_GAP: usize = 3;
+const SUBAGENT_FOOTER_MARGIN_MIN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tone {
@@ -681,7 +682,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            row.contains("Ctrl+C"),
+            row.contains("Ctrl-c"),
             "legend must lead with the exit pair: {row}"
         );
         assert!(
@@ -738,15 +739,15 @@ mod tests {
         assert!(!mk(ViewKind::Session, false).has_content());
         assert!(mk(ViewKind::Session, true).has_content());
         assert!(mk(ViewKind::Btw, false).has_content());
-        assert!(!mk(ViewKind::Runner, false).has_content());
-        assert!(!mk(ViewKind::Runner, true).has_content());
+        assert!(!mk(ViewKind::Subagent, false).has_content());
+        assert!(!mk(ViewKind::Subagent, true).has_content());
 
         let with_crumbs = ViewHints {
             kind: ViewKind::Session,
             asides: None,
             interruptible: false,
             parent_note: "",
-            breadcrumbs: Some("Main › Runner"),
+            breadcrumbs: Some("Main › Subagent"),
         };
         assert!(with_crumbs.has_content());
     }
@@ -787,7 +788,7 @@ mod tests {
             asides: None,
             interruptible: false,
             parent_note: "",
-            breadcrumbs: Some("Main › Runner[explore]"),
+            breadcrumbs: Some("Main › Subagent[explore]"),
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -799,24 +800,24 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(row.contains("Main › Runner[explore]"));
-        assert!(row.contains("Ctrl+X menu"));
+        assert!(row.contains("Main › Subagent[explore]"));
+        assert!(row.contains("Ctrl-x menu"));
         assert!(!row.contains("Esc"));
         assert!(!row.contains("C-x"));
     }
 
     #[test]
-    fn runner_header_shows_identity_role_title_and_sibling_index() {
-        let info = RunnerBarInfo {
+    fn subagent_header_shows_identity_role_title_and_sibling_index() {
+        let info = SubagentBarInfo {
             role: Some("explore".to_string()),
             label: "inspect the renderer".to_string(),
             index: 1,
             total: 2,
         };
-        let row = rendered_row(80, ViewHeader::Runner(&info));
+        let row = rendered_row(80, ViewHeader::Subagent(&info));
         assert_eq!(
             row,
-            "   ENVOY [EXPLORE] inspect the renderer                                 (1/2)   "
+            "   SUBAGENT [EXPLORE] inspect the renderer                              (1/2)   "
         );
     }
 
@@ -833,7 +834,7 @@ mod tests {
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
         let pos = row.find("UNATTENDED").expect("mode flag on the right");
         assert!(
-            row[pos..].contains("Ctrl+P palette"),
+            row[pos..].contains("Ctrl-p palette"),
             "palette affordance after the mode flag: {row}"
         );
         assert!(row.trim_end().ends_with("palette"));

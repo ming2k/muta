@@ -1,7 +1,7 @@
 # Step state machine
 
 Every collapsible transcript entry — a [tool step](tool-step.md), a
-[thinking step](thinking-step.md), or an envoy task step — is presented
+[thinking step](thinking-step.md), or a subagent task step — is presented
 through one shared state model in `apps/tui/crates/mutx/src/disclosure/`.
 This page documents that model: its three orthogonal axes, the two
 presentation channels they reduce to, and the transitions each axis allows.
@@ -138,10 +138,10 @@ The accent color a renderer passes to `summary_text_color`, by source:
 | Step kind | Lifecycle | Accent | Source |
 |-----------|-----------|--------|--------|
 | Tool | `Running` | `Some(theme.muted)` — neutral pending state | `draw_tool_step` |
-| Tool | `Failed` | `Some(theme.err)` | `draw_tool_step`, `draw_envoy_bar` |
-| Tool | `Denied` | `Some(theme.warn)` — distinct from a runtime failure | `draw_tool_step`, `draw_envoy_bar` |
-| Tool | `Cancelled` | `Some(theme.dim)` — reads as inert, not as a fresh failure | `draw_tool_step`, `draw_envoy_bar` |
-| Tool | `Ok` | `None` — hands control to the weight channel | `draw_tool_step`, `draw_envoy_bar` |
+| Tool | `Failed` | `Some(theme.err)` | `draw_tool_step`, `draw_subagent_bar` |
+| Tool | `Denied` | `Some(theme.warn)` — distinct from a runtime failure | `draw_tool_step`, `draw_subagent_bar` |
+| Tool | `Cancelled` | `Some(theme.dim)` — reads as inert, not as a fresh failure | `draw_tool_step`, `draw_subagent_bar` |
+| Tool | `Ok` | `None` — hands control to the weight channel | `draw_tool_step`, `draw_subagent_bar` |
 | Reasoning | streaming / finished | `None` — lifecycle reads from the summary text (duration omitted while streaming); the marker is always `+`/`-` | `draw_reasoning_trace` |
 
 A `Some(accent)` supplies the dominant hue while collapsed and idle; expanded
@@ -194,7 +194,7 @@ one of the historical bugs the state machine was introduced to fix:
 |------|----------------|
 | `disclosure/state.rs` | `Disclosure`, `Interaction`, `summary_weight`, `summary_text_color`. Pure functions, unit-tested in isolation from rendering |
 | `disclosure/mod.rs` | The three-axes architectural overview and the public re-exports |
-| `disclosure/renderers.rs` | Concrete step renderers that feed the axes in: `draw_tool_step`, `draw_reasoning_trace`, `draw_envoy_bar`, `draw_envoy_inline_step` |
+| `disclosure/renderers.rs` | Concrete step renderers that feed the axes in: `draw_tool_step`, `draw_reasoning_trace`, `draw_subagent_bar`, `draw_subagent_inline_step` |
 | `tools/mod.rs` | `ToolStatus` (5 states), `ToolStatus::color` |
 | `step_interaction.rs` | `default_tool_expanded`, summary-at-pointer classification (`summary_at`, `hovered_summary`) |
 | `document.rs` | `set_*_expanded` (auto, no-op if pinned) and `pin_*_expanded` (user, sets `user_pinned`); the `user_pinned` field on `MessageKind::ToolStep` / `MessageKind::Thinking` |

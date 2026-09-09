@@ -4,12 +4,12 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// Entitlement-neutral seed for the ChatGPT Subscription backend. Live Codex
 /// discovery is authoritative and may add GPT-5.5 or Pro-only Spark for the
 /// signed-in account; the static seed never guesses plan-specific access.
-pub use muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -99,9 +99,9 @@ const fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
     CHATGPT_IMPLICIT_CACHE
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
-    id: "chatgpt-oauth",
+    id: "openai-subscription",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
     user_agent: Some(muta_contracts::client_identity::CODEX_USER_AGENT),
@@ -111,8 +111,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // for each account and its capability metadata is trusted.
     protocol: WireProtocol::OpenAiResponses,
     models: CHATGPT_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Codex)),
-    fitting: true,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Codex),
+    default_client_profile: muta_contracts::ClientPreset::Codex,
+    client_profile_sensitive: true,
     wire_overrides: &[],
 };
 
@@ -127,12 +128,12 @@ mod tests {
             CHATGPT_BUILTIN_MODELS,
             &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
         );
-        assert_eq!(PRESET_SPEC.protocol, WireProtocol::OpenAiResponses);
+        assert_eq!(MODEL_PROVIDER_SPEC.protocol, WireProtocol::OpenAiResponses);
     }
 
     #[test]
     fn chatgpt_uses_affinity_without_platform_cache_options() {
-        let capabilities = (PRESET_SPEC.prompt_cache)("gpt-5.6-sol").materialize();
+        let capabilities = (MODEL_PROVIDER_SPEC.prompt_cache)("gpt-5.6-sol").materialize();
         assert_eq!(capabilities.modes, vec![PromptCacheMode::Implicit]);
         assert_eq!(capabilities.default_mode, Some(PromptCacheMode::Implicit));
         assert!(capabilities.supported_retentions.is_empty());

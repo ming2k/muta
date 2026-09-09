@@ -1,7 +1,7 @@
 //! Live-updatable additional-roots handle shared between the assembling
 //! bootstrap and the executing tools.
 //!
-//! Mirrors [`crate::SharedWebSearchConfig`]: one typed `Arc<RwLock<…>>`
+//! Mirrors [`crate::SharedWebConfig`]: one typed `Arc<RwLock<…>>`
 //! service the bootstrap provides into the tool context, so a runtime config
 //! reload (`/settings reload`) can recompute roots and swap them in without
 //! rebuilding the toolset or restarting the session.

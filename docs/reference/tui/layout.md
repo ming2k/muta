@@ -1,7 +1,7 @@
 # Frame layout
 
 How the terminal rect is divided across the TUI's three viewing modes: the
-**root conversation**, the **envoy zoom view**, and the **modal overlay**
+**root conversation**, the **subagent zoom view**, and the **modal overlay**
 state. Component-by-component detail lives on each component's own page;
 this one owns the rect math, the chrome-hiding rules, and the measurements
 table.
@@ -82,7 +82,7 @@ identity and status; on the Main session view it shows `SESSION`, the
 session-id tail, and the workspace path on the left, plus the session mode
 (`DELEGATED`) on the right. Row 2 — the view stack breadcrumb trail and affordance
 legend — renders only while the view has stack depth or page-specific items to announce:
-view stack breadcrumbs (`Main › Runner[...] › *Diff*` with `Ctrl+X menu`),
+view stack breadcrumbs (`Main › Subagent[...] › *Diff*` with `Ctrl+X menu`),
 the main view's live aside chip + `F5 asides`, or the aside view's `Ctrl+C back` /
 `F5 asides` / `Esc interrupt aside`. When single-view and no asides, row 2 collapses
 to 0 rows (`PAGE_HEADER_ROWS = 1`). Two-stroke leader chords (`Ctrl+X`, `Ctrl+C`) render
@@ -97,9 +97,9 @@ box and model bar are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
-| Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
-| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
-| Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 4` | Not in envoy view; chrome visible |
+| Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in subagent view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
+| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in subagent view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
+| Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 4` | Not in subagent view; chrome visible |
 | Model bar | `MODEL_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Ambient gauges only: model name + reasoning tier + `@instance` · context usage · stream rate. |
 
 ```text
@@ -145,11 +145,11 @@ the user always see which step's body they are looking at, and click to
 collapse it, without forcing a scroll anchor. Rendered by
 `draw_sticky_summary_if_needed`; see [expandable step](expandable-step.md).
 
-## Envoy zoom view
+## Subagent zoom view
 
-When the user zooms into an `envoy` tool step, the footer is hidden entirely
+When the user zooms into a `subagent` tool step, the footer is hidden entirely
 and the transcript chunk is split to make room for a one-row navigation bar
-at the bottom. The message stream is the focused envoy's child messages,
+at the bottom. The message stream is the focused subagent's child messages,
 not the root conversation.
 
 ```text
@@ -162,20 +162,20 @@ not the root conversation.
 │   …user / assistant / tool steps / thinking steps…           │
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
-│  Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← envoy bar
+│  Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← subagent bar
 └──────────────────────────────────────────────────────────────┘
-  (bottom edge: the envoy bar pins flush — no bottom viewport margin)
+  (bottom edge: the subagent bar pins flush — no bottom viewport margin)
 ```
 
 | Region | Constraint | Height |
 |--------|-----------|--------|
 | Transcript (children) | `Min(0)` | fills |
-| Envoy bar | `Length(ENVOY_BAR_ROWS = 1)` | 1 |
+| Subagent bar | `Length(SUBAGENT_FOOTER_ROWS)` | 3 |
 
 The activity bar, queue bar, input box, and model bar
 all collapse to 0 — the zoomed view is read-only, with the navigation bar as
 its only chrome.
-See [Envoy view](envoy-view.md) for the focus stack that drives this
+See [Subagent view](subagent-view.md) for the focus stack that drives this
 mode and the bar's contents.
 
 ## Modal overlay view
@@ -222,7 +222,7 @@ wraps with `TRANSCRIPT_H_INSET` cells of slack on the right.
 
 The **head row** is the one deliberate exception: it is top-level chrome, not
 a transcript-area component, so its `body` background spans the terminal's
-full width (like the Envoy key-legend band pinned to the bottom edge) and the
+full width (like the Subagent key-legend band pinned to the bottom edge) and the
 inset is applied to its *text* only — as pad spans inside `draw_page_header`
 — so the identity still lines up with the transcript band below.
 
@@ -270,7 +270,7 @@ with the transcript content above.
 | Queue bar height | 1 row | `QUEUE_BAR_ROWS` |
 | Model bar height | 1 row | `MODEL_BAR_ROWS` |
 | Status bar height | 1 row | `STATUS_BAR_ROWS` |
-| Envoy bar height | 1 row | `ENVOY_BAR_ROWS` |
+| Subagent bar height | 3 rows | `SUBAGENT_FOOTER_ROWS` |
 | Input box min height | 3 rows (top transition + 1 text + bottom transition) | `COMPOSER_MIN_HEIGHT` |
 | Input box max height | `terminal_height / 2` | `COMPOSER_MAX_HEIGHT_DIVISOR` |
 | Input box vertical chrome | 2 rows (top + bottom transition) | `COMPOSER_VERTICAL_CHROME_ROWS` |
@@ -294,12 +294,12 @@ with the transcript content above.
 
 | File | Responsibility |
 |------|----------------|
-| `render/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
+| `render/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, subagent split, sticky summary overlay |
 | `footer_stack.rs` | Declarative footer stack — row list, `measure`/`place` single-pass layout, hit-rect registry (`FooterRowId`) |
-| `design.rs` | All non-color layout tokens: `TRANSCRIPT_H_INSET`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `MODEL_BAR_ROWS`, `ENVOY_FOOTER_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
+| `design.rs` | All non-color layout tokens: `TRANSCRIPT_H_INSET`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `MODEL_BAR_ROWS`, `SUBAGENT_FOOTER_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
 | `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_queue_bar` (outbox summary), `draw_model_bar` (ambient gauges), `draw_completion_menu` |
-| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `draw_runner_footer` — the unified head row at the top of every view, plus the zoomed-runner footer |
+| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `draw_subagent_footer` — the unified head row at the top of every view, plus the zoomed-subagent footer |
 | `composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
-| `disclosure/renderers.rs` | `draw_runner_inline_step`, `draw_sticky_summary_if_needed` |
+| `disclosure/renderers.rs` | `draw_subagent_inline_step`, `draw_sticky_summary_if_needed` |
 | `app/mod.rs` | `focus_stack`, `follow_bottom`, scroll clamping |

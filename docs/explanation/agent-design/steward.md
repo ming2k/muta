@@ -9,7 +9,7 @@ For the architectural decisions establishing the Worker-Station Model and the Co
 ## 1. Why a Stateless Cognitive Pipeline
 
 In Muta's Worker-Station architecture:
-- **`Master` and `Runner`** are the only two *agent archetypes*: they hold conversation context, execute tools, mutate files, and deliver features or daemon orchestration.
+- **`Master` and `Subagent`** are the only two *agent archetypes*: they hold conversation context, execute tools, mutate files, and deliver features or daemon orchestration.
 - **`Hypervisor`, `Session`, and `Subtask`** are *host stations*: where an agent is placed to perform its duty.
 - **Harness Cognitive Tasks** are *internal utilities*: they exist entirely outside the agent delegation tree to service the Agent Harness state machine.
 

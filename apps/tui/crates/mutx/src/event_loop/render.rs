@@ -139,7 +139,7 @@ fn compose_frame(
             gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
         )
     };
-    // Transport-setback clause: rides beside the master label (never in its
+    // Transport-setback clause: rides beside the status label (never in its
     // slot), counting down while a provider retry backs off.
     let backoff_clause = app
         .provider_retry
@@ -191,12 +191,12 @@ fn compose_frame(
     let recess = app.active_modal().recess();
     let chrome_hidden = recess == Recess::Takeover;
 
-    // When zoomed into an Runner, render its child messages and
+    // When zoomed into a Subagent, render its child messages and
     // show a contextual first-row header; otherwise render the
     // root conversation.
     let view_messages = app.focused_messages();
     // `/btw` aside page-header context (ADR-0017/0103): shown only while the
-    // aside view is active. Runner zoom and the aside view are mutually
+    // aside view is active. Subagent zoom and the aside view are mutually
     // exclusive, so the two modes never coexist.
     let side_banner = app.in_side_view.then_some(render::BtwHead {
         parent: app.parent_status,
@@ -215,35 +215,35 @@ fn compose_frame(
         .iter()
         .filter(|row| app.running_sessions.contains(row.id.as_str()))
         .count();
-    let runner_bar = app.focus_stack.last().and_then(|current| {
+    let subagent_bar = app.focus_stack.last().and_then(|current| {
         let tasks: Vec<&TranscriptMessage> = app
             .messages
             .iter()
-            .filter(|message| message.is_runner_task())
+            .filter(|message| message.is_subagent_task())
             .collect();
         let idx = tasks
             .iter()
             .position(|message| message.tool_step_call_id() == Some(current.call_id.as_str()))?;
-        Some(render::RunnerBarInfo {
-            role: tasks.get(idx)?.runner_role(),
-            label: tasks.get(idx)?.runner_description(),
+        Some(render::SubagentBarInfo {
+            role: tasks.get(idx)?.subagent_role(),
+            label: tasks.get(idx)?.subagent_description(),
             index: idx + 1,
             total: tasks.len(),
         })
     });
     let breadcrumbs_string: Option<String> = if app.in_side_view {
         Some("Main › Aside".to_string())
-    } else if let Some(ref bar) = runner_bar {
-        let role = bar.role.as_deref().unwrap_or("runner");
-        Some(format!("Main › Runner[{role}]"))
+    } else if let Some(ref bar) = subagent_bar {
+        let role = bar.role.as_deref().unwrap_or("subagent");
+        Some(format!("Main › Subagent[{role}]"))
     } else {
         None
     };
     let page_hints = render::ViewHints {
         kind: if side_banner.is_some() {
             render::ViewKind::Btw
-        } else if app.in_runner_view() {
-            render::ViewKind::Runner
+        } else if app.in_subagent_view() {
+            render::ViewKind::Subagent
         } else {
             render::ViewKind::Session
         },
@@ -347,7 +347,7 @@ fn compose_frame(
                         && app.is_queue_blocked(viewed_session_id),
                 },
                 persistence_health: app.persistence_health.as_ref(),
-                runner_bar,
+                subagent_bar,
                 side_banner,
                 page_hints: Some(page_hints),
                 session_head: Some(render::SessionHead {
@@ -448,7 +448,7 @@ fn compose_frame(
                     context_window: app.active_model_context_window(),
                     last_turn_tps: viewed_chrome
                         .last_turn_performance
-                        .and_then(|sample| sample.preferred_tps()),
+                        .and_then(|sample| sample.stream_tps()),
                     ignition_elapsed_ms: app
                         .effort_ignition_epoch
                         .map(|epoch| epoch.elapsed().as_millis()),
@@ -518,7 +518,7 @@ fn compose_frame(
             // background. For the editor's key field the composer would
             // also panic: the masked key's byte cursor is computed
             // against the unmasked string.
-        } else if !app.in_runner_view() {
+        } else if !app.in_subagent_view() {
             // The composer stays mounted for the dim-recess modals
             // (Help / Session /
             // Activity) so the footer layout doesn't shift when the
@@ -533,8 +533,8 @@ fn compose_frame(
             // `show_caret` comes straight from the single source of
             // truth (`App::caret_visible`): in this branch the composer
             // is the only possible caret surface (the caret-owning
-            // modals are handled by the `skip` branch above, and runner
-            // zoom is excluded by the `!in_runner_view` gate), so
+            // modals are handled by the `skip` branch above, and subagent
+            // zoom is excluded by the `!in_subagent_view` gate), so
             // `caret_visible` reduces to "no step focus, no selection"
             // — exactly the old hand-rolled condition, without the risk
             // of drifting from the hide/show state machine.
@@ -904,57 +904,72 @@ fn compose_frame(
         }
         Modal::None => None,
         Modal::ModelEditor => {
-            let title = if app.editor_model_settings_only {
-                app.editor_model.clone()
+            if let Some(target) = app.editor_target.as_deref()
+                && (target.starts_with("web_credential:") || target.starts_with("web_endpoint:"))
+            {
+                let endpoint = target.starts_with("web_endpoint:");
+                Some(render::draw_web_value_editor(
+                    f,
+                    &format!("Configure {}", app.editor_model),
+                    if endpoint { "Endpoint" } else { "API token" },
+                    &app.input,
+                    app.cursor_position,
+                    !endpoint,
+                    &app.theme,
+                ))
             } else {
-                app.editor_target
-                    .as_deref()
-                    .and_then(|id| app.provider_picker.rows.iter().find(|r| r.id == id))
-                    .map(|r| r.name.clone())
-                    .unwrap_or_else(|| "model".to_string())
-            };
-            // ADR-0046: the effort/thinking rows belong ONLY to the
-            // per-model settings editor (`editor_model_settings_only`,
-            // opened from the Models picker). The provider key editor
-            // never shows them — reasoning is set per model, not per
-            // provider.
-            let effort = app
-                .editor_model_settings_only
-                .then_some(app.editor_effort.as_str());
-            // The model's advertised ladder lays out the slider's rungs; an
-            // unresolved model passes an empty slice so the block shows the
-            // bare value row + caption instead.
-            let effort_levels: Vec<String> = if app.editor_model_settings_only {
-                muta_contracts::resolve_model(&app.editor_model)
-                    .effort_levels
-                    .iter()
-                    .map(|e| e.as_str().to_string())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let thinking = app
-                .editor_model_settings_only
-                .then_some(app.editor_thinking)
-                .filter(|_| app.editor_thinking_available);
-            // Capability overrides (ADR-0149 layer 1): shown in the
-            // settings-only editor (fields 3/4), cycled with Space.
-            let overrides = app
-                .editor_model_settings_only
-                .then_some((app.editor_vision_override, app.editor_tool_override));
-            Some(render::draw_model_editor(
-                f,
-                &title,
-                &app.input,
-                app.cursor_position,
-                !app.editor_model_settings_only,
-                app.editor_field,
-                effort,
-                &effort_levels,
-                thinking,
-                overrides,
-                &app.theme,
-            ))
+                let title = if app.editor_model_settings_only {
+                    app.editor_model.clone()
+                } else {
+                    app.editor_target
+                        .as_deref()
+                        .and_then(|id| app.provider_picker.rows.iter().find(|r| r.id == id))
+                        .map(|r| r.name.clone())
+                        .unwrap_or_else(|| "model".to_string())
+                };
+                // ADR-0046: the effort/thinking rows belong ONLY to the
+                // per-model settings editor (`editor_model_settings_only`,
+                // opened from the Models picker). The provider key editor
+                // never shows them — reasoning is set per model, not per
+                // provider.
+                let effort = app
+                    .editor_model_settings_only
+                    .then_some(app.editor_effort.as_str());
+                // The model's advertised ladder lays out the slider's rungs; an
+                // unresolved model passes an empty slice so the block shows the
+                // bare value row + caption instead.
+                let effort_levels: Vec<String> = if app.editor_model_settings_only {
+                    muta_contracts::resolve_model(&app.editor_model)
+                        .effort_levels
+                        .iter()
+                        .map(|e| e.as_str().to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let thinking = app
+                    .editor_model_settings_only
+                    .then_some(app.editor_thinking)
+                    .filter(|_| app.editor_thinking_available);
+                // Capability overrides (ADR-0149 layer 1): shown in the
+                // settings-only editor (fields 3/4), cycled with Space.
+                let overrides = app
+                    .editor_model_settings_only
+                    .then_some((app.editor_vision_override, app.editor_tool_override));
+                Some(render::draw_model_editor(
+                    f,
+                    &title,
+                    &app.input,
+                    app.cursor_position,
+                    !app.editor_model_settings_only,
+                    app.editor_field,
+                    effort,
+                    &effort_levels,
+                    thinking,
+                    overrides,
+                    &app.theme,
+                ))
+            }
         }
         Modal::ProviderPreset => Some(render::draw_preset_chooser(
             app.preset_choice,
@@ -990,14 +1005,15 @@ fn compose_frame(
             let title = if editing {
                 format!("Edit — {}", app.custom_name)
             } else {
-                crate::preset_label_for(app.custom_preset_id.as_deref())
+                crate::provider_label_for(app.custom_provider_id.as_deref())
             };
             Some(render::draw_custom_provider_editor(
                 render::CustomEditorProps {
                     fields: &app.custom_fields,
                     field: app.custom_field,
                     editing,
-                    custom: app.custom_preset_id.as_deref() == Some("custom-openai"),
+                    custom: app.custom_provider_id.as_deref()
+                        == Some(crate::providers::CUSTOM_TEMPLATE.id),
                     title: &title,
                     name_buf: &app.custom_name,
                     base_url_buf: &app.custom_base_url,
@@ -1025,7 +1041,7 @@ fn compose_frame(
                     crate::model::selection::SelectionState::None
                 ),
                 has_running_task: viewed_running,
-                in_runner_view: app.in_runner_view(),
+                in_subagent_view: app.in_subagent_view(),
                 in_side_view: app.in_side_view,
                 queue_count: app.pending_dispatch.len(),
                 has_focused_target: app.focused_target.is_some(),
@@ -1115,6 +1131,7 @@ fn compose_frame(
                 app.telemetry_detail,
                 app.telemetry_turn,
                 app.telemetry_turn_cursor,
+                app.last_submit_ms,
                 loading,
                 &mut app.telemetry_scroll,
                 &app.theme,
@@ -1173,8 +1190,8 @@ fn compose_frame(
         Modal::Config => {
             let breadcrumbs_str = if app.in_side_view {
                 "Main › Aside › Settings"
-            } else if app.in_runner_view() {
-                "Main › Runner › Settings"
+            } else if app.in_subagent_view() {
+                "Main › Subagent › Settings"
             } else {
                 "Main › Settings"
             };
@@ -1197,8 +1214,25 @@ fn compose_frame(
                     theme: &app.theme,
                 },
             );
-            if let Some((ref mut state, ref anchor)) = app.config_dropdown {
-                crate::components::dropdown::draw_dropdown(f, state, anchor, &app.theme, f.area());
+            app.config_selected_rect = rects.selected_row_rect;
+            if let Some(row_rect) = rects.selected_row_rect {
+                ui.mount(UiKey::SettingsOption(app.config_detail_index), row_rect);
+            }
+            if let Some((ref mut state, ref mut anchor)) = app.config_dropdown {
+                if let Some(target_rect) = app.config_selected_rect
+                    && anchor.placement
+                        != crate::components::dropdown::DropdownPlacement::CenterScreen
+                {
+                    anchor.target_rect = target_rect;
+                }
+                let popup_area = crate::components::dropdown::draw_dropdown(
+                    f,
+                    state,
+                    anchor,
+                    &app.theme,
+                    f.area(),
+                );
+                ui.mount(UiKey::ConfigDropdown, popup_area);
             }
             Some(rects.area)
         }
@@ -1255,7 +1289,7 @@ fn compose_frame(
                     crate::model::selection::SelectionState::None
                 ),
                 has_running_task: viewed_running,
-                in_runner_view: app.in_runner_view(),
+                in_subagent_view: app.in_subagent_view(),
                 in_side_view: app.in_side_view,
                 queue_count: app.pending_dispatch.len(),
                 has_focused_target: app.focused_target.is_some(),
@@ -1314,7 +1348,7 @@ fn compose_frame(
     if app.esc_armed() {
         render::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     } else if app.ctrl_c_armed() {
-        render::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
+        render::draw_armed_toast(f, "press Ctrl-c again to exit", &app.theme);
     } else if app.copy_toast_until.is_some() {
         render::draw_copy_toast(
             f,

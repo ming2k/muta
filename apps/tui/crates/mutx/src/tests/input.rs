@@ -3,8 +3,8 @@
 use super::*;
 
 #[test]
-fn focused_tool_steps_mut_only_touches_focused_runner_children() {
-    let mut messages = conversation_with_runners();
+fn focused_tool_steps_mut_only_touches_focused_subagent_children() {
+    let mut messages = conversation_with_subagents();
     // Focused on task_a: its single child is an assistant message (not a
     // tool step), so the focused stream has 1 message and 0 tool steps.
     let focus = vec![crate::app::ZoomFrame {
@@ -78,13 +78,13 @@ fn caret_owner_none_when_step_focused() {
 }
 
 #[test]
-fn caret_owner_none_in_runner_view() {
+fn caret_owner_none_in_subagent_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.enter_runner("call-1".to_string());
+    app.enter_subagent("call-1".to_string());
     assert_eq!(app.caret_owner(), CaretOwner::None);
     assert!(
         !app.caret_visible(),
-        "runner zoom has no input line → cursor hidden, IME unanchored"
+        "subagent zoom has no input line → cursor hidden, IME unanchored"
     );
 }
 
@@ -444,4 +444,344 @@ fn failed_intent_send_latches_the_daemon_link_down_state() {
     assert!(!app.link_down);
     assert!(!app.send_intent(AgentRequest::Interrupt));
     assert!(app.link_down);
+}
+
+fn relay_key(
+    app: &mut App,
+    code: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+) -> Option<crate::input::InputAction> {
+    crate::event_loop::component_input::route(
+        app,
+        &crossterm::event::Event::Key(crossterm::event::KeyEvent::new(code, modifiers)),
+        &[crate::ui::UiKey::Composer],
+    )
+}
+
+#[test]
+fn shift_right_selects_characters_and_extracts() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(0);
+
+    // Shift+Right selects first char 'h'
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 1);
+    assert_eq!(
+        app.selection,
+        SelectionState::InputRange {
+            anchor_byte: 0,
+            head_byte: 1,
+        }
+    );
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("h".to_string())
+    );
+
+    // Shift+Right again selects "he"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 2);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("he".to_string())
+    );
+
+    // Shift+Left shrinks to "h"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Left,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 1);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("h".to_string())
+    );
+
+    // Shift+Left again collapses back to None
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Left,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 0);
+    assert_eq!(app.selection, SelectionState::None);
+}
+
+#[test]
+fn shift_left_backwards_selection() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(5); // parked after "hello"
+
+    // Shift+Left selects 'o' backwards
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Left,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 4);
+    assert_eq!(
+        app.selection,
+        SelectionState::InputRange {
+            anchor_byte: 5,
+            head_byte: 4,
+        }
+    );
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("o".to_string())
+    );
+
+    // Shift+Left again selects "lo"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Left,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 3);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("lo".to_string())
+    );
+
+    // Shift+Right shrinks back to "o"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 4);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("o".to_string())
+    );
+
+    // Shift+Right collapses to None
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 5);
+    assert_eq!(app.selection, SelectionState::None);
+
+    // Shift+Right again selects forwards: ' ' (space)
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 6);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some(" ".to_string())
+    );
+}
+
+#[test]
+fn shift_ctrl_left_and_right_word_selection() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(0);
+
+    // Shift+Ctrl+Right selects "hello"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 5);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("hello".to_string())
+    );
+
+    // Shift+Ctrl+Right again selects "hello world"
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 11);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("hello world".to_string())
+    );
+}
+
+#[test]
+fn shift_up_and_down_multiline_selection() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello\nworld".to_string();
+    // 'r' is index 8 (hello=5, \n=6, w=6, o=7, r=8)
+    app.set_cursor(8);
+
+    // Shift+Up moves to line 1 col 2 ('l' at index 2)
+    let action = relay_key(&mut app, crossterm::event::KeyCode::Up, KeyModifiers::SHIFT);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 2);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("llo\nwo".to_string())
+    );
+
+    // Shift+Down returns to index 8, collapsing selection
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Down,
+        KeyModifiers::SHIFT,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.cursor_position, 8);
+    assert_eq!(app.selection, SelectionState::None);
+}
+
+#[test]
+fn shift_selection_delete_and_backspace() {
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(6);
+
+    // Select "world"
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::End,
+        KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cursor_position, 11);
+
+    // Backspace replaces the selected text
+    let action = relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Backspace,
+        KeyModifiers::NONE,
+    );
+    assert!(matches!(action, Some(crate::input::InputAction::Backspace)));
+    assert_eq!(app.input, "hello ");
+    assert_eq!(app.cursor_position, 6);
+    assert_eq!(app.selection, SelectionState::None);
+}
+
+#[test]
+fn shift_selection_cjk() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "你好世界".to_string();
+    app.set_cursor(0);
+
+    // Shift+Right selects "你"
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cursor_position, 1);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("你".to_string())
+    );
+
+    // Shift+Right selects "你好"
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cursor_position, 2);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("你好".to_string())
+    );
+}
+
+#[test]
+fn shift_home_and_end_selection() {
+    use crate::event_loop::transcript::extract_selection_text;
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(5);
+
+    // Shift+Home selects to start
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Home,
+        KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cursor_position, 0);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some("hello".to_string())
+    );
+
+    // Shift+End selects from 5 to 11
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::End,
+        KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cursor_position, 11);
+    assert_eq!(
+        extract_selection_text(&app.selection, &[], &app.input, &app.ui.document, None),
+        Some(" world".to_string())
+    );
+}
+
+#[test]
+fn esc_cancels_shift_selection() {
+    use crossterm::event::KeyModifiers;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.set_cursor(0);
+
+    relay_key(
+        &mut app,
+        crossterm::event::KeyCode::Right,
+        KeyModifiers::SHIFT,
+    );
+    assert!(app.has_input_selection());
+
+    let action = relay_key(&mut app, crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None);
+    assert_eq!(app.input, "hello world");
 }

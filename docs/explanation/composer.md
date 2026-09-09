@@ -193,7 +193,7 @@ by the `caret_owner()` state machine:
 - `CaretOwner::Modal`: Dedicated text inputs inside modals (e.g. API key
   entry, Question modal's custom "Other" text row).
 - `CaretOwner::None`: When transcript steps have focus, when browsing
-  read-only modal lists, or when viewing runner tasks.
+  read-only modal lists, or when viewing subagent tasks.
 
 ### Single source of truth: `cursor_screen_pos`
 

@@ -1,507 +1,149 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { daemon } from "../stores/daemon.svelte.js";
-  import type { WebSearchConfigUpdate, WebSearchConfigView } from "../types.js";
+  import type {
+    WebConfigUpdate,
+    WebProviderAxis,
+    WebProviderCapability,
+    WebReaderProvider,
+    WebSearchProvider,
+  } from "../types.js";
 
-  interface Props {
-    onclose: () => void;
-  }
-
+  interface Props { onclose: () => void }
   let { onclose }: Props = $props();
-
-  // Fetch the authoritative snapshot when the dialog opens.
-  onMount(() => {
-    daemon.queryWebSearchConfig();
-  });
-
-  const BACKENDS = [
-    { id: "exa", label: "Exa", desc: "hosted MCP · anonymous by default (default)" },
-    { id: "parallel", label: "Parallel", desc: "hosted MCP · anonymous by default" },
-    { id: "duckduckgo", label: "DuckDuckGo", desc: "keyless scraping · frequently blocked" },
-    { id: "searxng", label: "SearXNG", desc: "self-hosted · keyless · needs a URL" },
-    { id: "tavily", label: "Tavily", desc: "hosted · needs a Tavily key" },
-    { id: "bocha", label: "Bocha", desc: "hosted AI search · needs a key · China-direct" },
-  ] as const;
-
-  const READERS = [
-    { id: "jina", label: "Jina Reader", desc: "r.jina.ai · JS rendering + readability extraction" },
-  ] as const;
-
   let cfg = $derived(daemon.websearchConfig);
+  let searchToken = $state("");
+  let readerToken = $state("");
+  let endpoint = $state<string | null>(null);
 
-  // Local drafts for text inputs; submitted as PATCH fields on Save.
-  let searxngUrl = $state<string | null>(null);
-  let keyDrafts = $state<Record<string, string>>({});
+  let selectedSearch = $derived(selected("Search"));
+  let selectedReader = $derived(selected("Reader"));
 
-  function effectiveSearxngUrl(): string {
-    return searxngUrl ?? cfg?.searxng_url ?? "";
-  }
-  function keyDraft(id: string): string {
-    return keyDrafts[id] ?? "";
-  }
+  onMount(() => daemon.queryWebSearchConfig());
 
-  function setKeyDraft(id: string, value: string) {
-    keyDrafts[id] = value;
+  function capabilities(axis: WebProviderAxis): WebProviderCapability[] {
+    return cfg?.capabilities.filter((item) => item.axis === axis) ?? [];
   }
 
-  let searxngRequired = $derived(cfg?.provider === "searxng");
+  function selected(axis: WebProviderAxis): WebProviderCapability | undefined {
+    const id = axis === "Search" ? cfg?.provider : cfg?.reader;
+    return capabilities(axis).find((item) => item.id === id);
+  }
 
-  let searxngInvalid = $derived(
-    searxngRequired && effectiveSearxngUrl().trim() === "",
-  );
+  function patch(update: Omit<WebConfigUpdate, "expected_revision">) {
+    if (!cfg) return;
+    daemon.updateWebSearchConfig({ expected_revision: cfg.revision, ...update });
+  }
 
-  let saveDisabled = $derived(searxngInvalid);
+  function setSearchProvider(value: string) {
+    patch({ provider: value as WebSearchProvider });
+  }
 
-  function save() {
-    if (!cfg || saveDisabled) return;
-    const patch: Record<string, string> = {};
-    if (searxngUrl !== null) {
-      patch.searxng_url = searxngUrl.trim();
+  function setReaderProvider(value: string) {
+    patch({ reader: value as WebReaderProvider });
+  }
+
+  function saveCredential(axis: WebProviderAxis, providerId: string, value: string) {
+    patch({ credential: { axis, provider_id: providerId, value: value.trim() } });
+    if (axis === "Search") searchToken = "";
+    else readerToken = "";
+  }
+
+  function statusLabel(status: string): string {
+    switch (status) {
+      case "Environment": return "Provided by environment";
+      case "Stored": return "Stored securely";
+      case "RequiredMissing": return "Required · missing";
+      case "OptionalMissing": return "Optional · not configured";
+      default: return "No token required";
     }
-    for (const [id, value] of Object.entries(keyDrafts)) {
-      // Only submit non-empty drafts; clearing a stored key is the explicit
-      // ✕ button next to each field, not an empty submit.
-      if (value.trim() !== "") patch[id] = value.trim();
-    }
-    daemon.updateWebSearchConfig(patch as Partial<WebSearchConfigUpdate>);
-    // Keep the dialog open: the ack toast confirms, and the presence flags
-    // re-render from the authoritative snapshot.
-    searxngUrl = null;
-    keyDrafts = {};
   }
 
-  function handleBackdrop(e: MouseEvent) {
-    if (e.target === e.currentTarget) onclose();
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") onclose();
+  function handleBackdrop(event: MouseEvent) {
+    if (event.target === event.currentTarget) onclose();
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={(event) => event.key === "Escape" && onclose()} />
 
 <div class="backdrop" onclick={handleBackdrop} role="presentation">
-  <div class="modal" role="dialog" aria-label="Web search settings">
-    <div class="modal-header">
-      <h3>Web search</h3>
-      <button class="close" aria-label="Close" onclick={onclose}>×</button>
-    </div>
+  <div class="modal" role="dialog" aria-label="Web tools settings">
+    <header>
+      <div><h3>Web tools</h3><p>One provider per capability. Changes apply immediately.</p></div>
+      <button class="icon" aria-label="Close" onclick={onclose}>×</button>
+    </header>
 
-    <div class="modal-body">
-      {#if !cfg}
-        <div class="loading">Loading configuration…</div>
-      {:else}
+    {#if !cfg}
+      <main><p class="muted">Loading configuration…</p></main>
+    {:else}
+      <main>
         <section>
-          <h4>Search backend <span class="tag">websearch</span></h4>
-          <p class="section-hint">
-            Used by the <code>websearch</code> tool. Changes apply live and persist to
-            <code>config.toml</code>.
-          </p>
-          <div class="option-grid">
-            {#each BACKENDS as b (b.id)}
-              <button
-                class="option"
-                class:active={cfg.provider === b.id}
-                onclick={() => daemon.updateWebSearchConfig({ provider: b.id })}
-                title={b.desc}
-              >
-                <span class="option-label">{b.label}</span>
-                <span class="option-desc">{b.desc}</span>
-              </button>
+          <div class="section-title"><h4>Search provider</h4><code>search_web</code></div>
+          <select value={cfg.provider} onchange={(event) => setSearchProvider(event.currentTarget.value)}>
+            {#each capabilities("Search") as provider (provider.id)}
+              <option value={provider.id}>{provider.display_name}</option>
             {/each}
-          </div>
+            <option value="disabled">Disabled</option>
+          </select>
+          {#if selectedSearch}
+            <p class="muted">{selectedSearch.description}</p>
+            {#if selectedSearch.endpoint === "UserSupplied"}
+              <label>
+                <span>Endpoint</span>
+                <input value={endpoint ?? cfg.searxng_url ?? ""} oninput={(event) => endpoint = event.currentTarget.value} placeholder="https://search.example.com/search" />
+              </label>
+              <button onclick={() => { patch({ searxng_url: (endpoint ?? cfg.searxng_url ?? "").trim() }); endpoint = null; }}>Save endpoint</button>
+            {:else if selectedSearch.credential !== "None"}
+              <label>
+                <span>API token <small>{statusLabel(cfg.search_credential)}</small></span>
+                <input type="password" bind:value={searchToken} placeholder="Leave blank to clear" autocomplete="off" />
+              </label>
+              <button onclick={() => saveCredential("Search", selectedSearch.id, searchToken)}>Save token</button>
+            {/if}
+          {/if}
         </section>
 
         <section>
-          <h4>Page reader <span class="tag">read_url</span></h4>
-          <p class="section-hint">
-            How <code>read_url</code> converts HTML pages to text using Jina Reader (server-side JS rendering and readability extraction).
-          </p>
-          <div class="option-grid">
-            {#each READERS as r (r.id)}
-              <button
-                class="option"
-                class:active={cfg.reader === r.id}
-                onclick={() => daemon.updateWebSearchConfig({ reader: r.id })}
-                title={r.desc}
-              >
-                <span class="option-label">{r.label}</span>
-                <span class="option-desc">{r.desc}</span>
-              </button>
+          <div class="section-title"><h4>Reader provider</h4><code>read_url</code></div>
+          <select value={cfg.reader} onchange={(event) => setReaderProvider(event.currentTarget.value)}>
+            {#each capabilities("Reader") as provider (provider.id)}
+              <option value={provider.id}>{provider.display_name}</option>
             {/each}
-          </div>
+            <option value="disabled">Disabled</option>
+          </select>
+          {#if selectedReader}
+            <p class="muted">{selectedReader.description}</p>
+            {#if selectedReader.credential !== "None"}
+              <label>
+                <span>API token <small>{statusLabel(cfg.reader_credential)}</small></span>
+                <input type="password" bind:value={readerToken} placeholder="Leave blank to clear" autocomplete="off" />
+              </label>
+              <button onclick={() => saveCredential("Reader", selectedReader.id, readerToken)}>Save token</button>
+            {/if}
+          {/if}
         </section>
 
         <section>
-          <h4>Timeout</h4>
-          <div class="timeout-row">
-            <button
-              class="btn-secondary"
-              onclick={() => daemon.updateWebSearchConfig({ timeout_secs: Math.max(5, cfg.timeout_secs - 5) })}
-            >
-              −5s
-            </button>
-            <span class="timeout-value">{cfg.timeout_secs} s</span>
-            <button
-              class="btn-secondary"
-              onclick={() => daemon.updateWebSearchConfig({ timeout_secs: cfg.timeout_secs + 5 })}
-            >
-              +5s
-            </button>
-          </div>
+          <div class="section-title"><h4>Request timeout</h4><span>{cfg.timeout_secs}s</span></div>
+          <input type="range" min="5" max="120" step="5" value={cfg.timeout_secs} onchange={(event) => patch({ timeout_secs: Number(event.currentTarget.value) })} />
         </section>
+      </main>
+    {/if}
 
-        <section>
-          <h4>SearXNG endpoint</h4>
-          <label class="field">
-            <span class="label">JSON search URL</span>
-            <input
-              type="text"
-              value={effectiveSearxngUrl()}
-              oninput={(e) => (searxngUrl = e.currentTarget.value)}
-              placeholder="http://localhost:8080/search"
-              spellcheck="false"
-              class:invalid={searxngInvalid}
-            />
-            <span class="hint">
-              {#if searxngRequired}
-                Required — a backend is set to <code>searxng</code>.
-              {:else}
-                Only used when a backend is <code>searxng</code>.
-              {/if}
-            </span>
-          </label>
-        </section>
-
-        <section>
-          <h4>API keys</h4>
-          <p class="section-hint">
-            Persist to <code>credentials.toml</code> (never <code>config.toml</code>). Existing
-            keys are never echoed back — only whether they are set. Submit an empty field as a
-            no-op; use the ✕ button to clear a stored key.
-          </p>
-          {#each [
-            { id: "exa_api_key", label: "Exa", set: cfg.exa_api_key_set, req: false },
-            { id: "parallel_api_key", label: "Parallel", set: cfg.parallel_api_key_set, req: false },
-            { id: "tavily_api_key", label: "Tavily", set: cfg.tavily_api_key_set, req: true },
-            { id: "bocha_api_key", label: "Bocha", set: cfg.bocha_api_key_set, req: true },
-            { id: "jina_api_key", label: "Jina Reader", set: cfg.jina_api_key_set, req: false },
-          ] as k (k.id)}
-            <label class="field key-field">
-              <span class="label">
-                {k.label}
-                {#if k.set}<span class="key-set">set</span>{:else if k.req}<span class="key-missing">required when selected</span>{/if}
-              </span>
-              <span class="key-row">
-                <input
-                  type="password"
-                  value={keyDraft(k.id)}
-                  oninput={(e) => setKeyDraft(k.id, e.currentTarget.value)}
-                  placeholder={k.set ? "(unchanged)" : "not set"}
-                  spellcheck="false"
-                  autocomplete="off"
-                />
-                {#if k.set}
-                  <button
-                    class="btn-secondary"
-                    title="Clear the stored key"
-                    onclick={() =>
-                      daemon.updateWebSearchConfig({ [k.id]: "" } as Partial<WebSearchConfigUpdate>)}
-                  >
-                    ✕
-                  </button>
-                {/if}
-              </span>
-            </label>
-          {/each}
-        </section>
-      {/if}
-    </div>
-
-    <div class="modal-footer">
-      <span class="footer-note">
-        Backend/reader/timeout apply immediately; text fields need Save.
-      </span>
-      <button class="btn-secondary" onclick={onclose}>Close</button>
-      <button class="btn-primary" disabled={saveDisabled} onclick={save}>Save</button>
-    </div>
+    <footer><span>Credentials are stored separately and never echoed back.</span><button onclick={onclose}>Done</button></footer>
   </div>
 </div>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--bg-app) 45%, transparent);
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: 8vh;
-    z-index: 100;
-  }
-
-  .modal {
-    width: 560px;
-    max-width: calc(100vw - 32px);
-    max-height: 84vh;
-    overflow-y: auto;
-    background-color: var(--bg-surface);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-modal);
-    display: flex;
-    flex-direction: column;
-  }
-
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.85rem 1rem;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .modal-header h3 {
-    font-family: var(--font-brush);
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    color: var(--text-primary);
-  }
-
-  .close {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 18px;
-    cursor: pointer;
-    line-height: 1;
-  }
-
-  .close:hover {
-    color: var(--text-primary);
-  }
-
-  .modal-body {
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
-  .loading {
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    padding: 24px 0;
-    text-align: center;
-  }
-
-  section h4 {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0 0 4px;
-  }
-
-  .tag {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--text-muted);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    padding: 1px 5px;
-    margin-left: 6px;
-    vertical-align: middle;
-    text-transform: lowercase;
-  }
-
-  .section-hint {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin: 0 0 10px;
-    line-height: 1.5;
-  }
-
-  .section-hint code,
-  .hint code {
-    font-family: var(--font-mono);
-    background: var(--bg-code);
-    border: 1px solid var(--line);
-    padding: 0 0.25rem;
-    border-radius: var(--radius-sm);
-  }
-
-  .option-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 8px;
-  }
-
-  .option {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    text-align: left;
-    background: transparent;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-md);
-    padding: 9px 11px;
-    cursor: pointer;
-    color: var(--text-secondary);
-  }
-
-  .option:hover {
-    border-color: var(--border-input-focus);
-  }
-
-  .option.active {
-    border-color: var(--accent-primary);
-    box-shadow: inset 2px 0 0 var(--accent-primary);
-    background: var(--seal-soft);
-  }
-
-  .option.active .option-label {
-    color: var(--accent-primary);
-  }
-
-  .option-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .option-desc {
-    font-size: 10px;
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-
-  .timeout-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .timeout-value {
-    font-family: var(--font-mono);
-    font-size: 14px;
-    color: var(--text-primary);
-    min-width: 48px;
-    text-align: center;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .key-set {
-    color: var(--accent-info);
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    padding: 0 4px;
-    text-transform: none;
-  }
-
-  .key-missing {
-    color: var(--accent-warning);
-    text-transform: none;
-  }
-
-  input {
-    background-color: var(--input-bg-inactive);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-md);
-    padding: 0.5rem 0.6rem;
-    color: var(--text-primary);
-    font-size: 0.82rem;
-    font-family: var(--font-mono);
-    outline: none;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  input:focus {
-    border-color: var(--border-input-focus);
-    background-color: var(--input-bg-active);
-  }
-
-  input.invalid {
-    border-color: var(--accent-danger);
-  }
-
-  .key-field {
-    margin-bottom: 10px;
-  }
-
-  .key-row {
-    display: flex;
-    gap: 6px;
-    align-items: stretch;
-  }
-
-  .hint {
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.5;
-  }
-
-  .modal-footer {
-    padding: 0.7rem 1rem;
-    border-top: 1px solid var(--line);
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .footer-note {
-    font-size: 0.65rem;
-    color: var(--text-muted);
-    margin-right: auto;
-  }
-
-  .btn-primary,
-  .btn-secondary {
-    font-size: 0.78rem;
-    font-weight: 500;
-    padding: 0.4rem 0.85rem;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    border: 1px solid transparent;
-  }
-
-  .btn-primary {
-    background-color: var(--accent-primary);
-    color: var(--bg-app);
-    border: none;
-  }
-
-  .btn-primary:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .btn-secondary {
-    background: transparent;
-    border-color: var(--line-strong);
-    color: var(--text-secondary);
-  }
-
-  .btn-secondary:hover {
-    background: var(--bg-surface-hover);
-  }
+  .backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bg-app) 55%, transparent); }
+  .modal { width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 20px 60px #0008; }
+  header, footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; }
+  header { border-bottom: 1px solid var(--line-subtle); } footer { border-top: 1px solid var(--line-subtle); color: var(--text-muted); font-size: 12px; }
+  h3, h4, p { margin: 0; } header p, .muted { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  main { display: grid; gap: 18px; padding: 20px; } section { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line-subtle); border-radius: 8px; }
+  .section-title { display: flex; align-items: center; justify-content: space-between; } code, small { color: var(--text-muted); }
+  label { display: grid; gap: 6px; font-size: 13px; } label span { display: flex; justify-content: space-between; }
+  input, select, button { color: inherit; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; }
+  button { cursor: pointer; justify-self: end; } .icon { border: 0; background: transparent; font-size: 20px; }
+  input[type="range"] { width: 100%; padding: 0; }
 </style>

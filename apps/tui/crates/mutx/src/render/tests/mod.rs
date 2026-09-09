@@ -38,7 +38,7 @@ fn render_full_view(
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: hints,
                 session_head: Some(SessionHead {

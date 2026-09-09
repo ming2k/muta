@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -13,7 +13,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// The legacy `gpt-4o`/`gpt-4o-mini` ids stay registered for existing
 /// configs but are no longer seeded for the official provider. Each id exists
 /// in the model registry.
-pub use muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::OPENAI_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -262,7 +262,7 @@ pub(super) fn prompt_cache_for_model(model: &str) -> muta_contracts::PromptCache
     }
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
     id: "openai",
     baselines: MODELS,
@@ -270,7 +270,8 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
     models: OPENAI_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::ModelsDev { provider: "openai" },
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };

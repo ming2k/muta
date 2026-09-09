@@ -353,7 +353,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         // Durable retry-resolution records: the success-side mirror of
         // `round_interrupts`. One JSON column on `sessions`, default `[]`.
-        // The DDL is applied conditionally by the migration runner (version
+        // The DDL is applied conditionally by the migration subagent (version
         // 9 arm) so a database that already carries the column — a dev
         // build's startup repair, or a partially-applied v9 — passes
         // through unchanged instead of failing on a duplicate column.
@@ -366,7 +366,7 @@ const MIGRATIONS: &[Migration] = &[
         // concepts — `origin` (WHY a message exists) and `hidden` (whether it
         // is shown). That coupling was false: the durable transcript
         // legitimately carries *visible* harness injections (UserSteer /
-        // RunnerSteer / RunnerTask, CommandEcho "/cmd" & "!cmd", ToolImage, and
+        // SubagentSteer / SubagentTask, CommandEcho "/cmd" & "!cmd", ToolImage, and
         // SystemPrompt/SystemReminder), all of which ADR-0050 records
         // `.hidden = false` with an `origin`. The false constraint then turned
         // a lawful mid-round save (e.g. the steering fire-at-turn-boundary) into
@@ -634,7 +634,7 @@ fn apply_usage_ledger_schema(tx: &rusqlite::Transaction) -> Result<()> {
 
 /// Migration 10 repair: rewrite `entries` with the corrected `origin`/`hidden`
 /// CHECKs (ADR-0186 integrity fix). The whole step runs in the caller's outer
-/// transaction with foreign-key enforcement disabled by the migration runner
+/// transaction with foreign-key enforcement disabled by the migration subagent
 /// (sqlite.org/lang_altertable procedure): the rebuild briefly drops
 /// `entries`, the parent of `entry_memberships`' foreign key, and re-creating
 /// the equivalent rows under a new table name cannot decrement SQLite's
@@ -3459,7 +3459,7 @@ mod tests {
     /// rolled back, `user_version` never advanced, and every subsequent
     /// open retried and re-failed the rebuild — wedging workspace-trust
     /// persistence (the TUI stuck on "Trusting workspace...") until the state
-    /// file was recreated. The runner must disable enforcement before `BEGIN`
+    /// file was recreated. The subagent must disable enforcement before `BEGIN`
     /// (a no-op inside a transaction), restore it after, and gate the result
     /// on `PRAGMA foreign_key_check`.
     #[test]
@@ -3547,7 +3547,7 @@ mod tests {
         assert_eq!(version, CURRENT_DB_VERSION);
 
         // Enforcement is a per-connection invariant installed by
-        // `configure_connection`; the runner must hand the connection back
+        // `configure_connection`; the subagent must hand the connection back
         // with it restored.
         let fk_enforced: i64 = conn
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
@@ -3620,7 +3620,7 @@ mod tests {
 
     /// Regression (reported incident): the v5 `entries` CHECK coupled `origin`
     /// and `hidden`, rejecting the legitimate *visible* harness injections the
-    /// durable transcript carries (UserSteer/RunnerSteer, CommandEcho "/cmd"
+    /// durable transcript carries (UserSteer/SubagentSteer, CommandEcho "/cmd"
     /// & "!cmd", ToolImage). A mid-round save of such a message then failed with
     /// `CHECK constraint failed: origin IS NULL OR hidden = 1`. The corrected
     /// schema (migration 10) accepts them without weakening the still-real

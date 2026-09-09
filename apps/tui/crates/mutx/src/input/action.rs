@@ -68,7 +68,7 @@ pub enum InputAction {
     ModelEditorVisionCycle,
     /// Cycle the tool-call capability override tri-state. Field 4.
     ModelEditorToolCycle,
-    /// Submit the custom-provider editor → `AgentRequest::AddProvider`.
+    /// Submit the custom-provider editor → `AgentRequest::AddConnection`.
     SubmitCustomProvider,
     /// Cancel the custom-provider editor and return to the Connections list.
     CancelCustomProvider,
@@ -115,7 +115,7 @@ pub enum InputAction {
     /// provider-delete confirm overlay rather than deleting immediately.
     DeleteProvider,
     /// Confirm the pending provider-delete: dispatch the staged
-    /// `AgentRequest::DeleteProvider` and close the confirm overlay. Only
+    /// `AgentRequest::DeleteConnection` and close the confirm overlay. Only
     /// produced by the confirm overlay's Enter when focus is on Delete.
     DeleteProviderConfirm,
     /// Cancel the provider-delete confirm overlay: drop the staged provider id
@@ -195,7 +195,6 @@ pub enum InputAction {
     /// Activate or toggle the selected item in the Settings View. Bound to `Enter` / `Space`.
     ConfigActivate,
     /// Delete the selected custom connection instance in Settings View. Bound to `d` / `D`.
-    ConfigDeleteConnection,
     /// Switch to previous tab segment in Settings View (e.g. Web Search tab). Bound to `←` / `1` / `h`.
     ConfigSegmentPrev,
     /// Switch to next tab segment in Settings View (e.g. Web Fetch tab). Bound to `→` / `2` / `l`.
@@ -491,8 +490,8 @@ pub enum InputAction {
         x: u16,
         y: u16,
     },
-    /// Leave the current runner view and return to the parent.
-    ExitRunner,
+    /// Leave the current subagent view and return to the parent.
+    ExitSubagent,
     /// Detach from the `/btw` aside view and return to the primary transcript
     /// (ADR-0103). Non-destructive: the aside keeps running. Mapped from
     /// Ctrl+C while the aside view is focused.
@@ -526,9 +525,9 @@ pub enum InputAction {
     /// Interrupt the viewed aside's in-flight round (Esc inside an aside
     /// view, ADR-0103 §2). Interrupting never closes the aside.
     InterruptSide,
-    /// Move to the previous sibling runner task.
+    /// Move to the previous sibling subagent task.
     PrevSibling,
-    /// Move to the next sibling runner task.
+    /// Move to the next sibling subagent task.
     NextSibling,
     /// Terminal was resized (SIGWINCH). The event loop forces a redraw and
     /// re-emits `EnableMouseCapture` so the crossterm parser's internal state

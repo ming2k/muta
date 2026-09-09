@@ -50,25 +50,25 @@ impl ChatGptDeviceCode {
 
 /// Request a device code from OpenAI's `deviceauth/usercode` endpoint.
 pub async fn request_device_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
 ) -> Result<ChatGptDeviceCode, crate::oauth::AuthError> {
-    let response = client
-        .post(cfg.device_authorization_url.as_ref())
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .header(
-            reqwest::header::USER_AGENT,
-            cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
-        )
-        .json(&serde_json::json!({ "client_id": cfg.client_id }))
-        .send()
-        .await
-        .map_err(|e| {
-            crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
-        })?;
-    let status = response.status();
-    let text = crate::oauth::token::read_response_text(response, "device code response").await?;
+    let request = crate::http::Request::new(
+        muta_net::Method::POST,
+        cfg.device_authorization_url.as_ref(),
+    )
+    .header("content-type", "application/json")
+    .header("accept", "application/json")
+    .header(
+        "user-agent",
+        cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
+    )
+    .json(&serde_json::json!({ "client_id": cfg.client_id }));
+    let response = client.send(request).await.map_err(|e| {
+        crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
+    })?;
+    let status = response.status;
+    let text = response.body;
     if !status.is_success() {
         return Err(crate::oauth::AuthError::TokenEndpoint {
             status: status.as_u16(),
@@ -98,7 +98,7 @@ pub struct ChatGptDeviceToken {
 /// `code_verifier` to exchange at the token endpoint. While pending, OpenAI
 /// answers `403`/`404`; any other non-2xx is a terminal failure.
 pub async fn poll_device_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     device: &ChatGptDeviceCode,
 ) -> Result<ChatGptDeviceToken, crate::oauth::AuthError> {
@@ -112,7 +112,7 @@ pub async fn poll_device_code(
 
 /// Test-injectable variant of [`poll_device_code`].
 pub async fn poll_device_code_with<S, Fut>(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     device: &ChatGptDeviceCode,
     sleep: S,
@@ -123,26 +123,23 @@ where
 {
     let interval_ms = device.interval_ms();
     loop {
-        let response = client
-            .post(cfg.device_token_url.as_ref())
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .header(
-                reqwest::header::USER_AGENT,
-                cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
-            )
-            .json(&serde_json::json!({
-                "device_auth_id": device.device_auth_id.expose_secret(),
-                "user_code": device.user_code,
-            }))
-            .send()
-            .await
-            .map_err(|e| {
-                crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
-            })?;
-        let status = response.status();
-        let text =
-            crate::oauth::token::read_response_text(response, "device token response").await?;
+        let request =
+            crate::http::Request::new(muta_net::Method::POST, cfg.device_token_url.as_ref())
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .header(
+                    "user-agent",
+                    cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
+                )
+                .json(&serde_json::json!({
+                    "device_auth_id": device.device_auth_id.expose_secret(),
+                    "user_code": device.user_code,
+                }));
+        let response = client.send(request).await.map_err(|e| {
+            crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
+        })?;
+        let status = response.status;
+        let text = response.body;
         if status.is_success() {
             return serde_json::from_str::<ChatGptDeviceToken>(&text).map_err(|e| {
                 crate::oauth::AuthError::Decode(format!("device token response parse failed: {e}"))
@@ -160,7 +157,7 @@ where
 
 /// Exchange a device `authorization_code` for a token set.
 pub async fn exchange_device_code(
-    client: &reqwest::Client,
+    client: &crate::http::Http,
     cfg: &OAuthConfig,
     token: &ChatGptDeviceToken,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {

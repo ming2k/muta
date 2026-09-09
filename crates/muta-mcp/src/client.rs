@@ -138,8 +138,10 @@ struct McpTransport {
 enum McpConnection {
     Stdio(McpTransport),
     Http {
-        endpoint: reqwest::Url,
-        client: reqwest::Client,
+        /// Absolute URL of the Streamable-HTTP endpoint.
+        url: String,
+        /// The owned transport (ADR-0200).
+        client: muta_net::Client<muta_net::TlsConnector<muta_net::TcpConnector>>,
         /// Session id issued by the server (`Mcp-Session-Id` on initialize),
         /// echoed on every subsequent request. `None` until (and unless) the
         /// server assigns one.
@@ -185,21 +187,19 @@ impl McpClient {
         // (`url` wins when both are set, mirroring the common MCP client
         // configuration shape.)
         let connection = if let Some(url) = config.url.as_deref() {
-            let endpoint: reqwest::Url = url
-                .parse()
+            // Validate the URL up front so a misconfigured server fails at
+            // connect time with a clear message, not on first request.
+            muta_net::Target::from_url(url)
                 .map_err(|error| format!("invalid MCP url '{url}': {error}"))?;
-            if !matches!(endpoint.scheme(), "http" | "https") {
-                return Err(format!(
-                    "MCP url '{url}' must use http or https (got '{}')",
-                    endpoint.scheme()
-                ));
-            }
+            let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector)
+                .map_err(|error| format!("failed to build MCP HTTP client: {error}"))?;
             McpConnection::Http {
-                endpoint,
-                client: reqwest::Client::builder()
-                    .timeout(MCP_REQUEST_TIMEOUT)
-                    .build()
-                    .map_err(|error| format!("failed to build MCP HTTP client: {error}"))?,
+                url: url.to_string(),
+                client: muta_net::Client::new(
+                    connector,
+                    muta_net::Pool::default(),
+                    muta_net::ClientConfig::default(),
+                ),
                 session_id: None,
             }
         } else {
@@ -399,49 +399,76 @@ impl McpClient {
                 })??
             }
             McpConnection::Http {
-                endpoint,
+                url,
                 client,
                 session_id,
             } => {
-                let mut request = client
-                    .post(endpoint.clone())
-                    .header("Accept", "application/json, text/event-stream")
-                    .json(&payload);
+                let (target, path) = muta_net::Target::from_url(url).map_err(|error| {
+                    McpError::Transport(format!("invalid MCP url '{url}': {error}"))
+                })?;
+                let mut head = muta_net::RequestHead::new(muta_net::Method::POST, path)
+                    .with_header("accept", "application/json, text/event-stream")
+                    .with_header("content-type", "application/json");
                 if let Some(session) = session_id.as_deref() {
-                    request = request.header("Mcp-Session-Id", session);
+                    head = head.with_header("mcp-session-id", session);
                 }
-                // The reqwest client carries the per-request timeout; a
-                // connection-level failure (DNS, refused, TLS, HTTP/2 reset)
-                // is transport-class and safe to reconnect-retry, while any
+                let body = serde_json::to_vec(&payload)
+                    .map_err(|error| McpError::Protocol(format!("MCP {method} encode: {error}")))?;
+                // A connection-level failure (DNS, refused, TLS, reset) is
+                // transport-class and safe to reconnect-retry, while any
                 // delivered body is parsed below and classified as protocol.
-                let http = request.send().await.map_err(|error| {
+                // The deadline covers the body too, as the previous client's
+                // per-request timeout did.
+                let exchange = tokio::time::timeout(
+                    MCP_REQUEST_TIMEOUT,
+                    client.request(&target, head, Some(body.into())),
+                )
+                .await
+                .map_err(|_| {
+                    McpError::Transport(format!(
+                        "MCP {method} timed out after {}s",
+                        MCP_REQUEST_TIMEOUT.as_secs()
+                    ))
+                })?
+                .map_err(|error| {
                     McpError::Transport(format!("MCP {method} HTTP failed: {error}"))
                 })?;
-                let status = http.status();
+                let status = exchange.head.status;
                 if !status.is_success() {
                     // 4xx/5xx: the server answered and refused — a protocol
                     // result, not a broken pipe.
+                    let mut exchange = exchange;
+                    let detail = exchange
+                        .body
+                        .read_to_end()
+                        .await
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                        .unwrap_or_default();
                     return Err(McpError::Protocol(format!(
-                        "MCP {method} HTTP {status}: {}",
-                        http.text().await.unwrap_or_default()
+                        "MCP {method} HTTP {status}: {detail}"
                     )));
                 }
                 if session_id.is_none() {
-                    *session_id = http
-                        .headers()
-                        .get("Mcp-Session-Id")
+                    *session_id = exchange
+                        .head
+                        .headers
+                        .get("mcp-session-id")
                         .and_then(|value| value.to_str().ok())
                         .map(str::to_string);
                 }
-                let content_type = http
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
+                let content_type = exchange
+                    .head
+                    .headers
+                    .get("content-type")
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or_default()
                     .to_string();
-                let body = http
-                    .text()
+                let mut exchange = exchange;
+                let body = exchange
+                    .body
+                    .read_to_end()
                     .await
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                     .map_err(|error| McpError::Transport(format!("MCP {method} body: {error}")))?;
                 parse_http_message(&body, &content_type, method)?
             }
@@ -471,24 +498,40 @@ impl McpClient {
                 .await
                 .map_err(|msg| McpError::Transport(format!("MCP {method} notify failed: {msg}"))),
             McpConnection::Http {
-                endpoint,
+                url,
                 client,
                 session_id,
             } => {
-                let mut request = client
-                    .post(endpoint.clone())
-                    .header("Accept", "application/json, text/event-stream")
-                    .json(&payload);
+                let (target, path) = muta_net::Target::from_url(url).map_err(|error| {
+                    McpError::Transport(format!("invalid MCP url '{url}': {error}"))
+                })?;
+                let mut head = muta_net::RequestHead::new(muta_net::Method::POST, path)
+                    .with_header("accept", "application/json, text/event-stream")
+                    .with_header("content-type", "application/json");
                 if let Some(session) = session_id.as_deref() {
-                    request = request.header("Mcp-Session-Id", session);
+                    head = head.with_header("mcp-session-id", session);
                 }
+                let body = serde_json::to_vec(&payload)
+                    .map_err(|error| McpError::Protocol(format!("MCP {method} encode: {error}")))?;
                 // Notifications have no id and thus no reply to correlate:
                 // spec-compliant servers answer 202 with (possibly) an empty
                 // body. Transport failure still classifies as reconnect-safe.
-                let http = request.send().await.map_err(|error| {
+                let exchange = tokio::time::timeout(
+                    MCP_REQUEST_TIMEOUT,
+                    client.request(&target, head, Some(body.into())),
+                )
+                .await
+                .map_err(|_| {
+                    McpError::Transport(format!(
+                        "MCP {method} notify timed out after {}s",
+                        MCP_REQUEST_TIMEOUT.as_secs()
+                    ))
+                })?
+                .map_err(|error| {
                     McpError::Transport(format!("MCP {method} notify failed: {error}"))
                 })?;
-                let _ = http.text().await;
+                let mut exchange = exchange;
+                let _ = exchange.body.read_to_end().await;
                 Ok(())
             }
         }

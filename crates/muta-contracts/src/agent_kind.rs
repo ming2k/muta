@@ -1,7 +1,7 @@
 //! Agent archetypes and mesh stations: the Worker-Station Model (ADR-0167).
 //!
-//! Two agent archetypes ([`AgentKind`]) — `Master` (the driving brain) and
-//! `Runner` (the mission worker).
+//! Two agent archetypes ([`AgentKind`]) — `Root` (the driving brain) and
+//! `Subagent` (the mission worker).
 //!
 //! Three operational stations ([`MeshStation`]) — `Hypervisor` (the daemon-level
 //! coordinator), `Session` (the user-facing conversation host), and `Subtask`
@@ -11,33 +11,35 @@ use serde::{Deserialize, Serialize};
 
 /// Archetype / classification of an agent entity.
 ///
-/// In Muta's worker-station model, there are strictly two kinds of agents:
-/// - [`AgentKind::Master`]: Full cognitive loop, tool execution, session/daemon orchestrator.
-/// - [`AgentKind::Runner`]: Isolated, sandboxed, short-lived task execution worker.
+/// In Muta's homogeneous agent model (ADR-0183), an agent entity runs either in
+/// a top-level root posture or a delegated child posture:
+/// - [`AgentKind::Root`]: Full cognitive loop, tool execution, session/daemon orchestrator.
+/// - [`AgentKind::Subagent`]: Isolated, sandboxed, short-lived task execution worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
-    /// Master agent: full cognitive loop, intent driver, conversation & tool authority.
-    Master,
-    /// Runner agent: mission-scoped worker, isolated/sandboxed, single-task lifecycle.
-    Runner,
+    /// Root agent: full cognitive loop, intent driver, conversation & tool authority.
+    #[serde(alias = "master")]
+    Root,
+    /// Subagent: mission-scoped worker, isolated/sandboxed, single-task lifecycle.
+    Subagent,
 }
 
 impl AgentKind {
-    pub const ALL: &'static [AgentKind] = &[AgentKind::Master, AgentKind::Runner];
+    pub const ALL: &'static [AgentKind] = &[AgentKind::Root, AgentKind::Subagent];
 
-    pub fn is_master(self) -> bool {
-        matches!(self, Self::Master)
+    pub fn is_root(self) -> bool {
+        matches!(self, Self::Root)
     }
 
-    pub fn is_runner(self) -> bool {
-        matches!(self, Self::Runner)
+    pub fn is_subagent(self) -> bool {
+        matches!(self, Self::Subagent)
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Master => "master",
-            Self::Runner => "runner",
+            Self::Root => "root",
+            Self::Subagent => "subagent",
         }
     }
 }
@@ -52,11 +54,11 @@ impl std::fmt::Display for AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeshStation {
-    /// Daemon-level Hypervisor station (staffed by a Master agent).
+    /// Daemon-level Hypervisor station (staffed by a Root agent).
     Hypervisor,
-    /// Session-level primary conversation station (staffed by a Master agent).
+    /// Session-level primary conversation station (staffed by a Root agent).
     Session,
-    /// Session subtask execution station (staffed by a Runner agent).
+    /// Session subtask execution station (staffed by a Subagent).
     Subtask,
 }
 
@@ -99,8 +101,8 @@ impl MeshStation {
     pub fn label(self) -> &'static str {
         match self {
             MeshStation::Hypervisor => "hypervisor",
-            MeshStation::Session => "master",
-            MeshStation::Subtask => "runner",
+            MeshStation::Session => "session",
+            MeshStation::Subtask => "subtask",
         }
     }
 }
@@ -147,6 +149,10 @@ mod tests {
             let back: AgentKind = serde_json::from_str(&s).unwrap();
             assert_eq!(back, *kind);
         }
+        assert_eq!(
+            serde_json::from_str::<AgentKind>("\"master\"").unwrap(),
+            AgentKind::Root
+        );
         for station in MeshStation::ALL {
             let s = serde_json::to_string(station).unwrap();
             let back: MeshStation = serde_json::from_str(&s).unwrap();

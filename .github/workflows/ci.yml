@@ -235,6 +235,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Build docs for the whole workspace; catches hard rustdoc failures.
       - run: cargo doc --workspace --no-deps --document-private-items --locked
+      # Zero-drift documentation governance verification (Protocol v5.0.0 / INV-TOOL-02)
+      - name: Documentation governance verification
+        run: bash scripts/check-governance.sh
+      # Architecture-profile ADR verification (INV-TEMP-03/04, INV-ARCH-01, INV-CORE-05)
+      - name: ADR governance verification
+        run: bash scripts/check-adr-governance.sh
 
   coverage:
     name: Coverage

@@ -123,17 +123,14 @@ impl AspectEngine {
 
     // Phase 5: Round EOL
 
-    /// Round-EOL digest maintenance (ADR-0193): the fifth aspect phase's
-    /// contract entry. Fires at round convergence; delegates to the shared
-    /// CAS routine (`Agent::spawn_eol_digest_maintenance`) — detached,
-    /// fail-open, anchor-throttled, single-flight. Never blocks the round
-    /// path; any failure keeps the previous digest.
+    /// Round-EOL hook (ADR-0183 phase 5): fires at round convergence.
     pub fn fire_round_eol(
         &self,
-        agent: &Arc<crate::Agent>,
-        session: Arc<muta_persistence::SessionStore>,
+        _agent: &Arc<crate::Agent>,
+        _session: Arc<muta_persistence::SessionStore>,
     ) {
-        agent.spawn_eol_digest_maintenance(session);
+        // Round convergence hook. Session titling runs concurrently on
+        // first-prompt admission, removing the legacy EOL digest requirement.
     }
 }
 

@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The minimal model seed for a fresh GitHub Copilot instance, before its
 /// first live discovery completes. A Copilot instance uses `discovery: true`
@@ -13,7 +13,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// `GET api.githubcopilot.com/models` at runtime — this seed only needs one
 /// universally available id so a brand-new instance activates without a 400.
 /// `gpt-4o-mini` is unlocked on every Copilot plan (incl. Free/Student).
-pub use muta_contracts::provider_presets::COPILOT_SEED_MODELS;
+pub use muta_contracts::model_providers::COPILOT_SEED_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -32,9 +32,9 @@ pub const MODELS: &[Model] = &[Model {
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::unsupported_prompt_cache,
-    id: "copilot-oauth",
+    id: "github-copilot",
     baselines: MODELS,
     base_url: "https://api.githubcopilot.com/chat/completions",
     user_agent: None,
@@ -46,8 +46,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // the client registry does not know is fitted with its advertised
     // capability metadata, mirroring the kimi-code flow.
     protocol: WireProtocol::OpenAiChatCompletions,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    fitting: true,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Copilot,
+    client_profile_sensitive: true,
     wire_overrides: &[],
     // Minimal seed: the id a fresh Copilot instance activates before the
     // first live discovery completes. `gpt-4o-mini` is universally

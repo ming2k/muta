@@ -3,7 +3,7 @@
 //! Dual-track execution model (ADR-0145):
 //! - **Deterministic Process Jobs**: Shell commands, long test runs, compilation, dev servers.
 //!   Managed at the OS level via `tokio::process`, 0 LLM token cost.
-//! - **Autonomous Sub-Runner Jobs**: Read-only exploration and analysis runners with isolated contexts.
+//! - **Autonomous Sub-Subagent Jobs**: Read-only exploration and analysis subagents with isolated contexts.
 //!
 //! Both tracks report into a unified lifecycle and event notification pipe.
 

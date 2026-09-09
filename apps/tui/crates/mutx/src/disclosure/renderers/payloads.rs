@@ -20,7 +20,7 @@ use crate::text_layout::{
 };
 use crate::tools::{DiffCache, DiffHunk, DiffOp, ResultKind};
 
-/// Build the summary line for a tool/runner step: an optional expand marker
+/// Build the summary line for a tool/subagent step: an optional expand marker
 /// followed by the summary text, padded to `full_width`.
 pub(crate) fn tool_summary_line(
     expand: &str,

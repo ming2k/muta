@@ -71,7 +71,7 @@ The optional `[master]` table.
 | `master.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
 | `master.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for an `execute_command` call it emits. Off by default: the execute_command schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the execute_command schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for delegated automatic flows where no human is reachable |
 | `master.skip_interactive_input` | `false` | Whether an interactive `execute_command` invocation (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as in delegated autonomous mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not put the master into delegated autonomous mode, so ordinary tool confirmations still apply |
-| `master.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature once it recurs enough times to reach `threshold` within the window. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is capped at its third occurrence (ADR-0148). Forced off for subordinate runners |
+| `master.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature once it recurs enough times to reach `threshold` within the window. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is capped at its third occurrence (ADR-0148). Forced off for subordinate subagents |
 | `master.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
 | `master.doom_guard.threshold` | `3` | Occurrences in-window before a repeat is blocked. `3` (ADR-0148): one same-signature re-run is tolerated — a transient retry, a re-run of the same test after an edit — and the second repeat is blocked. `2` restores the strict ADR-0113 first-repeat block. Clamped to `>= 2` |
 
@@ -92,59 +92,99 @@ threshold = 3
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `default_connection` | `""` (empty) | Connection id for the **fresh-session default**: used at startup and updated by a `/models` switch so the next launch follows it; empty leaves the choice to the `/models` picker. A switch also pins the selection to the session so resume restores it |
+| `default_connection` | `""` (empty) | Connection **name** for the **fresh-session default**: used at startup and updated by a `/models` switch so the next launch follows it; empty leaves the choice to the `/models` picker. A switch also pins the selection to the session so resume restores it |
 | `default_model` | `""` (empty) | Active model id within the selected connection, written by a `/models` switch or add-connection flow alongside `default_connection`. |
 | `connection_retry_max_attempts` | `30` | Max retry attempts for a transient connection error within a turn (clamped to 1..60) |
 | `connection_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
 | `connection_retry_max_ms` | `10000` | Cap on the backoff delay, in milliseconds |
 
-## Connection instances and credentials
+## Connections and credentials
 
-Connection *instances* (the "who I connect to" records) live in the state store
+Connections (the "who I connect to" records) live in the state store
 `$XDG_STATE_HOME/muta/connections.toml`; secrets in
 `$XDG_CONFIG_HOME/muta/credentials.toml`; `config.toml` holds only the
-*selection* (`default_connection` / `default_model`, which reference instance
-ids). The routes a model actually travels (per-model protocol/dialect/endpoint/
-reasoning) are **derived at runtime** from each instance's preset and the
-discovery cache — never persisted, so two instances of the same preset can
-never duplicate or drift a route set. See [Providers](providers.md) for the
+*selection* (`default_connection` / `default_model`, which reference connection
+names). The routes a model actually travels (per-model protocol/dialect/endpoint/
+reasoning) are **derived at runtime** from each connection's model provider and
+the discovery cache — never persisted, so two connections to the same provider
+can never duplicate or drift a route set. See [Providers](providers.md) for the
 matrix, [Paths](paths.md) for the files, and [Add a provider](../how-to/add-a-provider.md)
 for the full workflow.
 
-An instance is declared as one `[[connections]]` table in `connections.toml`:
+A connection is declared as one `[[connections]]` table in `connections.toml`.
+`name` is the connection's identity and `provider` is required; it must name a
+registered model provider (ADR-0201):
 
 ```toml
 [[connections]]
-id = "acme"
-name = "Acme Relay"          # display name; defaults to the id
+name = "acme"                # identity; unique, compared case-insensitively
+provider = "custom"          # any id in muta_contracts::model_providers::MODEL_PROVIDER_IDS
 auth = "ApiKey"              # ApiKey | XaiOAuth | ChatGptOAuth | CopilotOAuth | AntigravityOAuth
 # api_key_env = "ACME_API_KEY"  # optional env var holding the credential
 
-# Pure-custom instance only (no preset_id):
+# Optional overrides of the provider's defaults:
 protocol = "openai-chat-completions"
 # Also valid: openai-responses | anthropic-messages | google-generate-content
 base_url = "https://relay.example.com/v1/chat/completions"
-models = ["acme-7b", "acme-13b"]
+user_agent = "acme-client/1.0"
+
+# Optional connection-level model delta (narrowing and overrides only):
+models.include = ["acme-7b", "acme-13b"]
 ```
 
-The credential for an instance is stored once in `credentials.toml`, keyed by connection id:
+The credential for a connection is stored once in `credentials.toml`, keyed by
+connection name:
 
 ```toml
 [connections]
 acme = "sk-..."
 ```
 
-Resolution precedence is **`api_key_env` env var > `credentials.toml`** — an
-instance declares an optional env var *name*; when set and populated it wins.
+Resolution precedence is **`api_key_env` env var > `credentials.toml`** — a
+connection declares an optional env var *name*; when set and populated it wins.
 
-Multiple instances of the same preset are ordinary: each is its own
-`[[connections]]` row referencing the same `preset_id`, differing only in
-identity, credential, and overrides. The preset defines the routes once;
-instances never repeat them.
+Multiple connections to the same provider are ordinary: each is its own
+`[[connections]]` row with the same `provider`, differing only in name,
+credential, and overrides. The provider defines the model universe once;
+connections narrow it.
 
-| `favorites` | Default | Meaning |
+Renaming a connection rewrites `credentials.toml`, `auth.toml`, and
+`default_connection` in one atomic transaction (ADR-0201); historical session
+and telemetry records keep the name they ran under. Hand-editing `name` in
+`connections.toml` is equivalent to replacing the connection: the old
+credential becomes an orphan, the loader warns, and `muta auth set <name> <key>`
+repairs the pairing.
+
+| Key | Default | Meaning |
 |-----|---------|---------|
 | `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts into the second priority tier (below the currently-active pair) wherever it is served |
+
+## Model provider scope
+
+Provider-level model scoping lives in `$XDG_CONFIG_HOME/muta/model_providers.toml`,
+keyed by model provider id. It applies to every connection that points at that
+provider, because model existence and capability facts belong to the provider:
+
+```toml
+[model_providers.deepseek]
+models.include = [{ id = "deepseek-v4-preview", context_window = 1_000_000 }]
+models.exclude = ["deepseek-chat-deprecated"]
+
+[model_providers.deepseek.models.overrides."deepseek-v4-pro"]
+max_output_tokens = 32768
+```
+
+The effective model set and capabilities for a connection `c` to provider `p`
+resolve in this order (ADR-0199, ADR-0201):
+
+```text
+effective_models(c) = (Baseline(p) ∪ Include(p) ∪ Include(c)) ∖ Exclude(p) ∖ Exclude(c)
+capabilities(m)     = Overrides(c, m) ≺ Overrides(p, m) ≺ DiscoveryMetadata(c, m) ≺ Baseline(p, m)
+```
+
+A connection may narrow or override the resolved set but must not declare a
+model the provider excludes — except under `provider = "custom"`, whose model
+universe is open by definition.
 
 ## Permissions, command policy, and tool variants
 
@@ -213,7 +253,7 @@ silently.
 
 ## Per-model reasoning settings
 
-Reasoning controls are **per route** — one (instance, model) pair — not per
+Reasoning controls are **per route** — one (connection, model) pair — not per
 provider. `effort` is the reasoning-depth throttle; `thinking` is an
 Anthropic-only on/off switch. See [Reasoning effort](effort.md) for the full
 per-provider mapping and how a model's effective ladder resolves; this section
@@ -223,7 +263,7 @@ covers storage only.
 OpenAI (Responses and chat), Anthropic, xAI Grok, Kimi K3, DeepSeek, GLM-5.2,
 and Gemini. Valid values are clamped to the model's supported levels at
 request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
-GPT models expose a subset). Settings are stored per `(instance, model)` in
+GPT models expose a subset). Settings are stored per `(connection, model)` in
 `$XDG_STATE_HOME/muta/route_settings.json`, written by the model `e` editor in
 the picker — they are user-set route facts, not disposable discovery data or
 `config.toml` behavior.
@@ -244,7 +284,7 @@ Anthropic models show Effort plus the Thinking switch.
 The legacy `[model_reasoning."<model-id>"]` table and the flat
 `anthropic_effort` / `anthropic_thinking` fields are **deprecated** and no
 longer read; a one-shot migration folds their values into `route_settings` for
-the instances that serve the model.
+the connections that serve the model.
 
 ### Per-route prompt caching
 
@@ -405,7 +445,7 @@ configured here.
 | Table | Configures | Reference |
 |-------|------------|-----------|
 | `[skills]` | Skill sources, extra paths, disabled skills | [Skills](tools/skills.md) |
-| `[websearch]` | Web-search backend, proxy, timeout (API keys live in `credentials.toml [websearch]`, not here) | [Web tool](tools/web.md) |
+| `[web]` | Singleton search and reader providers, proxy, timeout, and SearXNG endpoint (provider-scoped credentials live in `credentials.toml [web.*]`) | [Web tools](tools/web.md) |
 | `[mcp.<server>]` | MCP servers (one table per server) | [MCP](tools/mcp.md) |
 
 ## Daemon

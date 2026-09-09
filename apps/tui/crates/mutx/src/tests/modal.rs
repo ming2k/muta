@@ -129,7 +129,7 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        preset_id: String::new(),
+        provider: String::new(),
         client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),
@@ -143,7 +143,7 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
     assert_eq!(app.picker_row_count(), providers);
 }
 
-/// Confirming the overlay dispatches exactly one `DeleteProvider` request and
+/// Confirming the overlay dispatches exactly one `DeleteConnection` request and
 /// tears the overlay down, so a stray second confirm cannot re-delete.
 #[test]
 fn confirm_provider_delete_dispatches_once_and_clears() {
@@ -155,8 +155,8 @@ fn confirm_provider_delete_dispatches_once_and_clears() {
         .confirm_provider_delete()
         .expect("confirm dispatches when an id is staged");
     assert!(
-        matches!(req, AgentRequest::DeleteProvider { ref id } if id == "doomed"),
-        "confirm dispatches a DeleteProvider request for the staged id"
+        matches!(req, AgentRequest::DeleteConnection { ref name } if name == "doomed"),
+        "confirm dispatches a DeleteConnection request for the staged name"
     );
     // Overlay torn down: no staged id remains.
     assert!(

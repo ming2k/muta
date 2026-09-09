@@ -256,7 +256,7 @@ pub(crate) fn provider_list_body(
 
         let mut row = ListRow::new(style, body_width).group(identity);
 
-        if let Some(label) = crate::providers::provider_type_label(&rp.preset_id) {
+        if let Some(label) = crate::providers::provider_type_label(&rp.provider) {
             row = row.group(RowGroup::midpoint().text(label, style.dim, 0));
         }
 
@@ -389,22 +389,15 @@ pub(crate) fn connection_detail_body(
         ])
     };
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Configuration
-    lines.push(Line::from(Span::styled("Configuration", header_style)));
-    lines.push(kv("ID", &detail.id));
-    lines.push(kv("Name", &detail.name));
-    if let Some(preset) = &detail.preset_label {
-        lines.push(kv("Preset", preset));
-    } else if let Some(pid) = &detail.preset_id {
-        lines.push(kv("Preset ID", pid));
-    } else {
-        lines.push(kv("Type", "Custom Connection"));
-    }
-    lines.push(kv("Protocol", &detail.protocol));
-    lines.push(kv("Base URL", &detail.base_url));
-    lines.push(kv("Auth Type", &detail.auth_type));
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(Span::styled("Configuration", header_style)),
+        kv("Name", &detail.name),
+        kv("Provider", &detail.provider_label),
+        kv("Provider ID", &detail.provider),
+        kv("Protocol", &detail.protocol),
+        kv("Base URL", &detail.base_url),
+        kv("Auth Type", &detail.auth_type),
+    ];
     if let Some(masked) = &detail.api_key_masked {
         lines.push(Line::from(vec![
             Span::styled(format!("{:<16}", "API Key"), label),

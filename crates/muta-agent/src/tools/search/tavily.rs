@@ -4,8 +4,7 @@
 
 use super::{ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
-
-const TAVILY_URL: &str = "https://api.tavily.com/search";
+use muta_contracts::TAVILY_SEARCH_ENDPOINT;
 
 pub(crate) struct TavilyProvider {
     pub api_key: Option<String>,
@@ -25,7 +24,7 @@ impl SearchProvider for TavilyProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let key = self
@@ -36,30 +35,33 @@ impl SearchProvider for TavilyProvider {
             .ok_or_else(|| {
                 "Tavily backend selected but `[websearch].tavily_api_key` is not set.".to_string()
             })?;
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_str(&format!("Bearer {key}"))
+                .map_err(|_| "Tavily key is not a valid header value".to_string())?,
+        );
         let response = client
-            .post(TAVILY_URL)
-            .bearer_auth(key)
-            .json(&serde_json::json!({
-                "query": query,
-                "search_depth": "advanced",
-                "include_answer": false,
-                "max_results": 10
-            }))
-            .send()
+            .post_json(
+                TAVILY_SEARCH_ENDPOINT,
+                headers,
+                &serde_json::json!({
+                    "query": query,
+                    "search_depth": "advanced",
+                    "include_answer": false,
+                    "max_results": 10
+                }),
+            )
             .await
             .map_err(|e| format!("Tavily request failed: {e}"))?;
-        let status = response.status();
+        let status = response.status;
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
             return Err(format!(
                 "Tavily returned HTTP {status} (check tavily_api_key): {}",
-                body.chars().take(300).collect::<String>()
+                response.body.chars().take(300).collect::<String>()
             ));
         }
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read Tavily response: {e}"))?;
+        let body = response.body;
         let json: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| format!("Tavily returned invalid JSON: {e}"))?;
         let results = json

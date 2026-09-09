@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use muta_contracts::{
-    InputRequest, PermissionRequest, ProviderPickerSnapshot, RunnerEvent, SessionOverview,
+    InputRequest, PermissionRequest, ProviderPickerSnapshot, SessionOverview, SubagentEvent,
     ToolStream, UserQuestionRequest,
 };
 
@@ -114,7 +114,7 @@ pub(crate) enum TranscriptEdit {
         duration_ms: u64,
         fallback: Option<TranscriptMessage>,
     },
-    /// An in-flight call was aborted; flip it (and nested runner children) to
+    /// An in-flight call was aborted; flip it (and nested subagent children) to
     /// Cancelled. `fallback` is the synthesized minimal cancelled step.
     ToolCancel {
         id: String,
@@ -123,10 +123,10 @@ pub(crate) enum TranscriptEdit {
     /// Live partial tool output (bash stdout) accumulating into the running
     /// step.
     ToolStream { id: String, stream: ToolStream },
-    /// A runner (sub-agent) event nested under a parent tool step.
-    RunnerEvent {
+    /// A subagent (sub-agent) event nested under a parent tool step.
+    SubagentEvent {
         parent_call_id: String,
-        event: RunnerEvent,
+        event: SubagentEvent,
     },
     /// A staged (optimistic) user message was admitted by the daemon:
     /// settle the newest entry with this correlation id, or append the
@@ -207,7 +207,7 @@ pub(crate) enum ChromeEdit {
     /// The round ended (interrupt / error): retire the live surface.
     RoundEnded,
     /// The turn finished; performance snapshot for the Activity modal.
-    TurnPerformance(muta_contracts::TurnPerformanceSnapshot),
+    TurnPerformance(Box<muta_contracts::TurnPerformanceSnapshot>),
 }
 
 /// Everything the response translator (and monitor client) can ask the event

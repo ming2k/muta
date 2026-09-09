@@ -630,7 +630,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 start_active_turn(
                     SideEnv {
                         side,
-                        master: agent,
+                        agent,
                         primary_session: session,
                         primary_lifecycle: lifecycle,
                         tx: resp_tx,
@@ -1236,8 +1236,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     // serializes) to disk, with a simulated `This is a test.`
                     // probe user message appended so the snapshot reflects
                     // "what the LLM context would look like if the user sent
-                    // this now". Out-of-band fields (nested runner children,
-                    // runner_meta, attribution, origin, hidden) are stripped via
+                    // this now". Out-of-band fields (nested subagent children,
+                    // subagent_meta, attribution, origin, hidden) are stripped via
                     // `Message::to_wire` — the dump shows what the model
                     // actually sees, not the internal `Message` struct that
                     // also carries durable-session sidecars. NO provider call
@@ -1436,7 +1436,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             start_active_turn(
                 SideEnv {
                     side,
-                    master: agent,
+                    agent,
                     primary_session: session,
                     primary_lifecycle: lifecycle,
                     tx: resp_tx,

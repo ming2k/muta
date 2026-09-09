@@ -28,6 +28,10 @@ pub struct TelemetryAttempt {
     pub cache_write_tokens: u64,
     pub performance: Option<RequestPerformance>,
     pub e2e_duration_ms: u64,
+    /// Epoch milliseconds when the attempt was dispatched. Lets the timeline
+    /// show what happened *before* dispatch (the TUI knows when Enter was
+    /// pressed; the ledger knows when the provider was called).
+    pub started_at_ms: u64,
 }
 
 impl TelemetryAttempt {
@@ -43,9 +47,16 @@ impl TelemetryAttempt {
         })
     }
 
-    /// Return a defensible token generation rate for this attempt.
-    pub fn preferred_tps(&self) -> Option<f64> {
-        self.snapshot().and_then(|s| s.preferred_tps())
+    /// The streaming rate for this attempt: its completion count over the
+    /// first→last token span.
+    pub fn stream_tps(&self) -> Option<f64> {
+        self.snapshot().and_then(|s| s.stream_tps())
+    }
+
+    /// The first→last token span, the denominator behind [`Self::stream_tps`].
+    pub fn stream_span_us(&self) -> Option<u64> {
+        self.performance
+            .and_then(|performance| performance.stream_us)
     }
 }
 
@@ -71,34 +82,30 @@ impl TelemetryRound {
         }
     }
 
-    /// Aggregate defensible rate for this round across all attempts.
-    pub fn preferred_tps(&self) -> Option<f64> {
-        let valid_attempts: Vec<_> = self
-            .attempts
-            .iter()
-            .filter_map(|a| a.preferred_tps().map(|tps| (a.completion_tokens, tps)))
-            .filter(|(toks, tps)| {
-                *toks > 0 && *tps > 0.0 && *tps <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS
-            })
-            .collect();
-
-        if valid_attempts.is_empty() {
+    /// The round's streaming rate: total tokens over total streamed seconds.
+    ///
+    /// Summing tokens and spans is the only aggregation that keeps the displayed
+    /// rate reproducible — averaging per-attempt rates would let a short
+    /// attempt outvote a long one.
+    pub fn stream_tps(&self) -> Option<f64> {
+        let mut tokens = 0u64;
+        let mut span_us = 0u64;
+        for attempt in &self.attempts {
+            let Some(span) = attempt.stream_span_us() else {
+                continue;
+            };
+            if attempt.stream_tps().is_none() {
+                continue;
+            }
+            tokens += attempt.completion_tokens;
+            span_us = span_us.saturating_add(span);
+        }
+        if tokens == 0 || span_us == 0 {
             return None;
         }
-
-        let total_tokens: u64 = valid_attempts.iter().map(|(toks, _)| *toks).sum();
-        let total_secs: f64 = valid_attempts
-            .iter()
-            .map(|(toks, tps)| *toks as f64 / *tps)
-            .sum();
-
-        if total_tokens > 0 && total_secs > 0.0 {
-            let tps = total_tokens as f64 / total_secs;
-            if tps.is_finite() && tps > 0.0 && tps <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS {
-                return Some(tps);
-            }
-        }
-        None
+        let tps = tokens as f64 * 1_000_000.0 / span_us as f64;
+        (tps.is_finite() && tps > 0.0 && tps <= muta_contracts::MAX_PLAUSIBLE_STREAM_TPS)
+            .then_some(tps)
     }
 }
 
@@ -135,6 +142,7 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
                 cache_write_tokens: cache_write,
                 performance: req.performance,
                 e2e_duration_ms,
+                started_at_ms: req.started_at_ms,
             };
 
             round_map.entry(req.key.round).or_default().push(attempt);

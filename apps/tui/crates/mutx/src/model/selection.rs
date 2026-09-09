@@ -120,6 +120,11 @@ pub enum SelectionState {
         anchor: SemanticCursor,
         head: SemanticCursor,
     },
+    /// Caret-based range selection in the live input box, spanning `[anchor_byte, head_byte)`.
+    InputRange {
+        anchor_byte: usize,
+        head_byte: usize,
+    },
 }
 
 impl SelectionState {
@@ -165,6 +170,17 @@ impl SelectionState {
                 SemanticCursor::new(*message_idx, *block_idx, 0),
                 SemanticCursor::new(*message_idx, *block_idx, usize::MAX),
             )),
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } => {
+                let lo = (*anchor_byte).min(*head_byte);
+                let hi = (*anchor_byte).max(*head_byte);
+                Some((
+                    SemanticCursor::new(crate::model::layout::INPUT_MSG_IDX, 0, lo),
+                    SemanticCursor::new(crate::model::layout::INPUT_MSG_IDX, 0, hi),
+                ))
+            }
             SelectionState::TableCell { .. } | SelectionState::None => None,
         }
     }
@@ -186,6 +202,10 @@ impl SelectionState {
         match self {
             SelectionState::None => false,
             SelectionState::Range { anchor, head } => anchor != head,
+            SelectionState::InputRange {
+                anchor_byte,
+                head_byte,
+            } => anchor_byte != head_byte,
             SelectionState::Block { .. } | SelectionState::TableCell { .. } => true,
         }
     }
@@ -205,7 +225,7 @@ pub fn get_selected_text<'a>(
     cell_info: Option<&CellDragInfo>,
 ) -> Option<String> {
     match state {
-        SelectionState::None => None,
+        SelectionState::None | SelectionState::InputRange { .. } => None,
         SelectionState::TableCell {
             message_idx,
             block_idx,
@@ -306,10 +326,25 @@ fn extract_within_message<'a>(
         };
 
         if byte_start < byte_end {
-            let slice = &text[byte_start..byte_end];
             if strip {
+                let slice = &text[byte_start..byte_end];
                 result.push_str(&strip_table_borders(slice));
+            } else if let Some(inline) = block.inline() {
+                let hidden = crate::text_layout::block_hidden_ranges(
+                    &inline.content,
+                    &inline.code_ranges,
+                    &inline.bold_ranges,
+                    &inline.math_ranges,
+                    &inline.link_ranges,
+                );
+                result.push_str(&crate::text_layout::strip_inline_markup_delimiters(
+                    &inline.content,
+                    byte_start,
+                    byte_end,
+                    &hidden,
+                ));
             } else {
+                let slice = &text[byte_start..byte_end];
                 result.push_str(slice);
             }
         }
@@ -708,6 +743,48 @@ mod tests {
         assert_eq!(
             get_selected_text(&sel, &messages, &|_, _| None, None),
             Some("world".to_string())
+        );
+    }
+
+    #[test]
+    fn test_range_selection_strips_markdown_formatting_delimiters() {
+        // "This is **bold text** and `code`."
+        // Bold: "bold text" is at bytes 10..19, delimiters are at 8..10 and 19..21.
+        // Selecting from visual start of 'bold' (byte 10) to visual end (byte 20, including trailing **)
+        // must yield clean "bold text" without the trailing '**' or leading '**'.
+        let msg = TranscriptMessage::new(Role::Assistant, "This is **bold text** and `code`.");
+        let messages = vec![msg];
+
+        // 1. Selecting the bold content exactly (as cursor_at resolves screen coordinates):
+        let sel_bold = SelectionState::Range {
+            anchor: SemanticCursor::new(0, 0, 10), // start of 'b'
+            head: SemanticCursor::new(0, 0, 20),   // lands on trailing '*'
+        };
+        assert_eq!(
+            get_selected_text(&sel_bold, &messages, &|_, _| None, None),
+            Some("bold text".to_string())
+        );
+
+        // 2. Selecting a substring within bold ("bold"):
+        let sel_sub = SelectionState::Range {
+            anchor: SemanticCursor::new(0, 0, 10), // start of 'b'
+            head: SemanticCursor::new(0, 0, 13),   // end of 'd'
+        };
+        assert_eq!(
+            get_selected_text(&sel_sub, &messages, &|_, _| None, None),
+            Some("bold".to_string())
+        );
+
+        // 3. Selecting the inline code span:
+        // "This is **bold text** and `code`."
+        // `code` is at 26..32. Content is 27..31.
+        let sel_code = SelectionState::Range {
+            anchor: SemanticCursor::new(0, 0, 27), // 'c'
+            head: SemanticCursor::new(0, 0, 31),   // trailing '`'
+        };
+        assert_eq!(
+            get_selected_text(&sel_code, &messages, &|_, _| None, None),
+            Some("code".to_string())
         );
     }
 

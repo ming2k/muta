@@ -28,9 +28,9 @@ pub(crate) fn resolve_focused_mut<'a>(
         return messages.get_mut(mi);
     };
     let task_idx = messages.iter().position(|message| {
-        message.is_runner_task() && message.tool_step_call_id() == Some(current.call_id.as_str())
+        message.is_subagent_task() && message.tool_step_call_id() == Some(current.call_id.as_str())
     })?;
-    messages[task_idx].runner_children_mut()?.get_mut(mi)
+    messages[task_idx].subagent_children_mut()?.get_mut(mi)
 }
 
 /// Iterate mutable messages in the currently focused view for tests.
@@ -43,11 +43,11 @@ pub(crate) fn focused_messages_mut<'a>(
         None => Box::new(messages.iter_mut()),
         Some(current) => {
             let task_idx = messages.iter().position(|message| {
-                message.is_runner_task()
+                message.is_subagent_task()
                     && message.tool_step_call_id() == Some(current.call_id.as_str())
             });
             match task_idx {
-                Some(idx) => match messages[idx].runner_children_mut() {
+                Some(idx) => match messages[idx].subagent_children_mut() {
                     Some(children) => Box::new(children.iter_mut()),
                     None => Box::new(std::iter::empty()),
                 },
@@ -65,6 +65,18 @@ pub(crate) fn extract_selection_text(
     layout_map: &crate::model::layout::LayoutMap,
     cell_info: Option<&CellDragInfo>,
 ) -> Option<String> {
+    if let SelectionState::InputRange {
+        anchor_byte,
+        head_byte,
+    } = sel
+    {
+        let s = (*anchor_byte).min(*head_byte);
+        let e = (*anchor_byte).max(*head_byte);
+        if s < e && e <= input.len() {
+            return Some(input[s..e].to_string());
+        }
+        return None;
+    }
     if let Some((start, end)) = sel.active_normalized_range() {
         if start.message_idx == crate::render::INPUT_MSG_IDX {
             let s = start.byte_offset;

@@ -1,7 +1,7 @@
 //! Live model-list discovery from each provider's API.
 //!
 //! A connection created from a preset can either mirror the
-//! preset's *compiled-in* model list ([`crate::registry::ProviderPresetSpec`])
+//! provider's *compiled-in* model list ([`crate::registry::ModelProviderSpec`])
 //! or fetch the list *live* from the provider's own `GET /models` endpoint.
 //! This module owns the live path: it speaks the three wire protocols
 //! (`openai` / `anthropic` / `google`), authenticates the same way a chat
@@ -138,8 +138,8 @@ pub enum ModelListError {
     /// empty or had an unexpected shape).
     BadEndpoint(String),
     /// The HTTP request failed (network/DNS/TLS). Carries the underlying
-    /// reqwest error for logging.
-    Http(reqwest::Error),
+    /// Transport failure, for logging.
+    Http(String),
     /// The API returned a non-2xx status. Carries the status code and body
     /// snippet so a misconfigured key surfaces a readable reason.
     Status(u16, String),
@@ -169,11 +169,10 @@ impl std::fmt::Display for ModelListError {
 }
 
 impl std::error::Error for ModelListError {
+    // The transport failure is a string now (ADR-0200); there is no inner
+    // error to hand out.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Http(e) => Some(e),
-            _ => None,
-        }
+        None
     }
 }
 
@@ -191,7 +190,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// entry, and GitHub Copilot (`api.githubcopilot.com`), advertising the same
 /// information nested under `capabilities.{limits,supports}` (see
 /// `discovered_model_from_entry`). Consumers decide per template whether
-/// these hints may be trusted (see `ProviderPresetSpec::fitting`).
+/// these hints may be trusted (see `ModelProviderSpec::fitting`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveredModel {
     pub id: String,
@@ -262,6 +261,21 @@ impl DiscoveredModel {
             }),
         }
     }
+}
+
+/// Append `key=value` pairs to a URL, percent-encoding as needed.
+fn append_query(url: &str, params: &[(&str, &str)]) -> String {
+    let mut out = String::from(url);
+    out.push(if out.contains('?') { '&' } else { '?' });
+    for (index, (name, value)) in params.iter().enumerate() {
+        if index > 0 {
+            out.push('&');
+        }
+        out.push_str(&crate::http::encode_component(name));
+        out.push('=');
+        out.push_str(&crate::http::encode_component(value));
+    }
+    out
 }
 
 /// Derive the `GET /models` endpoint from a chat endpoint base URL.
@@ -358,117 +372,127 @@ pub async fn discover_models(
     let endpoint = models_endpoint_for(req.protocol, req.base_url)?;
     let user_agent = req.user_agent.unwrap_or(crate::MUTA_USER_AGENT);
 
-    let client = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(ModelListError::Http)?;
+    let client = crate::http::Http::new(REQUEST_TIMEOUT).map_err(ModelListError::Http)?;
 
     let response = match req.protocol {
         DiscoveryProtocol::OpenAi => {
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
-            let mut builder = client.get(&endpoint);
+            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+                .header("user-agent", user_agent);
             if !req.api_key.expose_secret().trim().is_empty() {
-                builder = builder.bearer_auth(req.api_key.expose_secret());
+                request = request.header(
+                    "authorization",
+                    format!("Bearer {}", req.api_key.expose_secret()),
+                );
             }
             if let Some(etag) = options.etag {
-                builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);
+                request = request.header("if-none-match", etag);
             }
             for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
+                request = request.header(name, *value);
             }
-            builder.send().await.map_err(ModelListError::Http)?
+            client.send(request).await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::Codex => {
             // ChatGPT Codex models catalog: requires client_version query param,
             // originator header, and optional ChatGPT-Account-Id header.
-            let mut builder = client
-                .get(&endpoint)
-                .query(&[(
+            let endpoint = append_query(
+                &endpoint,
+                &[(
                     "client_version",
                     muta_contracts::client_identity::CODEX_VERSION,
-                )])
+                )],
+            );
+            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+                .header("user-agent", user_agent)
                 .header("originator", "codex_cli_rs");
             if !req.api_key.expose_secret().trim().is_empty() {
-                builder = builder.bearer_auth(req.api_key.expose_secret());
+                request = request.header(
+                    "authorization",
+                    format!("Bearer {}", req.api_key.expose_secret()),
+                );
             }
             if let Some(account_id) = req.account_id {
-                builder = builder.header("ChatGPT-Account-Id", account_id);
+                request = request.header("chatgpt-account-id", account_id);
             }
             if let Some(etag) = options.etag {
-                builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);
+                request = request.header("if-none-match", etag);
             }
             for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
+                request = request.header(name, *value);
             }
-            builder.send().await.map_err(ModelListError::Http)?
+            client.send(request).await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::Anthropic => {
             // Anthropic auth: x-api-key + the pinned API version. The version
             // header is mandatory on every Anthropic request including the
             // models list endpoint.
-            let mut builder = client
-                .get(&endpoint)
+            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+                .header("user-agent", user_agent)
                 .header("x-api-key", req.api_key.expose_secret())
                 .header("anthropic-version", anthropic_version());
             if req.api_key.expose_secret().trim().is_empty() {
                 // A keyless request still sends the headers (harmless) but
                 // most Anthropic relays require a key; the snapshot fallback
                 // covers the keyless-misconfigured case.
-                builder = builder.header("x-api-key", "");
+                request = request.header("x-api-key", "");
             }
             for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
+                request = request.header(name, *value);
             }
-            builder.send().await.map_err(ModelListError::Http)?
+            client.send(request).await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::GoogleCloudCode => {
-            let mut builder = client
-                .post(&endpoint)
+            let mut request = crate::http::Request::new(muta_net::Method::POST, &endpoint)
+                .header("user-agent", user_agent)
                 .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
                 .json(&serde_json::json!({ "project": "" }));
             if !req.api_key.expose_secret().trim().is_empty() {
-                builder = builder.bearer_auth(req.api_key.expose_secret());
+                request = request.header(
+                    "authorization",
+                    format!("Bearer {}", req.api_key.expose_secret()),
+                );
             }
             for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
+                request = request.header(name, *value);
             }
-            builder.send().await.map_err(ModelListError::Http)?
+            client.send(request).await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::Google => {
             // Google auth: the key is a query param, never a header. A keyless
             // request omits it entirely (Google rejects keyless, but a relay
             // might not require it).
-            let mut builder = client.get(&endpoint);
-            if !req.api_key.expose_secret().trim().is_empty() {
-                builder = builder.query(&[("key", req.api_key.expose_secret())]);
-            }
+            let endpoint = if req.api_key.expose_secret().trim().is_empty() {
+                endpoint.clone()
+            } else {
+                append_query(&endpoint, &[("key", req.api_key.expose_secret())])
+            };
+            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+                .header("user-agent", user_agent);
             for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
+                request = request.header(name, *value);
             }
-            builder.send().await.map_err(ModelListError::Http)?
+            client.send(request).await.map_err(ModelListError::Http)?
         }
     };
 
-    let status = response.status();
+    let status = response.status;
     let response_etag = response
-        .headers()
-        .get(reqwest::header::ETAG)
+        .headers
+        .get("etag")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    if status == reqwest::StatusCode::NOT_MODIFIED {
+    if status == http::StatusCode::NOT_MODIFIED {
         return Ok(ModelDiscoveryUpdate::NotModified {
             etag: response_etag.or_else(|| options.etag.map(str::to_string)),
         });
     }
     if !status.is_success() {
-        let code = status.as_u16();
-        let body = response.text().await.unwrap_or_default();
-        return Err(ModelListError::Status(code, body));
+        return Err(ModelListError::Status(status.as_u16(), response.body));
     }
 
-    let body = response.text().await.map_err(ModelListError::Http)?;
+    let body = response.body;
     let json: Value = serde_json::from_str(&body)
         .map_err(|e| ModelListError::Parse(format!("response is not valid JSON: {e}")))?;
 

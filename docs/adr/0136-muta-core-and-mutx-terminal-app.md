@@ -100,5 +100,5 @@ make new architecture documentation ambiguous.
 - [Crate layering](../explanation/crate-layering.md)
 - [Instance paths](../reference/paths.md)
 - [ADR-0098](0098-crate-renames-and-library-extractions.md)
-- [ADR-0102](0102-unified-binary-and-runtime-rename.md)
+- [ADR-0102](archive/0102-unified-binary-and-runtime-rename.md)
 - [ADR-0105](0105-one-port-two-protocols.md)

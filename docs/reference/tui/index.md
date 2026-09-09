@@ -27,7 +27,7 @@ mapping, driving the view layer through the borrowed `TranscriptProps` seam.
 └──────────────────────────────────────────────────────────┘
 ```
 
-See [layout.md](layout.md) for the footer stack, the envoy zoom view,
+See [layout.md](layout.md) for the footer stack, the subagent zoom view,
 the modal overlay mode, chrome hiding, and the full measurements table.
 
 ## Transcript focus
@@ -68,7 +68,7 @@ recall (the same walk as `Alt+P`/`Alt+N`; ADR-0174/0176).
 | [Tool step](tool-step.md) | Expandable step for tool calls |
 | [Thinking step](thinking-step.md) | Expandable step for reasoning text |
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
-| [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
+| [Subagent view](subagent-view.md) | Inline subagent step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Queue bar](queue-bar.md) | One-row staged-outbox summary; busy `Enter` stages here; click to open the queue modal |
 | [Model bar](model-bar.md) | Ambient gauges: model name + reasoning tier + `@instance` · context usage · stream rate |
@@ -104,7 +104,7 @@ ADR-0079; paths below are relative to that directory.
 | `text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
 | `message_body.rs` | `draw_message_body` (markdown text, user panels, code blocks) |
 | `disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |
-| `disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
+| `disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and subagent step renderers |
 | `disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
 | `layout/` | Transcript arrangement strategies: `turn_band` (selected by `[tui] transcript_layout`) |
 | `tools/` | Per-tool-step presenters (`execute_command`, `edit`, `read`, `search`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |

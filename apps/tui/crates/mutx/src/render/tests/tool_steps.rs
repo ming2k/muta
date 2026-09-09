@@ -1,31 +1,31 @@
-//! Tool-step and disclosure rendering tests: sticky steps, diffs, matches, code content, ack detail lines, runner steps.
+//! Tool-step and disclosure rendering tests: sticky steps, diffs, matches, code content, ack detail lines, subagent steps.
 
 use super::*;
 
-/// Render both the compact Runner step (root view) and the zoomed-in
-/// Runner view with its page header, ensuring no layout panics.
-/// Visual verification (run with MUTA_VISUAL=1 --nocapture): an runner
+/// Render both the compact Subagent step (root view) and the zoomed-in
+/// Subagent view with its page header, ensuring no layout panics.
+/// Visual verification (run with MUTA_VISUAL=1 --nocapture): a subagent
 /// zoom view with two ReAct turns, each emitting a concurrent tool-call
 /// batch, groups into turn bands with flush same-turn calls and a blank
 /// line between turns — exactly like the main session.
 #[test]
-fn runner_view_groups_children_into_turn_bands() {
+fn subagent_view_groups_children_into_turn_bands() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);
     let mut task = TranscriptMessage::tool_step(
         "task_1",
-        "runner",
+        "spawn_agent",
         r#"{"description":"explore the codebase","prompt":"..."}"#,
     );
     let call =
-        |id: &str, name: &str, round: u64, turn: usize| muta_contracts::RunnerEvent::ToolCall {
+        |id: &str, name: &str, round: u64, turn: usize| muta_contracts::SubagentEvent::ToolCall {
             id: id.into(),
             name: name.into(),
             arguments: r#"{"p":"x"}"#.into(),
             round,
             turn,
         };
-    let result = |id: &str, name: &str| muta_contracts::RunnerEvent::ToolResult {
+    let result = |id: &str, name: &str| muta_contracts::SubagentEvent::ToolResult {
         id: id.into(),
         name: name.into(),
         output: "done".into(),
@@ -33,15 +33,15 @@ fn runner_view_groups_children_into_turn_bands() {
     };
     // Turn 1: a 3-call concurrent batch.
     for (id, name) in [("a", "read_text"), ("b", "search_text"), ("c", "list_dir")] {
-        task.push_runner_event(&call(id, name, 1, 0));
-        task.push_runner_event(&result(id, name));
+        task.push_subagent_event(&call(id, name, 1, 0));
+        task.push_subagent_event(&result(id, name));
     }
     // Turn 2: a 2-call concurrent batch.
     for (id, name) in [("d", "websearch"), ("e", "webfetch")] {
-        task.push_runner_event(&call(id, name, 1, 1));
-        task.push_runner_event(&result(id, name));
+        task.push_subagent_event(&call(id, name, 1, 1));
+        task.push_subagent_event(&result(id, name));
     }
-    let children = task.runner_children().unwrap().to_vec();
+    let children = task.subagent_children().unwrap().to_vec();
     terminal.draw(|f| {
         let mut layout_map = LayoutMap::new();
         let _ = draw_transcript(
@@ -65,7 +65,7 @@ fn runner_view_groups_children_into_turn_bands() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: Some(RunnerBarInfo {
+                subagent_bar: Some(SubagentBarInfo {
                     role: Some("explore".to_string()),
                     label: "the codebase".to_string(),
                     index: 1,
@@ -97,13 +97,13 @@ fn runner_view_groups_children_into_turn_bands() {
         })
         .collect();
     if std::env::var("MUTA_VISUAL").is_ok() {
-        eprintln!("\n┌─ Runner zoom (turn-banded) ─");
+        eprintln!("\n┌─ Subagent zoom (turn-banded) ─");
         for r in &rows {
             eprintln!("│{r}");
         }
         eprintln!("└────\n");
     }
-    // Two turn headers appear (turn 1 and turn 2 of the runner's round 1).
+    // Two turn headers appear (turn 1 and turn 2 of the subagent's round 1).
     let body = rows.join("\n");
     assert!(body.contains("turn 1"), "expected a `turn 1` band: {body}");
     assert!(body.contains("turn 2"), "expected a `turn 2` band: {body}");
@@ -123,17 +123,17 @@ fn runner_view_groups_children_into_turn_bands() {
 }
 
 #[test]
-fn runner_step_and_view_render_without_panicking() {
+fn subagent_step_and_view_render_without_panicking() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);
 
-    // Root view: a completed runner task renders as a compact step.
+    // Root view: a completed subagent task renders as a compact step.
     let mut task = TranscriptMessage::tool_step(
         "task_1",
-        "runner",
+        "spawn_agent",
         r#"{"description":"explore the codebase","prompt":"..."}"#,
     );
-    task.push_runner_event(&muta_contracts::RunnerEvent::ToolCall {
+    task.push_subagent_event(&muta_contracts::SubagentEvent::ToolCall {
         id: "inner".into(),
         name: "search_text".into(),
         arguments: r#"{"pattern":"foo"}"#.into(),
@@ -162,7 +162,7 @@ fn runner_step_and_view_render_without_panicking() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
-                activity: "running runner",
+                activity: "running subagent",
                 awaiting_permission: false,
                 spinner_phase: 0,
                 input: "",
@@ -174,7 +174,7 @@ fn runner_step_and_view_render_without_panicking() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -192,9 +192,9 @@ fn runner_step_and_view_render_without_panicking() {
         );
     });
 
-    // Zoomed-in Runner view: the task's children are the message stream
+    // Zoomed-in Subagent view: the task's children are the message stream
     // and the contextual header is shown on the first row.
-    let children = root_messages[1].runner_children().unwrap().to_vec();
+    let children = root_messages[1].subagent_children().unwrap().to_vec();
     terminal.draw(|f| {
         let mut layout_map = LayoutMap::new();
         let _ = draw_transcript(
@@ -218,7 +218,7 @@ fn runner_step_and_view_render_without_panicking() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: Some(RunnerBarInfo {
+                subagent_bar: Some(SubagentBarInfo {
                     role: Some("explore".to_string()),
                     label: "the codebase".to_string(),
                     index: 1,
@@ -254,15 +254,15 @@ fn runner_step_and_view_render_without_panicking() {
     // the whole row now paints `body`, asserted in view_header's tests.
     assert_eq!(
         head_row,
-        "   ENVOY [EXPLORE] the codebase                                         (1/2)   ",
-        "Runner identity, role tag, title and sibling index on the head row"
+        "   SUBAGENT [EXPLORE] the codebase                                      (1/2)   ",
+        "Subagent identity, role tag, title and sibling index on the head row"
     );
     // The permanent key legend occupies the last three terminal rows,
     // with the shortcuts on its middle row.
     let legend = row_text(28);
     assert!(
         legend.contains("Esc back") && legend.contains("[ prev") && legend.contains("] next"),
-        "Runner shortcuts pinned on the footer's middle row: {legend:?}"
+        "Subagent shortcuts pinned on the footer's middle row: {legend:?}"
     );
     assert!(
         row_text(27).trim().is_empty() && row_text(29).trim().is_empty(),
@@ -324,7 +324,7 @@ fn height_cache_skip_path_matches_full_layout() {
                         blocked: false,
                     },
                     persistence_health: None,
-                    runner_bar: None,
+                    subagent_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -433,7 +433,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
                         blocked: false,
                     },
                     persistence_health: None,
-                    runner_bar: None,
+                    subagent_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -531,7 +531,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -611,13 +611,13 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     );
 }
 
-/// The Runner page's row 2 never renders — its permanent footer already
+/// The Subagent page's row 2 never renders — its permanent footer already
 /// carries the same legend (ADR-0104), so a second copy one screen apart
 /// would be pure duplication.
 #[test]
-fn runner_view_omits_row2_entirely() {
+fn subagent_view_omits_row2_entirely() {
     let hints = ViewHints {
-        kind: ViewKind::Runner,
+        kind: ViewKind::Subagent,
         asides: None,
         interruptible: true,
         parent_note: "",
@@ -626,7 +626,7 @@ fn runner_view_omits_row2_entirely() {
     assert!(!hints.has_content());
     let terminal = render_full_view(80, 24, &[], Some(hints));
     let row1 = grid_row(&terminal, 1);
-    assert!(row1.trim().is_empty(), "row 2 blank on runner: {row1:?}");
+    assert!(row1.trim().is_empty(), "row 2 blank on subagent: {row1:?}");
 }
 
 /// A checklist/todo tool step rendered while an active selection spans the block
@@ -676,7 +676,7 @@ fn checklist_tool_step_renders_with_active_selection_without_panic() {
                         blocked: false,
                     },
                     persistence_health: None,
-                    runner_bar: None,
+                    subagent_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,

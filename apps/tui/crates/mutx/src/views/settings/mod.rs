@@ -4,7 +4,7 @@
 //! - [`appearance`]: Themes and palette swatches
 //! - [`transcript`]: Message boundaries, Turn Band layout, auto-scroll
 //! - [`behavior`]: Click-outside dismiss and mouse rules
-//! - [`web`]: Web Search and Web Fetch connection routing, proxy, timeout
+//! - [`web`]: singleton Web Search and Web Reader provider selection
 //! - [`system`]: Paths, runtime info, version
 
 pub mod appearance;
@@ -13,10 +13,7 @@ pub mod system;
 pub mod transcript;
 pub mod web;
 
-pub use web::{
-    build_add_web_connection_dropdown, build_websearch_provider_dropdown,
-    build_websearch_reader_dropdown,
-};
+pub use web::{build_websearch_provider_dropdown, build_websearch_reader_dropdown};
 
 use muta_contracts::ColorSchemeConfig;
 use mutx_engine::{
@@ -160,6 +157,7 @@ pub struct ConfigRects {
     pub area: Rect,
     pub category_body: Rect,
     pub detail_body: Rect,
+    pub selected_row_rect: Option<Rect>,
 }
 
 /// Properties passed to render the complete Settings View.
@@ -293,7 +291,7 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: SettingsProps<'_>) -> Co
     };
 
     let focused = props.focus == ConfigFocus::Detail;
-    match category {
+    let selected_row_rect = match category {
         ConfigCategory::Appearance => {
             appearance::draw_appearance_detail(frame, detail_inner_rect, &mut props, focused)
         }
@@ -312,15 +310,16 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: SettingsProps<'_>) -> Co
         ConfigCategory::System => {
             system::draw_system_detail(frame, detail_inner_rect, &mut props, focused)
         }
-    }
+    };
 
-    // 4. Bottom Footer (3-Row Runner-Style with raised background, centered flexible equal division)
+    // 4. Bottom Footer (3-Row Subagent-Style with raised background, centered flexible equal division)
     draw_footer(frame, footer_rect, props.focus, props.theme);
 
     ConfigRects {
         area,
         category_body: category_rect,
         detail_body: detail_rect,
+        selected_row_rect,
     }
 }
 
@@ -472,7 +471,7 @@ pub(super) fn render_scrollable(
     scroll: &mut usize,
     selected_line: Option<usize>,
     theme: &Theme,
-) {
+) -> Option<Rect> {
     let visible_rows = rect.height as usize;
     let content_len = lines.len();
 
@@ -493,6 +492,15 @@ pub(super) fn render_scrollable(
     if max_scroll > 0 {
         draw_scrollbar(frame, rect, content_offset, max_scroll, theme);
     }
+
+    selected_line.and_then(|sel| {
+        if sel >= content_offset && sel < content_offset + visible_rows {
+            let row_y = rect.y + (sel - content_offset) as u16;
+            Some(Rect::new(rect.x, row_y, rect.width, 1))
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]

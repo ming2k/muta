@@ -398,7 +398,7 @@ mod tests {
         );
         assert_eq!(
             text(&left),
-            "Ctrl+T follow-up mode",
+            "Ctrl-t follow-up mode",
             "the hint must advertise the effective toggle binding, not the canonical"
         );
     }

@@ -61,7 +61,7 @@ they never read the same:
 |-----------|----------|
 | The viewed session's outbox is non-empty | Yes |
 | Empty outbox | No (the row returns to the transcript) |
-| Envoy zoom view | No |
+| Subagent zoom view | No |
 | Overlay modal open | No |
 
 ## Interaction

@@ -250,7 +250,7 @@ impl Tool for ExecuteCommandTool {
         &self,
         _call_id: &str,
         arguments: &str,
-        _on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
+        _on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
         stdin_policy: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {

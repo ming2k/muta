@@ -117,23 +117,23 @@ leave the round parked.
 ## Planning
 
 `ask_user` is `Read` access, so the main agent can use it freely to clarify
-requirements before or during a task. Inside an envoy it is gated by the
+requirements before or during a task. Inside a subagent it is gated by the
 profile's `allow_user_interaction` flag and the full-duplex channel
 ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)): the default
-`EXPLORE` profile is non-interactive, so a read-only research envoy that
+`EXPLORE` profile is non-interactive, so a read-only research subagent that
 needs clarification returns findings and assumptions in its written answer;
 the `CODE` profile opts in and its `ask_user` request/reply path works
 through the handle directly.
 
-## Envoys
+## Subagents
 
 `ask_user` also declares `requires_user`, so the built-in `EXPLORE` profile
-excludes it from envoys. An envoy has no user reachable — its
+excludes it from subagents. An subagent has no user reachable — its
 question-request events are dropped by the dispatch tool's forwarder — so
 admitting `ask_user` there would deadlock until the parent round is cancelled.
 Keeping the question with the parent (which *can* ask) is the contract; a
-envoy that hits ambiguity returns it in its written answer instead. See
-[Envoys → Tool admission](envoys.md#tool-admission) and
+subagent that hits ambiguity returns it in its written answer instead. See
+[Subagents → Tool admission](subagents.md#tool-admission) and
 [ADR-0011](../../adr/0011-subagent-profiles.md).
 
 ## See also

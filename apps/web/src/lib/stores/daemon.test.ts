@@ -426,36 +426,36 @@ describe("DaemonStore wire protocol", () => {
     });
   });
 
-  describe("runner flow", () => {
-    const runnerEvent = (ws: FakeWebSocket, event: unknown, parentCallId = "call-1") =>
-      roundEvent(ws, { Runner: { parent_call_id: parentCallId, event } });
+  describe("subagent flow", () => {
+    const subagentEvent = (ws: FakeWebSocket, event: unknown, parentCallId = "call-1") =>
+      roundEvent(ws, { SubagentStep: { parent_call_id: parentCallId, event } });
 
-    it("folds runner Started/Stream/Tool events into the parent tool", () => {
+    it("folds subagent Started/Stream/Tool events into the parent tool", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      runnerEvent(session, { Started: { profile: "explore" } });
-      runnerEvent(session, { StreamDelta: "partial " });
-      runnerEvent(session, { StreamDelta: "text" });
-      expect(store.liveTools["call-1"].runner?.streamingText).toBe("partial text");
+      subagentEvent(session, { Started: { profile: "explore" } });
+      subagentEvent(session, { StreamDelta: "partial " });
+      subagentEvent(session, { StreamDelta: "text" });
+      expect(store.liveTools["call-1"].subagent?.streamingText).toBe("partial text");
 
-      runnerEvent(session, { StreamEnd: "partial text" });
-      runnerEvent(session, {
+      subagentEvent(session, { StreamEnd: "partial text" });
+      subagentEvent(session, {
         ToolCall: { id: "e1", name: "read", arguments: "{}", round: 1, turn: 0 },
       });
-      runnerEvent(session, {
+      subagentEvent(session, {
         ToolResult: { id: "e1", name: "read", output: "file contents", duration_ms: 1 },
       });
-      runnerEvent(session, { Activity: "reading files" });
+      subagentEvent(session, { Activity: "reading files" });
 
-      const runner = store.liveTools["call-1"].runner;
-      expect(runner?.profile).toBe("explore");
-      expect(runner?.text).toBe("partial text");
-      expect(runner?.streamingText).toBe("");
-      expect(runner?.activity).toBe("reading files");
-      expect(runner?.tools).toHaveLength(1);
-      expect(runner?.tools[0]).toMatchObject({
+      const subagent = store.liveTools["call-1"].subagent;
+      expect(subagent?.profile).toBe("explore");
+      expect(subagent?.text).toBe("partial text");
+      expect(subagent?.streamingText).toBe("");
+      expect(subagent?.activity).toBe("reading files");
+      expect(subagent?.tools).toHaveLength(1);
+      expect(subagent?.tools[0]).toMatchObject({
         id: "e1",
         name: "read",
         status: "completed",
@@ -464,13 +464,13 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes runner PermissionRequest replies with parent_call_id", () => {
+    it("routes subagent PermissionRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      runnerEvent(session, { Started: { profile: "explore" } });
-      runnerEvent(session, {
+      subagentEvent(session, { Started: { profile: "explore" } });
+      subagentEvent(session, {
         PermissionRequest: {
           id: "p1",
           tool: "bash",
@@ -520,12 +520,12 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes runner UserQuestionRequest replies with parent_call_id", () => {
+    it("routes subagent UserQuestionRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      runnerEvent(session, {
+      subagentEvent(session, {
         UserQuestionRequest: {
           id: "q1",
           questions: [{ question: "?", options: [{ label: "a" }], multi_select: false }],
@@ -542,12 +542,12 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes runner InputRequest replies with parent_call_id", () => {
+    it("routes subagent InputRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      runnerEvent(session, {
+      subagentEvent(session, {
         StdinRequest: { id: "i1", command: "sudo x", prompt: "password", secret: true },
       });
       expect(store.pendingStdin?.request.id).toBe("i1");
@@ -744,37 +744,56 @@ describe("DaemonStore wire protocol", () => {
       session.message({
         type: "Response",
         WebSearchConfigSnapshot: {
+          revision: 4,
           provider: "exa",
-          fallback: "parallel",
           reader: "jina",
           timeout_secs: 20,
-          exa_api_key_set: false,
-          parallel_api_key_set: false,
-          tavily_api_key_set: true,
-          bocha_api_key_set: false,
-          jina_api_key_set: false,
+          search_credential: "OptionalMissing",
+          reader_credential: "Stored",
+          capabilities: [
+            {
+              axis: "Search",
+              id: "exa",
+              display_name: "Exa",
+              description: "Hosted semantic search",
+              credential: "Optional",
+              endpoint: "Fixed",
+              default_endpoint: "https://mcp.exa.ai",
+              default_env_var: "EXA_API_KEY",
+            },
+            {
+              axis: "Reader",
+              id: "jina",
+              display_name: "Jina Reader",
+              description: "Rendered page extraction to Markdown",
+              credential: "Optional",
+              endpoint: "Fixed",
+              default_endpoint: "https://r.jina.ai",
+              default_env_var: "JINA_API_KEY",
+            },
+          ],
         },
       });
       expect(store.websearchConfig?.provider).toBe("exa");
-      // Presence flags, never key material — the view has no such field.
-      expect(store.websearchConfig?.tavily_api_key_set).toBe(true);
+      // Readiness metadata, never key material — the view has no secret field.
+      expect(store.websearchConfig?.reader_credential).toBe("Stored");
+      expect(store.websearchConfig?.capabilities.map((item) => item.id)).toEqual(["exa", "jina"]);
 
       session.message({
         type: "Response",
         WebSearchConfigUpdated: {
+          revision: 5,
           provider: "tavily",
-          fallback: "duckduckgo",
           reader: "jina",
           timeout_secs: 30,
-          exa_api_key_set: false,
-          parallel_api_key_set: false,
-          tavily_api_key_set: true,
-          bocha_api_key_set: false,
-          jina_api_key_set: false,
+          search_credential: "Stored",
+          reader_credential: "Stored",
+          capabilities: [],
         },
       });
       expect(store.websearchConfig?.provider).toBe("tavily");
       expect(store.websearchConfig?.reader).toBe("jina");
+      expect(store.websearchConfig?.revision).toBe(5);
     });
 
     it("ConversationReplaced merges messages and commands sorted by timestamp", () => {

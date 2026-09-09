@@ -7,7 +7,7 @@
 //! Sections are categorized by [`InstructionTier`]:
 //! - Base (immutable persona, safety ethos, host environment)
 //! - Session (workspace rules, multi-root access, static tool categories)
-//! - Task (subagent mission, runner task framing)
+//! - Task (subagent mission, subagent task framing)
 //! - Ephemeral (turn-dynamic nudges)
 //!
 //! Ordering within each tier is governed by semantic [`InstructionOrder`] relations
@@ -28,11 +28,17 @@ use muta_contracts::{
 /// without risk of manual hasher drift.
 #[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
 pub struct SystemPromptContext {
-    /// The composed identity preamble sentence (name/mission/persona), empty
-    /// for tests / when no identity is set.
+    /// The composed identity line — name/mission, a persona override, or a
+    /// `/master` role directive. Empty when the embedding supplies no identity,
+    /// which is the shipped coding CLI's default.
     pub identity_preamble: String,
     /// Names of the tools admitted this turn (e.g. `["ask_user", ...]`).
     pub tool_names: Vec<String>,
+    /// Whether a subagent-dispatch tool (one whose
+    /// [`Tool::spawns_subagent`](muta_contracts::Tool::spawns_subagent) is
+    /// true) is admitted this turn. Capability-derived, so a renamed or new
+    /// dispatch tool needs no prompt-policy change.
+    pub has_subagent_tool: bool,
     /// Model-specific guidance from the resolved model.
     pub model_guidance: &'static str,
     /// Provider/protocol-specific prompt guidance from the active provider.
@@ -282,7 +288,15 @@ impl SystemPromptRegistry {
             }
         }
 
-        InstructionBundle::new(slices)
+        let mut bundle = InstructionBundle::new(slices);
+        // A section's leading `\n` is its paragraph break from whatever
+        // precedes it. The shipped agent carries no identity line, so the
+        // host-environment section can be first — drop its separator rather
+        // than opening the system message with a blank line.
+        if let Some(first) = bundle.slices.first_mut() {
+            first.content = first.content.trim_start_matches('\n').to_owned();
+        }
+        bundle
     }
 }
 
@@ -436,6 +450,23 @@ mod tests {
 
         let bundle = reg.build_bundle(&SystemPromptContext::empty());
         assert_eq!(bundle.render_combined(), "A\nB");
+    }
+
+    #[test]
+    fn first_section_loses_its_separator_newline() {
+        // Sections carry a leading `\n` as their paragraph break from whatever
+        // precedes them. When there is no identity line, the host section is
+        // first and must not open the message with a blank line.
+        let mut reg = SystemPromptRegistry::new();
+        reg.register(sec("system.leading", InstructionOrder::Head, "\n## Host"));
+        reg.register(sec(
+            "system.trailing",
+            InstructionOrder::Tail,
+            "\n## Persistence",
+        ));
+
+        let bundle = reg.build_bundle(&SystemPromptContext::empty());
+        assert_eq!(bundle.render_combined(), "## Host\n\n## Persistence");
     }
 
     #[test]

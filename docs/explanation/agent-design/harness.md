@@ -45,8 +45,8 @@ Tool schemas are request-scoped. Every ReAct turn, including the turn that
 carries tool results back upstream, sends the same complete schema set
 alongside the full message history. The provider is stateless across requests.
 
-The OpenAI-compatible providers declare schemas natively: the registry
-presets (`kimi-code`, `zai-code`) and the catalog-built `openai`/`deepseek`
+The OpenAI-compatible providers declare schemas natively: the model provider
+specs (`kimi-code`, `glm-cn`) and the catalog-built `openai`/`deepseek`
 multi-model entries all share one adapter, so they inherit native tool
 declaration. The Anthropic adapter declares Anthropic-format `tools`; the
 Google adapter converts the same schema set into Google
@@ -157,7 +157,7 @@ The guard is deterministic bookkeeping with no model call, but signature
 normalization is intentionally conservative: operations on the same target may
 collide even when secondary arguments differ. It is therefore an advanced,
 default-off policy configured through `[principal.nudge]`, not a routine TUI
-preference. Envoys force it off. See the
+preference. Subagents force it off. See the
 [Configuration Reference](../../reference/configuration.md#agent-behavior).
 
 ### Execution bounds
@@ -165,21 +165,21 @@ preference. Envoys force it off. See the
 The only execution cap is an explicit, opt-in `hard_stop_turns` (default **0**
 = off); a finite value is a user-declared budget and the sole thing that
 hard-stops a round. (The former `/review` on-demand diagnostic — a read-only
-reviewer envoy over the live transcript — has been retired.)
+reviewer subagent over the live transcript — has been retired.)
 
 These are execution bounds, not a security sandbox. Tool permission policy is
 a separate future layer.
 
 Write capability is enforced per-agent through a `WriteScope` boundary
 (ADR-0028, softened by ADR-0084): the main agent is unrestricted (the
-permission broker is still the interactive layer inside it); an envoy carries
+permission broker is still the interactive layer inside it); a subagent carries
 a scope resolved from its profile. A write tool whose target is outside that
 scope is *routed to the broker* for the user to decide when attended, and
 hard-blocked only in delegated mode, where no human can answer the prompt. All
-built-in envoy profiles carry a `Read` ceiling today, so this gate is
+built-in subagent profiles carry a `Read` ceiling today, so this gate is
 inactive in practice but available to future scoped-write roles. MCP servers
 with `read_only = false` declare `Write` and are subject to the same gate when
-run inside a scoped envoy.
+run inside a scoped subagent.
 
 ## Permission broker
 
@@ -230,7 +230,7 @@ branch snapshots under `sessions/<id>.json`:
 
 ## Context projection
 
-The runner projects the durable session into a model-visible window in three
+The subagent projects the durable session into a model-visible window in three
 pressure-driven layers, cheapest first. Every threshold is derived from the
 **active model's context window** — measured in
 tokens and re-seeded whenever the provider switches — so a 1M-token model is
@@ -252,7 +252,7 @@ exact keys and defaults live in the
 
 **Overflow recovery** is the harness's own reactive backstop and has no separate
 page. If a provider reports context overflow *before* any `ToolCall` event, the
-runner may compact and retry the same logical round once. Overflow *after* tool
+subagent may compact and retry the same logical round once. Overflow *after* tool
 activity is terminal, so tool side effects are never replayed.
 
 ## Extension surfaces

@@ -1,9 +1,8 @@
 # ADR-0113: Task Supervision and Idle Hosted-Session Suspension
 
-| Status   | Accepted |
-|----------|----------|
-| Date     | 2026-02-15 |
-| Supersedes | — |
+- **Status:** Accepted
+- **Date:** 2026-02-15
+- **Supersedes:** —
 
 ## Context
 

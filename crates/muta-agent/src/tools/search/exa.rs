@@ -7,7 +7,7 @@
 use super::{ProviderOutput, SearchProvider, mcp_tools_call};
 use async_trait::async_trait;
 
-const EXA_URL: &str = "https://mcp.exa.ai/mcp";
+use muta_contracts::EXA_SEARCH_ENDPOINT;
 const EXA_TOOL: &str = "web_search_exa";
 
 pub(crate) struct ExaProvider {
@@ -28,7 +28,7 @@ impl SearchProvider for ExaProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let url = endpoint_with_key(self.api_key.as_deref());
@@ -53,18 +53,14 @@ impl SearchProvider for ExaProvider {
 }
 
 /// Build the Exa MCP URL, appending `?exaApiKey=` when a key is configured.
-/// Uses reqwest's URL encoder so keys with special characters stay intact.
+/// The shared query encoder keeps keys with special characters intact.
 fn endpoint_with_key(api_key: Option<&str>) -> String {
-    #[allow(clippy::expect_used)] // EXA_URL is a compile-time constant; invalid URL is a build bug
-    let base = reqwest::Url::parse(EXA_URL).expect("hardcoded Exa URL is valid");
     let key = api_key.map(str::trim).filter(|s| !s.is_empty());
     match key {
-        Some(k) => {
-            let mut url = base;
-            url.query_pairs_mut().append_pair("exaApiKey", k);
-            url.into()
+        Some(key) => {
+            crate::tools::web::http::with_query(EXA_SEARCH_ENDPOINT, &[("exaApiKey", key)])
         }
-        None => base.into(),
+        None => EXA_SEARCH_ENDPOINT.to_string(),
     }
 }
 
@@ -74,7 +70,7 @@ mod tests {
 
     #[test]
     fn endpoint_omits_key_when_absent() {
-        assert_eq!(endpoint_with_key(None), EXA_URL);
+        assert_eq!(endpoint_with_key(None), EXA_SEARCH_ENDPOINT);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Model settings editor (effort + thinking toggles), preset chooser, and custom provider editor.
+//! Model settings editor (effort + thinking toggles), connection-template chooser, and custom provider editor.
 
 use mutx_engine::{
     Alignment, Frame, {Line, Span}, {Modifier, Style},
@@ -14,7 +14,7 @@ use crate::primitives::{
     modal_area, modal_chrome_rows, modal_frame, modal_header_parts, render_body,
     render_modal_footer,
 };
-use crate::providers::{CustomField, PROVIDER_PRESETS, ProviderPreset};
+use crate::providers::{ConnectionTemplate, CustomField, PROVIDER_PRESETS};
 use crate::render::Theme;
 
 // Effort selector (Faster⇄Smarter node slider)
@@ -406,6 +406,84 @@ pub fn draw_model_editor(
     area
 }
 
+/// Focused one-field editor used by singleton web provider setup.
+pub fn draw_web_value_editor(
+    frame: &mut Frame,
+    title: &str,
+    label: &str,
+    input: &str,
+    cursor_position: usize,
+    secret: bool,
+    theme: &Theme,
+) -> mutx_engine::Rect {
+    let geometry = ContentModalSpec::MODEL_EDITOR;
+    let desired = 1 + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
+    let modal = modal_frame(frame, area, theme, true, true);
+    modal_header_parts(
+        frame,
+        modal.header,
+        &breadcrumb_parts("Web tools", title),
+        theme,
+    );
+
+    let label_text = format!("{label:<10}");
+    let field_width = modal.body.width.saturating_sub(label_text.width() as u16) as usize;
+    let (offset, visible) = field_viewport(input, cursor_position, field_width);
+    let visible = if secret && !visible.is_empty() {
+        "•".repeat(visible.chars().count())
+    } else if visible.is_empty() {
+        if secret {
+            "enter token…".into()
+        } else {
+            "enter URL…".into()
+        }
+    } else {
+        visible
+    };
+    render_body(
+        frame,
+        modal.body,
+        vec![Line::from(vec![
+            Span::styled(
+                label_text.clone(),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                visible,
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            ),
+        ])],
+        &mut 0,
+        BodyRenderOptions::default(),
+        theme,
+    );
+    if let Some(footer) = modal.footer {
+        render_modal_footer(
+            frame,
+            footer,
+            &[
+                FooterHint::key_primary(crate::keymap::Key::ENTER, "save"),
+                FooterHint::key_always(crate::keymap::Key::ESC, "cancel"),
+            ],
+            theme,
+        );
+    }
+    if modal.body.width > 0 && modal.body.height > 0 {
+        let local_caret = usize::from(caret_column(input, cursor_position)).saturating_sub(offset);
+        let cursor_x = modal
+            .body
+            .x
+            .saturating_add(label_text.width() as u16)
+            .saturating_add(local_caret.min(field_width) as u16)
+            .min(modal.body.right().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, modal.body.y));
+    }
+    area
+}
+
 pub(crate) struct PresetRow {
     pub(crate) body_width: usize,
 }
@@ -417,12 +495,12 @@ impl PresetRow {
 
     pub(crate) fn build(
         &self,
-        preset: &ProviderPreset,
+        template: &ConnectionTemplate,
         focused: bool,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let style = choice_style(ChoiceTone::Filled, focused, theme);
-        let title = truncate_ellipsis(preset.display_title(), self.title_budget());
+        let title = truncate_ellipsis(template.display_title(), self.title_budget());
 
         let mut identity = RowGroup::fixed();
         for c in title.chars() {
@@ -450,7 +528,7 @@ impl PresetRow {
             &mut lines,
             &indent,
             &indent,
-            preset.description,
+            template.description,
             Style::default().bg(theme.panel()).fg(theme.dim()),
             self.body_width,
         );
@@ -458,7 +536,7 @@ impl PresetRow {
     }
 }
 
-/// Draw the preset chooser as the Connections list's Add preset connection child page.
+/// Draw the template chooser as the Connections list's Add connection child page.
 pub fn draw_preset_chooser(
     selected: usize,
     frame: &mut Frame,
@@ -469,7 +547,7 @@ pub fn draw_preset_chooser(
     let f = modal_frame(frame, area, theme, true, true);
 
     let header = hierarchical_breadcrumb(
-        &["Connections", "Add preset connection"],
+        &["Connections", "Add connection"],
         f.header.map(|h| h.width as usize).unwrap_or(80),
     );
     modal_header_parts(frame, f.header, &header, theme);
@@ -480,12 +558,12 @@ pub fn draw_preset_chooser(
 
     let mut body: Vec<Line> = Vec::new();
     let mut follow: Option<usize> = None;
-    for (i, preset) in PROVIDER_PRESETS.iter().enumerate() {
+    for (i, template) in PROVIDER_PRESETS.iter().enumerate() {
         let focused = i == selected;
         if focused {
             follow = Some(body.len());
         }
-        body.extend(policy.build(preset, focused, theme));
+        body.extend(policy.build(template, focused, theme));
     }
 
     render_body(
@@ -497,14 +575,14 @@ pub fn draw_preset_chooser(
         theme,
     );
 
-    let oauth_preset = PROVIDER_PRESETS
+    let oauth_template = PROVIDER_PRESETS
         .get(selected)
-        .is_some_and(|preset| preset.auth.is_oauth());
+        .is_some_and(|template| template.auth.is_oauth());
     let mut hints: Vec<FooterHint> = vec![
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::key_primary(crate::keymap::Key::ENTER, "select"),
     ];
-    if oauth_preset {
+    if oauth_template {
         hints.push(FooterHint::secondary("b", "browser"));
         hints.push(FooterHint::secondary("d", "device"));
     }
@@ -533,7 +611,7 @@ pub struct CustomEditorProps<'a> {
     pub cursor_position: usize,
 }
 
-/// Draw the provider editor: a per-preset form drawn from [`CustomEditorProps::fields`].
+/// Draw the provider editor: a per-template form drawn from [`CustomEditorProps::fields`].
 pub fn draw_custom_provider_editor(
     props: CustomEditorProps<'_>,
     frame: &mut Frame,
@@ -630,7 +708,7 @@ pub fn draw_custom_provider_editor(
     } else if custom {
         vec!["Connections", "Add custom connection"]
     } else {
-        vec!["Connections", "Add preset connection", title]
+        vec!["Connections", "Add connection", title]
     };
     let header = hierarchical_breadcrumb(&levels, header_width);
     modal_header_parts(frame, f.header, &header, theme);

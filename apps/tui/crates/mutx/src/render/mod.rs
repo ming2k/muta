@@ -20,11 +20,11 @@ pub(crate) use crate::design::{
     ACTIVITY_BAR_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP,
     CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT,
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
-    ENVOY_FOOTER_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS,
-    MODEL_BAR_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS,
-    TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
-    TRANSCRIPT_H_INSET,
+    FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, MODEL_BAR_ROWS,
+    PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, SUBAGENT_FOOTER_ROWS,
+    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
+    TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use crate::disclosure::{StickyStep, draw_sticky_summary_if_needed};
 /// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
@@ -52,7 +52,7 @@ pub use crate::theme::{COLOR_SCHEMES, Theme};
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_runner_footer,
+    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_subagent_footer,
     draw_view_header, draw_view_header_hints,
 };
 #[allow(unused_imports)]
@@ -151,7 +151,7 @@ pub struct TranscriptProps<'a> {
     /// Empty / "idle" means the status bar is hidden; every other value
     /// (including "responding") keeps the bar up for the full round lifecycle.
     pub activity: &'a str,
-    /// Transport-setback clause rendered beside (never inside) the master
+    /// Transport-setback clause rendered beside (never inside) the status
     /// label — e.g. `retry 2/8 (next in 4s)` while a provider retry backs
     /// off. Muted styling; first casualty under width pressure.
     pub backoff_clause: Option<&'a str>,
@@ -184,9 +184,9 @@ pub struct TranscriptProps<'a> {
     /// banner between the transcript gap and the queue bar; `Healthy` /
     /// `None` place nothing.
     pub persistence_health: Option<&'a muta_contracts::monitor::PersistenceHealth>,
-    /// When set, the view is zoomed into an runner task: a contextual page
+    /// When set, the view is zoomed into a subagent task: a contextual page
     /// header is rendered and `messages` is the focused task's child stream.
-    pub runner_bar: Option<RunnerBarInfo>,
+    pub subagent_bar: Option<SubagentBarInfo>,
     /// When set, the view is inside a `/btw` aside (ADR-0017/0103): the
     /// contextual view header carries the coarse primary-session status on
     /// row 1 and the aside's affordance legend on row 2.
@@ -502,18 +502,18 @@ impl BlockWrapCache {
     }
 }
 
-/// Page-header context for an Runner view (shown when zoomed into a task).
+/// Page-header context for a Subagent view (shown when zoomed into a task).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunnerBarInfo {
-    /// The runner's role (`explore` / `plan` / …), when the `Started` event
-    /// has identified it. Rendered as the `[ROLE]` tag between the `ENVOY`
+pub struct SubagentBarInfo {
+    /// The subagent's role (`explore` / `plan` / …), when the `Started` event
+    /// has identified it. Rendered as the `[ROLE]` tag between the `SUBAGENT`
     /// identity and the title; omitted before the role is known.
     pub role: Option<String>,
-    /// Title of the focused runner (its task description).
+    /// Title of the focused subagent (its task description).
     pub label: String,
-    /// 1-based index of the focused runner among its siblings.
+    /// 1-based index of the focused subagent among its siblings.
     pub index: usize,
-    /// Total number of sibling runner tasks.
+    /// Total number of sibling subagent tasks.
     pub total: usize,
 }
 
@@ -586,7 +586,7 @@ pub fn draw_transcript(
         chrome_hidden,
         queue_bar,
         persistence_health,
-        runner_bar,
+        subagent_bar,
         side_banner,
         page_hints,
         session_head,
@@ -637,14 +637,14 @@ pub fn draw_transcript(
 
     // Resolve every transcript page to one page-header model. The Main
     // session view always carries a head (its ambient session state — id
-    // tail, workspace, mode — replaces the old bottom status bar). Runner
-    // and `/btw` keep their contextual headers. Runner and `/btw` are
-    // mutually exclusive in the app; preferring Runner here is a defensive
+    // tail, workspace, mode — replaces the old bottom status bar). Subagent
+    // and `/btw` keep their contextual headers. Subagent and `/btw` are
+    // mutually exclusive in the app; preferring Subagent here is a defensive
     // fallback that keeps rendering deterministic if a malformed caller
     // supplies both.
-    let view_header = runner_bar
+    let view_header = subagent_bar
         .as_ref()
-        .map(ViewHeader::Runner)
+        .map(ViewHeader::Subagent)
         .or_else(|| side_banner.map(ViewHeader::Btw))
         .or_else(|| session_head.as_ref().map(ViewHeader::Session));
     // The row-2 affordance legend (ADR-0103 §3, demand-gated by ADR-0104).
@@ -663,14 +663,14 @@ pub fn draw_transcript(
     // has page-specific affordances to announce (ADR-0104; see
     // `ViewHints::has_content`) — the view-affordance legend on row 2, both
     // carved off with one layout split. Without a head, the standard
-    // viewport margins apply. The Runner page additionally owns the terminal's
+    // viewport margins apply. The Subagent page additionally owns the terminal's
     // last rows for its permanent key-legend footer (three background-painted
     // rows whose middle row carries the shortcuts), so the transcript ends
     // above that band.
-    let (head_rect, hints_rect, runner_footer_rect, viewport) = if view_header.is_some() {
+    let (head_rect, hints_rect, subagent_footer_rect, viewport) = if view_header.is_some() {
         let full = frame.area();
-        let footer_rows = if runner_bar.is_some() {
-            ENVOY_FOOTER_ROWS
+        let footer_rows = if subagent_bar.is_some() {
+            SUBAGENT_FOOTER_ROWS
         } else {
             0
         };
@@ -689,7 +689,7 @@ pub fn draw_transcript(
             .split(full);
         (
             // The head band spans the terminal's full width — it is top-level
-            // chrome pinned to the top edge, the counterpart of the Runner
+            // chrome pinned to the top edge, the counterpart of the Subagent
             // key-legend band at the bottom edge, not a transcript-area
             // component. Its *text* keeps the shared horizontal inset (applied
             // inside `draw_view_header` as pad spans) so it stays aligned with
@@ -712,10 +712,10 @@ pub fn draw_transcript(
 
     let size = viewport;
 
-    // When zoomed into an runner task, the footer (status bar, plan panel,
+    // When zoomed into a subagent task, the footer (status bar, plan panel,
     // input box, hint bar) is hidden: the task detail page is a read-only view
     // whose only chrome is its page header.
-    let in_runner = runner_bar.is_some();
+    let in_subagent = subagent_bar.is_some();
 
     // The activity bar (animated spinner + activity text) sits directly above the
     // input box, below the ambient todo/queue meta bars. It is shown for every
@@ -731,7 +731,7 @@ pub fn draw_transcript(
     // has nominally gone idle (e.g. right after an interrupt that rejects
     // permissions but before the stale round's terminal snapshot lands).
     let activity_active = !chrome_hidden
-        && !in_runner
+        && !in_subagent
         && (awaiting_permission || (!activity.is_empty() && activity != "idle"));
     // The activity bar is purely transient now: it shows only while a round is
     // active and hides when idle, so the row returns to the transcript (the
@@ -749,12 +749,12 @@ pub fn draw_transcript(
     // session reclaims the row; it appears the moment a message is staged
     // and stays up until the outbox drains, so the user always has a glanceable
     // surface while there is pending work.
-    let queue_row_needed = !chrome_hidden && !in_runner && !queue_bar.items.is_empty();
+    let queue_row_needed = !chrome_hidden && !in_subagent && !queue_bar.items.is_empty();
     let queue_height: u16 = if queue_row_needed { QUEUE_BAR_ROWS } else { 0 };
     // The durability-health banner (ADR-0196 D4) reserves a row only while
     // the writer is actually degraded; a healthy writer costs nothing.
     let persistence_health_row_needed = !chrome_hidden
-        && !in_runner
+        && !in_subagent
         && persistence_health.is_some_and(|health| !health.is_healthy());
     let persistence_health_height: u16 = if persistence_health_row_needed { 1 } else { 0 };
 
@@ -767,7 +767,7 @@ pub fn draw_transcript(
     let input_wrapped_lines = composer::input_row_count(input, input_text_width, byte_cursor);
     let desired_input_height = input_wrapped_lines as u16 + COMPOSER_VERTICAL_CHROME_ROWS;
     let max_input_height = (size.height / COMPOSER_MAX_HEIGHT_DIVISOR).max(COMPOSER_MIN_HEIGHT);
-    let input_box_height = if in_runner {
+    let input_box_height = if in_subagent {
         0
     } else {
         desired_input_height.min(max_input_height)
@@ -777,7 +777,7 @@ pub fn draw_transcript(
     // separation it needs (COMPOSER_HINT_GAP_ROWS = 0). It carries the
     // next Enter action plus ambient model/context info. Hidden alongside the
     // rest of the chrome while an overlay is open.
-    let hint_height: u16 = if chrome_hidden || in_runner {
+    let hint_height: u16 = if chrome_hidden || in_subagent {
         0
     } else {
         MODEL_BAR_ROWS
@@ -794,7 +794,7 @@ pub fn draw_transcript(
     // each row's rect, so the height arithmetic can no longer exist in two
     // copies that drift. Order, top → bottom: gap, queue bar,
     // activity bar, input box, hint bar.
-    let footer_rows: Vec<FooterRow> = if chrome_hidden || in_runner {
+    let footer_rows: Vec<FooterRow> = if chrome_hidden || in_subagent {
         Vec::new()
     } else {
         vec![
@@ -844,11 +844,11 @@ pub fn draw_transcript(
         draw_view_header_hints(frame, rect, hints, theme);
     }
 
-    // 1b. Runner key-legend footer — pinned to the terminal's last rows (its
+    // 1b. Subagent key-legend footer — pinned to the terminal's last rows (its
     // rect came out of the same layout split as the head). Painted on the
     // page-body background with the shortcuts on its middle row.
-    if let (Some(info), Some(rect)) = (runner_bar.as_ref(), runner_footer_rect) {
-        draw_runner_footer(frame, rect, info, theme);
+    if let (Some(info), Some(rect)) = (subagent_bar.as_ref(), subagent_footer_rect) {
+        draw_subagent_footer(frame, rect, info, theme);
     }
 
     // 2. Transcript History — the transcript area is the whole `chunks[0]`
@@ -876,13 +876,13 @@ pub fn draw_transcript(
     let mut sticky_steps: Vec<StickyStep> = Vec::new();
 
     // Empty-state replacement (ADR-0033): when the session has no messages and
-    // no runner/side view is open, the transcript is replaced by a centered
+    // no subagent/side view is open, the transcript is replaced by a centered
     // logo hero rather than rendering an empty stream. This is a component
     // substitution, not transcript content — the hero never participates in
     // scroll, selection, or attribution, so the whole message-rendering
     // pipeline (loop, badges, sticky pinning) is skipped. The footer below
     // renders exactly as in a live session.
-    let show_empty_state = messages.is_empty() && runner_bar.is_none() && side_banner.is_none();
+    let show_empty_state = messages.is_empty() && subagent_bar.is_none() && side_banner.is_none();
 
     if show_empty_state {
         empty_state::draw_empty_state(

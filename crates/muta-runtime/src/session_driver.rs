@@ -15,7 +15,7 @@ use crate::handlers_slash::SlashEnv;
 use crate::side::{SideEnv, resolve_turn_target};
 use muta_agent::catalog;
 use muta_agent::orchestration::{round_response, send_harness_state_for_session};
-use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
+use muta_agent::{Agent, RoundLifecycle, SubagentRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
@@ -170,10 +170,10 @@ pub struct SessionDriver {
     pub provider_holder: Arc<RwLock<Arc<dyn Provider>>>,
     /// Shared skills registry.
     pub skills_registry: Arc<SkillRegistry>,
-    /// Full-duplex runner registry (ADR-0029): maps the parent tool-call
+    /// Full-duplex subagent registry (ADR-0029): maps the parent tool-call
     /// id to the live child handle so a permission / ask_user reply can be
-    /// routed back down into the specific runner that surfaced it.
-    pub runner_registry: Arc<RunnerRegistry>,
+    /// routed back down into the specific subagent that surfaced it.
+    pub subagent_registry: Arc<SubagentRegistry>,
     /// Live MCP runtime: the connected server set, their tools, and status.
     /// Mutated by the `/mcp` modal (toggle / reconnect) and the periodic
     /// catalog refresh; read for the session-context snapshot's MCP pane.
@@ -217,12 +217,11 @@ pub struct SessionDriver {
     /// before falling back to the markdown-template path. Empty for `muta`
     /// today; populated by embeddings that need it.
     pub extra_commands: Arc<crate::slash_handler::SlashCommandRegistry>,
-    /// Shared hot-reloadable `[websearch]` configuration. The web tools hold
-    /// the same handle; `UpdateWebSearchConfig` and `/settings reload` write
-    /// into it so provider/reader/proxy changes take effect on the next tool
-    /// call without rebuilding the toolset.
-    pub websearch_shared: Arc<muta_contracts::SharedWebSearchConfig>,
-    /// Background job manager for asynchronous processes and sub-runners.
+    /// Shared hot-reloadable resolved `[web]` configuration. The web tools hold
+    /// the same handle; `UpdateWebSearchConfig` replaces one versioned snapshot
+    /// so changes take effect on the next call without rebuilding the toolset.
+    pub websearch_shared: muta_contracts::SharedWebConfig,
+    /// Background job manager for asynchronous processes and sub-subagents.
     pub background_jobs: crate::background_jobs::BackgroundJobManager,
 }
 
@@ -247,7 +246,7 @@ impl SessionDriver {
             mut provider_usage,
             provider_holder: provider_for_task,
             skills_registry,
-            runner_registry,
+            subagent_registry,
             mcp_runtime,
             workspace_security,
             shared_additional_roots,
@@ -568,7 +567,7 @@ impl SessionDriver {
                         crate::handlers_chat::start_queued_follow_up(
                             SideEnv {
                                 side: &side,
-                                master: &agent,
+                                agent: &agent,
                                 primary_session: &session,
                                 primary_lifecycle: &lifecycle,
                                 tx: &resp_tx,
@@ -622,7 +621,7 @@ impl SessionDriver {
                 } => {
                     crate::handlers_permission::reply(
                         &agent,
-                        &runner_registry,
+                        &subagent_registry,
                         &side,
                         &resp_tx,
                         request_id,
@@ -639,7 +638,7 @@ impl SessionDriver {
                     crate::handlers_permission::reply_question(
                         crate::handlers_permission::ReplyEnv {
                             agent: &agent,
-                            runner_registry: &runner_registry,
+                            subagent_registry: &subagent_registry,
                             side: &side,
                             resp_tx: &resp_tx,
                         },
@@ -657,7 +656,7 @@ impl SessionDriver {
                     crate::handlers_permission::reply_input(
                         crate::handlers_permission::ReplyEnv {
                             agent: &agent,
-                            runner_registry: &runner_registry,
+                            subagent_registry: &subagent_registry,
                             side: &side,
                             resp_tx: &resp_tx,
                         },
@@ -667,8 +666,8 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::SwitchProvider {
-                    provider_type,
+                AgentRequest::SwitchConnection {
+                    provider,
                     model,
                     api_key,
                     base_url,
@@ -682,22 +681,22 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        provider_type,
+                        provider,
                         model,
                         api_key,
                         base_url,
                     )
                     .await;
                 }
-                AgentRequest::AddProvider {
+                AgentRequest::AddConnection {
                     name,
+                    provider,
                     protocol,
                     base_url,
                     api_key,
                     user_agent,
                     models,
                     auth,
-                    preset_id,
                     client_identity,
                 } => {
                     let pending_authorization = pending_oauth_authorization.take();
@@ -710,39 +709,54 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        crate::handlers_provider::AddProviderParams {
+                        crate::handlers_provider::AddConnectionParams {
                             name,
+                            provider,
                             protocol,
                             base_url,
                             api_key,
                             user_agent,
                             models,
                             auth,
-                            preset_id,
                             client_identity,
                         },
                         pending_authorization,
                     )
                     .await;
                 }
-                AgentRequest::ConnectProvider { id, method } => {
+                AgentRequest::ConnectConnection { name, method } => {
                     if let Some(task) = active_oauth_task.take() {
                         task.abort();
                     }
                     let resp_tx_clone = resp_tx.clone();
-                    let provider_id = id.clone();
+                    let connection = name.clone();
                     active_oauth_task = Some(tokio::spawn(async move {
                         let success = crate::handlers_provider::run_oauth_for_connect(
                             &resp_tx_clone,
-                            provider_id.clone(),
+                            connection.clone(),
                             method,
                         )
                         .await;
                         OAuthResult::Connect {
-                            provider_id,
+                            provider_id: connection,
                             success,
                         }
                     }));
+                }
+                AgentRequest::RenameConnection { from, to } => {
+                    crate::handlers_provider::rename(
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
+                        from,
+                        to,
+                    )
+                    .await;
                 }
                 AgentRequest::AuthorizeOAuth { method, auth } => {
                     if let Some(task) = active_oauth_task.take() {
@@ -773,9 +787,9 @@ impl SessionDriver {
                         },
                     ));
                 }
-                AgentRequest::EditProvider {
-                    id,
+                AgentRequest::EditConnection {
                     name,
+                    provider,
                     protocol,
                     base_url,
                     api_key,
@@ -790,8 +804,8 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        id,
                         name,
+                        provider,
                         protocol,
                         base_url,
                         api_key,
@@ -844,8 +858,8 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::EditProviderModel {
-                    provider_id,
+                AgentRequest::EditConnectionModel {
+                    connection,
                     model,
                     effort,
                     thinking,
@@ -860,7 +874,7 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        provider_id,
+                        connection,
                         model,
                         effort,
                         thinking,
@@ -890,7 +904,7 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::DeleteProvider { id } => {
+                AgentRequest::DeleteConnection { name } => {
                     crate::handlers_provider::delete(
                         crate::handlers_provider::ProviderEnv {
                             config: &mut config,
@@ -900,7 +914,7 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        id,
+                        name,
                     )
                     .await;
                 }
@@ -1173,7 +1187,7 @@ impl SessionDriver {
                     crate::handlers_chat::chat(
                         SideEnv {
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             tx: &resp_tx,
@@ -1210,7 +1224,7 @@ impl SessionDriver {
                     crate::handlers_chat::follow_up(
                         SideEnv {
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             tx: &resp_tx,
@@ -1231,7 +1245,7 @@ impl SessionDriver {
                         SideEnv {
                             tx: &resp_tx,
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             config: &config,
@@ -1247,7 +1261,7 @@ impl SessionDriver {
                         SideEnv {
                             tx: &resp_tx,
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             config: &config,
@@ -1266,7 +1280,7 @@ impl SessionDriver {
                         SideEnv {
                             tx: &resp_tx,
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             config: &config,
@@ -1283,7 +1297,7 @@ impl SessionDriver {
                         SideEnv {
                             tx: &resp_tx,
                             side: &side,
-                            master: &agent,
+                            agent: &agent,
                             primary_session: &session,
                             primary_lifecycle: &lifecycle,
                             config: &config,
@@ -1331,7 +1345,7 @@ impl SessionDriver {
                     let _ = resp_tx.send(AgentResponse::TuiColorSchemeUpdated { name, custom });
                 }
                 AgentRequest::QueryWebSearchConfig => {
-                    crate::handlers_websearch::query(&config, &resp_tx);
+                    crate::handlers_websearch::query(&config, &websearch_shared, &resp_tx);
                 }
                 AgentRequest::UpdateWebSearchConfig(update) => {
                     crate::handlers_websearch::update(
@@ -1507,9 +1521,9 @@ struct CrashResidue {
 /// - Only the *highest* in-flight round is considered. The handler and
 ///   `start_resolved_turn` reject a point whose `round` no longer equals the
 ///   session's counter, so a lower one could never fire anyway.
-/// - The point names only the *master* actor's round. Runner (`task`)
-///   agents bill their own requests under `runner:<call-id>` against the same
-///   session; a child's key must not decide the master's resume point.
+/// - The point names only the *root* actor's round. Subagent (`task`)
+///   agents bill their own requests under `subagent:<call-id>` against the same
+///   session; a child's key must not decide the root agent's resume point.
 /// - `turns_committed` is recovered from the transcript itself: the round's
 ///   committed turns are the assistant messages after its opening prompt
 ///   (the last visible, non-echo user message — the transcript carries no
@@ -1650,8 +1664,8 @@ mod tests {
             domains: Vec::new()
         }));
         assert!(!round_owned_request(&AgentRequest::Interrupt));
-        assert!(!round_owned_request(&AgentRequest::SwitchProvider {
-            provider_type: "openai".to_string(),
+        assert!(!round_owned_request(&AgentRequest::SwitchConnection {
+            provider: "openai".to_string(),
             model: "gpt".to_string(),
             api_key: None,
             base_url: None,
@@ -1795,10 +1809,16 @@ mod tests {
         // reply must not be counted into round 2.
         store
             .set_request_usage_records(vec![
-                usage_record(&session_id, "master", 1, 1, RequestUsageStatus::Completed),
-                usage_record(&session_id, "master", 2, 1, RequestUsageStatus::Completed),
-                usage_record(&session_id, "master", 2, 2, RequestUsageStatus::InFlight),
-                usage_record(&session_id, "runner:c1", 2, 5, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "root", 1, 1, RequestUsageStatus::Completed),
+                usage_record(&session_id, "root", 2, 1, RequestUsageStatus::Completed),
+                usage_record(&session_id, "root", 2, 2, RequestUsageStatus::InFlight),
+                usage_record(
+                    &session_id,
+                    "subagent:c1",
+                    2,
+                    5,
+                    RequestUsageStatus::InFlight,
+                ),
             ])
             .await
             .unwrap();
@@ -1828,8 +1848,8 @@ mod tests {
             residue.interrupts[0].reason,
             muta_contracts::RoundInterruptReason::Terminated
         );
-        // The point names the highest in-flight round (not the runner's key),
-        // counts only committed master turns, and watermarks the durable
+        // The point names the highest in-flight round (not the subagent's key),
+        // counts only committed root turns, and watermarks the durable
         // window.
         let point = residue
             .retry_point
@@ -1854,11 +1874,11 @@ mod tests {
         let session_id = store.id().await;
         store
             .set_request_usage_records(vec![
-                usage_record(&session_id, "master", 1, 1, RequestUsageStatus::Completed),
+                usage_record(&session_id, "root", 1, 1, RequestUsageStatus::Completed),
                 // Round 2 still in flight — but round 3 has since completed,
                 // so 2 is history: the counter guard must retire it.
-                usage_record(&session_id, "master", 2, 1, RequestUsageStatus::InFlight),
-                usage_record(&session_id, "master", 3, 1, RequestUsageStatus::Completed),
+                usage_record(&session_id, "root", 2, 1, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "root", 3, 1, RequestUsageStatus::Completed),
             ])
             .await
             .unwrap();
@@ -1889,7 +1909,7 @@ mod tests {
         store
             .set_request_usage_records(vec![usage_record(
                 &session_id,
-                "master",
+                "root",
                 1,
                 1,
                 RequestUsageStatus::InFlight,
@@ -1930,7 +1950,7 @@ mod tests {
         store
             .set_request_usage_records(vec![usage_record(
                 &session_id,
-                "master",
+                "root",
                 2,
                 1,
                 RequestUsageStatus::InFlight,

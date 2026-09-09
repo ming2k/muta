@@ -19,7 +19,7 @@ Project and user-defined commands are covered under
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/unattended [on\|off]` | Toggle unattended execution mode (aliases: `/auto`, `/delegate`) |
 | `/confinement [on\|off]` | Toggle workspace filesystem confinement for this session (aliases: `/unconfine`, `/jail`) |
-| `/role <code\|architect\|reviewer\|security>` | Switch the agent role preset — changes persona and capability scope (alias: `/master`) |
+| `/role <code\|architect\|reviewer\|security>` | Switch the agent role preset — installs a role directive and narrows the capability scope (alias: `/master`) |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
@@ -29,7 +29,7 @@ Project and user-defined commands are covered under
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / suspend / kill / prompt / create, plus the console's `@N text` addressing and `/kill` `/interrupt` `/suspend` `/new` `/help` verbs (ADR-0096; layout per ADR-0097). `Esc` leaves the screen; `Ctrl+C` follows the app-wide double-press quit. `/host` is a hidden alias |
 | `/usage` | Open the usage-statistics overlay — daily token totals, per-model breakdown, and the recent request event log, aggregated over the durable store at `data/usage/` that survives session cleanup (ADR-0122) |
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
-| `/jobs [list\|kill id\|logs id]` | Inspect and manage background processes and sub-runners |
+| `/jobs [list\|kill id\|logs id]` | Inspect and manage background processes and subagents |
 | `/init [path]` | Initialize a `.muta/` config tree |
 | `/trust [all\|mcp\|skills\|hooks\|rules\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
 | `/untrust` | Revoke all project asset-domain grants and unload their contributions |
@@ -160,15 +160,15 @@ When confinement is disabled (`off`), file tools can read and write any path on 
 
 | Form | Effect |
 |------|--------|
-| `/role <role>` | Switch the active agent role preset (persona + capability scope) (alias: `/master`) |
+| `/role <role>` | Switch the active agent role preset (role directive + capability scope) (alias: `/master`) |
 | `/role` | List the available presets and the current one |
 
-Switches the session's agent preset at runtime (ADR-0053, updated by ADR-0144 and ADR-0183). Each preset is a value over the product's base identity — the mission/persona shifts, the product identity stays. It can also be triggered mid-message with the `@role:<role>` or `@master:<role>` mention:
+Switches the session's agent preset at runtime (ADR-0053, updated by ADR-0144 and ADR-0183). `code` restores the embedding's baseline identity — empty for the shipped CLI, whose prompt carries no self-description — while a focused role installs an imperative role directive and narrows the capability scope. It can also be triggered mid-message with the `@role:<role>` or `@master:<role>` mention:
 
 | Preset | Scope |
 |--------|-------|
-| `code` | The default developer agent — full capabilities, unrestricted writes |
-| `architect` | Design and review focus — full read, writes retained but the persona steers toward analysis and written rationale before changes |
+| `code` | The default developer agent — full capabilities, unrestricted writes, no role directive |
+| `architect` | Design and review focus — full read, writes retained but the directive steers toward analysis and written rationale before changes |
 | `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_text`, or `execute_command`) |
 | `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
 
@@ -257,8 +257,8 @@ and `/extensions` have been removed rather than retained as ambiguous aliases.
 
 The receiving agent gets the full chain of decisions and side effects: hidden
 and system messages are skipped (mirroring TUI rendering), reasoning traces
-are folded into collapsible `<details>` blocks, and runner transcripts
-nested under `runner` results are summarised by message counts instead of
+are folded into collapsible `<details>` blocks, and subagent transcripts
+nested under `subagent` results are summarised by message counts instead of
 dumped in full. If the system clipboard is unavailable, the export falls
 
 back to OSC52 or surfaces the underlying clipboard error.

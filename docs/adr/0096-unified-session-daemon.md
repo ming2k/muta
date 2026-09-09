@@ -169,5 +169,5 @@ backend is added.
   protocol the control plane extends.
 - [ADR-0094](0094-serve-as-host-verb.md) — the verb vocabulary; "daemon" is
   now the deployment reality this ADR makes true.
-- [ADR-0095](0095-standalone-session-mirroring.md) — superseded; its §
+- [ADR-0095](archive/0095-standalone-session-mirroring.md) — superseded; its §
   "follow-up: evaluate full unification" is this ADR.

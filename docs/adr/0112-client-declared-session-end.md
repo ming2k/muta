@@ -1,9 +1,8 @@
 # ADR-0112: Client-Declared Session End
 
-| Status   | Accepted |
-|----------|----------|
-| Date     | 2026-02-14 |
-| Supersedes | — |
+- **Status:** Accepted
+- **Date:** 2026-02-14
+- **Supersedes:** —
 
 ## Context
 

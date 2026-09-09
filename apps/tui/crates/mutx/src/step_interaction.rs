@@ -22,7 +22,7 @@ use crate::model::layout::{
 /// Which kind of step a pointer hit resolved to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StepKind {
-    /// A tool step or runner task summary.
+    /// A tool step or subagent task summary.
     ToolStep,
     /// A reasoning trace summary.
     Reasoning,
@@ -51,7 +51,7 @@ impl StepKind {
 /// message index and kind. Returns `None` for non-summary regions (prose,
 /// code blocks, table cells, the input box, …).
 ///
-/// Drives click routing — toggle / runner navigation / the detail overlay —
+/// Drives click routing — toggle / subagent navigation / the detail overlay —
 /// and the hover affordance, so every call site shares one notion of "what
 /// counts as a step summary".
 pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
@@ -99,7 +99,7 @@ pub fn default_tool_expanded(
         ToolStepStatus::Running => density || tool_default_expanded(config, name),
         ToolStepStatus::Failed | ToolStepStatus::Denied => true,
         ToolStepStatus::Cancelled => false,
-        // An interrupted runner preserved partial work, but the user stopped
+        // An interrupted subagent preserved partial work, but the user stopped
         // it deliberately — leave it collapsed (like Cancelled); the summary
         // line and the drill-in view surface the recovered findings.
         ToolStepStatus::Interrupted => false,

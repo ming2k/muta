@@ -105,7 +105,7 @@ mod snapshot_tests;
 pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, SelectionEdge};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{Modal, Recess, TelemetryTab};
-pub(crate) use providers::{CustomField, PROVIDER_PRESETS, preset_label_for};
+pub(crate) use providers::{CustomField, PROVIDER_PRESETS, provider_label_for};
 
 use muta_contracts::{
     AgentRequest, AgentResponse, LoopStatus, Message, ParentStatus, ProviderPickerSnapshot, Role,
@@ -254,9 +254,9 @@ fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
             event: RoundEvent::StreamDelta(_)
                 | RoundEvent::StreamReasoningDelta(_)
                 | RoundEvent::ToolStream { .. }
-                | RoundEvent::EnvoyCompat {
-                    event: muta_contracts::RunnerEvent::StreamDelta(_)
-                        | muta_contracts::RunnerEvent::StreamReasoningDelta(_),
+                | RoundEvent::SubagentStep {
+                    event: muta_contracts::SubagentEvent::StreamDelta(_)
+                        | muta_contracts::SubagentEvent::StreamReasoningDelta(_),
                     ..
                 },
             ..
@@ -593,7 +593,7 @@ pub async fn run_tui(
                             }
                             RoundEvent::TurnPerformance(performance) => {
                                 chrome!(event_loop::mutations::ChromeEdit::TurnPerformance(
-                                    performance,
+                                    Box::new(performance),
                                 ));
                             }
                             RoundEvent::SteerUnavailable { input_id } => {
@@ -1033,7 +1033,7 @@ pub async fn run_tui(
                             }
                             RoundEvent::ToolCancelled { id, .. } => {
                                 // An in-flight call was aborted: flip it (and any
-                                // nested runner children) to Cancelled.
+                                // nested subagent children) to Cancelled.
                                 let position = positions_by_session.get(&session_id).copied();
                                 let mut fallback =
                                     TranscriptMessage::tool_step(id.clone(), "tool", "{}");
@@ -1051,16 +1051,16 @@ pub async fn run_tui(
                             RoundEvent::ToolStream { id, stream } => {
                                 transcript!(E::ToolStream { id, stream });
                             }
-                            RoundEvent::EnvoyCompat {
+                            RoundEvent::SubagentStep {
                                 parent_call_id,
                                 event,
                             } => {
-                                // Full-duplex (ADR-0029): a runner's permission
+                                // Full-duplex (ADR-0029): a subagent's permission
                                 // broker or `ask_user` request bubbles up nested
                                 // under this `parent_call_id`; the reply is tagged
                                 // for down-routing into the child.
                                 match &event {
-                                    muta_contracts::RunnerEvent::PermissionRequest(req) => {
+                                    muta_contracts::SubagentEvent::PermissionRequest(req) => {
                                         mutations
                                             .send(M::QueuePermission {
                                                 request: req.clone(),
@@ -1074,7 +1074,7 @@ pub async fn run_tui(
                                             mutations.send(M::SetResponding(true)).await;
                                         }
                                     }
-                                    muta_contracts::RunnerEvent::UserQuestionRequest(req) => {
+                                    muta_contracts::SubagentEvent::UserQuestionRequest(req) => {
                                         mutations
                                             .send(M::QueueQuestion {
                                                 request: req.clone(),
@@ -1090,7 +1090,7 @@ pub async fn run_tui(
                                     }
                                     _ => {}
                                 }
-                                transcript!(E::RunnerEvent {
+                                transcript!(E::SubagentEvent {
                                     parent_call_id,
                                     event,
                                 });
@@ -1764,6 +1764,7 @@ pub async fn run_tui(
     }
 
     let mut app = App {
+        last_submit_ms: None,
         panels: crate::surfaces::PanelRegistry::new(),
         surfaces: match startup_overlay {
             StartupOverlay::SessionsPicker => {
@@ -1821,8 +1822,8 @@ pub async fn run_tui(
         pending_permissions: std::collections::VecDeque::new(),
         pending_questions: std::collections::VecDeque::new(),
         pending_inputs: std::collections::VecDeque::new(),
-        runner_permission_parent: HashMap::new(),
-        runner_question_parent: HashMap::new(),
+        subagent_permission_parent: HashMap::new(),
+        subagent_question_parent: HashMap::new(),
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         context_tokens_by_session: HashMap::new(),
         open_sessions_signal: false,
@@ -1872,6 +1873,7 @@ pub async fn run_tui(
         config_detail_scroll: 0,
         websearch_config: None,
         config_dropdown: None,
+        config_selected_rect: None,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
@@ -2012,7 +2014,7 @@ pub async fn run_tui(
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: muta_contracts::ConnectionAuth::ApiKey,
-        custom_preset_id: None,
+        custom_provider_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),

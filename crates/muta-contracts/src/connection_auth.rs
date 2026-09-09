@@ -92,7 +92,7 @@ impl ConnectionAuth {
 }
 
 /// Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
-/// ConnectProvider`] so the TUI picks the method, not the harness.
+/// ConnectConnection`] so the TUI picks the method, not the harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]

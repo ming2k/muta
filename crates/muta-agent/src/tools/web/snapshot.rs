@@ -30,8 +30,8 @@ pub enum WebSnapshotResult {
 }
 
 pub fn header_text(
-    headers: &reqwest::header::HeaderMap,
-    name: reqwest::header::HeaderName,
+    headers: &http::header::HeaderMap,
+    name: http::header::HeaderName,
 ) -> Option<String> {
     headers
         .get(name)
@@ -50,7 +50,7 @@ pub fn unix_now_ms() -> u64 {
 }
 
 pub async fn take_snapshot(
-    client: &reqwest::Client,
+    client: &crate::tools::web::http::WebHttp,
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
@@ -58,25 +58,25 @@ pub async fn take_snapshot(
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("URL must start with http:// or https://".to_string());
     }
-    let mut headers = reqwest::header::HeaderMap::new();
+    let mut headers = http::header::HeaderMap::new();
     if let Some(value) = etag.map(str::trim).filter(|value| !value.is_empty())
-        && let Ok(v) = reqwest::header::HeaderValue::from_str(value)
+        && let Ok(v) = http::header::HeaderValue::from_str(value)
     {
-        headers.insert(reqwest::header::IF_NONE_MATCH, v);
+        headers.insert(http::header::IF_NONE_MATCH, v);
     }
     if let Some(value) = last_modified
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        && let Ok(v) = reqwest::header::HeaderValue::from_str(value)
+        && let Ok(v) = http::header::HeaderValue::from_str(value)
     {
-        headers.insert(reqwest::header::IF_MODIFIED_SINCE, v);
+        headers.insert(http::header::IF_MODIFIED_SINCE, v);
     }
     let checked_at_ms = unix_now_ms();
     let response = guarded_get(client, url, headers).await?;
     let final_url = response.final_url;
     let headers = response.headers;
     let sent_etag = etag.map(str::trim).filter(|v| !v.is_empty());
-    let got_etag = header_text(&headers, reqwest::header::ETAG);
+    let got_etag = header_text(&headers, http::header::ETAG);
     if sent_etag.is_some() && sent_etag == got_etag.as_deref() {
         return Ok(WebSnapshotResult::NotModified { checked_at_ms });
     }
@@ -87,7 +87,7 @@ pub async fn take_snapshot(
             MAX_SNAPSHOT_BYTES / 1024 / 1024
         ));
     }
-    let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE)
+    let content_type = header_text(&headers, http::header::CONTENT_TYPE)
         .unwrap_or_default()
         .to_ascii_lowercase();
     let raw_text = String::from_utf8_lossy(&body);
@@ -110,8 +110,8 @@ pub async fn take_snapshot(
         text_preview,
         content_hash,
         content_type,
-        etag: header_text(&headers, reqwest::header::ETAG),
-        last_modified: header_text(&headers, reqwest::header::LAST_MODIFIED),
+        etag: header_text(&headers, http::header::ETAG),
+        last_modified: header_text(&headers, http::header::LAST_MODIFIED),
         body_bytes: body.len(),
         checked_at_ms,
     }))

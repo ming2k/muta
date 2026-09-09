@@ -1,9 +1,9 @@
-//! Provider modals state: preset chooser, custom editor fields, the OAuth flow, and delete staging.
+//! Provider modals state: template chooser, custom editor fields, the OAuth flow, and delete staging.
 
 use super::*;
 
 impl App {
-    /// Open the curated preset chooser — the "Add preset connection" entry
+    /// Open the curated template chooser — the "Add curated connection" entry
     /// point.
     /// The chat draft is already parked in `stashed_input` (the Connections list
     /// stashed it on open); the chooser is a pure list, so the composer line
@@ -21,11 +21,11 @@ impl App {
     }
 
     /// Open the standalone custom-connection editor directly from
-    /// Connections. Unlike a preset selection, this is a sibling branch of
-    /// the add flow, so the Connections panel stays below it on the transient
-    /// navigation stack.
+    /// Connections. Unlike a curated template selection, this is a sibling
+    /// branch of the add flow, so the Connections panel stays below it on the
+    /// transient navigation stack.
     pub fn open_custom_connection_editor(&mut self) {
-        self.seed_custom_provider_from_preset(&crate::providers::CUSTOM_CONNECTION);
+        self.seed_custom_provider_from_template(&crate::providers::CUSTOM_TEMPLATE);
         if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
             self.push_transient_surface(Modal::CustomProvider);
         } else {
@@ -35,7 +35,7 @@ impl App {
         self.set_cursor(0);
     }
 
-    /// Move the preset-chooser selection, wrapping at the ends.
+    /// Move the template-chooser selection, wrapping at the ends.
     pub fn move_preset_choice(&mut self, forward: bool) {
         let n = crate::PROVIDER_PRESETS.len();
         if n == 0 {
@@ -48,47 +48,47 @@ impl App {
         };
     }
 
-    /// Seed create-mode buffers from `preset` without opening the editor.
-    pub fn seed_custom_provider_from_preset(&mut self, preset: &ProviderPreset) {
+    /// Seed create-mode buffers from `template` without opening the editor.
+    pub fn seed_custom_provider_from_template(&mut self, template: &ConnectionTemplate) {
         self.custom_edit_id = None;
-        self.custom_fields = preset.fields();
+        self.custom_fields = template.fields();
         self.custom_field = 0;
-        self.custom_protocol_wire = preset.protocol.to_string();
-        self.custom_client_identity = preset
+        self.custom_protocol_wire = template.protocol.to_string();
+        self.custom_client_identity = template
             .user_agent
             .map(muta_contracts::ClientIdentity::from_user_agent)
             .unwrap_or(muta_contracts::ClientIdentity::Native);
-        self.custom_models = preset.models.iter().map(|m| m.to_string()).collect();
-        self.custom_url_hint = preset.url_hint.to_string();
-        self.custom_user_agent = preset.user_agent.map(str::to_string);
-        self.custom_auth = preset.auth;
-        self.custom_preset_id = Some(preset.id.to_string());
+        self.custom_models = template.models.iter().map(|m| m.to_string()).collect();
+        self.custom_url_hint = template.url_hint.to_string();
+        self.custom_user_agent = template.user_agent.map(str::to_string);
+        self.custom_auth = template.auth;
+        self.custom_provider_id = Some(template.id.to_string());
         self.custom_name.clear();
-        self.custom_base_url = preset.default_url.map(str::to_string).unwrap_or_default();
+        self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
         self.custom_model.clear();
     }
 
-    /// Open the provider editor seeded from `preset` (create mode) on the Name
+    /// Open the provider editor seeded from `template` (create mode) on the Name
     /// field. The composer line is borrowed for the focused Name field.
-    pub fn open_custom_provider_editor(&mut self, preset: &ProviderPreset) {
-        self.seed_custom_provider_from_preset(preset);
+    pub fn open_custom_provider_editor(&mut self, template: &ConnectionTemplate) {
+        self.seed_custom_provider_from_template(template);
         self.replace_transient_surface(Modal::CustomProvider);
         self.input.clear();
         self.set_cursor(0);
     }
 
-    /// Open the OAuth waiting sheet and seed create buffers from `preset`.
+    /// Open the OAuth waiting sheet and seed create buffers from `template`.
     pub fn begin_oauth_add(
         &mut self,
-        preset: &ProviderPreset,
+        template: &ConnectionTemplate,
         method: muta_contracts::LoginMethod,
     ) {
-        self.seed_custom_provider_from_preset(preset);
+        self.seed_custom_provider_from_template(template);
         self.awaiting_oauth_add = true;
         // The default message mirrors the selected login method: the device
         // flow prints a URL + user code,
-        // while the browser flow opens a loopback callback. The auth runner
+        // while the browser flow opens a loopback callback. The auth subagent
         // overwrites this with the live URL/code as soon as the device-code
         // request returns.
         self.oauth_pending_message = match method {
@@ -159,21 +159,26 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Open the provider editor in **edit** mode for an existing user provider,
+    /// Open the provider editor in **edit** mode for an existing connection,
     /// pre-filling its metadata. The visible fields depend on whether it is a
-    /// preset vs custom provider, and its auth type: a custom API-key connection shows
-    /// Name / Base URL / Token, a preset API-key connection shows Name / Token, and an
-    /// OAuth connection (ChatGPT/Codex, xAI, Copilot, Antigravity) shows Name only.
-    /// The Model field is always hidden (models are managed in the Models picker).
+    /// curated or `custom` connection, and its auth type: a custom API-key
+    /// connection shows Name / Base URL / Token, a curated API-key connection
+    /// shows Name / Token, and an OAuth connection (ChatGPT/Codex, xAI, Copilot,
+    /// Antigravity) shows Name only. The Model field is always hidden (models
+    /// are managed in the Models picker).
+    ///
+    /// `key` is the connection's identity (ADR-0201 INV-3) — the request that
+    /// saves this form is keyed by it, and a changed Name is submitted as the
+    /// separate `RenameConnection` transaction.
     #[allow(clippy::too_many_arguments)] // Editor state is seeded from one connection snapshot.
     pub fn open_edit_provider_editor(
         &mut self,
-        id: String,
+        key: String,
         name: String,
         protocol: String,
         base_url: String,
         auth: ConnectionAuth,
-        is_preset: bool,
+        curated: bool,
         client_identity: muta_contracts::ClientIdentity,
     ) {
         if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
@@ -181,8 +186,8 @@ impl App {
         } else {
             self.replace_transient_surface(Modal::CustomProvider);
         }
-        self.custom_edit_id = Some(id);
-        self.custom_fields = edit_fields(is_preset, auth);
+        self.custom_edit_id = Some(key);
+        self.custom_fields = edit_fields(curated, auth);
         self.custom_field = 0;
         self.custom_protocol_wire = protocol;
         self.custom_client_identity = client_identity;
@@ -190,10 +195,11 @@ impl App {
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
         self.custom_auth = auth;
-        // Edit mode never carries a preset id: edits to an existing connection
-        // are sent as `EditProvider`, which ignores the preset id anyway, and
-        // a stray id here must not leak into a later create flow.
-        self.custom_preset_id = None;
+        // Edit mode never carries a provider id: edits to an existing
+        // connection are sent as `EditConnection`, which is keyed by the
+        // connection name, and a stray id here must not leak into a later
+        // create flow.
+        self.custom_provider_id = None;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;
         self.custom_token.clear();
@@ -212,7 +218,7 @@ impl App {
         self.custom_fields.get(self.custom_field as usize).copied()
     }
 
-    /// Number of visible fields the editor exposes for the active preset.
+    /// Number of visible fields the editor exposes for the active template.
     fn custom_field_count(&self) -> u8 {
         self.custom_fields.len().max(1) as u8
     }
@@ -305,7 +311,7 @@ impl App {
     }
 
     /// Move the provider editor focus (`Tab` / `BackTab`), wrapping across the
-    /// active preset's visible fields.
+    /// active template's visible fields.
     pub fn cycle_custom_field(&mut self, forward: bool) {
         self.stash_custom_field();
         let n = self.custom_field_count();
@@ -386,7 +392,7 @@ impl App {
     }
 
     /// Whether the provider with this snapshot id is user-defined (not a
-    /// built-in preset). Drives the Connections `e`/`Shift+D` routing and the
+    /// curated provider). Drives the Connections `e`/`Shift+D` routing and the
     /// Models `d` (remove-model) gate.
     pub fn provider_is_custom(&self, id: &str) -> bool {
         self.provider_picker
@@ -409,11 +415,11 @@ impl App {
         }
     }
 
-    /// Stage the highlighted custom provider for deletion: open the confirm
-    /// overlay ([`App::pending_provider_delete`]) over the Connections list
-    /// without destroying anything yet. No-op for built-in providers or when an
-    /// overlay is already open (prevents re-staging). Driven by the `Shift+D`
-    /// → `DeleteProvider` arm.
+    /// Stage the highlighted user-defined connection for deletion: open the
+    /// confirm overlay ([`App::pending_provider_delete`]) over the Connections
+    /// list without destroying anything yet. No-op for curated providers or when
+    /// an overlay is already open (prevents re-staging). Driven by the `Shift+D`
+    /// → `DeleteProvider` input action.
     pub fn stage_provider_delete(&mut self) {
         if self.active_modal() != Modal::Connections || self.pending_provider_delete.is_some() {
             return;
@@ -427,17 +433,17 @@ impl App {
         }
     }
 
-    /// Confirm the staged deletion: dispatch `AgentRequest::DeleteProvider` for
-    /// the staged id and tear the overlay down. Returns `Some(request)` when a
-    /// deletion was staged (the harness applies it), `None` when the overlay
-    /// was not open. Driven by the overlay's Enter-on-Delete. Decrementing
-    /// `modal_index` mirrors the picker's other removal paths so the cursor
-    /// lands on a valid row once this row vanishes.
+    /// Confirm the staged deletion: dispatch `AgentRequest::DeleteConnection`
+    /// for the staged connection name and tear the overlay down. Returns
+    /// `Some(request)` when a deletion was staged (the harness applies it),
+    /// `None` when the overlay was not open. Driven by the overlay's
+    /// Enter-on-Delete. Decrementing `modal_index` mirrors the picker's other
+    /// removal paths so the cursor lands on a valid row once this row vanishes.
     pub fn confirm_provider_delete(&mut self) -> Option<AgentRequest> {
-        let id = self.pending_provider_delete.take()?;
+        let name = self.pending_provider_delete.take()?;
         self.modal_index = self.modal_index.saturating_sub(1);
         self.provider_delete_focus = ProviderDeleteChoice::default();
-        Some(AgentRequest::DeleteProvider { id })
+        Some(AgentRequest::DeleteConnection { name })
     }
 
     /// Cancel the staged deletion: drop the staged id and return keyboard

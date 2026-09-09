@@ -42,7 +42,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,

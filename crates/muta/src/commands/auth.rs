@@ -39,15 +39,15 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
             println!("{:-<24} {:-<24} {:-<16}", "", "", "");
 
             for p in &connections.connections {
-                let is_default = if config.default_connection == p.id {
+                let is_default = if config.default_connection.eq_ignore_ascii_case(&p.name) {
                     " [Active]"
                 } else {
                     ""
                 };
                 println!(
                     "{:<24} {:<24}{}",
-                    p.display_name(),
-                    instance_status(&connections, &creds, &p.id),
+                    p.name,
+                    instance_status(&connections, &creds, &p.name),
                     is_default
                 );
             }
@@ -56,44 +56,30 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
             let config = Config::load();
             let connections = Connections::load();
             let creds = Credentials::load();
-            let found = connections
-                .connections
-                .iter()
-                .find(|p| p.id.eq_ignore_ascii_case(&provider));
+            let found = connections.get(&provider);
             let Some(found) = found else {
                 return Err(format!("unknown connection '{provider}'").into());
             };
-            let status = instance_status(&connections, &creds, &found.id);
-            let is_default = if config.default_connection == found.id {
+            let status = instance_status(&connections, &creds, &found.name);
+            let is_default = if config.default_connection.eq_ignore_ascii_case(&found.name) {
                 " [Active]"
             } else {
                 ""
             };
-            println!(
-                "Connection '{}': {}{}",
-                found.display_name(),
-                status,
-                is_default
-            );
+            println!("Connection '{}': {}{}", found.name, status, is_default);
         }
         AuthAction::Set { provider, key } => {
-            let mut connections = Connections::load();
-            let Some(id) = connections
-                .connections
-                .iter()
-                .find(|p| p.id.eq_ignore_ascii_case(&provider))
-                .map(|p| p.id.clone())
-            else {
+            let connections = Connections::load();
+            let Some(name) = connections.get(&provider).map(|p| p.name.clone()) else {
                 return Err(format!(
                     "unknown connection '{provider}'. To configure a connection, use the TUI or add it to connections.toml."
                 )
                 .into());
             };
             let mut creds = Credentials::load();
-            creds.set_api_key(&id, Some(muta_contracts::SecretString::from(key)));
+            creds.set_api_key(&name, Some(muta_contracts::SecretString::from(key)));
             creds.save()?;
-            println!("Successfully set API key for connection '{id}'.");
-            let _ = &mut connections;
+            println!("Successfully set API key for connection '{name}'.");
         }
     }
     Ok(())

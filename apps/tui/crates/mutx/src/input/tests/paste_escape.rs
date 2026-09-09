@@ -170,11 +170,11 @@ fn escape_clears_focus() {
 }
 
 #[test]
-fn escape_exits_runner_view() {
+fn escape_exits_subagent_view() {
     let mut input = String::new();
     assert_eq!(
         key_in_view(KeyCode::Esc, true, &mut input),
-        InputAction::ExitRunner
+        InputAction::ExitSubagent
     );
     assert_eq!(
         key_in_view(KeyCode::Esc, false, &mut input),

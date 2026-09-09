@@ -11,7 +11,7 @@ provider channel. For provider availability and endpoints, see
 |--------|-------|-----------|-----------|
 | Per-provider baseline table | Model id | Every provider has no trusted value for a field | Baseline and offline fallback |
 | Fitted overlay | Unknown model id | A trusted provider discovered an id not in any baseline table | Bare-id fallback outside a channel |
-| Remote channel metadata | Provider instance and model | A trusted provider's live list explicitly supplies a field | Effective behavior for that channel |
+| Remote channel metadata | Connection and model | A trusted provider's live list explicitly supplies a field | Effective behavior for that channel |
 
 Each provider's baseline table lives beside its other registry data (e.g.
 `crates/muta-providers/src/registry/openai.rs`) and is submitted to
@@ -44,7 +44,7 @@ baseline so partial provider responses do not erase useful local knowledge.
 
 ## Discovery modes
 
-`model_source` applies only to a provider instance created from a built-in
+`model_source` applies only to a connection created from a built-in
 template.
 
 | Value | Behavior |

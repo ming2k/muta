@@ -10,7 +10,7 @@ For the TUI layout and component specifications, see [Terminal UI Reference](../
 
 Terminal AI chat interfaces face an inherent design tension:
 - On one side: a fast, fluid, readline-style conversational prompt where the user spends 95% of their time typing.
-- On the other side: a rich, addressable transcript populated with interactive tool invocations, expandable thinking traces, execution diffs, and sub-agent runners.
+- On the other side: a rich, addressable transcript populated with interactive tool invocations, expandable thinking traces, execution diffs, and sub-agent subagents.
 
 Traditional approaches either:
 1. **Flatten output into dumb terminal stream**: Output becomes dead characters; inspectability is lost.
@@ -75,7 +75,7 @@ Target navigation chords are strictly symmetric vectors:
 
 ### Invariant 4: Component Autonomy Protocol
 When a component holds target focus, it possesses autonomous control over its localized verbs:
-- `Enter`: Activates disclosure (expand/collapse) or enters zoomed sub-view (e.g. Runner task).
+- `Enter`: Activates disclosure (expand/collapse) or enters zoomed sub-view (e.g. Subagent task).
 - `y` / `c`: Copies the component's representative content (tool output, thinking trace, command result) to the clipboard with an immediate toast notification, without modifying the composer draft.
 - `Esc`: Yields control back to the composer.
 

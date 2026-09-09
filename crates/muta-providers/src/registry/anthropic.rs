@@ -6,7 +6,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// Per-model `max_tokens` for the Anthropic `/messages` surface. The Messages
 /// API requires `max_tokens`; capping the response at the model's registered
@@ -48,7 +48,7 @@ pub(crate) fn anthropic_model_max_tokens(model_id: &str) -> Option<u32> {
 /// so the same preset serves the official API or any Anthropic-compatible relay.
 /// Each id exists in the model registry, so its metadata (context window, output
 /// limit, capabilities) resolves there.
-pub use muta_contracts::provider_presets::ANTHROPIC_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::ANTHROPIC_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -157,7 +157,7 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
     }
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
     id: "anthropic",
     baselines: MODELS,
@@ -165,8 +165,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::AnthropicMessages,
     models: ANTHROPIC_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Anthropic)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Anthropic),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };
 

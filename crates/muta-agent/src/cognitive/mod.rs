@@ -1,4 +1,4 @@
-//! Cognitive execution engine: typed, resilient out-of-band runner for Agent Harness (ADR-0167).
+//! Cognitive execution engine: typed, resilient out-of-band subagent for Agent Harness (ADR-0167).
 //!
 //! # Architecture
 //!
@@ -16,7 +16,7 @@ use std::time::Duration;
 use muta_contracts::{
     CognitiveTask, EnvironmentReminderOutput, EnvironmentSensorInput, EnvironmentSensorTask,
     ExecutionTier, Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput,
-    PreFlightRouterTask, Provider, Role, SessionDigestInput, SessionDigestTask,
+    PreFlightRouterTask, Provider, Role, SessionTitleInput, SessionTitleTask,
     StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
 };
 
@@ -132,22 +132,14 @@ impl CognitivePipeline {
             .await
     }
 
-    /// Distill an excerpt (plus an optional previous digest for revision) into a structured session digest.
-    ///
-    /// Unlike the fail-open sentinels this returns `None` on any failure —
-    /// timeout, provider error, or malformed JSON — because there is no
-    /// sensible plain-text fallback for a structured digest; the caller
-    /// keeps the previous digest instead.
-    pub async fn generate_digest(
-        &self,
-        input: SessionDigestInput,
-    ) -> Option<muta_contracts::SessionDigest> {
-        match self.consult(SessionDigestTask, input).await {
-            Ok(digest) => Some(digest),
+    /// Distill an excerpt into a concise session title.
+    pub async fn generate_title(&self, input: SessionTitleInput) -> Option<String> {
+        match self.consult(SessionTitleTask, input).await {
+            Ok(title) => Some(title),
             Err(err) => {
                 tracing::warn!(
                     error = %err,
-                    "Session digest generation failed; keeping previous digest"
+                    "Session title generation failed"
                 );
                 None
             }
@@ -225,41 +217,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cognitive_digest_parses_and_fails_open() {
-        let json = r#"{"title": "Fix auth loop", "intent": "User wants login fixed.", "history": ["Reproduced the loop"]}"#;
+    async fn cognitive_title_parses_and_fails_open() {
         let provider = Arc::new(MockProvider {
-            response: Ok(format!("```json\n{json}\n```")),
+            response: Ok("```\nFix auth loop\n```".to_string()),
         });
-        let digest = CognitivePipeline::new(provider)
-            .generate_digest(SessionDigestInput {
+        let title = CognitivePipeline::new(provider)
+            .generate_title(SessionTitleInput {
                 excerpt: "user: fix the login loop".to_string(),
-                previous: None,
             })
             .await
-            .expect("fenced JSON parses");
-        assert_eq!(digest.title, "Fix auth loop");
-        assert_eq!(digest.history, vec!["Reproduced the loop".to_string()]);
+            .expect("fenced title parses");
+        assert_eq!(title, "Fix auth loop");
 
         let provider = Arc::new(MockProvider {
             response: Err("HTTP 500 error".to_string()),
         });
         assert!(
             CognitivePipeline::new(provider)
-                .generate_digest(SessionDigestInput {
+                .generate_title(SessionTitleInput {
                     excerpt: "x".to_string(),
-                    previous: None,
                 })
                 .await
                 .is_none()
         );
         let provider = Arc::new(MockProvider {
-            response: Ok("not json at all".to_string()),
+            response: Ok("   \n\t  ".to_string()),
         });
         assert!(
             CognitivePipeline::new(provider)
-                .generate_digest(SessionDigestInput {
+                .generate_title(SessionTitleInput {
                     excerpt: "x".to_string(),
-                    previous: None,
                 })
                 .await
                 .is_none()

@@ -323,7 +323,7 @@ format (tools still arrive as full schemas in `tool_specs`).
 - [ADR-0060](0060-skills-and-mcp-extension-boundaries.md) — MCP as a connector
   with `DynamicToolSink`; this ADR keeps that boundary and layers scoping on
   top.
-- [ADR-0013](0013-skills-xdg-paths-and-bundled-embed.md) — the XDG + project
+- [ADR-0013](archive/0013-skills-xdg-paths-and-bundled-embed.md) — the XDG + project
   `.neenee/` cascade for skills/commands this ADR extends to tools.
 - `crates/neenee-agent/src/mcp/runtime.rs` — `McpRuntime`, frozen `configs`,
   `start_background` / `refresh_all`.

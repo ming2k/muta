@@ -189,7 +189,7 @@ Migration (staged, each shippable):
 - [ADR-0025](0025-lifecycle-event-hooks.md) — single-axis hooks; this ADR
   partially supersedes its exclusion of round-count by adding one constrained
   event.
-- [ADR-0026](0026-plan-progression-forcing-functions.md) — the bespoke nudge
+- [ADR-0026](archive/0026-plan-progression-forcing-functions.md) — the bespoke nudge
   pattern the `steering.rs` module generalises.
 - `crates/neenee-agent/src/agent.rs` — `guard_repeated_call` (`:1853`),
   `dispatch_tool_calls` (`:1627`), `review_now` (`:1943`), round boundaries

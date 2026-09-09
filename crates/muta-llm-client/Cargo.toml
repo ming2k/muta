@@ -5,23 +5,51 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# The owned transport is the production egress (ADR-0200 P2). The cutover is
+# therefore a default feature: `MUTA_EGRESS=reqwest` remains the per-process
+# escape hatch where the oracle is compiled in.
+default = ["net-transport-default"]
+# The `reqwest` differential/shadow oracle. Never part of a production build:
+# it exists so the owned transport can be compared against a reference
+# implementation (ADR-0200).
+reqwest-oracle = ["dep:reqwest"]
+# Runtime shadow: replay production requests through the owned transport and
+# compare them with the oracle (ADR-0200).
+net-shadow = ["reqwest-oracle"]
+# P2 cutover: make the owned transport the default when `MUTA_EGRESS` is unset.
+net-transport-default = []
+
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
 async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { version = "1.4" }
 futures = { workspace = true }
-reqwest = { workspace = true }
+muta-net = { path = "../muta-net" }
+muta-trace = { path = "../muta-trace" }
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 httpdate = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-mockito = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
-# Test-only model baseline registration (mirrors vendor metadata that lives in
-# muta-providers, which this crate cannot depend on).
+bytes = { workspace = true }
+futures = { workspace = true }
+http = "1.4"
 inventory = { workspace = true }
+mockito = { workspace = true }
+muta-net = { path = "../muta-net" }
+muta-trace = { path = "../muta-trace" }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "live_shadow"
+required-features = ["reqwest-oracle"]

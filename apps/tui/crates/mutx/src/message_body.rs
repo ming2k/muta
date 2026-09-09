@@ -51,8 +51,8 @@ fn sent_header_anchor(msg: &TranscriptMessage) -> String {
                 return format!("hook:{}", format!("{event:?}").to_lowercase());
             }
             muta_contracts::InjectionKind::InterAgent => return "inter-agent".to_string(),
-            muta_contracts::InjectionKind::RunnerSteer => return "runner steer".to_string(),
-            muta_contracts::InjectionKind::RunnerTask => return "runner task".to_string(),
+            muta_contracts::InjectionKind::SubagentSteer => return "subagent steer".to_string(),
+            muta_contracts::InjectionKind::SubagentTask => return "subagent task".to_string(),
             muta_contracts::InjectionKind::UserSteer => return "steer".to_string(),
             muta_contracts::InjectionKind::LoopReviewNudge => return "guard:loop".to_string(),
             muta_contracts::InjectionKind::SystemReminder => return "system:reminder".to_string(),

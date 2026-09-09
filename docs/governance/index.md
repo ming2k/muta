@@ -4,7 +4,18 @@ Top-level governance charter, decision hierarchy, review gates, and documentatio
 
 | Section | Purpose |
 |---------|---------|
-| [Documentation Governance](documentation/core/index.md) | Standardized 4-gate routing, micro-core protocol, writing style, and review checklist |
+| [Documentation Governance](documentation/core/index.md) | Clean-Break Architecture (Protocol v5.0.0): 4D spatial coordinate tensor, codified invariants constitution, operational lifecycle, and presentation syntax |
+
+## Core Meta-Governance
+- [Taxonomy](documentation/core/taxonomy.md): 4D spatial coordinate tensor (Temperature x Lifecycle x Audience x Mode).
+- [Invariants](documentation/core/invariants.md): Codified constitution of numbered system invariants (`INV-*`).
+- [Workflow](documentation/core/workflow.md): Code-to-doc trigger matrix, PR review gates, standard intake SOP, and adoption.
+- [Style Guide](documentation/core/style.md): Technical voice, structural syntax, link contracts.
+- [Repository Contracts](documentation/contracts.md): Active profiles and directory layout bindings.
+
+## Active Domain Profiles
+- **Architecture**: [Architecture Profile](documentation/profiles/architecture/index.md) (`adr.md`, `living-snapshot.md`, `rfc.md`).
+- **Validation**: [Validation Profile](documentation/profiles/validation/index.md) (`acceptance.md`, `testing.md`).
 
 ## Governance Structure & Decision Hierarchy
 

@@ -105,9 +105,7 @@ pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
         "write_todos" | "update_todo" | "todo" | "todo_update" => {
             crate::phase::ToolVerb::UpdatingTasks
         }
-        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => {
-            crate::phase::ToolVerb::Delegating
-        }
+        "spawn_agent" | "delegate_code" | "delegate_mcp" => crate::phase::ToolVerb::Delegating,
         n if n.starts_with("mcp__") => crate::phase::ToolVerb::Mcp,
         _ => crate::phase::ToolVerb::Generic,
     }
@@ -251,7 +249,7 @@ pub async fn run_app_loop(
 
         // The renderer measured `max_scroll` from this frame's content and
         // viewport. Keep a manual position in bounds while preserving the
-        // sticky-header exception used by collapsed runner summaries.
+        // sticky-header exception used by collapsed subagent summaries.
         if !app.follow_bottom {
             // A collapsed sticky header may leave too little content below it
             // for `max_scroll` to reach the header line; while a pin is

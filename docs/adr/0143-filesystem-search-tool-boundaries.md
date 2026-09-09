@@ -79,6 +79,6 @@ the scheduler serializes them against overlapping writes.
 ## References
 
 - [ADR-0135: Retirement deletes](0135-retirement-deletes-no-teaching-errors.md)
-- [ADR-0140: Workspace authority](0140-workspace-authority-and-content-bound-extension-trust.md)
+- [ADR-0140: Workspace authority](archive/0140-workspace-authority-and-content-bound-extension-trust.md)
 - [ADR-0142: Additional workspace roots](0142-additional-workspace-roots.md)
 - [Filesystem tools reference](../reference/tools/filesystem.md)

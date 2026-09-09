@@ -36,13 +36,17 @@ stored as durable policy. It is assembled in a fixed reading order, each
 section present only when its precondition holds:
 
 1. **Identity preamble.** Who this agent is — a name and a mission composed into
-   one opening sentence. The engine itself is identity-agnostic: it does not
-   hardcode a persona or a purpose. The embedding (the CLI, a future frontend)
-   supplies them, so the same engine can serve as a coding assistant, a research
-   agent, or an operations agent by passing different values. An envoy takes
-   a third form: its identity *is* its role's full system prompt, injected
-   verbatim as the preamble, ignoring name and mission. See
-   [Envoys](envoys.md).
+   one opening sentence, or a full persona override. The engine itself is
+   identity-agnostic: it does not hardcode a persona or a purpose. The embedding
+   (the CLI, a future frontend) supplies them, so the same engine can serve as a
+   coding assistant, a research agent, or an operations agent by passing
+   different values. Supplying one is optional, and the shipped coding CLI
+   supplies none: nothing in the harness reads the model's self-name, so its
+   prompt opens straight at the host environment. An identity line appears only
+   where it changes behaviour — a `/role` switch installs an imperative role
+   directive, and a subagent takes a third form: its identity *is* its task
+   prompt, injected verbatim as the preamble, ignoring name and mission. See
+   [Subagent delegation](subagents.md).
 2. **Model and provider guidance.** Narrow behavioral or protocol facts may be
    supplied by the selected model and provider. Empty guidance contributes no
    section.
@@ -65,7 +69,7 @@ imperative method. A section carries a stable id, a rank that fixes its reading
 order, an activation precondition, and a renderer. The system-prompt registry
 composes active sections in rank order and stamps the singleton message's
 canonical origin. That makes each section independently testable,
-reorderable, or disable-able. The same engine serves an envoy: its role persona
+reorderable, or disable-able. The same engine serves a subagent: its task prompt
 becomes the identity preamble and composes with the applicable shared policy.
 The registry and context snapshot are agent-owned policy; only the provider's
 narrow prompt-hints value crosses the shared contract boundary. See
@@ -85,8 +89,8 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 | **Compaction checkpoint** | Context pressure triggers compaction | Wrap a model-written summary of archived rounds under a stable header that flags it as durable context, not a new request. See [Context compaction](context-compaction.md) |
 | **Implicit skill** | The latest user message mentions a skill name | Load the skill body so the model behaves as if it had explicitly invoked it. See [Skills](skills.md) |
 | **Hook output** | A configured lifecycle hook returns injected context | Let user practice (lint failures, CI gates, reminders) re-enter the conversation. See [Lifecycle hooks](hooks.md) |
-| **Envoy steering** | A parent agent steers a running child | Land a visible user message directing the envoy, or a hidden inter-agent note. See [Envoys](envoys.md) |
-| **Envoy task** | The harness starts an envoy or a session-review diagnostic | Open the child transcript with its delegated task or review input while retaining its non-user provenance |
+| **Subagent steering** | A parent agent steers a running child | Land a visible user message directing the subagent, or a hidden inter-agent note. See [Subagent delegation](subagents.md) |
+| **Subagent task** | The harness starts a subagent or a session-review diagnostic | Open the child transcript with its delegated task or review input while retaining its non-user provenance |
 | **Tool image** | A tool returns an image that must travel as a user-role companion message | Preserve the image attachment and identify the protocol projection as harness-authored context |
 
 A defining property is that none of these are semantic guesses. The optional
@@ -173,7 +177,7 @@ event-driven user context carries the kind specific to its lifecycle source.
 - [ADR-0061](../../adr/0061-atomic-model-request-boundary.md) — messages and
   tools form one immutable request while durable conversation additions remain
   separate from ephemeral assembly.
-- [ADR-0039](../../adr/0039-unified-prompt-registry.md) — introduced ranked
+- [ADR-0039](../../adr/archive/0039-unified-prompt-registry.md) — introduced ranked
   system-prompt composition and fixed latent system-message clobber defects;
   superseded by ADR-0056 for the cross-channel abstraction boundary.
 - [ADR-0034](../../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md)
@@ -190,6 +194,6 @@ event-driven user context carries the kind specific to its lifecycle source.
 Each injection mechanism has a deep-dive of its own: [Context
 compaction](context-compaction.md) for the checkpoint, [Skills](skills.md) for
 implicit loading, [Lifecycle hooks](hooks.md) for hook-driven context, and
-[Envoys](envoys.md) for inter-agent steering. The protocol contract that
-carries these messages to the provider is covered in [Chat API
+[Subagent delegation](subagents.md) for inter-agent steering. The protocol
+contract that carries these messages to the provider is covered in [Chat API
 primitives](../chat-api-primitives.md) and [Request flow](../request-flow.md).

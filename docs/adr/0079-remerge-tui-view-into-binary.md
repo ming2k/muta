@@ -111,11 +111,11 @@ delete the crate:
 
 ## References
 
-- [ADR-0045](0045-extract-neenee-tui-view.md) — the extraction this ADR
+- [ADR-0045](archive/0045-extract-neenee-tui-view.md) — the extraction this ADR
   reverses (status now Superseded).
 - [ADR-0074](0074-consolidate-llm-client-crate.md) — the consolidation
   signature (single consumer + lockstep) applied here.
-- [ADR-0080](0080-rename-neenee-to-neenee-cli.md) — the binary's package
+- [ADR-0080](archive/0080-rename-neenee-to-neenee-cli.md) — the binary's package
   rename; the merge landed after it, so paths above read `neenee-cli`.
 - [ADR-0038](0038-in-house-grid-diff-rendering-engine.md) — the engine
   crate, which stays put.

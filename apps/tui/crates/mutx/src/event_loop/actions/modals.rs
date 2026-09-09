@@ -26,7 +26,7 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
             .expect("provider editor must carry a registered wire protocol");
         let base_url = app.custom_base_url.trim().to_string();
         let api_key = muta_contracts::SecretString::from(app.custom_token.trim());
-        if let Some(id) = app.custom_edit_id.clone() {
+        if let Some(key) = app.custom_edit_id.clone() {
             // Edit mode: update meta (models stay managed in
             // the Models picker). A name is still required.
             // ADR-0046: effort/thinking are no longer
@@ -34,9 +34,39 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
             if name.is_empty() {
                 app.load_custom_field();
             } else {
-                app.send_intent(AgentRequest::EditProvider {
-                    id,
+                // The connection's identity is its `name` (ADR-0201 INV-3).
+                // A changed Name is the separate atomic `RenameConnection`
+                // transaction; the metadata edit itself stays keyed by the
+                // current name.
+                let provider = app
+                    .custom_provider_id
+                    .clone()
+                    .or_else(|| {
+                        app.provider_picker
+                            .rows
+                            .iter()
+                            .find(|r| r.id == key)
+                            .map(|r| r.provider.clone())
+                    })
+                    .unwrap_or_default();
+                let is_custom = provider == crate::providers::CUSTOM_TEMPLATE.id;
+                // Only the `custom` provider owns its wire/endpoint; a curated
+                // provider derives both from its spec.
+                let protocol = is_custom.then_some(protocol);
+                let base_url = app
+                    .custom_fields
+                    .contains(&crate::CustomField::BaseUrl)
+                    .then(|| base_url.clone())
+                    .filter(|url| !url.is_empty());
+                if name != key {
+                    app.send_intent(AgentRequest::RenameConnection {
+                        from: key.clone(),
+                        to: name.clone(),
+                    });
+                }
+                app.send_intent(AgentRequest::EditConnection {
                     name,
+                    provider,
                     protocol,
                     base_url,
                     api_key,
@@ -50,9 +80,9 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                 app.custom_edit_id = None;
             }
         } else {
-            // Create mode: the model list comes from the preset's
+            // Create mode: the model list comes from the template's
             // seeded models, or the single typed Model field when
-            // the preset exposes one.
+            // the template exposes one.
             // ADR-0046: new channels start with thinking off;
             // reasoning is opted in per model from the Models
             // picker.
@@ -72,20 +102,30 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
             if name.is_empty() || !usable {
                 app.load_custom_field();
             } else {
-                // `custom-openai` is an editor definition, not a curated
-                // preset. New custom connections persist as pure-custom
-                // declarations with no preset id; the catalog still accepts
-                // the old id when loading existing configurations.
-                let preset_id = created_connection_preset_id(app.custom_preset_id.take());
-                app.send_intent(AgentRequest::AddProvider {
+                // The template's id IS the model provider id (ADR-0201): the
+                // connection is created against that service surface. Only the
+                // `custom` provider takes a protocol/endpoint override; a
+                // curated provider owns its wire. The name is sent raw and
+                // trimmed — the daemon rejects a duplicate with a suggested
+                // alternative (surfaced as `AgentResponse::Error`) instead of
+                // the client silently suffixing it.
+                let provider = app.custom_provider_id.take().unwrap_or_default();
+                let is_custom = provider == crate::providers::CUSTOM_TEMPLATE.id;
+                let protocol = is_custom.then_some(protocol);
+                let base_url = app
+                    .custom_fields
+                    .contains(&crate::CustomField::BaseUrl)
+                    .then(|| base_url.clone())
+                    .filter(|url| !url.is_empty());
+                app.send_intent(AgentRequest::AddConnection {
                     name,
+                    provider,
                     protocol,
                     base_url,
                     api_key,
                     user_agent: app.custom_user_agent.clone(),
                     models,
                     auth: app.custom_auth,
-                    preset_id,
                     client_identity: Some(app.custom_client_identity.clone()),
                 });
                 app.restore_chat_after_editor_chain();
@@ -93,13 +133,6 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
             }
         }
     }
-}
-
-/// Convert the editor definition id into the persisted connection shape.
-/// `custom-openai` remains load-compatible, but new custom connections are
-/// pure-custom records rather than preset-derived records.
-fn created_connection_preset_id(preset_id: Option<String>) -> Option<String> {
-    preset_id.filter(|id| id != "custom-openai")
 }
 
 /// Loop stage (input dispatch): the `OpenModelEditor` arm.
@@ -190,14 +223,14 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                     .iter()
                     .find(|r| r.id == id)
                     .cloned();
-                let (name, protocol, base_url, auth, is_preset, client_identity) = row
+                let (name, protocol, base_url, auth, curated, client_identity) = row
                     .map(|r| {
                         (
                             r.name,
                             r.protocol,
                             r.base_url,
                             r.auth,
-                            !r.preset_id.is_empty() && r.preset_id != "custom-openai",
+                            r.provider != crate::providers::CUSTOM_TEMPLATE.id,
                             r.client_identity,
                         )
                     })
@@ -206,7 +239,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                         String::new(),
                         String::new(),
                         muta_contracts::ConnectionAuth::ApiKey,
-                        false,
+                        true,
                         muta_contracts::ClientIdentity::Native,
                     ));
                 app.model_search = false;
@@ -216,7 +249,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                     protocol,
                     base_url,
                     auth,
-                    is_preset,
+                    curated,
                     client_identity,
                 );
             }
@@ -229,43 +262,30 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
     if app.active_modal() == Modal::ModelEditor
         && let Some(target) = app.editor_target.clone()
     {
-        if let Some(payload) = target.strip_prefix("web_search:") {
-            let key = app.input.trim().to_string();
-            let (preset_id, name) = match payload {
-                "tavily" => (Some("tavily".to_string()), "Tavily AI Search".to_string()),
-                "bocha" => (Some("bocha".to_string()), "Bocha AI Search".to_string()),
-                "searxng" => (Some("searxng".to_string()), "SearXNG Instance".to_string()),
-                "parallel" => (Some("parallel".to_string()), "Parallel Search".to_string()),
-                "custom-search" => (None, "Custom Search Relay".to_string()),
-                _ => (Some("exa".to_string()), "Exa Search".to_string()),
+        if let Some(payload) = target.strip_prefix("web_credential:") {
+            let Some(expected_revision) =
+                app.websearch_config.as_ref().map(|config| config.revision)
+            else {
+                return ActionFlow::NextEvent;
             };
-            let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
-            let new_conn = muta_contracts::WebSearchConnection {
-                id: id.clone(),
-                name: Some(name),
-                preset_id,
-                api_key_env: None,
-                base_url: None,
-                custom_headers: None,
-                enabled: true,
+            let mut parts = payload.splitn(2, ':');
+            let axis = match parts.next() {
+                Some("search") => muta_contracts::WebProviderAxis::Search,
+                Some("reader") => muta_contracts::WebProviderAxis::Reader,
+                _ => return ActionFlow::NextEvent,
             };
-
-            let mut update = muta_contracts::WebSearchConfigUpdate {
-                upsert_search_connection: Some(new_conn),
-                provider: Some(id),
-                ..Default::default()
-            };
-            if !key.is_empty() {
-                match payload {
-                    "tavily" => update.tavily_api_key = Some(key),
-                    "bocha" => update.bocha_api_key = Some(key),
-                    "parallel" => update.parallel_api_key = Some(key),
-                    "exa" => update.exa_api_key = Some(key),
-                    _ => {}
-                }
-            }
-            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
-
+            let provider_id = parts.next().unwrap_or_default().to_string();
+            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
+                muta_contracts::WebSearchConfigUpdate {
+                    expected_revision,
+                    credential: Some(muta_contracts::WebCredentialUpdate {
+                        axis,
+                        provider_id,
+                        value: app.input.trim().to_string(),
+                    }),
+                    ..Default::default()
+                },
+            )));
             app.input.clear();
             app.set_cursor(0);
             app.editor_target = None;
@@ -273,37 +293,19 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             return ActionFlow::NextEvent;
         }
 
-        if let Some(payload) = target.strip_prefix("web_reader:") {
-            let key = app.input.trim().to_string();
-            let (preset_id, name) = match payload {
-                "firecrawl" => (
-                    Some("firecrawl".to_string()),
-                    "Firecrawl Reader".to_string(),
-                ),
-                "custom-reader" => (None, "Custom Web Reader".to_string()),
-                _ => (Some("jina".to_string()), "Jina Reader".to_string()),
+        if target == "web_endpoint:searxng" {
+            let Some(expected_revision) =
+                app.websearch_config.as_ref().map(|config| config.revision)
+            else {
+                return ActionFlow::NextEvent;
             };
-            let id = format!("{}-{}", payload, chrono::Utc::now().timestamp() % 10000);
-            let new_conn = muta_contracts::WebReaderConnection {
-                id: id.clone(),
-                name: Some(name),
-                preset_id,
-                api_key_env: None,
-                base_url: None,
-                custom_headers: None,
-                enabled: true,
-            };
-
-            let mut update = muta_contracts::WebSearchConfigUpdate {
-                upsert_reader_connection: Some(new_conn),
-                reader: Some(id),
-                ..Default::default()
-            };
-            if !key.is_empty() && payload == "jina" {
-                update.jina_api_key = Some(key);
-            }
-            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(update)));
-
+            app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
+                muta_contracts::WebSearchConfigUpdate {
+                    expected_revision,
+                    searxng_url: Some(app.input.trim().to_string()),
+                    ..Default::default()
+                },
+            )));
             app.input.clear();
             app.set_cursor(0);
             app.editor_target = None;
@@ -347,8 +349,8 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     }),
                 });
             } else {
-                app.send_intent(AgentRequest::EditProviderModel {
-                    provider_id: id,
+                app.send_intent(AgentRequest::EditConnectionModel {
+                    connection: id,
                     model,
                     effort: Some(effort),
                     thinking: app.editor_thinking_available.then_some(app.editor_thinking),
@@ -380,8 +382,8 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
         // (effort/thinking are set per model from the Models
         // picker `e` editor).
         let key = app.input.trim().to_string();
-        app.send_intent(AgentRequest::SwitchProvider {
-            provider_type: id,
+        app.send_intent(AgentRequest::SwitchConnection {
+            provider: id,
             model,
             api_key: if key.is_empty() {
                 None
@@ -873,8 +875,8 @@ pub(crate) fn arm_effort_ignition_if_max(app: &mut App) {
 
 pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bool) {
     if key_ready {
-        app.send_intent(AgentRequest::SwitchProvider {
-            provider_type: id,
+        app.send_intent(AgentRequest::SwitchConnection {
+            provider: id,
             model,
             api_key: None,
             base_url: None,
@@ -889,7 +891,7 @@ pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, ke
             .and_then(|config| config.effective_default_login_method())
             .or_else(|| auth.default_login_method())
             .unwrap_or(muta_contracts::LoginMethod::Device);
-        app.send_intent(AgentRequest::ConnectProvider { id, method });
+        app.send_intent(AgentRequest::ConnectConnection { name: id, method });
         app.dismiss_surface();
     } else {
         app.push_transient_surface(Modal::ModelEditor);
@@ -944,7 +946,7 @@ pub(crate) async fn handle_permission_submit(
             }
         };
         let request_id = request.id;
-        let parent_call_id = app.runner_permission_parent.remove(&request_id);
+        let parent_call_id = app.subagent_permission_parent.remove(&request_id);
         app.send_intent(AgentRequest::PermissionReply {
             request_id: request_id.clone(),
             decision,
@@ -954,7 +956,7 @@ pub(crate) async fn handle_permission_submit(
             let queued: Vec<muta_contracts::PermissionRequest> =
                 app.pending_permissions.drain(..).collect();
             for pending in queued {
-                let parent_call_id = app.runner_permission_parent.remove(&pending.id);
+                let parent_call_id = app.subagent_permission_parent.remove(&pending.id);
                 app.send_intent(AgentRequest::PermissionReply {
                     request_id: pending.id,
                     decision: muta_contracts::PermissionDecision::Reject,
@@ -1024,7 +1026,7 @@ pub(crate) mod question_effects {
                         }
                         continue;
                     }
-                    let parent_call_id = app.runner_question_parent.remove(request_id);
+                    let parent_call_id = app.subagent_question_parent.remove(request_id);
                     app.send_intent(AgentRequest::UserQuestionReply {
                         request_id: request_id.clone(),
                         answers: answers.clone(),
@@ -1037,7 +1039,7 @@ pub(crate) mod question_effects {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
                         continue;
                     }
-                    let parent_call_id = app.runner_question_parent.remove(request_id);
+                    let parent_call_id = app.subagent_question_parent.remove(request_id);
                     app.send_intent(AgentRequest::UserQuestionReply {
                         request_id: request_id.clone(),
                         answers: Vec::new(),
@@ -1070,17 +1072,17 @@ pub(crate) mod question_effects {
 
 #[cfg(test)]
 mod tests {
-    use super::created_connection_preset_id;
-
     #[test]
-    fn custom_connection_does_not_persist_a_preset_id() {
-        assert_eq!(
-            created_connection_preset_id(Some("custom-openai".to_string())),
-            None
-        );
-        assert_eq!(
-            created_connection_preset_id(Some("openai".to_string())).as_deref(),
-            Some("openai")
+    fn custom_template_creates_a_custom_provider_connection() {
+        // The `custom` template is the generic bring-your-own-endpoint
+        // provider; the seeded provider id is the one persisted on the
+        // connection, and it is NOT part of the curated chooser table.
+        assert_eq!(crate::providers::CUSTOM_TEMPLATE.id, "custom");
+        assert!(
+            crate::providers::PROVIDER_PRESETS
+                .iter()
+                .all(|t| t.id != crate::providers::CUSTOM_TEMPLATE.id),
+            "custom connections have their own Connections-level branch"
         );
     }
 

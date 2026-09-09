@@ -70,7 +70,7 @@ fn input_box_grows_with_wrapped_content() {
                         blocked: false,
                     },
                     persistence_health: None,
-                    runner_bar: None,
+                    subagent_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -1039,6 +1039,98 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
     );
 }
 
+#[test]
+fn composer_input_range_highlights_exact_characters() {
+    let theme = Theme::default();
+    let sel_bg = theme.selected();
+    let interior_bg = theme.input_surface();
+    let input = "hello world";
+    // Select only 'h' (bytes 0..1)
+    let sel = SelectionState::InputRange {
+        anchor_byte: 0,
+        head_byte: 1,
+    };
+    let mut terminal = mutx_engine::TestTerminal::new(20, 5);
+
+    terminal.draw(|f| {
+        draw_composer(
+            ComposerProps {
+                frame: f,
+                input_rect: Rect::new(0, 0, 20, 4),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &sel,
+            },
+            ComposerText {
+                input,
+                byte_cursor: 1,
+            },
+            true,
+            false,
+            false,
+            0,
+            0,
+            crate::components::composer_hints::ComposerHints::default(),
+        );
+    });
+
+    let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
+    let buffer = terminal.buffer();
+    // Col 0: '›', Col 1: gap, Col 2: 'h' (selected), Col 3: 'e' (unselected)
+    assert_eq!(
+        buffer.get(2, y).unwrap().bg,
+        sel_bg,
+        "col 2 ('h') must be selected"
+    );
+    assert_eq!(
+        buffer.get(3, y).unwrap().bg,
+        interior_bg,
+        "col 3 ('e') must not be selected"
+    );
+
+    // Select "hello" (bytes 0..5)
+    let sel = SelectionState::InputRange {
+        anchor_byte: 0,
+        head_byte: 5,
+    };
+    terminal.draw(|f| {
+        draw_composer(
+            ComposerProps {
+                frame: f,
+                input_rect: Rect::new(0, 0, 20, 4),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &sel,
+            },
+            ComposerText {
+                input,
+                byte_cursor: 5,
+            },
+            true,
+            false,
+            false,
+            0,
+            0,
+            crate::components::composer_hints::ComposerHints::default(),
+        );
+    });
+    let buffer = terminal.buffer();
+    for col in 2..7 {
+        assert_eq!(
+            buffer.get(col, y).unwrap().bg,
+            sel_bg,
+            "col {col} in 'hello' must be selected"
+        );
+    }
+    assert_eq!(
+        buffer.get(7, y).unwrap().bg,
+        interior_bg,
+        "col 7 (space) must not be selected"
+    );
+}
+
 /// Regression for the input-select bug: a click that starts a selection
 /// (anchor == head, a collapsed range) must highlight NOTHING, and a drag
 /// through the real click pipeline (layout_map → cursor_at) must highlight
@@ -1203,7 +1295,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -1465,7 +1557,7 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -1557,7 +1649,7 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -1722,7 +1814,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,

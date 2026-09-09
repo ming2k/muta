@@ -427,7 +427,7 @@ pub(crate) fn live_history_hints() -> &'static [LiveHint] {
 /// "Other" row is highlighted), `1..9` picks an option, anything else types
 /// into the focused field.
 /// Settings modal: `space` activates the row; in the Detail pane `1`/`h` and
-/// `2`/`l` step segments; `d`/`D` deletes the selected connection.
+/// `2`/`l` step segments.
 fn resolve_config_key(c: char, keys: &ModalKeys) -> Option<InputAction> {
     if c == ' ' {
         return Some(InputAction::ConfigActivate);
@@ -439,9 +439,6 @@ fn resolve_config_key(c: char, keys: &ModalKeys) -> Option<InputAction> {
         if c == '2' || c == 'l' {
             return Some(InputAction::ConfigSegmentNext);
         }
-    }
-    if c == 'd' || c == 'D' {
-        return Some(InputAction::ConfigDeleteConnection);
     }
     None
 }

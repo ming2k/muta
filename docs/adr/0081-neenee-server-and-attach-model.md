@@ -214,6 +214,6 @@ Attach mode is opt-in.
   the transport layer; identity lives in each binary.
 - [ADR-0076](0076-rename-session-and-store-crates.md) — the name history
   that freed "server".
-- [ADR-0080](0080-rename-neenee-to-neenee-cli.md) — the peer rename.
+- [ADR-0080](archive/0080-rename-neenee-to-neenee-cli.md) — the peer rename.
 - [Server WebSocket API](../reference/server-api.md) —
   protocol reference (updated for `History.session_id`).

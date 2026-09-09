@@ -34,6 +34,18 @@ pub(crate) fn block_selection_range(
             message_idx: mi,
             block_idx: bi,
         } => (*mi == message_idx && *bi == block_idx).then_some((0, None)),
+        SelectionState::InputRange {
+            anchor_byte,
+            head_byte,
+        } => {
+            if message_idx == crate::model::layout::INPUT_MSG_IDX && block_idx == 0 {
+                let s = (*anchor_byte).min(*head_byte);
+                let e = (*anchor_byte).max(*head_byte);
+                (s != e).then_some((s, Some(e)))
+            } else {
+                None
+            }
+        }
         SelectionState::Range { .. } => {
             let (start, end) = selection.active_normalized_range()?;
             let here = (message_idx, block_idx);
@@ -247,6 +259,63 @@ pub(crate) fn markup_visible_width(
 /// and `bold_ranges` are absolute byte offsets into that original content. Used
 /// to budget display columns for both width measurement and markup-aware
 /// wrapping, so neither reserves space for delimiters the renderer hides.
+pub(crate) fn block_hidden_ranges(
+    content: &str,
+    code_ranges: &[(usize, usize)],
+    bold_ranges: &[(usize, usize)],
+    math_ranges: &[(usize, usize)],
+    link_ranges: &[crate::model::document::LinkRange],
+) -> Vec<(usize, usize)> {
+    let mut hidden = markup_hidden_ranges(content, 0, code_ranges, bold_ranges, math_ranges);
+    hidden.extend(link_delim_local_ranges(content, 0, link_ranges));
+    hidden.sort_unstable_by_key(|&(lo, _)| lo);
+    hidden
+}
+
+/// Strip zero-width markdown formatting delimiters from a selected slice of a block's content.
+///
+/// `byte_start` and `byte_end` are byte offsets within `full_content` representing
+/// the inclusive-head selection range. Any delimiter ranges that intersect `[byte_start, byte_end)`
+/// are excluded, ensuring copied text matches the clean rendered characters the user saw on screen.
+pub(crate) fn strip_inline_markup_delimiters(
+    full_content: &str,
+    byte_start: usize,
+    byte_end: usize,
+    hidden_ranges: &[(usize, usize)],
+) -> String {
+    if byte_start >= byte_end || byte_start >= full_content.len() {
+        return String::new();
+    }
+    let byte_end = byte_end.min(full_content.len());
+
+    let mut result = String::with_capacity(byte_end - byte_start);
+    let mut curr = byte_start;
+
+    for &(h_start, h_end) in hidden_ranges {
+        if h_end <= curr {
+            continue;
+        }
+        if h_start >= byte_end {
+            break;
+        }
+        // Segment before this hidden range
+        if curr < h_start {
+            let seg_end = h_start.min(byte_end);
+            if curr < seg_end {
+                result.push_str(&full_content[curr..seg_end]);
+            }
+        }
+        // Advance past hidden range
+        curr = curr.max(h_end);
+    }
+
+    if curr < byte_end {
+        result.push_str(&full_content[curr..byte_end]);
+    }
+
+    result
+}
+
 pub(crate) fn markup_hidden_ranges(
     text: &str,
     line_start_byte: usize,

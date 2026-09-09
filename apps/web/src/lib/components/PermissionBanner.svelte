@@ -101,7 +101,7 @@
         {daemon.pendingPermission.request.label || daemon.pendingPermission.request.tool}
       </span>
       {#if daemon.pendingPermission.origin.label}
-        <span class="origin">runner: {daemon.pendingPermission.origin.label}</span>
+        <span class="origin">subagent: {daemon.pendingPermission.origin.label}</span>
       {/if}
     </div>
     {#if daemon.pendingPermission.request.description}
@@ -131,7 +131,7 @@
       <span class="seal-mark">问</span>
       <span class="title">{t("agentNeedsAnswer")}</span>
       {#if daemon.pendingQuestion.origin.label}
-        <span class="origin">runner: {daemon.pendingQuestion.origin.label}</span>
+        <span class="origin">subagent: {daemon.pendingQuestion.origin.label}</span>
       {/if}
     </div>
     {#each daemon.pendingQuestion.request.questions as q, qi (qi)}
@@ -187,7 +187,7 @@
       <span class="seal-mark">入</span>
       <span class="title">{daemon.pendingInput.request.prompt}</span>
       {#if daemon.pendingInput.origin.label}
-        <span class="origin">runner: {daemon.pendingInput.origin.label}</span>
+        <span class="origin">subagent: {daemon.pendingInput.origin.label}</span>
       {/if}
     </div>
     <p class="desc mono">{daemon.pendingInput.request.command}</p>

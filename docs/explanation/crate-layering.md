@@ -39,7 +39,7 @@ from ADR-0005 is dependency direction, not visual symmetry.
 
 Pure domain and wire contracts with no workspace dependencies:
 `AgentRequest` / `AgentResponse` / `Message` / `ModelRequest`, the `Provider`
-and `Tool` traits, `ToolSet`, `AgentIdentity`, principal/envoy profiles,
+and `Tool` traits, `ToolSet`, `AgentIdentity`, principal/subagent profiles,
 `OperationScope`, and token-accounting records. Independent layers import the
 same vocabulary without depending on agent orchestration.
 
@@ -85,7 +85,7 @@ The engine. `Agent` + the round/turn loop (ADR-0047), model-request and
 system-prompt policy, durable conversation-context injection, tool-call
 dispatch and compatibility parsing, context projection, shell input policy,
 `ProxyProvider`, skill context injection,
-`EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
+`SubagentTool`, and the full-duplex subagent registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It also owns the built-in tools
 (`execute_command`, `read_text`, `find_files`, `search_text`, `read_url`, todo management, …) in its
 `tools` module: most self-register via `inventory`, and stateful todo tools
@@ -97,7 +97,7 @@ role-agnostic by design.
 
 The `agent -> skills` edge is intentional layering, not a
 cycle: the skills crate does not depend on agent orchestration.
-`EnvoyTool` remains in Agent because it constructs and controls agents.
+`SubagentTool` remains in Agent because it constructs and controls agents.
 
 ### `muta-runtime` — session runtime & control plane
 
@@ -191,7 +191,7 @@ multi-frontend transport details.
 ## References
 
 - [ADR-0005](../adr/0005-strict-layering-and-renames.md) — the strict-DAG rule.
-- [ADR-0035](../adr/0035-application-layer-split.md) — application-layer split.
+- [ADR-0035](../adr/archive/0035-application-layer-split.md) — application-layer split.
 - [ADR-0037](../adr/0037-server-layer.md) — the server layer.
 - [ADR-0053](../adr/0053-declarative-principal-profile.md) — `PrincipalProfile`.
 - [ADR-0054](../adr/0054-server-layer-followups.md) — identity relocation, serve

@@ -5,13 +5,13 @@ use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, OpenAiProviderSpec, RemoteCatalogSource};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
 /// joined the plan alongside the flagship (native multimodal, 1M context,
 /// ~1/3 the credit burn), so it is offered ahead of the older flagships.
-pub use muta_contracts::provider_presets::ZAI_CODE_MODELS;
+pub use muta_contracts::model_providers::ZAI_CODE_MODELS;
 
 // ZAI Code (CN) — Zhipu BigModel / Z.AI coding-plan platform
 // (open.bigmodel.cn/api/coding/paas/v4). A coding-agent membership endpoint
@@ -20,7 +20,7 @@ pub use muta_contracts::provider_presets::ZAI_CODE_MODELS;
 // the ZHIPU_API_KEY legacy name for key compatibility with the broader
 // Zhipu ecosystem, while ZAI_API_KEY is the preferred alias.
 pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
-    id: "zai-code",
+    id: "glm-cn",
     base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
     default_model: "glm-5.3",
     env_api_key: "ZAI_API_KEY",
@@ -132,9 +132,9 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::unsupported_prompt_cache,
-    id: "zai-code",
+    id: "glm-cn",
     baselines: MODELS,
     base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
     user_agent: Some(crate::ZCODE_USER_AGENT),
@@ -146,11 +146,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // models.dev entry for zai covers the gap so a plan refresh does not blank
     // the picker. Baselines stay the single source of capability truth either
     // way (fitting is off).
-    live_catalog: Some(LiveCatalog::ProviderEndpointWithFallback {
-        protocol: DiscoveryProtocol::OpenAi,
-        fallback_provider: "zai",
-    }),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::ZCode,
+    client_profile_sensitive: false,
     wire_overrides: &[],
     models: ZAI_CODE_MODELS,
 };
@@ -161,14 +159,14 @@ mod tests {
 
     #[test]
     fn openai_compat_spec_resolves_model_override_and_default() {
-        let spec = openai_provider_spec("zai-code").expect("zai-code spec");
+        let spec = openai_provider_spec("glm-cn").expect("glm-cn spec");
         assert_eq!(spec.resolve_model(None), "glm-5.3");
         assert_eq!(spec.resolve_model(Some("glm-5.1".to_string())), "glm-5.1");
     }
 
     #[test]
     fn zai_code_uses_zcode_user_agent_and_identity() {
-        let spec = openai_provider_spec("zai-code").expect("zai-code spec");
+        let spec = openai_provider_spec("glm-cn").expect("glm-cn spec");
         let provider = spec.build("test-key".to_string(), None, None);
         assert_eq!(provider.endpoint.user_agent(), crate::ZCODE_USER_AGENT);
         let identity = provider.endpoint.client_identity();

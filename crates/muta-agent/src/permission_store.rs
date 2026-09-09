@@ -281,7 +281,7 @@ impl PermissionStore {
 
     /// Designate the project whose bucket backs the persistent "always"
     /// allowlist, and load any rules already on disk into the in-memory set.
-    /// Pass `None` to disable persistence (runners and most tests do this).
+    /// Pass `None` to disable persistence (subagents and most tests do this).
     pub fn set_project_root(&self, root: Option<std::path::PathBuf>) {
         self.set_project_root_with_dirs(root, &muta_persistence::paths::get());
     }

@@ -433,28 +433,23 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
 
 /// Golden layout test for ADR-0039 stage 2: the registry-assembled system
 /// message must reproduce the legacy `parts.join("\n")` layout byte-for-byte
-/// for a representative state (identity set, no skills). The always-on
-/// conciseness and persistence sections compose in unconditionally. Sections
-/// that need a gap carry their own leading `\n`, so a single-`\n` join yields a
-/// stable, readable layout.
+/// for the shipped baseline state (no identity, no skills). The always-on
+/// host-environment and persistence sections compose in unconditionally.
+/// Sections that need a gap carry their own leading `\n`, so a single-`\n`
+/// join yields a stable, readable layout.
 #[test]
 fn system_prompt_registry_reproduces_legacy_layout() {
     let agent = agent();
-    // The `agent()` helper ships an empty identity; give it one so the
-    // preamble section is active and exercises the full layout.
-    agent.set_identity(crate::AgentIdentity::new(
-        "muta",
-        "an expert AI coding assistant",
-    ));
+    // The `agent()` helper ships an empty identity, which is exactly what the
+    // shipped coding CLI uses: the baseline prompt opens at the host
+    // environment, with no "You are …" self-description.
 
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
 
-    // preamble \n\n host env \n\n persistence.
-    let expected = "You are muta, an expert AI coding assistant.\n\
-     \n\
-     ## Host Execution Environment\n\
+    // host env \n\n persistence.
+    let expected = "## Host Execution Environment\n\
      - Primary Workspace: `.`\n\
      - Operating System: Unix-like (Linux/macOS)\n\
      - Native Shell: POSIX sh / bash\n\
@@ -481,29 +476,36 @@ fn system_prompt_registry_reproduces_legacy_layout() {
 }
 
 #[test]
-fn apply_master_profile_switches_identity_into_the_system_prompt() {
-    // Plan §3.3 acceptance: switching the master role live re-rolls the
-    // system-prompt preamble, so the next request speaks with the new persona.
+fn apply_preset_switches_identity_into_the_system_prompt() {
+    // Plan §3.3 acceptance: switching the agent role live re-rolls the
+    // system-prompt identity line, so the next request speaks with the new
+    // role directive. The baseline (empty identity) opens at the host
+    // environment instead.
     let agent = agent();
-    agent.set_identity(crate::AgentIdentity::new("muta", "a coding assistant"));
-
-    let architect = muta_contracts::MasterPreset::for_role(
-        muta_contracts::MasterPresetId::Architect,
-        &crate::AgentIdentity::new("muta", "a coding assistant"),
+    let mut baseline: Vec<Message> = Vec::new();
+    agent.prepare_request_messages_debug(&mut baseline);
+    assert!(
+        !baseline[0].content.starts_with("You are"),
+        "the shipped baseline must carry no self-description; got: {}",
+        baseline[0].content
     );
-    agent.apply_master_profile(&architect);
 
-    // The next assembled request must open with the architect preamble, not
-    // the original coding one.
+    let architect = muta_contracts::AgentPreset::for_role(
+        muta_contracts::AgentPresetId::Architect,
+        &crate::AgentIdentity::default(),
+    );
+    agent.apply_preset(&architect);
+
+    // The next assembled request must open with the architect role directive.
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
     assert!(
-        prompt.contains("architect"),
-        "switched preamble should mention the architect role; got: {prompt}"
+        prompt.starts_with("Role: software architect."),
+        "switched prompt should open with the architect role directive; got: {prompt}"
     );
     assert!(
-        !prompt.starts_with("You are muta, a coding assistant."),
+        !prompt.starts_with("You are a coding assistant."),
         "the old identity preamble must be replaced, not appended; got: {prompt}"
     );
 }
@@ -1440,11 +1442,11 @@ async fn rejected_permission_does_not_execute_tool() {
     );
 }
 
-/// A read-only tool for the runner child in the drain test.
-struct RunnerReadTool;
+/// A read-only tool for the subagent child in the drain test.
+struct SubagentReadTool;
 
 #[async_trait]
-impl Tool for RunnerReadTool {
+impl Tool for SubagentReadTool {
     fn name(&self) -> &str {
         "read_text"
     }
@@ -1460,15 +1462,15 @@ impl Tool for RunnerReadTool {
 }
 
 /// A provider whose first request returns a `read_text` tool call and whose
-/// second request flips the gate and then stalls forever — so the runner is
+/// second request flips the gate and then stalls forever — so the subagent is
 /// parked mid-flight and can only stop when its cancellation token fires.
-struct GatedRunnerProvider {
+struct GatedSubagentProvider {
     requests: AtomicUsize,
     gate: tokio::sync::watch::Sender<bool>,
 }
 
 #[async_trait]
-impl Provider for GatedRunnerProvider {
+impl Provider for GatedSubagentProvider {
     async fn chat(
         &self,
         _request: muta_contracts::ModelRequest,
@@ -1517,46 +1519,46 @@ impl Provider for GatedRunnerProvider {
 }
 
 /// The executor's cooperative drain: when the user cancels a turn while an
-/// runner is in flight, `execute_tool_evented` signals the runner, waits for it
+/// subagent is in flight, `execute_tool_evented` signals the subagent, waits for it
 /// to return its partial transcript, and reports the recovered result with
 /// `interrupted: true` — instead of dropping the future and losing the work.
 #[tokio::test]
-async fn execute_tool_evented_drains_interrupted_runner() {
+async fn execute_tool_evented_drains_interrupted_subagent() {
     let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
-    let runner: Arc<crate::RunnerTool> = Arc::new(crate::RunnerTool::new(
-        Arc::new(GatedRunnerProvider {
+    let subagent: Arc<crate::SubagentTool> = Arc::new(crate::SubagentTool::new(
+        Arc::new(GatedSubagentProvider {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        muta_contracts::ToolSet::from_tools(vec![Arc::new(RunnerReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::RUNNER_EXPLORE,
+        muta_contracts::ToolSet::from_tools(vec![Arc::new(SubagentReadTool) as Arc<dyn Tool>]),
+        &muta_contracts::SUBAGENT_EXPLORE,
     ));
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
-        vec![runner.clone() as Arc<dyn Tool>],
+        vec![subagent.clone() as Arc<dyn Tool>],
         crate::AgentIdentity::default(),
     ));
 
     let cancel = CancellationToken::new();
     let call = ToolCall {
-        id: "call_runner".to_string(),
-        name: "spawn_runner".to_string(),
+        id: "call_subagent".to_string(),
+        name: "spawn_agent".to_string(),
         arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
     };
     let agent_for_run = agent.clone();
     let cancel_for_run = cancel.clone();
     let task = tokio::spawn(async move {
         agent_for_run
-            .execute_tool_evented(&call, "call_runner", &cancel_for_run, &mut |_event| {})
+            .execute_tool_evented(&call, "call_subagent", &cancel_for_run, &mut |_event| {})
             .await
     });
 
-    // Wait until the runner is genuinely mid-flight, then interrupt the turn.
+    // Wait until the subagent is genuinely mid-flight, then interrupt the turn.
     let mut gate_rx = gate_rx;
     gate_rx
         .changed()
         .await
-        .expect("runner reached second request");
+        .expect("subagent reached second request");
     cancel.cancel();
 
     let outcome = task
@@ -1566,13 +1568,16 @@ async fn execute_tool_evented_drains_interrupted_runner() {
     assert!(outcome.interrupted, "interruption must be reported");
     let result = outcome.result.expect("drained result must be recovered");
     match result {
-        ToolOutput::Runner {
+        ToolOutput::Subagent {
             interrupted,
             failed,
             messages,
             ..
         } => {
-            assert!(interrupted, "recovered runner must be flagged interrupted");
+            assert!(
+                interrupted,
+                "recovered subagent must be flagged interrupted"
+            );
             assert!(!failed, "interruption is not a failure");
             assert_eq!(
                 messages.iter().filter(|m| m.role == Role::Tool).count(),
@@ -1580,7 +1585,7 @@ async fn execute_tool_evented_drains_interrupted_runner() {
                 "the child's completed tool call must survive the drain"
             );
         }
-        other => panic!("expected a drained Runner output, got {other:?}"),
+        other => panic!("expected a drained Subagent output, got {other:?}"),
     }
 }
 
@@ -1983,7 +1988,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 "stdin-request {} (secret={})",
                 request.command, request.secret
             )),
-            AgentEvent::Runner { .. } => Some("subtask".to_string()),
+            AgentEvent::Subagent { .. } => Some("subtask".to_string()),
             AgentEvent::TodosUpdated(list) => Some(format!("todos {} items", list.len())),
             AgentEvent::BackgroundJobStarted(info) => {
                 Some(format!("background-job-started {}", info.id.0))
@@ -2251,7 +2256,7 @@ async fn doom_block_is_surgical_across_files() {
 }
 
 /// The doom guard is gated by `set_nudge_config`: disabled (the default), a
-/// repeating call is neither blocked nor injected — runners and the review
+/// repeating call is neither blocked nor injected — subagents and the review
 /// diagnostic rely on this. The test is explicit about the disabled state
 /// rather than relying on the default so the assertion stays meaningful if the
 /// default ever flips.
@@ -2638,7 +2643,7 @@ async fn unattended_preserves_schema_and_intercepts_ask_user_at_runtime() {
 // Verifies the per-project `Always` allowlist round-trips through disk:
 // approving `Always` on one agent is visible to a fresh agent constructed
 // against the same project root, and revoking is mirrored to disk too.
-// Runners (no project root) stay ephemeral and never touch the file.
+// Subagents (no project root) stay ephemeral and never touch the file.
 
 #[tokio::test]
 async fn always_permission_persists_across_agents_for_same_project() {
@@ -2756,7 +2761,7 @@ async fn agent_without_project_root_never_writes_permissions_file() {
     let perms_path = dirs.project_permissions(&project_root);
 
     // No set_project_root call: the agent stays ephemeral, so an Always
-    // approval must not write any file (runners behave the same way).
+    // approval must not write any file (subagents behave the same way).
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
@@ -3198,11 +3203,11 @@ async fn scheduler_records_results_in_input_order_despite_completion_order() {
     );
 }
 
-/// A turn interrupted mid-batch records the drained runner's partial result
+/// A turn interrupted mid-batch records the drained subagent's partial result
 /// and pairs the never-produced sibling call with `ToolCancelled` — the
-/// batch-level counterpart of `execute_tool_evented_drains_interrupted_runner`.
+/// batch-level counterpart of `execute_tool_evented_drains_interrupted_subagent`.
 #[tokio::test]
-async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
+async fn interrupted_batch_records_subagent_drain_and_cancels_unproduced_calls() {
     use std::future::pending;
 
     struct BlockingTool {
@@ -3228,25 +3233,25 @@ async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
     }
 
     let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
-    let runner: Arc<crate::RunnerTool> = Arc::new(crate::RunnerTool::new(
-        Arc::new(GatedRunnerProvider {
+    let subagent: Arc<crate::SubagentTool> = Arc::new(crate::SubagentTool::new(
+        Arc::new(GatedSubagentProvider {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        muta_contracts::ToolSet::from_tools(vec![Arc::new(RunnerReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::RUNNER_EXPLORE,
+        muta_contracts::ToolSet::from_tools(vec![Arc::new(SubagentReadTool) as Arc<dyn Tool>]),
+        &muta_contracts::SUBAGENT_EXPLORE,
     ));
     let started = Arc::new(tokio::sync::Notify::new());
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[
-                ("c1", "spawn_runner", r#"{"description":"d","prompt":"p"}"#),
+                ("c1", "spawn_agent", r#"{"description":"d","prompt":"p"}"#),
                 ("c2", "stream_read", "{}"),
             ]),
             text_turn("done"),
         ])),
         vec![
-            runner as Arc<dyn Tool>,
+            subagent as Arc<dyn Tool>,
             Arc::new(BlockingTool {
                 started: started.clone(),
             }),
@@ -3276,7 +3281,7 @@ async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
     gate_rx
         .changed()
         .await
-        .expect("runner reached its stalled second request");
+        .expect("subagent reached its stalled second request");
     started.notified().await;
     token.cancel();
 
@@ -3287,17 +3292,17 @@ async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
     );
 
     let recorded = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    // The runner drained within the grace period: its ToolResult landed and no
+    // The subagent drained within the grace period: its ToolResult landed and no
     // ToolCancelled was emitted for it.
     assert!(
         recorded.iter().any(
-            |event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "spawn_runner")
+            |event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "spawn_agent")
         ),
-        "drained runner must emit ToolResult"
+        "drained subagent must emit ToolResult"
     );
     assert!(
         !recorded.iter().any(
-            |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "spawn_runner")
+            |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "spawn_agent")
         ),
         "a produced (drained) call must never be paired with ToolCancelled"
     );
@@ -3315,7 +3320,7 @@ async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
         messages
             .iter()
             .any(|m| m.role == Role::Tool && m.content.contains("interrupted mid-task")),
-        "drained runner result must be recorded: {messages:?}"
+        "drained subagent result must be recorded: {messages:?}"
     );
     assert!(
         !messages

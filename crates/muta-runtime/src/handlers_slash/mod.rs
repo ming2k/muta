@@ -49,6 +49,6 @@ pub struct SlashEnv<'a> {
     pub startup: &'a SessionStart,
     pub ui: &'a dyn crate::UiBridge,
     pub extra_commands: &'a SlashCommandRegistry,
-    pub websearch_shared: &'a Arc<muta_contracts::SharedWebSearchConfig>,
+    pub websearch_shared: &'a muta_contracts::SharedWebConfig,
     pub background_jobs: &'a crate::background_jobs::BackgroundJobManager,
 }

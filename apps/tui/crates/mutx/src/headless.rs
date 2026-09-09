@@ -444,7 +444,7 @@ async fn handle_user_question_request(
     // ADR-0141: the non-TTY fabrication branch is gone. A piped run
     // declares the Autonomous posture at attach, so the session's posture
     // gate settles `ask_user` by labeled policy (fail-closed or
-    // recommended-labeled per `[master] ask_user_fallback`) *inside* the
+    // recommended-labeled per `[agent] ask_user_fallback`) *inside* the
     // harness — this handler is only reached when an interactive human is
     // on the other end of stdin/stderr. If one still slips through (e.g. a
     // legacy daemon), fail closed rather than inventing an answer.
@@ -452,7 +452,7 @@ async fn handle_user_question_request(
         eprintln!(
             "mutx: agent asked a question but stdin is not a TTY and no \
              human channel is attached; cancelling the question. Run with a \
-             terminal, or configure `[master] ask_user_fallback` for \
+             terminal, or configure `[agent] ask_user_fallback` for \
              autonomous answering."
         );
         send_intent(

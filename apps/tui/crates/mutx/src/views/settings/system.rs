@@ -9,15 +9,12 @@ pub(super) fn draw_system_detail(
     body: Rect,
     props: &mut SettingsProps<'_>,
     _focused: bool,
-) {
+) -> Option<Rect> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     let items = [
         ("Config File", "~/.config/muta/config.toml"),
-        (
-            "Web Connections",
-            "~/.local/state/muta/web_connections.toml",
-        ),
+        ("Credentials", "~/.config/muta/credentials.toml"),
         (
             "Workspace",
             if props.workspace.is_empty() {
@@ -47,5 +44,5 @@ pub(super) fn draw_system_detail(
         lines.push(Line::from(""));
     }
 
-    render_scrollable(frame, body, lines, props.detail_scroll, None, props.theme);
+    render_scrollable(frame, body, lines, props.detail_scroll, None, props.theme)
 }

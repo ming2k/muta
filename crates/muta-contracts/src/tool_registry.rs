@@ -12,7 +12,7 @@
 //! in higher crates (e.g. `SkillRegistry` in `muta-skills`). The map is the
 //! only seam.
 //!
-//! A handful of "meta" tools genuinely cannot self-register — e.g. an envoy
+//! A handful of "meta" tools genuinely cannot self-register — e.g. a subagent
 //! dispatch tool that needs a snapshot of the *rest* of the toolset, which is
 //! the registry's own output. Those are still assembled explicitly where the
 //! dependency is created; the registry collects everything that is
@@ -65,7 +65,7 @@ impl ToolContext {
 /// a different meaning cannot collide with it in the type-keyed map.
 ///
 /// Provided by the bootstrap that assembles the session (`muta-runtime`).
-/// A context without one (unit tests, envoy sub-agents built from a static
+/// A context without one (unit tests, subagent sub-agents built from a static
 /// snapshot) leaves the service unset and tools fall back to the process cwd —
 /// the historical behaviour — which remains correct wherever one process
 /// serves exactly one project.
@@ -572,7 +572,7 @@ pub enum ToolScope {
     #[default]
     All,
     /// Admit only the named capabilities. An empty set admits nothing. Used by
-    /// envoy roles to confine a spawned agent to e.g. the read-only inspection
+    /// subagent roles to confine a spawned agent to e.g. the read-only inspection
     /// tools.
     Only(BTreeSet<String>),
 }
@@ -611,7 +611,7 @@ impl ToolScope {
 
 /// One party's ask of the [`ToolSet`] pool: a [`ToolScope`] (which capabilities)
 /// plus a [`VariantSelection`] (which implementation of each). Both the agent
-/// identity (principal or envoy role) and the active model express themselves
+/// identity (principal or subagent role) and the active model express themselves
 /// as a `ToolSelection`; [`ToolSet::resolve_for`] composes the two — scope by
 /// intersection, variants by agent-over-model precedence — into the live
 /// toolset.
@@ -1370,7 +1370,7 @@ mod tests {
 
         let decl = ToolDeclaration::new(
             "code_analyst",
-            crate::AgentKind::Master,
+            crate::AgentKind::Root,
             ToolScope::only(["read_text", "search_text"]),
         );
         pool.declare(decl.clone());

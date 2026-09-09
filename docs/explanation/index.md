@@ -8,7 +8,7 @@ Conceptual background and design rationale.
 |------|--------|
 | [Crate layering](crate-layering.md) | The workspace crate topology, each layer's responsibility, the dependency DAG, and how a request flows across layers |
 | [The session daemon and the control plane](session-daemon-and-control-plane.md) | Who owns a session's lifecycle, the daemon's observe/drive/manage roles, and how every client connects |
-| [Workflow patterns](workflow-patterns.md) | The five core interaction models: pairing loop, multi-session management, runner delegation, MCP extensions, and headless automation |
+| [Workflow patterns](workflow-patterns.md) | The five core interaction models: pairing loop, multi-session management, subagent delegation, MCP extensions, and headless automation |
 
 ## Storage and persistence
 
@@ -37,13 +37,14 @@ before the individual docs.
 | [Prompt and message assembly](agent-design/prompt-assembly.md) | How the harness composes the model-visible message window into one request: hidden harness context, non-driving command echoes, and the singleton system message |
 | [Context pruning](agent-design/context-pruning.md) | The cheap first context-projection layer: clears stale tool-result bodies while preserving the `tool_call_id` chain |
 | [Context compaction](agent-design/context-compaction.md) | The heavier second projection layer: summarizes older complete rounds into a durable checkpoint with a visible `Compacted` notice |
-| [Envoys](agent-design/envoys.md) | The `envoy` tool's read-only child agent: isolation model, event streaming, and the TUI zoom view |
+| [Subagents](agent-design/subagents.md) | The `subagent` tool's read-only child agent: isolation model, event streaming, and the TUI zoom view |
 | [MCP servers](agent-design/mcp.md) | Local stdio MCP server discovery, the `mcp__<server>__<tool>` wrapper, failure isolation, and access-tier gating |
 | [User questions](agent-design/user-questions.md) | How the `ask_user` tool blocks the agent, renders a modal, and returns answers |
 | [Delegated autonomous execution](agent-design/delegated-mode.md) | The design intent of running without human intervention: what the flag enforces (the broker gate) versus the broader no-confirmations/no-questions posture it expresses, and where it is forced on |
 | [Skills](agent-design/skills.md) | On-demand domain expertise: the catalog/body two-channel model, the source/priority cascade, and explicit versus implicit invocation |
 | [Lifecycle hooks](agent-design/hooks.md) | User-configured actions on the agent's lifecycle events (PreToolUse, Stop, SessionStart, PreCompact…): one event axis with capability implied by the event |
 | [Token accounting](agent-design/token-accounting.md) | How token counts are measured: upstream `usage` preferred with a char-class estimation fallback, the reported-vs-estimated ledger, and the accuracy report modal |
+| [Network telemetry, TTFT, and streaming TPS](agent-design/network-telemetry-and-tps.md) | How muta measures latency and throughput from the client boundary: OSI/TCP observability, Packet 5 ACK reality, the 9-stage latency timeline, `TCP_INFO` polling, and the single-rate doctrine |
 | [Prompt caching](agent-design/prompt-caching.md) | How prompt caching saves cost across providers: the three strategies (`Breakpoints` / `SessionKey` / `Automatic`), the per-protocol JSON paths, and the single rule that keeps cache savings honest (no inline reads) |
 
 

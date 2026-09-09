@@ -249,7 +249,7 @@ impl TranscriptEntry {
             effort: payload.effort.clone(),
             hidden: self.hidden,
             children: None,
-            runner_meta: None,
+            subagent_meta: None,
             origin: payload.injection.clone(),
             timestamp: Some(self.created_at_ms / 1000),
             sent_at_ms: payload.sent_at_ms,

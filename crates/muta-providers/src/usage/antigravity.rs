@@ -61,13 +61,13 @@ pub struct AntigravityUsageFetcher;
 
 #[async_trait]
 impl ProviderUsageFetcher for AntigravityUsageFetcher {
-    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
-        preset_id == Some("antigravity-oauth") || base_url.contains("cloudcode-pa.googleapis.com")
+    fn matches(&self, provider: &str, base_url: &str) -> bool {
+        provider == "google-antigravity" || base_url.contains("cloudcode-pa.googleapis.com")
     }
 
     async fn fetch_usage(
         &self,
-        client: &reqwest::Client,
+        client: &crate::http::Http,
         base_url: &str,
         api_key: &str,
     ) -> Result<ProviderUsage, String> {
@@ -83,26 +83,21 @@ impl ProviderUsageFetcher for AntigravityUsageFetcher {
             "project": ""
         });
 
-        let resp = client
-            .post(&endpoint)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-            .header(reqwest::header::USER_AGENT, ANTIGRAVITY_USER_AGENT)
+        let request = crate::http::Request::new(muta_net::Method::POST, &endpoint)
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("user-agent", ANTIGRAVITY_USER_AGENT)
             .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&req_body)
-            .send()
+            .json(&req_body);
+        let resp = client
+            .send(request)
             .await
             .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP {status}: {text}"));
+        if !resp.is_success() {
+            return Err(format!("HTTP {}: {}", resp.status, resp.body));
         }
 
-        let body: AntigravityQuotaSummaryResponse = resp
-            .json()
-            .await
+        let body: AntigravityQuotaSummaryResponse = serde_json::from_str(&resp.body)
             .map_err(|e| format!("Failed to parse Antigravity quota response: {e}"))?;
 
         parse_antigravity_quota(body)

@@ -102,7 +102,7 @@ pub enum QuestionAction {
 pub enum QuestionEffect {
     /// Send the computed answers back to the agent. Carries the request id,
     /// one array of selected option labels per question, and the optional
-    /// runner parent tool-call id the reply must be tagged with for routing.
+    /// subagent parent tool-call id the reply must be tagged with for routing.
     Reply {
         request_id: String,
         answers: Vec<Vec<String>>,

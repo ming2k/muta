@@ -130,8 +130,8 @@ interactive profile (e.g. `PLAN` with `allow_user_interaction: true`) can drop
 
 - [ADR-0011](0011-subagent-profiles.md) — the capability-axis profile primitive
   the registry threads through; `allow_user_interaction` is now reachable.
-- [ADR-0027](0027-plan-as-subagent.md) — §5 (clarification via parent
+- [ADR-0027](archive/0027-plan-as-subagent.md) — §5 (clarification via parent
   round-trip) is superseded by this ADR's live channel.
-- [ADR-0028](0028-capability-allocation-scoped-writes.md) — orthogonal; the
+- [ADR-0028](archive/0028-capability-allocation-scoped-writes.md) — orthogonal; the
   `WriteScope` grant this builds on.
 - [Subagents](../explanation/agent-design/envoys.md) — the duplex model.

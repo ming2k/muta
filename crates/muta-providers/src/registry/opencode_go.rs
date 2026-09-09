@@ -6,13 +6,13 @@ use muta_contracts::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{LiveCatalog, ProviderPresetSpec};
+use super::{ModelProviderSpec, RemoteCatalogSource};
 
 /// Curated seed models offered by the OpenCode Go preset. A fresh connection
 /// activates from this list before the first models.dev fetch completes; the
 /// live catalog then refreshes the served set (including relay models this
 /// client has never heard of).
-pub use muta_contracts::provider_presets::OPENCODE_GO_MODELS;
+pub use muta_contracts::model_providers::OPENCODE_GO_MODELS;
 
 /// Wire-format exceptions for the opencode-go relay. The relay's default route
 /// is OpenAI chat-completions, but the `minimax-*` family is served over
@@ -261,7 +261,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::unsupported_prompt_cache,
     id: "opencode-go",
     baselines: MODELS,
@@ -275,10 +275,11 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     // enabled because models.dev is the relay's own directory — every
     // advertised id is materialized with its catalog metadata, so a newly
     // shipped relay model appears with zero client changes.
-    live_catalog: Some(LiveCatalog::ModelsDev {
+    catalog_source: RemoteCatalogSource::ModelsDev {
         provider: "opencode-go",
-    }),
-    fitting: true,
+    },
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: WIRE_OVERRIDES,
     models: OPENCODE_GO_MODELS,
 };

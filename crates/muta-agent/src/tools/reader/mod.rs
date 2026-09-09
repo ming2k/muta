@@ -21,17 +21,16 @@ pub(crate) enum Reader {
     Disabled,
 }
 
-pub(crate) fn build_reader(cfg: &muta_contracts::WebSearchConfig) -> Reader {
-    let name = cfg.reader.trim();
-    if name == "none" || name == "(none)" || name == "disabled" {
-        return Reader::Disabled;
+pub(crate) fn build_reader(cfg: &muta_contracts::WebRuntimeConfig) -> Reader {
+    match cfg.behavior.reader {
+        muta_contracts::WebReaderProvider::Jina => Reader::Jina(jina::JinaReader {
+            api_key: cfg
+                .reader_credential
+                .as_ref()
+                .map(|k| k.expose_secret().to_string()),
+        }),
+        muta_contracts::WebReaderProvider::Disabled => Reader::Disabled,
     }
-    Reader::Jina(jina::JinaReader {
-        api_key: cfg
-            .jina_api_key
-            .as_ref()
-            .map(|k| k.expose_secret().to_string()),
-    })
 }
 
 impl Reader {
@@ -49,7 +48,7 @@ impl Reader {
     /// Errors are surfaced verbatim to the model/user.
     pub(crate) async fn read(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         url: &str,
         _raw: bool,
     ) -> Result<ReaderOutput, String> {
@@ -74,34 +73,41 @@ pub(crate) struct ReaderOutput {
 mod tests {
     use super::*;
 
-    #[test]
-    fn build_reader_defaults_to_jina_for_unknown_name() {
-        let cfg = muta_contracts::WebSearchConfig {
-            reader: "unknown".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(build_reader(&cfg).name(), "jina");
+    /// The reader field is an enum now: an unknown name fails at parse time,
+    /// so `build_reader` can never receive one.
+    fn runtime_from_toml(text: &str) -> muta_contracts::WebRuntimeConfig {
+        let behavior: muta_contracts::WebConfig =
+            toml::from_str(text).expect("reader field parses");
+        muta_contracts::WebRuntimeConfig {
+            behavior,
+            search_credential: None,
+            reader_credential: None,
+        }
+    }
 
-        let cfg: muta_contracts::WebSearchConfig =
-            toml::from_str("reader = \"totally-bogus\"").expect("reader field parses");
-        assert_eq!(build_reader(&cfg).name(), "jina");
+    #[test]
+    fn an_unknown_reader_name_is_rejected_at_parse_time() {
+        let error = toml::from_str::<muta_contracts::WebConfig>("reader = \"totally-bogus\"")
+            .expect_err("unknown reader names must not parse");
+        assert!(
+            error.to_string().contains("unsupported web reader"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
     fn build_reader_disables_when_configured() {
-        let cfg: muta_contracts::WebSearchConfig =
-            toml::from_str("reader = \"disabled\"").expect("reader field parses");
-        assert_eq!(build_reader(&cfg).name(), "disabled");
-
-        let cfg: muta_contracts::WebSearchConfig =
-            toml::from_str("reader = \"none\"").expect("reader field parses");
-        assert_eq!(build_reader(&cfg).name(), "disabled");
+        assert_eq!(
+            build_reader(&runtime_from_toml("reader = \"disabled\"")).name(),
+            "disabled"
+        );
     }
 
     #[test]
     fn build_reader_selects_jina_by_name() {
-        let cfg: muta_contracts::WebSearchConfig =
-            toml::from_str("reader = \"jina\"").expect("reader field parses");
-        assert_eq!(build_reader(&cfg).name(), "jina");
+        assert_eq!(
+            build_reader(&runtime_from_toml("reader = \"jina\"")).name(),
+            "jina"
+        );
     }
 }

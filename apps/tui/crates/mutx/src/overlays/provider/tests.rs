@@ -401,8 +401,8 @@ fn preset_chooser_shows_only_titles_when_unfocused() {
     // newline + indent between its characters.
     let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        squeezed.contains("Connections›Addpresetconnection"),
-        "preset branch breadcrumb: {text:?}"
+        squeezed.contains("Connections›Addconnection"),
+        "template branch breadcrumb: {text:?}"
     );
     assert!(
         squeezed.contains("flagshipClaudemodelswithadvancedreasoning"),
@@ -458,8 +458,8 @@ fn preset_chooser_carries_the_auth_scheme_in_the_description_sentence() {
     // is used anywhere in the chooser.
     let xai_idx = PROVIDER_PRESETS
         .iter()
-        .position(|t| t.id == "xai-oauth")
-        .expect("xai-oauth preset");
+        .position(|t| t.id == "xai")
+        .expect("xai template");
     let text = render_preset_chooser(xai_idx, 100, 32);
     assert!(
         text.contains("authorizes in the browser"),
@@ -601,7 +601,7 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            preset_id: String::new(),
+            provider: String::new(),
             client_identity: Default::default(),
             last_used_ms: None,
             auth: Default::default(),
@@ -899,10 +899,9 @@ fn connections_modal_detail_view_renders_info_and_usage() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);
     let detail = muta_contracts::ConnectionDetail {
-        id: "deepseek-prod".to_string(),
         name: "DeepSeek Production".to_string(),
-        preset_id: Some("deepseek".to_string()),
-        preset_label: Some("DeepSeek".to_string()),
+        provider: "deepseek".to_string(),
+        provider_label: "DeepSeek".to_string(),
         protocol: "openai".to_string(),
         base_url: "https://api.deepseek.com".to_string(),
         auth_type: "API Key".to_string(),
@@ -972,7 +971,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
     assert!(text.contains("Connections"));
     assert!(text.contains("Details [DeepSeek Production]"));
     assert!(text.contains("Configuration"));
-    assert!(text.contains("deepseek-prod"));
+    assert!(text.contains("deepseek"));
     assert!(text.contains("https://api.deepseek.com"));
     assert!(text.contains("sk-12...abcd"));
     assert!(text.contains("Client Profile"));
@@ -1020,10 +1019,9 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);
     let detail = muta_contracts::ConnectionDetail {
-        id: "antigravity-oauth".to_string(),
         name: "Google Antigravity".to_string(),
-        preset_id: Some("antigravity-oauth".to_string()),
-        preset_label: Some("Google Antigravity".to_string()),
+        provider: "google-antigravity".to_string(),
+        provider_label: "Google Antigravity".to_string(),
         protocol: "google".to_string(),
         base_url: "https://cloudcode-pa.googleapis.com".to_string(),
         auth_type: "OAuth".to_string(),
@@ -1116,10 +1114,9 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);
     let detail = muta_contracts::ConnectionDetail {
-        id: "deepseek-prod".to_string(),
         name: "DeepSeek Production".to_string(),
-        preset_id: Some("deepseek".to_string()),
-        preset_label: Some("DeepSeek".to_string()),
+        provider: "deepseek".to_string(),
+        provider_label: "DeepSeek".to_string(),
         protocol: "openai".to_string(),
         base_url: "https://api.deepseek.com".to_string(),
         auth_type: "API Key".to_string(),
@@ -1204,10 +1201,9 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 35);
     let detail = muta_contracts::ConnectionDetail {
-        id: "antigravity-oauth".to_string(),
         name: "Google Antigravity".to_string(),
-        preset_id: Some("antigravity-oauth".to_string()),
-        preset_label: Some("Google Antigravity".to_string()),
+        provider: "google-antigravity".to_string(),
+        provider_label: "Google Antigravity".to_string(),
         protocol: "google".to_string(),
         base_url: "https://cloudcode-pa.googleapis.com".to_string(),
         auth_type: "OAuth".to_string(),
@@ -1404,10 +1400,9 @@ fn connections_modal_standalone_detail_renders_single_level_header() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 24);
     let detail = muta_contracts::ConnectionDetail {
-        id: "anthropic-prod".to_string(),
         name: "Anthropic".to_string(),
-        preset_id: Some("anthropic".to_string()),
-        preset_label: Some("Anthropic".to_string()),
+        provider: "anthropic".to_string(),
+        provider_label: "Anthropic".to_string(),
         protocol: "anthropic".to_string(),
         base_url: "https://api.anthropic.com".to_string(),
         auth_type: "API Key".to_string(),

@@ -35,7 +35,7 @@
 //! (`agent -> skills`); orchestration-native tools that
 //! construct or control agents remain in this crate.
 //!
-//! ## Why catalog and RunnerTool live here (not in store / tools)
+//! ## Why catalog and SubagentTool live here (not in store / tools)
 //!
 //! Both got relocated here from their intuitive homes to keep the
 //! dependency graph strictly layered (see ADR-0005):
@@ -45,11 +45,11 @@
 //!   `muta-providers` — an inversion, since store is otherwise a peer
 //!   of providers. The catalog is fundamentally a factory consumed by
 //!   orchestration, so it lives where orchestration lives.
-//! - **`RunnerTool`** spawns runners via `Agent::new`. It used to live
+//! - **`SubagentTool`** spawns subagents via `Agent::new`. It used to live
 //!   in the former `muta-tools` crate, which forced tools to depend on
 //!   this crate —
 //!   another inversion, since tools are below the agent layer. The
-//!   runner tool is fundamentally an orchestration primitive that
+//!   subagent tool is fundamentally an orchestration primitive that
 //!   happens to satisfy the `Tool` trait, so it lives here too.
 //!
 //! Everything `muta-contracts` exports is re-exported here so consumers can
@@ -98,14 +98,14 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub(crate) const FINISH_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(750);
 
 /// How long the tool executors wait for a cooperatively-cancelled in-flight
-/// call (an runner) to drain after the user interrupts a turn, before falling
-/// back to dropping its future. The runner observes its token at the next safe
+/// call (a subagent) to drain after the user interrupts a turn, before falling
+/// back to dropping its future. The subagent observes its token at the next safe
 /// boundary (the current provider stream or tool call, both bounded by their
 /// own timeouts) and returns its partial transcript — normally in well under
 /// a second. This is the backstop for pathological cases (a child parked on a
 /// human answer it will never get because the same human just pressed Esc).
 /// Bounded so an interrupt never hangs the UI.
-const RUNNER_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+const SUBAGENT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
@@ -130,10 +130,8 @@ pub mod inflight;
 pub use inflight::Inflight;
 pub mod agent_slot;
 mod dispatch_pipeline;
-pub mod master_slot;
-pub mod runner_tool;
 pub mod subagent_tool;
-pub use agent_slot::{AgentSlot, MasterSlot};
+pub use agent_slot::AgentSlot;
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;
@@ -146,7 +144,7 @@ pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
 pub mod aspects;
 pub use aspects::AspectEngine;
 pub mod cognitive;
-pub mod session_digest;
+pub mod session_title;
 mod shell_input;
 pub use cognitive::{CognitiveError, CognitivePipeline};
 pub mod stream_loop_detector;
@@ -161,13 +159,12 @@ mod tool_scheduler;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;
-pub use model_request::policies::runner_system_prompt_registry;
 pub use model_request::system_prompt::{
     InstructionOrder, SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError,
     SystemPromptSection,
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
-pub use subagent_tool::{RunnerRegistry, RunnerTool, SubAgentRegistry, SubAgentTool};
+pub use subagent_tool::{SubagentRegistry, SubagentTool};
 
 #[cfg(test)]
 mod tests;

@@ -1,9 +1,9 @@
-//! Background job manager for long-running process commands and asynchronous sub-runners.
+//! Background job manager for long-running process commands and asynchronous sub-subagents.
 //!
 //! Dual-track execution model:
 //! - **Track A (Process Jobs)**: OS-level subprocesses (`tokio::process`) capturing output
 //!   into in-memory ring buffers and disk logs, with 0 LLM token cost.
-//! - **Track B (Sub-Runner Jobs)**: Asynchronous isolated exploration subagents.
+//! - **Track B (Sub-Subagent Jobs)**: Asynchronous isolated exploration subagents.
 //!
 //! Emits live progress events and delivers completed outcomes to the session mailbox.
 

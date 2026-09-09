@@ -68,7 +68,7 @@ pub enum Modal {
     /// editing config.toml by hand. The protocol and seeded models come from the
     /// template chosen in [`Self::ProviderPreset`]; `Tab`/`BackTab` cycle the
     /// visible fields, and the focused field borrows the composer line (like
-    /// [`Self::ModelEditor`]). `Enter` saves (→ `AgentRequest::AddProvider`) and
+    /// [`Self::ModelEditor`]). `Enter` saves (→ `AgentRequest::AddConnection`) and
     /// activates; `Esc` returns to the Connections list. See `App::custom_field`
     /// and friends.
     CustomProvider,

@@ -713,7 +713,7 @@ pub(crate) mod workspace_tests {
     }
 
     #[tokio::test]
-    async fn workspace_process_runner_fails_closed() {
+    async fn workspace_process_subagent_fails_closed() {
         let root = scratch();
         let env = WorkspaceExecutionEnvironment::new(root.path());
         let error = env

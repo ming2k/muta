@@ -10,7 +10,7 @@ use crate::keymap::Key;
 use crate::render::Theme;
 
 pub struct ActivityBarProps<'a> {
-    /// Master-slot label (the typed phase's text).
+    /// Root agent label (the typed phase's text).
     pub status: &'a str,
     /// Transport-setback clause rendered beside the label, warning-tinted. `None`
     /// when transport is healthy.

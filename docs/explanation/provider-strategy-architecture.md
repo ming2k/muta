@@ -40,6 +40,35 @@ matrix and parameter schemas, see [Providers](../reference/providers.md).
 
 ---
 
+## Model Providers and Connections
+
+Two concepts that earlier releases conflated are kept apart (ADR-0201):
+
+- A **model provider** is a service surface. Its identity is exactly the triple
+  *endpoint family, wire dialect, model universe* — never a wire protocol and
+  never an authentication mode. `openai-subscription` names a surface;
+  `chatgpt-oauth`, which named an auth mode, is gone. The closed id set lives in
+  `muta_contracts::model_providers::MODEL_PROVIDER_IDS`.
+- A **connection** is a named pipe to exactly one model provider: it binds a
+  credential and a client identity, and may narrow or override the provider's
+  model set. Its identity is its `name` (unique, compared case-insensitively);
+  it has no `id`.
+
+Model existence and capability facts belong to the provider, so user scoping is
+keyed by provider first:
+
+| Scope | File | Key |
+|-------|------|-----|
+| provider | `$XDG_CONFIG_HOME/muta/model_providers.toml` | `[model_providers.<provider id>]` |
+| connection | `$XDG_STATE_HOME/muta/connections.toml` | one `[[connections]]` row per connection |
+
+A connection may narrow or override the resolved set but must not invent a
+model the provider excludes, except under `provider = "custom"`, whose model
+universe is open by definition. Routes stay derived at runtime from the provider
+plus the discovery cache and are never persisted (ADR-0123, ADR-0182); this
+decision changes naming and keying, not derivation. The remaining sections
+describe the strategy layers that derivation consumes.
+
 ## 1. Wire Inference Protocols
 
 Inference drivers in `muta-llm-client` decouple high-level agent rounds from

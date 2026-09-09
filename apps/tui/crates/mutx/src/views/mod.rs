@@ -1,6 +1,6 @@
 //! Full-screen view destinations (ADR-0141).
 //!
-//! A **view** is an independent, full-screen destination (`Session`, `Dashboard`, `Settings`, `Envoy`, `Side`).
+//! A **view** is an independent, full-screen destination (`Session`, `Dashboard`, `Settings`, `Subagent`, `Side`).
 //! Modals and overlays float over views and never own the full screen.
 
 pub mod settings;

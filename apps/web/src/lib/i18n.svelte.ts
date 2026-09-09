@@ -94,7 +94,7 @@ const en = {
   arguments: "Arguments",
   liveOutput: "Live output",
   result: "Result",
-  runner: "runner",
+  subagent: "subagent",
   working: "working…",
   toolsRunning: (n: number) => `${n} tool${n > 1 ? "s" : ""} running`,
   thinking: "thinking",
@@ -107,7 +107,7 @@ const en = {
   roleAssistant: "Muta",
   roleSystem: "notification",
   roleTool: "tool",
-  runnerTranscript: (n: number) => `runner transcript (${n})`,
+  subagentTranscript: (n: number) => `subagent transcript (${n})`,
 
   // Todos
   tasks: "Tasks",
@@ -182,7 +182,7 @@ const en = {
 type TemplateKeys =
   | "questionNeedsAnswer"
   | "toolsRunning"
-  | "runnerTranscript"
+  | "subagentTranscript"
   | "imageTooLargeBody"
   | "projectPathHint"
   | "daemonReachable";
@@ -266,7 +266,7 @@ const zh: Dict = {
   arguments: "参数",
   liveOutput: "实时输出",
   result: "结果",
-  runner: "runner",
+  subagent: "subagent",
   working: "工作中…",
   toolsRunning: (n: number) => `${n} 个工具运行中`,
   thinking: "思考中",
@@ -277,7 +277,7 @@ const zh: Dict = {
   roleAssistant: "Muta",
   roleSystem: "通知",
   roleTool: "工具",
-  runnerTranscript: (n: number) => `runner 记录（${n}）`,
+  subagentTranscript: (n: number) => `subagent 记录（${n}）`,
 
   tasks: "任务",
 

@@ -117,9 +117,10 @@ impl Dirs {
         self.config_dir.join("config.toml")
     }
 
-    /// User-declared preset customizations (`$XDG_CONFIG_HOME/muta/presets.toml`, ADR-0199).
-    pub fn presets_file(&self) -> PathBuf {
-        self.config_dir.join("presets.toml")
+    /// User-declared model provider customizations
+    /// (`$XDG_CONFIG_HOME/muta/model_providers.toml`, ADR-0199, ADR-0201).
+    pub fn model_providers_file(&self) -> PathBuf {
+        self.config_dir.join("model_providers.toml")
     }
 
     /// User-supplied color scheme files (`$XDG_CONFIG_HOME/muta/themes`).
@@ -164,8 +165,8 @@ impl Dirs {
         self.state_dir.join("connections.toml")
     }
 
-    /// Web connections (`$XDG_STATE_HOME/muta/web_connections.toml`).
-    /// The program-managed state for web search and reader connections.
+    /// Legacy web connections (`$XDG_STATE_HOME/muta/web_connections.toml`).
+    /// Read only as a migration source; current runtime state does not depend on it.
     pub fn web_connections_file(&self) -> PathBuf {
         self.state_dir.join("web_connections.toml")
     }

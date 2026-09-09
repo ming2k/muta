@@ -14,7 +14,7 @@ impl Agent {
 
     /// Designate the project whose bucket backs the persistent "always"
     /// allowlist, and load any rules already on disk into the in-memory set.
-    /// Pass `None` to disable persistence (runners and most tests do this).
+    /// Pass `None` to disable persistence (subagents and most tests do this).
     ///
     /// Loading is best-effort: a missing, unreadable, or unsupported file is
     /// silently ignored — the agent simply starts with an empty allowlist and
@@ -71,7 +71,7 @@ impl Agent {
         self.dynamic_tools.clone()
     }
 
-    /// The runner-dispatch-facing read port of the same registry (ADR-0138):
+    /// The subagent-dispatch-facing read port of the same registry (ADR-0138):
     /// an mcp_specialist child's toolset is resolved from the *live* snapshot
     /// at spawn time, so periodic re-discovery reaches later children without
     /// re-binding.
@@ -196,10 +196,10 @@ impl Agent {
 
     /// Structured view of every installed tool, for the session modal's Tools
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
-    /// (`builtin`, `runner`, or the publisher-provided dynamic source id).
+    /// (`builtin`, `subagent`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<muta_contracts::ToolInfo> {
         // Classification delegates to the ToolManager's three-bucket
-        // authority for the builtin (with runner broken out for display) and
+        // authority for the builtin (with subagent broken out for display) and
         // user buckets; the mcp bucket keeps the publisher-provided dynamic
         // source id as its label. The source label is display-only; dispatch
         // treats all three buckets uniformly via name-clash priority
@@ -212,11 +212,11 @@ impl Agent {
         let mut seen: HashSet<String> = HashSet::new();
         let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = Vec::new();
 
-        // 1+2. builtin (with runner broken out) and user, from the manager.
+        // 1+2. builtin (with subagent broken out) and user, from the manager.
         for sourced in self.tool_manager.installed() {
             let label = match sourced.source {
-                crate::tool_manager::ToolSource::Builtin if sourced.tool.name() == "runner" => {
-                    "runner"
+                crate::tool_manager::ToolSource::Builtin if sourced.tool.spawns_subagent() => {
+                    "subagent"
                 }
                 crate::tool_manager::ToolSource::Builtin => "builtin",
                 crate::tool_manager::ToolSource::User => "user",

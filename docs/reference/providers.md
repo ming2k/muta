@@ -1,10 +1,16 @@
 # Providers
 
-Muta separates three concepts that are often conflated:
+Muta separates concepts that are often conflated:
 
 - A **wire protocol** is the exact inference API request and event shape.
 - A **provider dialect** is provider-specific authentication, headers, or an
   envelope layered on one wire protocol.
+- A **model provider** is the upstream service surface that serves models:
+  endpoint family, wire dialect, and model universe (ADR-0201). It is named by
+  a `provider` id and owns the model existence and capability facts.
+- A **connection** is a named pipe to exactly one model provider: it binds a
+  credential and a client identity, and may narrow or override the provider's
+  model set. Its identity is its `name`; it has no `id`.
 - A **route** is one connection and model using one protocol, dialect,
   endpoint, credential, and capability set.
 
@@ -23,9 +29,9 @@ The canonical protocol names are a closed set:
 | `anthropic-messages` | Anthropic Messages `system`, `messages`, and content blocks | Anthropic message/content-block events |
 | `google-generate-content` | Google `generateContent` contents and parts | `streamGenerateContent` candidates and parts |
 
-These names are used by model metadata, provider presets, custom connection
-state, and add/edit events. No alias is accepted and an unknown value does not
-fall back to OpenAI.
+These names are used by model metadata, model providers, connection state, and
+add/edit requests. No alias is accepted and an unknown value does not fall back
+to OpenAI.
 
 All four adapters support native tool declarations and structured streaming.
 Reasoning support is resolved per model and route rather than inferred from the
@@ -43,22 +49,27 @@ adapter name.
 Dialects are mutually exclusive typed values. For example, one Responses route
 cannot accidentally be both ChatGPT and Copilot.
 
-## Preset routes
+## Model provider routes
 
-| Preset id | Inference protocol | Dialect/routing | Authentication |
-|-----------|--------------------|-----------------|----------------|
-| `openai` | OpenAI Chat Completions | standard | API key |
-| `anthropic` | Anthropic Messages | standard | API key |
-| `google` | Google generateContent | Generative Language | API key |
-| `deepseek` | OpenAI Responses | standard | API key |
-| `xai-oauth` | OpenAI Chat Completions | standard | xAI OAuth |
-| `chatgpt-oauth` | OpenAI Responses | ChatGPT | ChatGPT OAuth |
-| `copilot-oauth` | Advertised per model: Chat Completions, Responses, or Messages | matching Copilot dialect | GitHub device OAuth |
-| `kimi-code` | OpenAI Chat Completions | standard | coding-plan key |
-| `zai-code` | OpenAI Chat Completions | standard plus ZCode identity | coding-plan key |
-| `opencode-go` | Selected per model: Chat Completions, Messages, or Google generateContent | standard relay routes | API key |
-| `antigravity-oauth` | Google generateContent | Antigravity | Google OAuth |
-| `custom-openai` | OpenAI Chat Completions | standard | optional API key |
+A **model provider** is the service surface a connection points at (ADR-0201):
+its identity is the triple *endpoint family, wire dialect, model universe* — never
+a wire protocol and never an authentication mode. The closed id set lives in
+`muta_contracts::model_providers::MODEL_PROVIDER_IDS`.
+
+| Model provider id | Default protocol | Dialect/routing | Authentication |
+|-------------------|------------------|-----------------|----------------|
+| `openai` | `openai-chat-completions` | standard | API key |
+| `openai-subscription` | `openai-responses` | ChatGPT/Codex | ChatGPT OAuth |
+| `anthropic` | `anthropic-messages` | standard | API key |
+| `google` | `google-generate-content` | Generative Language | API key |
+| `google-antigravity` | `google-generate-content` | Antigravity | Google OAuth |
+| `github-copilot` | Advertised per model: `openai-chat-completions`, `openai-responses`, or `anthropic-messages` | matching Copilot dialect | GitHub device OAuth |
+| `xai` | `openai-chat-completions` | standard | xAI OAuth or `XAI_API_KEY` |
+| `deepseek` | `openai-responses` | standard | API key |
+| `glm-cn` | `openai-chat-completions` | standard plus ZCode identity | coding-plan key |
+| `kimi-code` | `openai-chat-completions` | standard | coding-plan key |
+| `opencode-go` | Selected per model: chat-completions, messages, or generate-content | standard relay routes | API key |
+| `custom` | `openai-chat-completions` (connection default; a connection may override) | standard | optional API key |
 
 Copilot's live model catalogue is authoritative for the protocol of each model.
 A Copilot model advertising an unsupported Google protocol is rejected rather
@@ -76,12 +87,12 @@ upstream service may offer.
 | OpenAI GPT-5.5 family | implicit | optional 24-hour retention; affinity key | reads |
 | OpenAI GPT-5.4, GPT-5.4 mini, and GPT-5.2 variants | implicit | in-memory or 24-hour retention; affinity key | reads |
 | OpenAI GPT-4o, GPT-4o mini, GPT-5.3 Codex Spark | implicit | in-memory retention; affinity key | reads |
-| Other OpenAI preset models | unsupported | none | none |
-| Anthropic preset models | automatic, 5 minutes | automatic or explicit; 5-minute or 1-hour TTL; disable; at most 4 breakpoints | reads and writes |
-| Google preset models | implicit | none | reads |
-| DeepSeek preset models | implicit | none | provider-specific hits and misses |
+| Other OpenAI provider models | unsupported | none | none |
+| Anthropic provider models | automatic, 5 minutes | automatic or explicit; 5-minute or 1-hour TTL; disable; at most 4 breakpoints | reads and writes |
+| Google provider models | implicit | none | reads |
+| DeepSeek provider models | implicit | none | provider-specific hits and misses |
 | Kimi Code models | implicit | none | provider-specific reads |
-| xAI, ChatGPT, Copilot, ZAI, OpenCode Go, Antigravity, and custom routes | unsupported | none | none declared |
+| xAI, ChatGPT subscription, Copilot, GLM CN, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
 
 “Unsupported” means Muta sends no cache control and rejects a non-default cache
 preference for that route. It does not claim that the upstream never performs
@@ -100,15 +111,31 @@ for the decision.
 ## Connections and route derivation
 
 Connections live in `$XDG_STATE_HOME/muta/connections.toml`. Credentials live
-in `$XDG_CONFIG_HOME/muta/credentials.toml`. A preset connection stores its
-preset id, identity, and credential reference; its model routes are derived at
-runtime from the preset and live discovery cache.
+in `$XDG_CONFIG_HOME/muta/credentials.toml`, keyed by connection **name**.
 
-A pure-custom connection stores an exact `protocol`, endpoint, and model list.
-The default add-custom flow creates an OpenAI Chat Completions route, supporting
-one or more comma-separated models in the Model input field, while the state
-schema can represent any of the four canonical protocols. Custom routes
-do not inherit a preset's prompt-cache capabilities.
+A connection is a named pipe, not a provider definition. It declares exactly
+one `provider` (a model provider id from the closed set above), owns one
+credential, and declares the client identity it speaks with. It may narrow the
+provider's model universe and override known capability fields, but it must not
+invent a model the provider excludes — except under `provider = "custom"`,
+whose universe is open by definition. `protocol`, `base_url`, and `user_agent`
+are optional overrides of the provider's defaults; a connection to `custom`
+supplies its own endpoint, and the default add-custom flow creates an OpenAI
+Chat Completions route supporting one or more comma-separated model ids in the
+Model input field.
+
+The connection's `name` is its sole identifier (unique, compared
+case-insensitively; a duplicate is rejected with a suggested alternative). It
+keys the credential (`credentials.toml`), the OAuth token set (`auth.toml`),
+the discovery cache, and `config.toml`'s `default_connection`. Renaming is one
+atomic transaction over `credentials.toml`, `auth.toml`, and
+`default_connection`; historical session and telemetry records keep the name
+they ran under.
+
+Routes are never persisted: the catalog derives each route (protocol, dialect,
+endpoint, credential, capability set) at runtime from the connection's provider
+plus the discovery cache. Custom routes do not inherit a provider's prompt-cache
+capabilities.
 
 Credential resolution is `api_key_env` first, then the connection entry in
 `credentials.toml`. OAuth connections resolve their current bearer from the
@@ -126,14 +153,17 @@ Copilot can serve the same model id over different APIs on different plans.
 
 ## Adding a provider
 
-A new preset must declare:
+A new model provider must declare:
 
 1. one default wire protocol and any typed dialect;
 2. exact per-model routing exceptions;
 3. authentication and client identity;
 4. trusted discovery/fitting behavior;
 5. an explicit prompt-cache capability record, using unsupported when the
-   behavior is undocumented or not implemented end to end.
+   behavior is undocumented or not implemented end to end;
+6. a stable id in `MODEL_PROVIDER_IDS` — the id names a service surface, so it
+   must not encode a wire protocol (`*-compatible`) or an authentication mode
+   (`*-oauth`).
 
 See [How to add a provider](../how-to/add-a-provider.md) and
 [Model metadata](model-metadata.md).

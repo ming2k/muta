@@ -149,7 +149,7 @@ underlying view.
 
 ## References
 
-- [ADR-0133](0133-view-surfaces-buffer-like-lifecycle-and-quick-switch.md)
+- [ADR-0133](archive/0133-view-surfaces-buffer-like-lifecycle-and-quick-switch.md)
 - [TUI modals and surface lifecycle](../reference/tui/modals.md)
 - [TUI architecture](../reference/tui/architecture.md)
 - `apps/tui/crates/mutx/src/views.rs`

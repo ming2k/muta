@@ -37,8 +37,9 @@ User-edited configuration. Lossy; back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[workspace]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Connection *instances* live in `connections.toml`, secrets in `credentials.toml` | Yes |
-| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **connection instance**: `[connections.<id>] api_key`. OAuth logins do not live here — see the note below. | Yes |
+| `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[workspace]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[web]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Model connections live in `connections.toml`; secrets live in `credentials.toml` | Yes |
+| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`): model credentials under `[connections]` by connection name, web credentials under `[web.search]` / `[web.reader]` by provider id. OAuth logins do not live here — see the note below. | Yes |
+| `model_providers.toml` | Provider-level model scope, keyed by **model provider id**: `[model_providers.<id>]` with `models.include` / `models.exclude` / `models.overrides`. Applies to every connection pointing at that provider (ADR-0199, ADR-0201). Renamed from `presets.toml` | Yes (user-authored) |
 
 Default location: `~/.config/muta/`.
 
@@ -52,8 +53,8 @@ The two credential kinds, side by side:
 
 | Kind | File | Keyed by | Contents |
 |------|------|----------|----------|
-| token (API key) | `~/.config/muta/credentials.toml` | provider instance (`[providers.<id>]`) | `api_key` |
-| oauth (subscription login) | `~/.local/state/muta/auth.toml` | provider instance (`[tokens.<provider>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
+| token (API key) | `~/.config/muta/credentials.toml` | connection name (`[connections]` table) | `api_key` |
+| oauth (subscription login) | `~/.local/state/muta/auth.toml` | connection name (`[tokens.<name>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
 
 The category split follows the XDG spec's own test ("important or portable
 enough to the user?") rather than the fact that both files hold secrets: a
@@ -94,11 +95,11 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
-| `providers.toml` | **Connections** — the program-managed "who I connect to" records: id/name, `preset_id`, `auth`, optional `api_key_env`, and a pure-custom connection's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's preset + the discovery cache, never persisted | No (user-managed connections) |
-| `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
+| `connections.toml` | **Connections** — the program-managed "who I connect to" records: `name` (the identity), `provider` (a model provider id), `auth`, optional `api_key_env`, optional `protocol` / `base_url` / `user_agent` overrides, and the connection-level `models` delta. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's model provider + the discovery cache, never persisted | No (user-managed connections) |
+| `route_settings.json` | The user's per-(connection, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
 | `workspace_security.json` | Versioned, canonical-workspace-keyed SHA-256 grants for the concrete `mcp`, `skills`, `hooks`, `rules`, and `roots` project asset domains | Rebuildable (project asset trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
-| `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
+| `auth.toml` | OAuth token sets per connection name (`[tokens.<name>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
 | `muta.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
 | `log/` | Structured rolling-log appender output, daily rotation with bounded retention (`MUTA_LOG_RETENTION`, default 14 files) | Rebuildable |
 

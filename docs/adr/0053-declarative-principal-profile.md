@@ -118,7 +118,7 @@ config still wins. A future quant/research/ops principal is another value.
 
 ## References
 
-- [0042](0042-principal-envoy-role-vocabulary.md) — the role vocabulary.
+- [0042](archive/0042-principal-envoy-role-vocabulary.md) — the role vocabulary.
 - [0041](0041-tool-capabilities-scope-and-override.md) — the two-selector model
   both roles share.
-- [0028](0028-capability-allocation-scoped-writes.md) — `OperationScope`.
+- [0028](archive/0028-capability-allocation-scoped-writes.md) — `OperationScope`.

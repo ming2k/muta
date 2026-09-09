@@ -27,6 +27,7 @@ pub fn draw_telemetry_modal(
     detail: bool,
     turn: Option<(u32, u32)>,
     turn_cursor: usize,
+    submitted_at_ms: Option<u64>,
     loading: bool,
     scroll: &mut usize,
     theme: &Theme,
@@ -102,6 +103,7 @@ pub fn draw_telemetry_modal(
             target_attempt,
             context,
             body_width,
+            submitted_at_ms,
             theme,
         );
         let footer = [
@@ -440,14 +442,14 @@ pub(crate) fn build_overview_body(
 
     lines.push(Line::from(""));
 
-    // 3. Performance & Activity
-    lines.push(overview_section_header(
-        "STREAM PERFORMANCE & ACTIVITY",
-        theme,
-    ));
+    // 3. Streaming performance
+    lines.push(overview_section_header("STREAMING PERFORMANCE", theme));
 
-    let mut tps_values: Vec<f64> = Vec::new();
-    let mut ttft_values_ms: Vec<f64> = Vec::new();
+    // One rate, one aggregation: sum the tokens and the spans, then divide. The
+    // reader can reproduce it from the per-turn numbers in the table below.
+    let mut tokens: u64 = 0;
+    let mut span_us: u64 = 0;
+    let mut ttft_ms: Vec<f64> = Vec::new();
     let mut total_e2e_ms: u64 = 0;
     let mut total_turns: usize = 0;
 
@@ -455,43 +457,51 @@ pub(crate) fn build_overview_body(
         total_turns += r.turns_count;
         total_e2e_ms += r.e2e_duration_ms;
         for att in &r.attempts {
-            if let Some(tps) = att.preferred_tps() {
-                tps_values.push(tps);
+            if att.stream_tps().is_some()
+                && let Some(span) = att.stream_span_us()
+            {
+                tokens += att.completion_tokens;
+                span_us = span_us.saturating_add(span);
             }
             if let Some(perf) = &att.performance
                 && let Some(ttft_us) = perf.ttft_us
             {
-                ttft_values_ms.push(ttft_us as f64 / 1000.0);
+                ttft_ms.push(ttft_us as f64 / 1000.0);
             }
         }
     }
 
-    if !tps_values.is_empty() {
-        let avg_tps = tps_values.iter().sum::<f64>() / (tps_values.len() as f64);
-        lines.push(kv_overview_line(
-            "Avg Stream Rate",
-            &format!("{:.1} tok/s", avg_tps),
-            Style::default().fg(theme.fg()),
-            theme,
-        ));
-    } else {
-        lines.push(kv_overview_line(
-            "Avg Stream Rate",
-            "–",
-            Style::default().fg(theme.muted()),
-            theme,
-        ));
-    }
+    let rate = (tokens > 0 && span_us > 0)
+        .then(|| tokens as f64 * 1_000_000.0 / span_us as f64)
+        .filter(|rate| rate.is_finite() && *rate > 0.0);
+    lines.push(kv_overview_line(
+        "Streaming Rate",
+        &fmt_tps(rate),
+        Style::default().fg(theme.fg()),
+        theme,
+    ));
+    lines.push(kv_overview_line(
+        "  (tokens / span)",
+        &if rate.is_some() {
+            format!("{} tok over {}", fmt_num(tokens), fmt_duration_us(span_us))
+        } else {
+            "–".to_string()
+        },
+        Style::default().fg(theme.muted()),
+        theme,
+    ));
 
-    if !ttft_values_ms.is_empty() {
-        let avg_ttft = ttft_values_ms.iter().sum::<f64>() / (ttft_values_ms.len() as f64);
-        lines.push(kv_overview_line(
-            "Avg TTFT",
-            &format!("{:.0}ms", avg_ttft),
-            Style::default().fg(theme.fg()),
-            theme,
-        ));
-    }
+    // Latency is reported as a median: with a handful of turns, a mean is
+    // decided by whichever request was unluckiest.
+    lines.push(kv_overview_line(
+        "TTFT (median)",
+        &match median(&mut ttft_ms) {
+            Some(median) => format!("{median:.0}ms"),
+            None => "–".to_string(),
+        },
+        Style::default().fg(theme.fg()),
+        theme,
+    ));
 
     lines.push(kv_overview_line(
         "Total Duration",
@@ -508,6 +518,20 @@ pub(crate) fn build_overview_body(
     ));
 
     lines
+}
+
+/// Median of a non-empty slice (in place).
+fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let middle = values.len() / 2;
+    if values.len() % 2 == 1 {
+        Some(values[middle])
+    } else {
+        Some((values[middle - 1] + values[middle]) / 2.0)
+    }
 }
 
 fn overview_section_header(title: &str, theme: &Theme) -> Line<'static> {
@@ -665,7 +689,7 @@ pub(crate) fn build_rounds_table(
             ));
         }
 
-        let tps_label = fmt_tps(r.preferred_tps());
+        let tps_label = fmt_tps(r.stream_tps());
         row_spans.push(Span::styled(
             format!("{:<w$}", tps_label, w = col_tps),
             Style::default().fg(theme.fg()),
@@ -837,7 +861,7 @@ pub(crate) fn build_turns_table(
             Style::default().fg(theme.fg()),
         ));
 
-        let tps_label = fmt_tps(att.preferred_tps());
+        let tps_label = fmt_tps(att.stream_tps());
         row_spans.push(Span::styled(
             format!("{:<w$}", tps_label, w = col_tps),
             Style::default().fg(theme.fg()),
@@ -877,6 +901,7 @@ pub(crate) fn build_attempt_inspector_body(
     target_attempt: u32,
     context: ContextUsageProps,
     _width: usize,
+    submitted_at_ms: Option<u64>,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let attempt = rounds
@@ -1010,234 +1035,244 @@ pub(crate) fn build_attempt_inspector_body(
         ]));
         lines.push(Line::from(""));
 
-        // Latency Timeline Waterfall Section
-        lines.push(overview_section_header("LATENCY TIMELINE WATERFALL", theme));
+        // Latency timeline: Enter → turn end, every stage in order.
+        lines.push(Line::from(""));
+        lines.push(overview_section_header("LATENCY TIMELINE", theme));
+        lines.push(Line::from(vec![Span::styled(
+            "  From Enter to the settled turn — one row per stage",
+            Style::default().fg(theme.text_muted),
+        )]));
         lines.push(Line::from(""));
 
         let perf = att.performance;
-
-        // Node 0: Request Dispatched
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  ● 0.00s   ",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Request Dispatched",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
-
-        // Branch 1: Connect & Handshake
-        let ready_us = perf.and_then(|p| p.stream_ready_us);
-        let ready_str = ready_us.map_or("–".to_string(), fmt_duration_us);
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  ├─ Connect & Handshake",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({ready_str})"),
-                Style::default().fg(theme.brand()),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │    DNS + TLS + Gateway + Send Request Payload",
-            Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
-
-        // Node 1: Stream Ready
-        let ready_node_time = ready_us.map_or("+–".to_string(), |us| {
-            format!("+{:.2}s", us as f64 / 1_000_000.0)
-        });
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  ● {ready_node_time:<8}"),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Stream Ready",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " (HTTP 200 Headers received)",
-                Style::default().fg(theme.text_muted),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
-
-        // Branch 2: Prefill & Server Queue
-        let ttft_us = perf.and_then(|p| p.ttft_us);
-        let prefill_us = match (ttft_us, ready_us) {
-            (Some(ttft), Some(ready)) => Some(ttft.saturating_sub(ready)),
+        // The TUI knows when Enter was pressed; the ledger knows when the
+        // provider was called. Their difference is everything the daemon did
+        // before dispatch (queueing, context projection, hooks).
+        let pre_dispatch_ms: Option<u64> = match (submitted_at_ms, att.started_at_ms) {
+            (Some(submitted), started) if started >= submitted => Some(started - submitted),
             _ => None,
         };
-        let prefill_str = prefill_us.map_or("–".to_string(), fmt_duration_us);
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  ├─ Prefill & Server Queue",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({prefill_str})"),
-                Style::default().fg(theme.warning),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            format!(
-                "  │    Prompt Processing ({} cached / {} eval)",
-                fmt_tokens(att.cache_read_tokens),
-                fmt_tokens(fresh_input)
-            ),
-            Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
+        let base_ms = pre_dispatch_ms.unwrap_or(0) as f64 / 1000.0;
 
-        // Node 2: First Token Arrived (TTFT)
-        let ttft_node_time = ttft_us.map_or("+–".to_string(), |us| {
-            format!("+{:.2}s", us as f64 / 1_000_000.0)
-        });
-        let ttft_val_str = ttft_us.map_or("–".to_string(), fmt_duration_us);
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  ● {ttft_node_time:<8}"),
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "First Token Arrived",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" (Client TTFT: {ttft_val_str})"),
-                Style::default().fg(theme.success),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
+        let node = |lines: &mut Vec<Line<'static>>,
+                    at: Option<f64>,
+                    glyph: &str,
+                    name: &str,
+                    detail: String,
+                    style: Style| {
+            let stamp = at.map_or("        –".to_string(), |at| format!("{at:>8.2}s"));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {stamp} {glyph} "),
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    name.to_string(),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("   {detail}"), style),
+            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "  │",
+                Style::default().fg(theme.dim()),
+            )]));
+        };
+        let muted = Style::default().fg(theme.text_muted);
+        let accent = Style::default().fg(theme.brand());
+        let good = Style::default().fg(theme.success);
+        let warn = Style::default().fg(theme.warning);
 
-        // Branch 3: Stream Decode
-        let stream_us = perf.and_then(|p| p.stream_us);
-        let stream_str = stream_us.map_or("–".to_string(), fmt_duration_us);
-        let stream_tps_str = fmt_tps(att.preferred_tps());
-        let streamed_tok_str = if let Some(p) = perf {
-            if p.streamed_output_tokens > 0 {
-                p.streamed_output_tokens
+        // Enter (only when the composer timestamp is known).
+        if pre_dispatch_ms.is_some() {
+            node(
+                &mut lines,
+                Some(0.0),
+                "●",
+                "Enter",
+                "you submitted the prompt".to_string(),
+                muted,
+            );
+        }
+        node(
+            &mut lines,
+            Some(base_ms),
+            "●",
+            "Request dispatched",
+            if pre_dispatch_ms.is_some() {
+                format!("{base_ms:.2}s local: queue, context projection, hooks")
             } else {
-                att.completion_tokens
+                "timeline starts here (composer timestamp unavailable)".to_string()
+            },
+            muted,
+        );
+
+        // Connection: the phases we can measure, or the fact that none happened.
+        let connect_detail = match perf {
+            Some(p) if p.stream_ready_us.is_some() => {
+                let dns = p.dns_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+                let tcp = p.tcp_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+                let tls = p.tls_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+                format!("DNS {dns} · TCP {tcp} · TLS {tls}")
             }
-        } else {
-            att.completion_tokens
+            _ => "reused pooled connection — no handshake".to_string(),
         };
+        node(
+            &mut lines,
+            perf.and_then(|p| p.stream_ready_us)
+                .map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Connection ready",
+            connect_detail,
+            accent,
+        );
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  ├─ Stream Decode",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({stream_str})"),
-                Style::default().fg(theme.success),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            format!("  │    {streamed_tok_str} tokens generated @ {stream_tps_str}"),
-            Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
+        // Request upload: from dispatch to the last byte handed to the kernel.
+        let sent_us = perf.and_then(|p| p.request_sent_us);
+        node(
+            &mut lines,
+            sent_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Request sent",
+            sent_us.map_or("not recorded".to_string(), |us| {
+                format!("upload complete after {}", fmt_duration_us(us))
+            }),
+            muted,
+        );
 
-        // Node 3: Last Token Received
-        let last_token_us = match (ttft_us, stream_us) {
-            (Some(ttft), Some(stream)) => Some(ttft + stream),
+        // Response head: the server has answered, body pending.
+        let head_us = perf.and_then(|p| p.stream_ready_us);
+        node(
+            &mut lines,
+            head_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Response headers",
+            head_us.map_or("not recorded".to_string(), |us| {
+                format!(
+                    "server accepted the request · {} from dispatch",
+                    fmt_duration_us(us)
+                )
+            }),
+            accent,
+        );
+
+        // First origin frame: the model started responding.
+        let frame_us = perf.and_then(|p| p.first_frame_us);
+        node(
+            &mut lines,
+            frame_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Server started",
+            frame_us.map_or("not recorded".to_string(), |us| {
+                format!(
+                    "first frame from the origin · {} from dispatch",
+                    fmt_duration_us(us)
+                )
+            }),
+            accent,
+        );
+
+        // First token: the new TTFT anchor is the request being sent.
+        let ttft_us = perf.and_then(|p| p.ttft_us);
+        let ttft_after_sent = match (sent_us, ttft_us) {
+            (Some(sent), Some(ttft)) if ttft >= sent => Some(ttft - sent),
             _ => None,
         };
-        let last_node_time = last_token_us.map_or("+–".to_string(), |us| {
-            format!("+{:.2}s", us as f64 / 1_000_000.0)
-        });
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  ● {last_node_time:<8}"),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Last Token Received",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
+        node(
+            &mut lines,
+            ttft_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "First token",
+            match (ttft_after_sent, ttft_us) {
+                (Some(after), Some(total)) => format!(
+                    "TTFT {} after the request was sent · {} from dispatch",
+                    fmt_duration_us(after),
+                    fmt_duration_us(total)
+                ),
+                (None, Some(total)) => {
+                    format!(
+                        "{} from dispatch (request-sent anchor missing)",
+                        fmt_duration_us(total)
+                    )
+                }
+                _ => "no output observed".to_string(),
+            },
+            good,
+        );
 
-        // Branch 4: Tail & Commit
+        // Last token: the stream span is the rate's denominator.
+        let stream_us = perf.and_then(|p| p.stream_us);
+        let last_token_us = match (ttft_us, stream_us) {
+            (Some(ttft), Some(span)) => Some(ttft.saturating_add(span)),
+            _ => None,
+        };
+        let rate = att.stream_tps();
+        node(
+            &mut lines,
+            last_token_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Last token",
+            match (stream_us, rate) {
+                (Some(span), Some(rate)) => format!(
+                    "streamed {} · {} tok @ {}",
+                    fmt_duration_us(span),
+                    fmt_num(att.completion_tokens),
+                    fmt_tps(Some(rate))
+                ),
+                (Some(span), None) => format!(
+                    "streamed {} · rate – (needs two events and a span)",
+                    fmt_duration_us(span)
+                ),
+                _ => "not recorded".to_string(),
+            },
+            good,
+        );
+
+        // Stream closed (EOF after the last token).
         let tail_us = perf.and_then(|p| p.tail_us);
-        let tail_str = tail_us.map_or("–".to_string(), fmt_duration_us);
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  ├─ Tail & Commit",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({tail_str})"),
-                Style::default().fg(theme.text_muted),
-            ),
-        ]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │    Stream EOF verification + schema parse",
-            Style::default().fg(theme.text_muted),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  │",
-            Style::default().fg(theme.dim()),
-        )]));
+        let eof_us = match (last_token_us, tail_us) {
+            (Some(last), Some(tail)) => Some(last.saturating_add(tail)),
+            _ => None,
+        };
+        node(
+            &mut lines,
+            eof_us.map(|us| base_ms + us as f64 / 1000.0),
+            "●",
+            "Stream closed",
+            tail_us.map_or("not recorded".to_string(), |tail| {
+                format!("{} after the last token", fmt_duration_us(tail))
+            }),
+            muted,
+        );
 
-        // Node 4: Final Completed
+        // Turn end: validated and settled.
         let e2e_us = perf
             .and_then(|p| p.e2e_us)
             .unwrap_or(att.e2e_duration_ms * 1_000);
-        let e2e_str = fmt_duration_us(e2e_us);
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  ■ +{e2e_str}  "),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Request Completed",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" (Total E2E: {e2e_str})"),
-                Style::default().fg(theme.brand()),
-            ),
-        ]));
+        node(
+            &mut lines,
+            Some(base_ms + e2e_us as f64 / 1000.0),
+            "■",
+            "Turn end",
+            format!("validated after {}", fmt_duration_us(e2e_us)),
+            warn,
+        );
+
+        if perf.and_then(|p| p.rtt_us).is_some() || perf.map(|p| p.retransmits).unwrap_or(0) > 0 {
+            let rtt = perf
+                .and_then(|p| p.rtt_us)
+                .map(fmt_duration_us)
+                .unwrap_or_else(|| "–".into());
+            let retransmits = perf.map(|p| p.retransmits).unwrap_or(0);
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("socket: RTT {rtt} · retransmits {retransmits}"),
+                    Style::default().fg(theme.text_muted),
+                ),
+            ]));
+        }
     } else {
         lines.push(Line::from(vec![Span::styled(
             "  Attempt record not found.",

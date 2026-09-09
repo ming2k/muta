@@ -34,7 +34,7 @@ pub enum HumanRequestKind {
 /// The interactivity posture a client declares in its attach `Select` frame.
 ///
 /// The session's effective channel is the OR over all attached clients: one
-/// interactive watcher is enough. Envoy children inherit their parent's
+/// interactive watcher is enough. Subagent children inherit their parent's
 /// posture, so a question that would flow up to a nonexistent human fails
 /// fast in the child instead of parking forever.
 ///

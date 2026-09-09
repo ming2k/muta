@@ -134,7 +134,7 @@ without changing any column width.
 
 ## References
 
-- [ADR-0045](0045-extract-neenee-tui-view.md) — established
+- [ADR-0045](archive/0045-extract-neenee-tui-view.md) — established
   `render/components/` as the home for reusable composed render chrome; this
   component follows that seam.
 - [ADR-0047](0047-round-contains-turn-vocabulary.md) — fixed the round/turn

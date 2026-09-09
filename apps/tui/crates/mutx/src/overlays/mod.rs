@@ -59,7 +59,7 @@ pub use permission::{
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
     CustomEditorProps, draw_connections_modal, draw_custom_provider_editor, draw_model_editor,
-    draw_models_modal, draw_oauth_pending, draw_preset_chooser,
+    draw_models_modal, draw_oauth_pending, draw_preset_chooser, draw_web_value_editor,
 };
 pub use provider_delete_confirm::draw_provider_delete_confirm;
 pub use queue::{QueueModalProps, draw_queue_modal};

@@ -106,10 +106,10 @@ pub enum AgentRequest {
         request_id: String,
         decision: PermissionDecision,
         /// Full-duplex (ADR-0029): when the reply targets a permission
-        /// request surfaced by a *runner* (carried up as a
-        /// [`RoundEvent::EnvoyCompat`] / [`RunnerEvent::PermissionRequest`]),
+        /// request surfaced by a *subagent* (carried up as a
+        /// [`RoundEvent::SubagentStep`] / [`SubagentEvent::PermissionRequest`]),
         /// this is the parent tool-call id the request was nested under. The
-        /// harness looks up the live child's `crate::RunnerHandle` in the
+        /// harness looks up the live child's `crate::SubagentHandle` in the
         /// task registry by this id and resolves its parked oneshot directly.
         /// `None` means the request came from the top-level (or `/btw` side)
         /// agent and is resolved on `context.agent` as before.
@@ -119,14 +119,14 @@ pub enum AgentRequest {
         request_id: String,
         answers: Vec<Vec<String>>,
         /// Full-duplex (ADR-0029): the parent tool-call id when the answered
-        /// question came from an runner's `ask_user`
-        /// ([`RunnerEvent::UserQuestionRequest`]); `None` for a top-level /
+        /// question came from a subagent's `ask_user`
+        /// ([`SubagentEvent::UserQuestionRequest`]); `None` for a top-level /
         /// side agent question. See [`AgentRequest::PermissionReply`] for the
         /// routing contract.
         parent_call_id: Option<String>,
     },
     /// Reply to an interactive command's standard input request ([`AgentEvent::StdinRequest`]),
-    /// routed back to the parked oneshot. `parent_call_id` mirrors the question/permission replies for runner
+    /// routed back to the parked oneshot. `parent_call_id` mirrors the question/permission replies for subagent
     /// routing.
     #[serde(alias = "InputReply")]
     StdinReply {
@@ -134,65 +134,78 @@ pub enum AgentRequest {
         text: String,
         parent_call_id: Option<String>,
     },
-    SwitchProvider {
-        provider_type: String,
+    SwitchConnection {
+        provider: String,
         model: String,
         api_key: Option<crate::SecretString>,
         base_url: Option<String>,
     },
-    /// Add a user-defined provider from a TUI template, persist it to config,
-    /// then activate it. `protocol` is one of `"openai"` | `"anthropic"` |
-    /// `"google"`; `api_key` may be empty (a keyless OpenAI-compatible relay
-    /// suppresses the auth header). The harness derives a stable id from `name`.
-    /// `models` is the provider's seeded model list — one channel per model,
-    /// the first becoming the default/active model. A template that seeds the
-    /// whole Claude family lands all of them in the picker's stage-2 list.
+    /// Create a connection: bind a model provider to a credential and a client
+    /// identity, persist it, then activate it. `name` is the connection's
+    /// identity (ADR-0201) and must be unique; the daemon rejects a duplicate
+    /// with a suggested alternative instead of silently disambiguating.
+    /// `provider` must name a registered model provider. `protocol`, `base_url`,
+    /// and `user_agent` are optional overrides of the provider's defaults;
+    /// `models` is an optional initial inclusion set, honored only for models
+    /// the provider's universe admits (`provider = "custom"` is exempt).
     ///
-    /// Per ADR-0046, reasoning (effort/thinking) is no longer set at provider
+    /// Per ADR-0046, reasoning (effort/thinking) is not set at connection
     /// creation — it is opted in per model via the stage-2 model `e` editor
-    /// (`EditProviderModel`). New channels start with thinking off.
-    AddProvider {
+    /// (`EditConnectionModel`). New channels start with thinking off.
+    AddConnection {
         name: String,
-        protocol: crate::WireProtocol,
-        base_url: String,
-        api_key: crate::SecretString,
+        provider: String,
+        #[serde(default)]
+        protocol: Option<crate::WireProtocol>,
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
         user_agent: Option<String>,
+        api_key: crate::SecretString,
+        #[serde(default)]
         models: Vec<String>,
         /// How the connection authenticates. OAuth credentials are owned by
-        /// this exact connection id.
+        /// this exact connection name.
         auth: crate::ConnectionAuth,
-        /// The stable preset id this connection is created from.
-        #[serde(default)]
-        preset_id: Option<String>,
         /// Client identity (impersonation/headers). Defaults to Native when unset.
         #[serde(default)]
         client_identity: Option<crate::ClientIdentity>,
     },
     /// Reauthenticate an existing OAuth connection. Runs the browser-loopback
-    /// or device-code flow, persists directly to `id`, then activates it.
+    /// or device-code flow, persists directly under `name`, then activates it.
     /// Progress streams via [`AgentResponse::ConnectStatus`].
-    ConnectProvider {
-        id: String,
+    ConnectConnection {
+        name: String,
         method: crate::LoginMethod,
     },
     /// Run OAuth before a connection exists. Successful credentials remain
-    /// session-local until the following `AddProvider` consumes them.
+    /// session-local until the following `AddConnection` consumes them.
     AuthorizeOAuth {
         method: crate::LoginMethod,
         auth: crate::ConnectionAuth,
     },
     /// Cancel any in-flight OAuth authorization.
     CancelAuthorizeOAuth,
-    /// Edit a user-defined connection's metadata in place (display name, protocol,
-    /// base URL, API key, client identity) without touching its model list.
-    EditProvider {
-        id: String,
+    /// Edit a connection's metadata in place (provider, protocol, base URL, API
+    /// key, client identity) without touching its model scope. Keyed by `name`;
+    /// renaming is the separate atomic request [`Self::RenameConnection`].
+    EditConnection {
         name: String,
-        protocol: crate::WireProtocol,
-        base_url: String,
+        provider: String,
+        #[serde(default)]
+        protocol: Option<crate::WireProtocol>,
+        #[serde(default)]
+        base_url: Option<String>,
         api_key: crate::SecretString,
         #[serde(default)]
         client_identity: Option<crate::ClientIdentity>,
+    },
+    /// Rename a connection. The daemon rewrites every hard join key
+    /// (`credentials.toml`, `auth.toml`, `default_connection`) in one
+    /// transaction; historical records keep the old name (ADR-0201).
+    RenameConnection {
+        from: String,
+        to: String,
     },
     /// Remove a model (channel) from a user-defined provider, persist, and push a
     /// fresh picker snapshot. The last remaining model is kept (a provider must
@@ -218,12 +231,12 @@ pub enum AgentRequest {
         model_id: String,
         overrides: crate::model::CapabilityOverrides,
     },
-    /// Edit settings for one model/channel of a user-defined provider. This is
+    /// Edit settings for one model/channel of a connection. This is
     /// intentionally channel-scoped: OpenAI effort and Anthropic
     /// effort/thinking can vary by model even when the provider endpoint/key are
     /// shared.
-    EditProviderModel {
-        provider_id: String,
+    EditConnectionModel {
+        connection: String,
         model: String,
         effort: Option<String>,
         thinking: Option<bool>,
@@ -235,7 +248,7 @@ pub enum AgentRequest {
     },
     /// Edit the per-model reasoning settings (Anthropic effort/thinking) for a
     /// **built-in** model, persisted into the `[model_reasoning."<model-id>"]`
-    /// table. This is the model-level counterpart to `EditProviderModel`:
+    /// table. This is the model-level counterpart to `EditConnectionModel`:
     /// built-in providers (e.g. `anthropic`) have no user-editable channels, so
     /// their per-model reasoning knobs live in this shared table keyed by model
     /// id rather than on a channel. ADR-0045.
@@ -244,17 +257,16 @@ pub enum AgentRequest {
         effort: Option<String>,
         thinking: Option<bool>,
         /// Capability overrides (ADR-0149 layer 1) — same semantics as
-        /// [`AgentRequest::EditProviderModel::overrides`].
+        /// [`AgentRequest::EditConnectionModel::overrides`].
         overrides: Option<crate::model::CapabilityOverrides>,
     },
-    /// Delete a user-defined provider entirely: drop the entry from
-    /// `config.providers`, remove it from `favorites`, and persist. If the
-    /// deleted provider was active (`default_provider`), fall back to the
-    /// default built-in provider (`"kimi-code"`) and activate it so the live
-    /// provider never points at a removed entry. Built-in providers are not
-    /// deletable this way; the handler ignores unknown / built-in ids.
-    DeleteProvider {
-        id: String,
+    /// Delete a connection: drop the entry from `connections.toml`, remove its
+    /// credential and OAuth tokens, and persist. If the deleted connection was
+    /// the default (`default_connection`), fall back to the first remaining
+    /// connection and activate it so the live selection never points at a
+    /// removed entry. Unknown names are ignored.
+    DeleteConnection {
+        name: String,
     },
     /// Toggle the favorite flag on a model in the **Models** picker. `id` is the
     /// model wire id. Favorite is model-level (a daily-driver model is starred
@@ -442,12 +454,11 @@ pub enum AgentRequest {
         name: String,
         custom: crate::ColorSchemeConfig,
     },
-    /// Query the effective `[websearch]` configuration (provider, fallback,
-    /// reader, proxy, timeout, SearXNG URL, and **key presence only** —
-    /// secrets never cross the wire). Replied with
+    /// Query the effective singleton `[web]` configuration, readiness, and
+    /// provider capability catalog. Secrets never cross the wire. Replied with
     /// [`AgentResponse::WebSearchConfigSnapshot`].
     QueryWebSearchConfig,
-    /// Update the `[websearch]` configuration live. Every field is optional:
+    /// Update the `[web]` configuration live. Every field is optional:
     /// absent fields keep their current value, so a frontend can PATCH one
     /// setting at a time. API keys are optional and follow the credentials
     /// store discipline (persisted to `credentials.toml`, never to
@@ -455,92 +466,51 @@ pub enum AgentRequest {
     /// validates, persists, hot-applies the new config to the web tools, and
     /// replies with [`AgentResponse::WebSearchConfigUpdated`] carrying the
     /// effective post-update view (key presence only).
-    UpdateWebSearchConfig(Box<WebSearchConfigUpdate>),
+    UpdateWebSearchConfig(Box<WebConfigUpdate>),
 }
 
-/// A partial update to the `[websearch]` table. Every field is optional:
-/// `None` keeps the current value, `Some` replaces it. Sent via
-/// [`AgentRequest::UpdateWebSearchConfig`].
-///
-/// Secrets travel in the clear on this request (the wire is the local
-/// WebSocket to the user's own daemon, the same trust domain as the
-/// `AddProvider`/`EditProvider` requests that carry provider API keys), but
-/// they are persisted to `credentials.toml` — never `config.toml` — and are
-/// **never echoed back**: the reply carries only key presence.
+/// Optimistic, partial mutation of the singleton web configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
 #[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct WebSearchConfigUpdate {
-    /// Primary search backend (`exa` | `parallel` | `duckduckgo` | `searxng`
-    /// | `tavily` | `bocha`).
+pub struct WebConfigUpdate {
+    /// Required compare-and-swap precondition. Callers must query the current
+    /// view before mutating it; stale writers are rejected rather than merged.
+    pub expected_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub provider: Option<String>,
-    /// Page-content reader used by `read_url` (`builtin` | `jina`).
+    pub provider: Option<crate::WebSearchProvider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub reader: Option<String>,
-    /// Proxy URL applied to both tools (`http(s)://`, `socks5://`,
-    /// `socks5h://`). Empty string clears it.
+    pub reader: Option<crate::WebReaderProvider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proxy: Option<String>,
-    /// Per-request timeout in seconds (clamped to ≥ 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub timeout_secs: Option<u64>,
-    /// SearXNG JSON endpoint; required when `provider = "searxng"`.
-    /// Empty string clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub searxng_url: Option<String>,
-    /// Exa API key. Empty string clears the stored key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub exa_api_key: Option<String>,
-    /// Parallel API key. Empty string clears the stored key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub parallel_api_key: Option<String>,
-    /// Tavily API key. Empty string clears the stored key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub tavily_api_key: Option<String>,
-    /// Bocha API key. Empty string clears the stored key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub bocha_api_key: Option<String>,
-    /// Jina Reader API key. Empty string clears the stored key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub jina_api_key: Option<String>,
-    /// Optional search connection to upsert into `search_connections` in `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub upsert_search_connection: Option<crate::WebSearchConnection>,
-    /// Optional search connection ID to delete from `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub delete_search_connection: Option<String>,
-    /// Optional reader connection to upsert into `reader_connections` in `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub upsert_reader_connection: Option<crate::WebReaderConnection>,
-    /// Optional reader connection ID to delete from `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub delete_reader_connection: Option<String>,
+    pub credential: Option<WebCredentialUpdate>,
 }
 
-/// The frontend-facing view of the effective `[websearch]` configuration.
-/// Mirrors [`crate::WebSearchConfig`] with every API key reduced to a
-/// boolean **presence flag** — plaintext secrets never cross the wire in
-/// either reply ([`AgentResponse::WebSearchConfigSnapshot`] or
-/// [`AgentResponse::WebSearchConfigUpdated`]).
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct WebSearchConfigView {
-    pub provider: String,
-    pub reader: String,
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebCredentialUpdate {
+    pub axis: crate::WebProviderAxis,
+    pub provider_id: String,
+    /// Empty clears the stored value. Secrets are never echoed in responses.
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebConfigView {
+    pub revision: u64,
+    pub provider: crate::WebSearchProvider,
+    pub reader: crate::WebReaderProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proxy: Option<String>,
@@ -548,59 +518,14 @@ pub struct WebSearchConfigView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub searxng_url: Option<String>,
-    #[serde(default)]
-    pub exa_api_key_set: bool,
-    #[serde(default)]
-    pub parallel_api_key_set: bool,
-    #[serde(default)]
-    pub tavily_api_key_set: bool,
-    #[serde(default)]
-    pub bocha_api_key_set: bool,
-    #[serde(default)]
-    pub jina_api_key_set: bool,
-    /// Configured search connection instances from `search_connections` in `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub search_connections: Vec<crate::WebSearchConnection>,
-    /// Configured reader connection instances from `reader_connections` in `web_connections.toml`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reader_connections: Vec<crate::WebReaderConnection>,
+    pub search_credential: crate::WebCredentialStatus,
+    pub reader_credential: crate::WebCredentialStatus,
+    pub capabilities: Vec<crate::WebProviderCapability>,
 }
 
-impl WebSearchConfigView {
-    pub fn with_connections(
-        mut self,
-        search: Vec<crate::WebSearchConnection>,
-        reader: Vec<crate::WebReaderConnection>,
-    ) -> Self {
-        self.search_connections = search;
-        self.reader_connections = reader;
-        self
-    }
-}
-
-impl From<&crate::WebSearchConfig> for WebSearchConfigView {
-    fn from(cfg: &crate::WebSearchConfig) -> Self {
-        let is_set = |k: &Option<crate::SecretString>| {
-            k.as_ref()
-                .map(|s| !s.expose_secret().trim().is_empty())
-                .unwrap_or(false)
-        };
-        Self {
-            provider: cfg.provider.clone(),
-            reader: cfg.reader.clone(),
-            proxy: cfg.proxy.clone(),
-            timeout_secs: cfg.timeout_secs,
-            searxng_url: cfg.searxng_url.clone(),
-            exa_api_key_set: is_set(&cfg.exa_api_key),
-            parallel_api_key_set: is_set(&cfg.parallel_api_key),
-            tavily_api_key_set: is_set(&cfg.tavily_api_key),
-            bocha_api_key_set: is_set(&cfg.bocha_api_key),
-            jina_api_key_set: is_set(&cfg.jina_api_key),
-            search_connections: Vec::new(),
-            reader_connections: Vec::new(),
-        }
-    }
-}
+/// Stable wire-name aliases retained across the internal `[web]` schema migration.
+pub type WebSearchConfigUpdate = WebConfigUpdate;
+pub type WebSearchConfigView = WebConfigView;
 
 /// Controls how many queued messages are injected when the agent reaches a queue drain point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
@@ -825,14 +750,10 @@ pub enum AgentResponse {
         name: String,
         custom: crate::ColorSchemeConfig,
     },
-    /// The effective `[websearch]` configuration (key presence only — no
-    /// plaintext secrets). Replied to [`AgentRequest::QueryWebSearchConfig`].
-    WebSearchConfigSnapshot(WebSearchConfigView),
-    /// An [`AgentRequest::UpdateWebSearchConfig`] was validated, persisted,
-    /// and hot-applied to the live web tools. Carries the authoritative
-    /// post-update view so the frontend re-renders from persisted state, not
-    /// its optimistic local edit (mirrors `TuiLayoutUpdated`'s discipline).
-    WebSearchConfigUpdated(WebSearchConfigView),
+    /// Authoritative singleton web configuration; never contains secret text.
+    WebSearchConfigSnapshot(WebConfigView),
+    /// Validated, persisted and hot-applied authoritative state.
+    WebSearchConfigUpdated(WebConfigView),
 }
 
 /// A user-visible notice emitted by the agent or harness.
@@ -1487,17 +1408,14 @@ pub enum RoundEvent {
         prompt: String,
         images: Vec<crate::ImagePart>,
     },
-    /// A runner event to render nested inside the parent tool step.
-    ///
-    /// Wire-compat (ADR-0144 §6): serializes under the historical `Envoy`
-    /// tag so transcripts and event streams recorded before the tier rename
-    /// keep decoding; `alias` admits both spellings on input.
-    #[serde(alias = "Runner")]
-    EnvoyCompat {
+    /// A subagent event to render nested inside the parent tool step. The
+    /// variant carries the child's own [`SubagentEvent`] plus the parent
+    /// tool-call id it was nested under (ADR-0183).
+    SubagentStep {
         parent_call_id: String,
-        event: RunnerEvent,
+        event: SubagentEvent,
     },
-    /// A background process or sub-runner job started.
+    /// A background process or sub-subagent job started.
     BackgroundJobStarted(crate::job::BackgroundJobInfo),
     /// Incremental progress or output line from a background job.
     BackgroundJobProgress {
@@ -1660,7 +1578,7 @@ pub enum SessionForkKind {
     /// A `/btw` aside: forked from the trunk, running alongside it.
     Aside,
     /// A subagent run's own durable session (ADR-0186 §6): spawned by a
-    /// runner tool call in a parent session, never surfaced in the picker.
+    /// subagent tool call in a parent session, never surfaced in the picker.
     Subagent,
 }
 
@@ -1717,10 +1635,10 @@ pub struct ProviderPickerRow {
     /// Base URL of the default channel, used to pre-fill the edit form.
     pub base_url: String,
     pub key_ready: bool,
-    /// The add-connection preset that birthed this connection (`"openai"`,
-    /// `"anthropic"`, `"deepseek"`, …), when known.
+    /// The model provider this connection points at (`"openai"`,
+    /// `"anthropic"`, `"deepseek"`, …).
     #[serde(default)]
-    pub preset_id: String,
+    pub provider: String,
     /// Client identity configured for this connection.
     #[serde(default)]
     pub client_identity: crate::ClientIdentity,
@@ -1746,7 +1664,7 @@ pub enum ConnectStatus {
         message: String,
     },
     /// Authorization succeeded; tokens persisted (and provider activated when
-    /// this followed [`AgentRequest::ConnectProvider`]).
+    /// this followed [`AgentRequest::ConnectConnection`]).
     Done { provider: String },
     /// Authorization succeeded but the follow-up live model discovery failed,
     /// so the provider keeps its previous (often seed-only) model list. The
@@ -1858,7 +1776,7 @@ pub struct SessionSnapshot {
     pub provider_keys: Option<Vec<(String, bool)>>,
 }
 
-/// Events emitted by an runner spawned through the `task` tool.
+/// Events emitted by a subagent spawned through the `task` tool.
 ///
 /// These are forwarded from the child agent back to the parent harness so that
 /// the TUI can render nested tool steps and streaming output inside the parent
@@ -1869,50 +1787,50 @@ pub struct SessionSnapshot {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum RunnerEvent {
-    /// Emitted once at runner start, carrying the bound profile's name
+pub enum SubagentEvent {
+    /// Emitted once at subagent start, carrying the bound profile's name
     /// (e.g. `"explore"`, `"plan"`, `"verify"`). Lets the TUI label the
-    /// runner by its role rather than a generic "Runner", so a user can
-    /// tell a planning runner from a research one at a glance.
+    /// subagent by its role rather than a generic "Subagent", so a user can
+    /// tell a planning subagent from a research one at a glance.
     Started { profile: String },
-    /// A user-visible notice from the runner.
+    /// A user-visible notice from the subagent.
     Notice(AgentNotice),
-    /// The runner started a new response stream. `round`/`turn` carry the
-    /// runner's own ReAct position (1-indexed user round, 0-indexed
+    /// The subagent started a new response stream. `round`/`turn` carry the
+    /// subagent's own ReAct position (1-indexed user round, 0-indexed
     /// model-request position within it, mirroring
     /// [`AgentEvent::ModelRequestStarted`]) so the TUI can stamp the child
-    /// message and group the zoomed runner view into turn bands exactly like
+    /// message and group the zoomed subagent view into turn bands exactly like
     /// the main session view.
     StreamStart { round: u64, turn: usize },
-    /// New text token from the runner.
+    /// New text token from the subagent.
     StreamDelta(String),
-    /// The runner response stream finished with the final accumulated text.
+    /// The subagent response stream finished with the final accumulated text.
     StreamEnd(String),
-    /// The runner started a reasoning (thinking) stream. `round`/`turn`
-    /// identify the runner's own ReAct position (see
-    /// [`RunnerEvent::StreamStart`]) so the child thinking trace joins the
+    /// The subagent started a reasoning (thinking) stream. `round`/`turn`
+    /// identify the subagent's own ReAct position (see
+    /// [`SubagentEvent::StreamStart`]) so the child thinking trace joins the
     /// same turn band as its sibling assistant text and tool calls. Emitted
-    /// before the first [`RunnerEvent::StreamReasoningDelta`] of a trace, so
+    /// before the first [`SubagentEvent::StreamReasoningDelta`] of a trace, so
     /// frontends can place the trace without waiting for content.
     ///
-    /// This closes a visibility gap, not a new capability: the runner's
+    /// This closes a visibility gap, not a new capability: the subagent's
     /// reasoning is already captured in its persisted transcript
     /// (`Message::reasoning_content`) and renders after a session reload —
-    /// but before these events it was invisible while the runner was actually
+    /// but before these events it was invisible while the subagent was actually
     /// running, because the child's `AgentEvent::ReasoningDelta` had no
     /// forwarding arm. The design principle is that no agent behaviour is
-    /// hidden from the user: what the principal discloses live, an runner
+    /// hidden from the user: what the principal discloses live, a subagent
     /// discloses live too.
     StreamReasoningStart { round: u64, turn: usize },
-    /// New reasoning token from the runner (a disclosed chain only — the
+    /// New reasoning token from the subagent (a disclosed chain only — the
     /// sender gates hidden-chain models out at the source; see
     /// [`crate::ReasoningSupport::chain_disclosed`]).
     StreamReasoningDelta(String),
-    /// The runner's reasoning stream finished with the final accumulated
+    /// The subagent's reasoning stream finished with the final accumulated
     /// reasoning text.
     StreamReasoningEnd(String),
-    /// The runner invoked a tool. `round`/`turn` identify the runner's own
-    /// ReAct position (see [`RunnerEvent::StreamStart`]) so the child tool
+    /// The subagent invoked a tool. `round`/`turn` identify the subagent's own
+    /// ReAct position (see [`SubagentEvent::StreamStart`]) so the child tool
     /// step joins the same turn band as its sibling calls.
     ToolCall {
         id: String,
@@ -1921,32 +1839,32 @@ pub enum RunnerEvent {
         round: u64,
         turn: usize,
     },
-    /// A tool invoked by the runner returned a result.
+    /// A tool invoked by the subagent returned a result.
     ToolResult {
         id: String,
         name: String,
         output: String,
         duration_ms: u64,
     },
-    /// A status update from the runner.
+    /// A status update from the subagent.
     Activity(String),
-    /// The runner's permission broker surfaced a write/execute tool call
+    /// The subagent's permission broker surfaced a write/execute tool call
     /// that needs a human decision. Full-duplex (ADR-0029): this carries the
     /// request *up* to the parent harness so the user can answer it; the
-    /// reply travels back *down* through the runner handle's
+    /// reply travels back *down* through the subagent handle's
     /// `reply_permission` (resolving the parked oneshot directly), unblocking
-    /// the runner's pending tool. Only fires when
-    /// the runner's profile does not suppress the broker (e.g. via
+    /// the subagent's pending tool. Only fires when
+    /// the subagent's profile does not suppress the broker (e.g. via
     /// `delegated: true`) — a read-only profile never produces one.
     PermissionRequest(PermissionRequest),
-    /// The runner called `ask_user` and is blocked awaiting answers.
+    /// The subagent called `ask_user` and is blocked awaiting answers.
     /// Full-duplex (ADR-0029): carries the questions *up*; the reply travels
-    /// back *down* through the runner handle's `reply_user_question`. Only
+    /// back *down* through the subagent handle's `reply_user_question`. Only
     /// fires for profiles with `allow_user_interaction: true`.
     UserQuestionRequest(UserQuestionRequest),
-    /// The runner's `bash` tool classified a command interactive and needs
+    /// The subagent's `bash` tool classified a command interactive and needs
     /// operator stdin. Carries the request *up*; the reply travels
-    /// back *down* through the runner handle's `reply_stdin`.
+    /// back *down* through the subagent handle's `reply_stdin`.
     #[serde(alias = "InputRequest")]
     StdinRequest(StdinRequest),
 }
@@ -1963,14 +1881,14 @@ pub enum RunnerEvent {
 /// Modeled on codex's `Op` (`codex-rs/protocol/src/protocol.rs`), trimmed to
 /// muta's driver shape: the agent owns an `mpsc` inbox whose receiver is
 /// drained at the top of every ReAct turn (and, for `Interrupt`, raced against
-/// the live stream). The top-level agent and spawned runners share the same
-/// `Op` vocabulary — an runner is just an agent whose inbox sender the
+/// the live stream). The top-level agent and spawned subagents share the same
+/// `Op` vocabulary — a subagent is just an agent whose inbox sender the
 /// parent holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentOp {
     /// Append a visible user message to the live transcript before the next
     /// model request, as if the user typed it. Lets a parent (or, for a
-    /// runner, the orchestrating agent) steer a running round with new
+    /// subagent, the orchestrating agent) steer a running round with new
     /// information without restarting it. codex `inject_if_running` analogue.
     Steer(String),
     /// Append a hidden (system-level) steering note — like
@@ -2054,12 +1972,12 @@ pub enum AgentEvent {
     /// as [`AgentRequest::StdinReply`].
     #[serde(alias = "InputRequest")]
     StdinRequest(StdinRequest),
-    /// An runner spawned by a tool (e.g. `task`) emitted an event.
-    Runner {
+    /// An subagent spawned by a tool (e.g. `task`) emitted an event.
+    Subagent {
         parent_call_id: String,
-        event: RunnerEvent,
+        event: SubagentEvent,
     },
-    /// A background process or sub-runner job started.
+    /// A background process or sub-subagent job started.
     BackgroundJobStarted(crate::job::BackgroundJobInfo),
     /// Incremental progress or output line from a background job.
     BackgroundJobProgress {
@@ -2121,8 +2039,8 @@ pub struct PermissionRequest {
     /// "Always" is honoured) for ordinary broker prompts.
     #[serde(default)]
     pub one_off: bool,
-    /// Origin label identifying which runner produced this request (ADR-0138).
-    /// `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
+    /// Origin label identifying which subagent produced this request (ADR-0138).
+    /// `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · mcp_specialist")`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     /// Threat / hazard level classification of this tool invocation.
@@ -2166,7 +2084,7 @@ pub struct UserQuestion {
 pub struct UserQuestionRequest {
     pub id: String,
     pub questions: Vec<UserQuestion>,
-    /// Origin label identifying which runner produced this request (ADR-0138).
+    /// Origin label identifying which subagent produced this request (ADR-0138).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
 }

@@ -20,10 +20,14 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod client;
+pub mod egress;
 pub mod endpoint;
 pub mod json;
 pub mod prompt_cache;
 pub mod protocol;
+pub mod request;
+#[cfg(feature = "net-shadow")]
+pub mod shadow;
 pub mod sse;
 pub mod transport;
 
@@ -31,12 +35,21 @@ pub mod transport;
 // facade reach it as `crate::{Endpoint, ensure_success, …}` rather than through
 // the owning module.
 pub use client::Client;
+pub use egress::MutaNetEgress;
+#[cfg(feature = "reqwest-oracle")]
+pub use egress::ReqwestEgress;
+#[cfg(feature = "reqwest-oracle")]
+pub use egress::TraceSink;
+pub use egress::{Egress, HttpResponse, RequestParts};
+
 pub use endpoint::{
     COPILOT_CLIENT_HEADERS, ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile,
     ClientProfileSpec, Endpoint, MUTA_USER_AGENT, OPENCODE_USER_AGENT, OPENCODE_VERSION,
     ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
-pub use transport::{decode_response_json, ensure_success, retry_after_ms, transport_error};
+#[cfg(feature = "reqwest-oracle")]
+pub use transport::transport_error;
+pub use transport::{decode_response_json, ensure_success, retry_after_ms};
 
 // Re-export the concrete provider types at the crate root for ergonomic access
 // and stable intra-doc links.

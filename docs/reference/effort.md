@@ -110,13 +110,13 @@ clamps a legacy `medium` override up to `low`).
 
 ## Configuring it
 
-Effort is set per **route** — one `(instance, model)` pair — as a string,
+Effort is set per **route** — one `(connection, model)` pair — as a string,
 stored in the discovery cache (`route_settings`) and edited from the model `e`
 picker in the TUI:
 
 ```toml
 # $XDG_CACHE_HOME/muta/models_discovery.json
-# route_settings["<instance_id>"]["<model_id>"] = { "effort": "high" }
+# route_settings["<connection_name>"]["<model_id>"] = { "effort": "high" }
 ```
 
 It is not a `config.toml` field: routes are derived at runtime, and their

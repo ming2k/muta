@@ -9,6 +9,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod http;
 mod list_models;
 pub mod models_dev;
 pub mod oauth;
@@ -30,10 +31,10 @@ pub use oauth::OAuthCredentialSource;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_OAUTH_MODELS, CHATGPT_BUILTIN_MODELS,
     COPILOT_SEED_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    LiveCatalog, OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OPENCODE_GO_MODELS,
-    OpenAiProviderSpec, PROVIDER_PRESET_SPECS, ProviderPresetSpec, WIRE_OVERRIDES,
-    XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel, openai_provider_spec,
-    provider_preset_spec, route_for_model,
+    LiveCatalog, MODEL_PROVIDER_SPECS, ModelProviderSpec, OPENAI_BUILTIN_MODELS,
+    OPENAI_PROVIDER_SPECS, OPENCODE_GO_MODELS, OpenAiProviderSpec, RemoteCatalogSource,
+    WIRE_OVERRIDES, XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel,
+    model_provider_spec, openai_provider_spec, route_for_model,
 };
 pub use usage::{
     AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,

@@ -208,7 +208,7 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.transcript = rebuild_transcript_from_messages(&messages);
             state.data.generation = uuid::Uuid::new_v4().to_string();
-            let children = admit_runner_children(&mut state.data, &messages);
+            let children = admit_subagent_children(&mut state.data, &messages);
             state.projected_cache = Some(messages.clone());
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
@@ -222,7 +222,7 @@ impl SessionStore {
                 !empty_unpersisted,
             )
         };
-        persist_runner_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.db_path, &self.blob_store, &children);
         if should_persist {
             self.persist_off_runtime(path, data, self.blob_store.clone())
                 .await?;
@@ -281,12 +281,12 @@ impl SessionStore {
                         .transcript
                         .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                children = admit_runner_children(&mut state.data, tail);
+                children = admit_subagent_children(&mut state.data, tail);
                 state.append_to_projection_cache(tail);
             } else if !wire_eq(current, state.get_or_project_messages()) {
                 state.data.transcript = rebuild_transcript_from_messages(current);
                 state.data.generation = uuid::Uuid::new_v4().to_string();
-                children = admit_runner_children(&mut state.data, current);
+                children = admit_subagent_children(&mut state.data, current);
                 state.invalidate_projection_cache();
                 full_rewrite = true;
             }
@@ -303,7 +303,7 @@ impl SessionStore {
             };
             (state.path.clone(), data, children)
         };
-        persist_runner_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.db_path, &self.blob_store, &children);
         self.persist_off_runtime(path, data, self.blob_store.clone())
             .await
     }
@@ -332,13 +332,13 @@ impl SessionStore {
                         .transcript
                         .push(muta_contracts::TranscriptEntry::from_message(0, message));
                 }
-                children = admit_runner_children(&mut state.data, tail);
+                children = admit_subagent_children(&mut state.data, tail);
                 state.append_to_projection_cache(tail);
                 state.data.updated_at = unix_timestamp();
             } else if !wire_eq(commit.messages, state.get_or_project_messages()) {
                 state.data.transcript = rebuild_transcript_from_messages(commit.messages);
                 state.data.generation = uuid::Uuid::new_v4().to_string();
-                children = admit_runner_children(&mut state.data, commit.messages);
+                children = admit_subagent_children(&mut state.data, commit.messages);
                 state.invalidate_projection_cache();
                 state.data.updated_at = unix_timestamp();
                 full_rewrite = true;
@@ -433,7 +433,7 @@ impl SessionStore {
             };
             (state.path.clone(), data, children, usage_upserts)
         };
-        persist_runner_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.db_path, &self.blob_store, &children);
         self.persist_with_usage(path, data, usage_upserts).await
     }
 
@@ -616,18 +616,18 @@ impl SessionStore {
     }
 }
 
-/// Intercept runner results in an admission delta (ADR-0186 §6): each nested
+/// Intercept subagent results in an admission delta (ADR-0186 §6): each nested
 /// transcript becomes a **subagent session** (its own `sessions` row, facts
 /// shared by identity), and the parent's tool entry gains a `SubagentRef`
 /// pointer. The in-memory `Message` keeps its `children` for the live view;
 /// the persisted entry carries only the pointer. The subagent rows are
 /// *returned*, not written here: the caller persists them after releasing the
 /// session lock so no blocking I/O runs under the lock (ADR-0187).
-fn admit_runner_children(state: &mut SessionData, candidates: &[Message]) -> Vec<SessionData> {
+fn admit_subagent_children(state: &mut SessionData, candidates: &[Message]) -> Vec<SessionData> {
     let mut subagents = Vec::new();
     for message in candidates {
-        let (Some(children), Some(runner_meta)) =
-            (message.children.as_ref(), message.runner_meta.as_ref())
+        let (Some(children), Some(subagent_meta)) =
+            (message.children.as_ref(), message.subagent_meta.as_ref())
         else {
             continue;
         };
@@ -645,7 +645,7 @@ fn admit_runner_children(state: &mut SessionData, candidates: &[Message]) -> Vec
         subagent.transcript = rebuild_transcript_from_messages(children);
         subagents.push(subagent);
         // Stamp the pointer on the already-admitted parent entry (the newest
-        // tool result matching this runner result's content).
+        // tool result matching this subagent result's content).
         let call_id = message.tool_call_id.clone();
         if let Some(entry) = state
             .transcript
@@ -658,9 +658,9 @@ fn admit_runner_children(state: &mut SessionData, candidates: &[Message]) -> Vec
             && let muta_contracts::EntryPayload::Message(payload) = &mut entry.payload {
                 payload.subagent = Some(muta_contracts::SubagentRef {
                     session_id: subagent_id,
-                    description: runner_meta.description.clone(),
-                    duration_ms: runner_meta.duration_ms,
-                    toolset_count: Some(runner_meta.toolset_count),
+                    description: subagent_meta.description.clone(),
+                    duration_ms: subagent_meta.duration_ms,
+                    toolset_count: Some(subagent_meta.toolset_count),
                 });
             }
     }
@@ -670,7 +670,7 @@ fn admit_runner_children(state: &mut SessionData, candidates: &[Message]) -> Vec
 /// Persist admitted subagent sessions. Called after the session lock is
 /// released; failures leave the parent entry's pointer dangling, which the
 /// load path reports rather than silently dropping the run.
-fn persist_runner_children(db_path: &Path, blob_store: &BlobStore, subagents: &[SessionData]) {
+fn persist_subagent_children(db_path: &Path, blob_store: &BlobStore, subagents: &[SessionData]) {
     for subagent in subagents {
         if let Err(error) = crate::session::persist_to(db_path, subagent, blob_store) {
             tracing::warn!(%error, subagent = %subagent.id, "could not persist subagent session; nested transcript is dropped");

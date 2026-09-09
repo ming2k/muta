@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 /// Typed result of a tool invocation.
 ///
-/// Neither `PartialEq` nor `Eq` is derived: the [`ToolOutput::Runner`]
+/// Neither `PartialEq` nor `Eq` is derived: the [`ToolOutput::Subagent`]
 /// variant carries `Vec<Message>` and `Message` does not implement either
 /// trait (its `Vec<ImagePart>` base64 payloads make structural equality
 /// expensive and uninteresting). Compare via [`ToolOutput::to_text`] or by
@@ -119,33 +119,33 @@ pub enum ToolOutput {
         new: String,
         start_line: usize,
     },
-    /// A read-only runner run (produced by the `task` tool). Carries the
-    /// runner's full internal transcript so it can be persisted on the
+    /// A read-only subagent run (produced by the `task` tool). Carries the
+    /// subagent's full internal transcript so it can be persisted on the
     /// parent session and replayed on resume, plus the actual token usage so
     /// parent-side accounting no longer under-counts by 100x. `summary`
     /// is the short text the parent model sees as the tool result.
     ///
-    /// `failed` is the structured failure flag set explicitly by the runner tool
-    /// when the runner hit a guardrail or errored, replacing the old
+    /// `failed` is the structured failure flag set explicitly by the subagent tool
+    /// when the subagent hit a guardrail or errored, replacing the old
     /// `summary.starts_with("Error")` text sniff. The summary text still
     /// carries an `Error:` prefix for the *parent model's* benefit (so it
     /// understands the sub-task did not succeed), but UI classification now
     /// reads this field instead of pattern-matching the prose.
     ///
-    /// `interrupted` is set when the runner was stopped *by the parent* (the
+    /// `interrupted` is set when the subagent was stopped *by the parent* (the
     /// turn was cancelled) before finishing, as opposed to failing on its own.
     /// It is distinct from `failed`: the partial transcript is preserved either
     /// way, but an interruption is a user-initiated stop (the work may be
     /// resumed or re-delegated), while a failure is the sub-task's own
     /// termination. `#[serde(default)]` keeps pre-interrupt sessions readable.
-    Runner {
+    Subagent {
         summary: String,
         messages: Vec<crate::Message>,
         usage: crate::TokenUsage,
-        /// Time the runner's own provider requests spent *generating*
+        /// Time the subagent's own provider requests spent *generating*
         /// (completion-spanning, excluding tool execution and human pauses),
         /// so the parent round can fold it into its throughput denominator.
-        /// Without this, the runner's output tokens would be in the parent's
+        /// Without this, the subagent's output tokens would be in the parent's
         /// numerator but its generation time missing from the denominator —
         /// inflating the displayed tok/s for any delegating round.
         generation_ms: u64,
@@ -207,7 +207,7 @@ pub enum StdinPolicy {
     ///    operator supplied the response (e.g. a password) through an inline
     ///    TUI panel. The bytes are written into the stdin pipe before the
     ///    child has a chance to block.
-    /// 2. **Model-supplied** (opt-in): an runner profile or main config set
+    /// 2. **Model-supplied** (opt-in): a subagent profile or main config set
     ///    `allow_model_stdin`, which dynamically exposed a `stdin` parameter
     ///    in the command tool schema and the model filled it. For autonomous /
     ///    delegated flows where no human is reachable.
@@ -572,10 +572,10 @@ impl ToolOutput {
                 PatchOp::Edit => format!("Edited '{}' successfully", path),
                 PatchOp::Delete => format!("Deleted '{}'", path),
             },
-            // The parent model sees the runner's textual summary only; the
+            // The parent model sees the subagent's textual summary only; the
             // structured transcript travels out-of-band via the parent harness
             // attaching `messages` to the Tool-role message's `children`.
-            ToolOutput::Runner { summary, .. } => summary.clone(),
+            ToolOutput::Subagent { summary, .. } => summary.clone(),
             // Images are not rendered as text for the model; the harness
             // injects the real image into a follow-up user message. The tool
             // message itself only needs a legal string placeholder.
@@ -594,7 +594,7 @@ impl ToolOutput {
             ToolOutput::Error { .. } => true,
             ToolOutput::PermissionDenied { .. } => true,
             ToolOutput::Shell { exit, .. } => !matches!(*exit, Some(0)),
-            ToolOutput::Runner { failed, .. } => *failed,
+            ToolOutput::Subagent { failed, .. } => *failed,
             ToolOutput::Text(_)
             | ToolOutput::Code { .. }
             | ToolOutput::Listing { .. }
@@ -604,37 +604,37 @@ impl ToolOutput {
         }
     }
 
-    /// If this output is a [`ToolOutput::Runner`] that was interrupted by the
+    /// If this output is a [`ToolOutput::Subagent`] that was interrupted by the
     /// parent (turn cancelled mid-flight), return `true`. Distinct from
-    /// [`ToolOutput::is_error`]: an interrupted runner preserved its partial
+    /// [`ToolOutput::is_error`]: an interrupted subagent preserved its partial
     /// transcript rather than failing on its own.
-    pub fn runner_interrupted(&self) -> bool {
+    pub fn subagent_interrupted(&self) -> bool {
         match self {
-            ToolOutput::Runner { interrupted, .. } => *interrupted,
+            ToolOutput::Subagent { interrupted, .. } => *interrupted,
             _ => false,
         }
     }
 
-    /// If this output is a [`ToolOutput::Runner`], return its nested
+    /// If this output is a [`ToolOutput::Subagent`], return its nested
     /// transcript and token usage so the harness can attach `children` to the
     /// parent's tool-result message and accumulate real cost into the parent
     /// turn's accounting. Returns `None` for every other variant.
-    pub fn runner_payload(&self) -> Option<(&[crate::Message], crate::TokenUsage)> {
+    pub fn subagent_payload(&self) -> Option<(&[crate::Message], crate::TokenUsage)> {
         match self {
-            ToolOutput::Runner {
+            ToolOutput::Subagent {
                 messages, usage, ..
             } => Some((messages, *usage)),
             _ => None,
         }
     }
 
-    /// If this output is a [`ToolOutput::Runner`], return the generation time
+    /// If this output is a [`ToolOutput::Subagent`], return the generation time
     /// its own provider requests spent, so the parent can fold it into its
-    /// throughput denominator alongside the runner's output tokens. Returns
+    /// throughput denominator alongside the subagent's output tokens. Returns
     /// `0` for every other variant.
-    pub fn runner_generation_ms(&self) -> u64 {
+    pub fn subagent_generation_ms(&self) -> u64 {
         match self {
-            ToolOutput::Runner { generation_ms, .. } => *generation_ms,
+            ToolOutput::Subagent { generation_ms, .. } => *generation_ms,
             _ => 0,
         }
     }
@@ -1098,10 +1098,10 @@ mod tests {
     }
 
     #[test]
-    fn runner_to_text_returns_summary_only() {
+    fn subagent_to_text_returns_summary_only() {
         // The parent model only sees the summary; the structured transcript
         // travels out-of-band. This is the contract that lets us persist the
-        // runner transcript without polluting the parent's context window.
+        // subagent transcript without polluting the parent's context window.
         let usage = crate::TokenUsage {
             prompt_tokens: 1000,
             completion_tokens: 200,
@@ -1109,7 +1109,7 @@ mod tests {
             ..Default::default()
         };
         let messages = vec![crate::Message::new(crate::Role::Assistant, "internal")];
-        let o = ToolOutput::Runner {
+        let o = ToolOutput::Subagent {
             summary: "external summary".into(),
             messages,
             usage,
@@ -1122,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn runner_payload_returns_messages_and_usage() {
+    fn subagent_payload_returns_messages_and_usage() {
         let usage = crate::TokenUsage {
             prompt_tokens: 50,
             completion_tokens: 10,
@@ -1133,7 +1133,7 @@ mod tests {
             crate::Message::new(crate::Role::System, "sys"),
             crate::Message::new(crate::Role::Assistant, "answer"),
         ];
-        let o = ToolOutput::Runner {
+        let o = ToolOutput::Subagent {
             summary: "s".into(),
             messages: messages.clone(),
             usage,
@@ -1141,23 +1141,23 @@ mod tests {
             failed: false,
             interrupted: false,
         };
-        let (got_messages, got_usage) = o.runner_payload().expect("runner payload");
+        let (got_messages, got_usage) = o.subagent_payload().expect("subagent payload");
         assert_eq!(got_messages.len(), 2);
         assert_eq!(got_usage, usage);
     }
 
     #[test]
-    fn non_runner_payload_returns_none() {
+    fn non_subagent_payload_returns_none() {
         let o = ToolOutput::text("plain");
-        assert!(o.runner_payload().is_none());
+        assert!(o.subagent_payload().is_none());
     }
 
     #[test]
-    fn runner_failed_flag_drives_is_error_not_summary_text() {
-        // Regression for the text-sniff removal: an runner whose summary
+    fn subagent_failed_flag_drives_is_error_not_summary_text() {
+        // Regression for the text-sniff removal: a subagent whose summary
         // starts with "Error" but carries `failed: false` must NOT classify
         // as an error, and vice versa.
-        let with_flag = ToolOutput::Runner {
+        let with_flag = ToolOutput::Subagent {
             summary: "partial findings".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
@@ -1167,7 +1167,7 @@ mod tests {
         };
         assert!(with_flag.is_error());
 
-        let no_flag = ToolOutput::Runner {
+        let no_flag = ToolOutput::Subagent {
             summary: "Error: legacy text".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
@@ -1180,8 +1180,8 @@ mod tests {
 
     #[test]
     fn interrupted_flag_round_trips_and_defaults_to_false() {
-        // An interrupted runner survives serialization with its flag intact.
-        let interrupted = ToolOutput::Runner {
+        // An interrupted subagent survives serialization with its flag intact.
+        let interrupted = ToolOutput::Subagent {
             summary: "Interrupted: stopped".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
@@ -1191,14 +1191,14 @@ mod tests {
         };
         let json = serde_json::to_string(&interrupted).unwrap();
         let back: ToolOutput = serde_json::from_str(&json).unwrap();
-        assert!(back.runner_interrupted());
+        assert!(back.subagent_interrupted());
         assert!(!back.is_error());
 
         // Sessions persisted before the field existed deserialize with
         // `interrupted: false` — never a hard load failure. Build the legacy
         // JSON by serializing and dropping the field, so the shape is exact
         // regardless of TokenUsage's field set.
-        let with_flag = ToolOutput::Runner {
+        let with_flag = ToolOutput::Subagent {
             summary: "x".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
@@ -1210,13 +1210,13 @@ mod tests {
         legacy_json
             .as_object_mut()
             .unwrap()
-            .get_mut("Runner")
+            .get_mut("Subagent")
             .unwrap()
             .as_object_mut()
             .unwrap()
             .remove("interrupted");
         let legacy: ToolOutput = serde_json::from_value(legacy_json).unwrap();
-        assert!(!legacy.runner_interrupted());
+        assert!(!legacy.subagent_interrupted());
         assert!(legacy.is_error());
     }
 }

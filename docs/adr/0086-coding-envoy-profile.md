@@ -115,7 +115,7 @@ No migration: the change is additive. The profile is exported from
 - [ADR-0011](0011-subagent-profiles.md) — the capability-axis profile primitive.
 - [ADR-0012](0012-toolaccess-tier-split.md) — the `Read < Execute < Write` tier
   split.
-- [ADR-0028](0028-capability-allocation-scoped-writes.md) — the `WriteScope`
+- [ADR-0028](archive/0028-capability-allocation-scoped-writes.md) — the `WriteScope`
   grant (available, unused by `CODE` for now).
 - [ADR-0029](0029-full-duplex-subagent-communication.md) — the up/down channel
   that carries `CODE`'s permission requests.

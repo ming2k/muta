@@ -47,7 +47,7 @@ fn redesigned_components_render_without_panicking() {
                             blocked: false,
                         },
                         persistence_health: None,
-                        runner_bar: None,
+                        subagent_bar: None,
                         side_banner: None,
                         page_hints: None,
                     session_head: None,
@@ -105,7 +105,7 @@ fn redesigned_components_render_without_panicking() {
                     &theme,
                 );
                 draw_copy_toast(f, "copied to clipboard", false, &theme);
-                draw_armed_toast(f, "press Ctrl+C again to exit", &theme);
+                draw_armed_toast(f, "press Ctrl-c again to exit", &theme);
             });
 
     // Modals + permission sheet on a fresh frame.
@@ -391,21 +391,20 @@ fn config_appearance_pages_render_at_minimum_terminal_size() {
 fn web_settings_split_search_and_reader_into_clear_panels() {
     let theme = Theme::default();
     let custom = muta_contracts::ColorSchemeConfig::default();
-    let mut web =
-        muta_contracts::WebSearchConfigView::from(&muta_contracts::WebSearchConfig::default());
-    web.search_connections
-        .push(muta_contracts::WebSearchConnection {
-            id: "exa-team".to_string(),
-            name: Some("Team Search".to_string()),
-            preset_id: Some("exa".to_string()),
-            api_key_env: None,
-            base_url: None,
-            custom_headers: None,
-            enabled: true,
-        });
+    let web = muta_contracts::WebSearchConfigView {
+        revision: 0,
+        provider: muta_contracts::WebSearchProvider::Exa,
+        reader: muta_contracts::WebReaderProvider::Jina,
+        proxy: None,
+        timeout_secs: 20,
+        searxng_url: None,
+        search_credential: muta_contracts::WebCredentialStatus::Stored,
+        reader_credential: muta_contracts::WebCredentialStatus::Stored,
+        capabilities: muta_contracts::web_provider_capabilities(),
+    };
 
     let mut terminal = mutx_engine::TestTerminal::new(80, 24);
-    for (category_index, expected_route) in [(3, "Search route"), (4, "Reader route")] {
+    for (category_index, expected_axis) in [(3, "Used by search_web"), (4, "Used by read_url")] {
         terminal.draw(|frame| {
             draw_settings_view(
                 frame,
@@ -433,11 +432,48 @@ fn web_settings_split_search_and_reader_into_clear_panels() {
             .join("\n");
         assert!(screen.contains("Web Search"));
         assert!(screen.contains("Web Reader"));
-        assert!(screen.contains(expected_route));
-        assert!(screen.contains("ROUTING"));
-        assert!(screen.contains("REQUEST POLICY"));
-        assert!(screen.contains("CONNECTIONS"));
+        assert!(screen.contains(expected_axis));
+        assert!(screen.contains("PROVIDER"));
+        assert!(screen.contains("NETWORK"));
+        assert!(screen.contains("Provider"));
+        assert!(screen.contains("Timeout"));
     }
+}
+
+#[test]
+fn settings_view_reports_selected_row_rect_for_popover_anchoring() {
+    let theme = Theme::default();
+    let custom = muta_contracts::ColorSchemeConfig::default();
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+
+    let mut selected_rect = None;
+    terminal.draw(|frame| {
+        let rects = draw_settings_view(
+            frame,
+            SettingsProps {
+                category_index: 0, // Appearance
+                detail_index: 1,
+                focus: ConfigFocus::Detail,
+                color_scheme: "zen",
+                custom_color_scheme: &custom,
+                transcript_layout: crate::layout::Strategy::TurnBand,
+                expand_auto_scroll: false,
+                click_outside_dismiss: true,
+                websearch: None,
+                workspace: "",
+                category_scroll: &mut 0,
+                detail_scroll: &mut 0,
+                breadcrumbs: Some("Main › Settings"),
+                theme: &theme,
+            },
+        );
+        selected_rect = rects.selected_row_rect;
+    });
+
+    let rect = selected_rect.expect("selected settings row rect should be present");
+    assert!(rect.y > 0);
+    assert!(rect.width > 20);
+    assert_eq!(rect.height, 1);
 }
 
 #[test]
@@ -476,7 +512,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                         blocked: false,
                     },
                     persistence_health: None,
-                    runner_bar: None,
+                    subagent_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -544,7 +580,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -613,7 +649,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -677,7 +713,7 @@ fn nonempty_session_does_not_render_empty_state() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -750,7 +786,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -857,7 +893,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -927,7 +963,7 @@ fn h1_underline_clamps_to_text_extent() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -1015,7 +1051,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,
@@ -1098,7 +1134,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                     blocked: false,
                 },
                 persistence_health: None,
-                runner_bar: None,
+                subagent_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,

@@ -11,7 +11,7 @@ matches the tool's domain: filesystem and web tools go in
 `crates/muta-agent/src/tools/`, slash-command discovery and project
 scaffolding live in `crates/muta-runtime/src/` (`commands` and `project`),
 MCP adapters live in `crates/muta-mcp/src`,
-and skill tools live in `crates/muta-skills`. `envoy` likewise
+and skill tools live in `crates/muta-skills`. `subagent` likewise
 lives in `crates/muta-agent/src/` because it constructs agents.
 The todo tools in `crates/muta-agent/src/tools/todo.rs` receive their
 agent-owned state through `TodoToolContext`, injected by the agent's private
@@ -98,7 +98,7 @@ also overrides `call_structured_with_events` to stream stdout live via
 `ToolStream`.
 
 > **Note on `call_structured_with_events`.** If you override it (rare — only
-> `execute_command` and the envoy `task` tool do), the signature now takes a final
+> `execute_command` and the subagent `task` tool do), the signature now takes a final
 > `stdin: StdinPolicy` argument. Non-shell tools ignore it (it defaults to
 > `StdinPolicy::Closed`, which gives a child no stdin); the default
 > `call`/`call_structured` delegations pass `Closed` for you, so most tools
@@ -177,9 +177,9 @@ override `call_with_events` (`crates/muta-contracts/src/capability.rs`) instead
 of `call`. The default implementation delegates to `call`, so overriding
 `call` alone is enough for synchronous tools.
 
-`EnvoyTool` (`crates/muta-agent/src/envoy_tool.rs`) is currently the only
+`SubagentTool` (`crates/muta-agent/src/subagent_tool.rs`) is currently the only
 tool that overrides `call_with_events`. It forwards `SubTaskEvent`s from
-the envoy so the parent harness can render live progress. Read its
+the subagent so the parent harness can render live progress. Read its
 implementation before adopting the same pattern; the event surface is
 narrow.
 
@@ -215,11 +215,11 @@ Use `with_tools` for an iterator. Agent-owned tool identities take precedence
 over caller-supplied tools with the same name and variant, so an embedding
 cannot accidentally detach `todo` from that agent's state.
 
-Tools collected before `EnvoyTool` construction are available for its
+Tools collected before `SubagentTool` construction are available for its
 snapshot. Admission is by capability axis: read-only, non-interactive tools
 can enter the `EXPLORE` profile, while write tools and user-interactive tools
 are excluded. See
-[Envoys → Tool admission](../explanation/agent-design/envoys.md#tool-admission)
+[Subagents → Tool admission](../explanation/agent-design/subagents.md#tool-admission)
 and [ADR-0011](../adr/0011-subagent-profiles.md).
 
 ## Verify

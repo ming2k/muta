@@ -31,13 +31,13 @@ pub use siliconflow::SiliconFlowUsageFetcher;
 /// Trait implemented by provider-specific usage / quota fetchers.
 #[async_trait]
 pub trait ProviderUsageFetcher: Send + Sync {
-    /// Whether this fetcher handles the given preset or base URL.
-    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool;
+    /// Whether this fetcher handles the given model provider or base URL.
+    fn matches(&self, provider: &str, base_url: &str) -> bool;
 
     /// Fetch and normalize usage/quota data from the provider endpoint.
     async fn fetch_usage(
         &self,
-        client: &reqwest::Client,
+        client: &crate::http::Http,
         base_url: &str,
         api_key: &str,
     ) -> Result<ProviderUsage, String>;
@@ -54,23 +54,22 @@ pub fn registered_fetchers() -> &'static [&'static dyn ProviderUsageFetcher] {
     ]
 }
 
-/// Query provider usage for a connection based on preset or endpoint URL.
+/// Query provider usage for a connection based on its model provider or endpoint URL.
 pub async fn fetch_provider_usage(
-    preset_id: Option<&str>,
+    provider: &str,
     base_url: &str,
     api_key: &str,
 ) -> ConnectionUsageState {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    fetch_provider_usage_with_client(&client, preset_id, base_url, api_key).await
+    let Ok(client) = crate::http::Http::control_plane() else {
+        return ConnectionUsageState::Error("could not build the HTTP client".to_string());
+    };
+    fetch_provider_usage_with_client(&client, provider, base_url, api_key).await
 }
 
-/// Query provider usage using an explicit reqwest client.
+/// Query provider usage using an explicit client handle.
 pub async fn fetch_provider_usage_with_client(
-    client: &reqwest::Client,
-    preset_id: Option<&str>,
+    client: &crate::http::Http,
+    provider: &str,
     base_url: &str,
     api_key: &str,
 ) -> ConnectionUsageState {
@@ -80,7 +79,7 @@ pub async fn fetch_provider_usage_with_client(
     }
 
     for fetcher in registered_fetchers() {
-        if fetcher.matches(preset_id, base_url) {
+        if fetcher.matches(provider, base_url) {
             return match fetcher.fetch_usage(client, base_url, key).await {
                 Ok(usage) => ConnectionUsageState::Available(Box::new(usage)),
                 Err(err) => ConnectionUsageState::Error(err),

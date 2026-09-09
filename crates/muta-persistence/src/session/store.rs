@@ -252,26 +252,19 @@ impl SessionStore {
             (resolved.clone(), path, state.data.id == resolved)
         };
 
-        let db_deleted = self
+        let _db_deleted = self
             .writer
             .delete_session(resolved.clone())
             .await
             .map_err(|e| e.to_string())?;
 
         let log = snapshot.with_extension("jsonl");
-        let file_deleted = snapshot.exists() || log.exists();
         let _ = fs::remove_file(&snapshot);
         let _ = fs::remove_file(&log);
 
-        if !db_deleted && !file_deleted {
-            return Err(format!(
-                "Could not delete session '{}': session not found.",
-                resolved
-            ));
-        }
-
         // Repoint at a fresh session so the store stays usable after the
-        // active session is removed.
+        // active session is removed (even if the active session was deferred/empty
+        // and never written to disk or SQLite).
         if is_active {
             self.reset().await?;
         }
@@ -442,11 +435,36 @@ impl SessionStore {
                     }
                 }
             }
+            // If no match was found with the project_root filter and input is a full UUID,
+            // check globally across the database in case of symlink or canonicalization variance.
+            if matches.is_empty()
+                && input.len() >= 32
+                && let Ok(found) = engine.resolve_session_prefix(input, None)
+            {
+                for id in found {
+                    if !matches.iter().any(|(m_id, _)| m_id == &id) {
+                        let path = self.sessions_dir.join(format!("{id}.json"));
+                        matches.push((id, path));
+                    }
+                }
+            }
         }
 
         match matches.as_slice() {
             [(id, path)] => Ok((id.clone(), path.clone())),
-            [] => Err(format!("No session matches '{}'.", input)),
+            [] => {
+                // If the input is a full 36-char canonical UUID format that doesn't match
+                // anything, still resolve to its expected path so delete/cleanup operations
+                // can treat already-deleted/absent sessions idempotently.
+                if input.len() == 36 && input.chars().filter(|c| *c == '-').count() == 4 {
+                    Ok((
+                        input.to_string(),
+                        self.sessions_dir.join(format!("{input}.json")),
+                    ))
+                } else {
+                    Err(format!("No session matches '{}'.", input))
+                }
+            }
             _ => Err(format!(
                 "Session prefix '{}' is ambiguous ({} matches).",
                 input,

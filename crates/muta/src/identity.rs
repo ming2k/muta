@@ -5,32 +5,34 @@
 //! brings its own identity/master. The server's `/btw` side
 //! session reuses the primary agent's identity via `Agent::identity()`,
 //! so it never asks the server to name a product.
+//!
+//! ## Why the shipped agent has no self-description
+//!
+//! The engine composes an identity preamble only when the embedding supplies
+//! one ([`AgentIdentity`]); this CLI supplies none. Nothing in the harness
+//! reads the model's self-name: no feature parses "I am muta", addressing is
+//! user-side (`@role:` / `/role`), and the product name already travels
+//! with the binary, the UI chrome, and the config paths. Capabilities are
+//! declared by the tool schemas, the environment by the host section, and the
+//! work ethos by the persistence policy — so a
+//! `"You are muta, an expert AI coding assistant."` opening would spend the
+//! prompt's most salient slot on a label that steers no behaviour, and it
+//! invites the model to answer identity questions with a product name it has
+//! no grounded knowledge of. The baseline prompt therefore opens at the host
+//! environment.
+//!
+//! A `/role` switch is the one place a framing line earns its
+//! tokens: the focused roles install an imperative role directive
+//! (see [`AgentPreset::for_role`]).
 
-use muta_contracts::{AgentIdentity, AgentPreset, MasterPreset};
-
-/// The product's default instance name. A self-reference anchor the model
-/// uses in the system prompt (intro line, responding when called by name).
-/// Not "the master's name" — the role ("code") is carried by
-/// [`AgentPreset::name`].
-const MUTA_NAME: &str = "muta";
-
-/// What this CLI's agent is for.
-const MUTA_MISSION: &str = "an expert AI coding assistant with tool access";
-
-/// The composed identity: name + mission, default tone (no persona override).
-pub fn muta_identity() -> AgentIdentity {
-    AgentIdentity::new(MUTA_NAME, MUTA_MISSION)
-}
+use muta_contracts::{AgentIdentity, AgentPreset};
 
 /// The built-in **coding agent** profile (ADR-0183): the declarative
-/// form of the role this binary historically assembled inline.
+/// form of the role this binary historically assembled inline. Its identity
+/// is empty — see the module docs for why the shipped agent describes no
+/// product.
 pub fn agent_code() -> AgentPreset {
-    AgentPreset::with_identity("code", muta_identity())
-}
-
-/// Legacy alias for [`agent_code`].
-pub fn master_code() -> MasterPreset {
-    agent_code()
+    AgentPreset::with_identity("code", AgentIdentity::default())
 }
 
 /// The daemon has no terminal or browser clipboard of its own. Clipboard
@@ -48,8 +50,8 @@ impl muta_runtime::UiBridge for DaemonUiBridge {
     }
 }
 
-// Master role presets (`architect`, `reviewer`, `security`) and the
-// `/master` / `@master:` switching mechanism are declared in
-// `muta-contracts` as shared vocabulary (`MasterPresetId`,
-// `MasterPreset::for_role`) and applied via `Agent::apply_master_role`,
+// Role presets (`architect`, `reviewer`, `security`) and the
+// `/role` (alias `/master`) / `@role:` switching mechanism are declared in
+// `muta-contracts` as shared vocabulary (`AgentPresetId`,
+// `AgentPreset::for_role`) and applied via `Agent::apply_role`,
 // so this binary does not need its own role registry — both frontends share one.

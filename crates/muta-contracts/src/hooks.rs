@@ -84,7 +84,7 @@ impl HookEventKind {
 
 /// Owned snapshot of the moment a hook fires. Serialized to JSON and piped to
 /// command handlers on stdin. Owned (not borrowed) so it crosses the async
-/// spawn into the command runner without lifetime gymnastics.
+/// spawn into the command subagent without lifetime gymnastics.
 #[derive(Debug, Clone)]
 pub struct HookContext {
     pub session_id: String,
@@ -94,7 +94,7 @@ pub struct HookContext {
 
 /// The payload for one fire. Tool events carry a name + a reduced view of the
 /// input/output — commands read JSON on stdin, not live Rust values, so the
-/// full [`crate::ToolOutput`] (which may embed an envoy transcript) is not
+/// full [`crate::ToolOutput`] (which may embed a subagent transcript) is not
 /// forwarded wholesale; its `to_text()` summary is.
 // Hook payloads are constructed once per fire and immediately serialized to
 // the hook process's stdin; boxing `PermissionRequest` would not reduce peak

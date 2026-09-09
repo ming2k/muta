@@ -24,8 +24,8 @@ use muta_contracts::{ConnectionAuth, ProviderModelInfo, ProviderPickerSnapshot, 
 use crate::fuzzy;
 
 /// One editable field of the provider editor. The visible set is chosen by the
-/// active [`ProviderPreset`] (create) or the edited provider's protocol (edit),
-/// rather than a fixed five-field form. Provider-owned model collections are
+/// active [`ConnectionTemplate`] (create) or the edited connection's provider
+/// (edit), rather than a fixed five-field form. Provider-owned model collections are
 /// imported from `muta_contracts`; this view layer only selects and renders
 /// those curated values.
 ///
@@ -43,16 +43,20 @@ pub enum CustomField {
     ClientIdentity,
 }
 
-/// A curated starting point for adding a user-defined provider. Curated presets
-/// lock the protocol and seed their model list; the standalone custom definition
-/// exposes protocol, model, and request identity in its editor. Modelled as *data* — one
-/// table entry per preset — mirroring `muta_contracts::provider_presets`.
-pub struct ProviderPreset {
-    /// Stable identifier shared with the matching entry in
-    /// the contracts preset tables. Persisted on the created
-    /// connection as `preset_id` so the catalog can re-seed the connection
-    /// from this preset's *current* model list on later startups. MUST match
-    /// the spec's `id` 1:1 and never change once shipped.
+/// A curated starting point for adding a connection — the **creation-time
+/// template** of ADR-0201. A template is consumed when the connection is
+/// created and never persisted as identity; the created connection records
+/// only the [`Self::id`] as its `provider` (a model provider names a service
+/// surface, ADR-0201 INV-1). Curated templates lock the wire protocol and seed
+/// their model list; the standalone `custom` template exposes protocol, model,
+/// and request identity in its editor. Modelled as *data* — one table entry per
+/// template — mirroring `muta_contracts::model_providers`.
+pub struct ConnectionTemplate {
+    /// The **model provider id** this template creates a connection for
+    /// (`"openai"`, `"openai-subscription"`, `"custom"`, …). MUST match the
+    /// matching `muta_providers::model_provider_spec` id 1:1 and never change
+    /// once shipped: it is persisted as the connection's `provider` and is the
+    /// join key the catalog resolves models with.
     pub id: &'static str,
     /// List label, e.g. `"Custom Anthropic (Claude relay)"`.
     pub label: &'static str,
@@ -61,51 +65,52 @@ pub struct ProviderPreset {
     /// what the service is, what it serves, and how it authenticates ("sign
     /// in with an API key" vs "authorizes in the browser").
     pub description: &'static str,
-    /// Wire protocol sent in `AgentRequest::AddProvider`: `"openai"` |
-    /// `"anthropic"` | `"google"` (the legacy `"gemini"` label is still
-    /// accepted).
+    /// Default wire protocol for the created connection, sent in
+    /// `AgentRequest::AddConnection` as `protocol: Some(..)` **only** for the
+    /// `custom` provider; a curated provider owns its wire and is created with
+    /// `protocol: None`.
     pub protocol: WireProtocol,
     /// Models seeded as channels. Empty means the user enters one via the Model
-    /// field (presets can opt in when they need one).
+    /// field (templates can opt in when they need one).
     pub models: &'static [&'static str],
     /// Whether the editor shows a Base URL field (false for native Google).
     pub needs_url: bool,
     /// Placeholder shown in the Base URL field — the full endpoint shape.
     pub url_hint: &'static str,
-    /// Whether the editor exposes a free-text Model field. Most presets seed
+    /// Whether the editor exposes a free-text Model field. Most templates seed
     /// `models`; open protocols can still add arbitrary model ids later.
     pub needs_model: bool,
-    /// A concrete relay endpoint pre-filled into the Base URL field on open
-    /// (create mode), so a relay-specific preset works without the user
-    /// typing the host. `None` for the generic presets — their `url_hint` is
-    /// a placeholder only and the field starts empty, since the user supplies
-    /// their own relay host. When set, the user can still edit the value.
+    /// A concrete endpoint pre-filled into the Base URL field on open
+    /// (create mode), so a service-specific template works without the user
+    /// typing the host. `None` for templates whose `url_hint` is a placeholder
+    /// only and whose field starts empty, since the user supplies their own
+    /// relay host. When set, the user can still edit the value.
     pub default_url: Option<&'static str>,
-    /// Preset-specific user agent. Most providers use the default agent, but
+    /// Template-specific user agent. Most providers use the default agent, but
     /// the coding-plan endpoints validate this header.
     pub user_agent: Option<&'static str>,
-    /// How seeded connections authenticate. `XaiOAuth` starts browser OAuth
-    /// before the name editor (OAuth-first add flow).
+    /// How connections created from this template authenticate. `XaiOAuth`
+    /// starts browser OAuth before the name editor (OAuth-first add flow).
     pub auth: muta_contracts::ConnectionAuth,
 }
 
-impl ProviderPreset {
-    /// The title the preset chooser sorts and keys rows by. Every preset
-    /// renders its [`Self::label`] alone as the row title — the `OAuth` /
-    /// `(sub2api)` suffixes are part of the label, so this accessor exists to
-    /// name that rule and give the sort a single home rather than to project
-    /// a second spelling of the label.
+impl ConnectionTemplate {
+    /// The title the template chooser sorts and keys rows by. Every template
+    /// renders its [`Self::label`] alone as the row title — any suffix is part
+    /// of the label, so this accessor exists to name that rule and give the
+    /// sort a single home rather than to project a second spelling of the
+    /// label.
     pub fn display_title(&self) -> &'static str {
         self.label
     }
 
-    /// The ordered, visible editor fields for this preset (create mode).
-    /// OAuth presets only ask for the connection name (auth already completed).
+    /// The ordered, visible editor fields for this template (create mode).
+    /// OAuth templates only ask for the connection name (auth already completed).
     pub fn fields(&self) -> Vec<CustomField> {
         if self.auth.is_oauth() {
             return vec![CustomField::Name];
         }
-        if self.id == CUSTOM_CONNECTION.id {
+        if self.id == CUSTOM_TEMPLATE.id {
             return vec![
                 CustomField::Name,
                 CustomField::BaseUrl,
@@ -127,23 +132,26 @@ impl ProviderPreset {
         fields
     }
 
-    /// Whether selecting this preset starts OAuth before the name editor.
+    /// Whether selecting this template starts OAuth before the name editor.
     pub fn oauth_first(&self) -> bool {
         self.auth.is_oauth()
     }
 }
 
-/// The provider presets offered when adding a connection, **sorted
+/// The connection templates offered when adding a connection, **sorted
 /// alphabetically by title**. The chooser renders rows in this order and keys
 /// `↑/↓` movement to it, so the declared order here IS the display order —
 /// insert new entries at their sorted position, not at the end.
-pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
-    ProviderPreset {
+///
+/// Every `id` is a **model provider id** (ADR-0201 §5) and is persisted on the
+/// created connection as `provider`.
+pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
+    ConnectionTemplate {
         id: "anthropic",
         label: "Anthropic",
         description: "Anthropic's official API for flagship Claude models with advanced reasoning; sign in with an Anthropic API key.",
         protocol: WireProtocol::AnthropicMessages,
-        models: muta_contracts::provider_presets::ANTHROPIC_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::ANTHROPIC_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.anthropic.com/v1/messages",
         needs_model: false,
@@ -151,12 +159,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
-        id: "chatgpt-oauth",
+    ConnectionTemplate {
+        id: "openai-subscription",
         label: "ChatGPT Subscription",
         description: "Uses your ChatGPT Plus or Pro subscription for Codex and flagship GPT models; authorizes in the browser, no API key.",
         protocol: WireProtocol::OpenAiResponses,
-        models: muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://chatgpt.com/backend-api/codex/responses",
         needs_model: false,
@@ -164,12 +172,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
     },
-    ProviderPreset {
+    ConnectionTemplate {
         id: "deepseek",
         label: "DeepSeek",
         description: "DeepSeek's platform API with high-performance reasoning and coding models; sign in with a DeepSeek API key.",
         protocol: WireProtocol::OpenAiResponses,
-        models: muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::DEEPSEEK_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.deepseek.com/v1/responses",
         needs_model: false,
@@ -177,12 +185,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
-        id: "copilot-oauth",
+    ConnectionTemplate {
+        id: "github-copilot",
         label: "GitHub Copilot",
         description: "Your GitHub Copilot subscription, serving multi-vendor coding and reasoning models; authorizes on the device via GitHub.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::COPILOT_SEED_MODELS,
+        models: muta_contracts::model_providers::COPILOT_SEED_MODELS,
         needs_url: false,
         url_hint: "https://api.githubcopilot.com/chat/completions",
         needs_model: false,
@@ -190,12 +198,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::CopilotOAuth,
     },
-    ProviderPreset {
+    ConnectionTemplate {
         id: "google",
         label: "Google AI Studio",
         description: "Google AI Studio / developer API covering the full Gemini range; sign in with a Google API key.",
         protocol: WireProtocol::GoogleGenerateContent,
-        models: muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::GOOGLE_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://generativelanguage.googleapis.com/v1beta",
         needs_model: false,
@@ -203,12 +211,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
-        id: "antigravity-oauth",
+    ConnectionTemplate {
+        id: "google-antigravity",
         label: "Google Antigravity",
         description: "Your Google One AI Premium subscription for flagship Gemini plus companion Claude models; authorizes in the browser.",
         protocol: WireProtocol::GoogleGenerateContent,
-        models: muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS,
+        models: muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS,
         needs_url: false,
         url_hint: "https://daily-cloudcode-pa.googleapis.com",
         needs_model: false,
@@ -216,12 +224,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::AntigravityOAuth,
     },
-    ProviderPreset {
+    ConnectionTemplate {
         id: "kimi-code",
         label: "Kimi Code",
         description: "Moonshot's Kimi Coding Plan with long-context coding and reasoning models; sign in with a plan API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::KIMI_CODE_MODELS,
+        models: muta_contracts::model_providers::KIMI_CODE_MODELS,
         needs_url: false,
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
         needs_model: false,
@@ -229,12 +237,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
+    ConnectionTemplate {
         id: "openai",
         label: "OpenAI Platform",
         description: "OpenAI's platform API for official flagship GPT and frontier reasoning models; sign in with an OpenAI API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::OPENAI_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.openai.com/v1/chat/completions",
         needs_model: false,
@@ -242,12 +250,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
+    ConnectionTemplate {
         id: "opencode-go",
         label: "OpenCode Go",
         description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with an OpenCode API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::OPENCODE_GO_MODELS,
+        models: muta_contracts::model_providers::OPENCODE_GO_MODELS,
         needs_url: false,
         url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
         needs_model: false,
@@ -255,12 +263,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
-        id: "zai-code",
+    ConnectionTemplate {
+        id: "glm-cn",
         label: "ZAI Code (CN)",
         description: "Zhipu's Z.AI Coding Plan with flagship GLM and code-enhanced models; sign in with a plan API key.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::ZAI_CODE_MODELS,
+        models: muta_contracts::model_providers::ZAI_CODE_MODELS,
         needs_url: false,
         url_hint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
         needs_model: false,
@@ -268,12 +276,12 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         user_agent: Some(muta_contracts::client_identity::ZCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
-    ProviderPreset {
-        id: "xai-oauth",
+    ConnectionTemplate {
+        id: "xai",
         label: "xAI",
         description: "Your SuperGrok or X Premium subscription for flagship Grok reasoning models; authorizes in the browser.",
         protocol: WireProtocol::OpenAiChatCompletions,
-        models: muta_contracts::provider_presets::XAI_BUILTIN_MODELS,
+        models: muta_contracts::model_providers::XAI_BUILTIN_MODELS,
         needs_url: false,
         url_hint: "https://api.x.ai/v1/chat/completions",
         needs_model: false,
@@ -283,17 +291,19 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
     },
 ];
 
-/// The generic OpenAI-compatible connection definition. It is intentionally
-/// separate from [`PROVIDER_PRESETS`]: the Connections surface exposes
-/// "Add preset connection" and "Add custom connection" as sibling actions,
-/// so a custom endpoint is never presented as though it were a preset.
+/// The `custom` provider's template — the generic bring-your-own-endpoint
+/// definition (ADR-0201 §6). It is intentionally separate from
+/// [`PROVIDER_PRESETS`]: the Connections surface exposes "Add curated
+/// connection" and "Add custom connection" as sibling actions, so a custom
+/// endpoint is never presented as though it were a curated service.
 ///
-/// The stable `custom-openai` id is retained to recognize existing
-/// connections. New custom connections persist without a preset id.
-pub const CUSTOM_CONNECTION: ProviderPreset = ProviderPreset {
-    id: "custom-openai",
+/// `custom` is an ordinary model provider with an open model universe; its
+/// default wire is `openai-chat-completions` and a connection may override
+/// protocol, base URL, and user agent.
+pub const CUSTOM_TEMPLATE: ConnectionTemplate = ConnectionTemplate {
+    id: "custom",
     label: "Custom connection",
-    description: "Any OpenAI-compatible endpoint you bring — a custom gateway, local runtime, or relay; you set the base URL and key.",
+    description: "Any endpoint you bring — a custom gateway, local runtime, or relay; you set the base URL, protocol, and key.",
     protocol: WireProtocol::OpenAiChatCompletions,
     models: &[],
     needs_url: true,
@@ -304,51 +314,53 @@ pub const CUSTOM_CONNECTION: ProviderPreset = ProviderPreset {
     auth: muta_contracts::ConnectionAuth::ApiKey,
 };
 
-/// Resolve either a curated preset or the standalone custom-connection
-/// definition by its stable persisted id.
-pub fn connection_definition(id: &str) -> Option<&'static ProviderPreset> {
-    if id == CUSTOM_CONNECTION.id {
-        return Some(&CUSTOM_CONNECTION);
+/// Resolve either a curated template or the standalone `custom` template by
+/// its **provider id**.
+pub fn connection_definition(provider: &str) -> Option<&'static ConnectionTemplate> {
+    if provider == CUSTOM_TEMPLATE.id {
+        return Some(&CUSTOM_TEMPLATE);
     }
-    PROVIDER_PRESETS.iter().find(|preset| preset.id == id)
+    PROVIDER_PRESETS.iter().find(|t| t.id == provider)
 }
 
 /// The editor header title for a create-mode connection — the label of the
-/// preset the flow was seeded from, falling back to a generic header. The
-/// lookup is by **preset id**, not wire protocol: several presets share the
-/// `openai` protocol, and a first-match-by-protocol lookup would mislabel
-/// the editor (e.g. "ChatGPT Subscription" for the ChatGPT OAuth preset).
-pub fn preset_label_for(preset_id: Option<&str>) -> String {
-    preset_id
+/// template the flow was seeded from, falling back to a generic header. The
+/// lookup is by **provider id**, not wire protocol: several providers share the
+/// `openai` wire, and a first-match-by-protocol lookup would mislabel the
+/// editor (e.g. "ChatGPT Subscription" for the OpenAI Platform flow).
+pub fn provider_label_for(provider: Option<&str>) -> String {
+    provider
         .and_then(connection_definition)
         .map(|t| t.label.to_string())
         .unwrap_or_else(|| "＋ Add connection".to_string())
 }
 
-/// Resolve the provider **type** label for a Connections row from its preset
-/// id — e.g. `preset_id = "openai"` → `"OpenAI Platform"`. This is the
-/// provider *kind* shown beside the user-given connection name (distinct from
-/// the connection name itself). Returns `None` for legacy connections with no
-/// recorded preset, in which case the row renders the connection name alone.
-pub fn provider_type_label(preset_id: &str) -> Option<&'static str> {
-    if preset_id.is_empty() {
+/// Resolve the provider **type** label for a Connections row from its
+/// `provider` id — e.g. `provider = "openai"` → `"OpenAI Platform"`. This is
+/// the service surface shown beside the user-given connection name (distinct
+/// from the connection name itself). Returns `None` for a provider the local
+/// template table does not know, in which case the row renders the connection
+/// name alone.
+pub fn provider_type_label(provider: &str) -> Option<&'static str> {
+    if provider.is_empty() {
         return None;
     }
-    connection_definition(preset_id).map(|t| t.label)
+    connection_definition(provider).map(|t| t.label)
 }
 
-/// The ordered editor fields shown when **editing** an existing user provider.
-/// For an API-key custom provider the form offers Name, Base URL, and Token (the Model
-/// field is omitted — models, and their per-model reasoning, ADR-0046, are
-/// managed in the Models picker). For a preset provider (where endpoint and models
-/// are derived from the hardcoded preset spec), Base URL is fixed by the preset,
-/// so only Name and Token are offered. For an OAuth connection (ChatGPT/Codex, xAI,
-/// Copilot, Antigravity) only Name is editable: the Base URL and Token are fixed by
-/// the auth flow and must not be hand-edited, so a rename is the only safe operation.
-pub fn edit_fields(is_preset: bool, auth: ConnectionAuth) -> Vec<CustomField> {
+/// The ordered editor fields shown when **editing** an existing connection.
+/// For the `custom` provider the form offers Name, Base URL, and Token (the
+/// Model field is omitted — models, and their per-model reasoning, ADR-0046,
+/// are managed in the Models picker). For a curated provider (where endpoint
+/// and models are owned by the provider spec), Base URL is fixed by the
+/// provider, so only Name and Token are offered. For an OAuth connection
+/// (ChatGPT/Codex, xAI, Copilot, Antigravity) only Name is editable: the Base
+/// URL and Token are fixed by the auth flow and must not be hand-edited, so a
+/// rename is the only safe operation.
+pub fn edit_fields(curated: bool, auth: ConnectionAuth) -> Vec<CustomField> {
     if auth.is_oauth() {
         vec![CustomField::Name]
-    } else if is_preset {
+    } else if curated {
         vec![CustomField::Name, CustomField::Token]
     } else {
         vec![
@@ -373,8 +385,8 @@ pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
 }
 
 /// The registry model ids matching a wire protocol. Kept as a test helper for
-/// registry and preset consistency; the custom connection editor intentionally
-/// does not use this list.
+/// registry and template consistency; the custom connection editor
+/// intentionally does not use this list.
 #[cfg(test)]
 fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
     let Ok(protocol) = protocol_wire.parse::<WireProtocol>() else {
@@ -475,13 +487,13 @@ pub struct RankedProvider {
     pub model: String,
     /// Every model id this provider serves.
     pub models: Vec<String>,
-    /// `true` for built-in presets, `false` for user-defined providers. Drives
+    /// `true` for curated providers, `false` for user-defined connections. Drives
     /// the built-in/custom grouping and whether `e` opens the full meta editor.
     pub builtin: bool,
-    /// The add-connection preset that birthed this instance (`"openai"`, …),
-    /// when known. Surfaced so the Connections list can show the provider
-    /// *type* beside the instance name.
-    pub preset_id: String,
+    /// The model provider this connection points at (`"openai"`, …),
+    /// surfaced so the Connections list can show the provider *type* beside
+    /// the connection name (ADR-0201).
+    pub provider: String,
     /// Client identity configured for this connection.
     pub client_identity: muta_contracts::ClientIdentity,
     /// The rendered label — the provider's display name (the instance name).
@@ -547,7 +559,7 @@ pub fn providers_filtered_from(
             model: prow.model.clone(),
             models: prow.models.clone(),
             builtin: prow.builtin,
-            preset_id: prow.preset_id.clone(),
+            provider: prow.provider.clone(),
             client_identity: prow.client_identity.clone(),
             label,
             m,
@@ -741,7 +753,7 @@ mod tests {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            preset_id: String::new(),
+            provider: String::new(),
             client_identity: Default::default(),
             last_used_ms: None,
             auth: Default::default(),
@@ -1155,22 +1167,22 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_preset_is_offered_with_prefilled_url_and_seeded_models() {
+    fn antigravity_template_is_offered_with_prefilled_url_and_seeded_models() {
         let tmpl = PROVIDER_PRESETS
             .iter()
-            .find(|t| t.id == "antigravity-oauth")
-            .expect("antigravity preset offered in the chooser");
+            .find(|t| t.id == "google-antigravity")
+            .expect("antigravity template offered in the chooser");
         assert_eq!(tmpl.label, "Google Antigravity");
         assert_eq!(tmpl.protocol, WireProtocol::GoogleGenerateContent);
         assert_eq!(
             tmpl.models,
-            muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS
+            muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS
         );
         assert_eq!(
             tmpl.default_url,
             Some("https://daily-cloudcode-pa.googleapis.com")
         );
-        assert!(!tmpl.needs_url, "OAuth preset hides Base URL field");
+        assert!(!tmpl.needs_url, "OAuth template hides Base URL field");
         assert!(
             !tmpl.needs_model,
             "no free-text Model field — models are seeded"
@@ -1179,15 +1191,15 @@ mod tests {
     }
 
     #[test]
-    fn openai_preset_seeds_openai_text_models() {
+    fn openai_template_seeds_openai_text_models() {
         let tmpl = PROVIDER_PRESETS
             .iter()
             .find(|t| t.id == "openai")
-            .expect("openai preset offered in the chooser");
+            .expect("openai template offered in the chooser");
         assert_eq!(tmpl.protocol, WireProtocol::OpenAiChatCompletions);
         assert_eq!(
             tmpl.models,
-            muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS
+            muta_contracts::model_providers::OPENAI_BUILTIN_MODELS
         );
         assert!(
             !tmpl.needs_url,
@@ -1208,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_presets_prefill_official_urls_generic_relays_do_not() {
+    fn builtin_templates_prefill_official_urls_generic_relays_do_not() {
         let builtin_labels = [
             "OpenAI Platform",
             "Anthropic",
@@ -1391,34 +1403,36 @@ mod tests {
     }
 
     #[test]
-    fn each_preset_models_reference_the_shared_constants() {
-        // The preset `id` is the durable join key persisted on connections as
-        // `preset_id`. The daemon's preset specs and this UI table must share
-        // the *same* model-list constant (single source of truth in
-        // `muta_contracts::provider_presets`) — otherwise the catalog's
-        // reconciliation could not re-seed a connection from its preset. This
+    fn each_template_models_reference_the_shared_constants() {
+        // The template `id` IS the model provider id, persisted on the created
+        // connection as `provider`. The daemon's provider specs and this UI
+        // table must share the *same* model-list constant (single source of
+        // truth in `muta_contracts::model_providers`) — otherwise the catalog's
+        // reconciliation could not re-seed a connection from its provider. This
         // test catches a UI table that inlined a drifted copy of the list.
         for t in PROVIDER_PRESETS {
             let referenced = match t.id {
-                "anthropic" => Some(muta_contracts::provider_presets::ANTHROPIC_BUILTIN_MODELS),
-                "chatgpt-oauth" => Some(muta_contracts::provider_presets::CHATGPT_BUILTIN_MODELS),
-                "deepseek" => Some(muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS),
-                "copilot-oauth" => Some(muta_contracts::provider_presets::COPILOT_SEED_MODELS),
-                "google" => Some(muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS),
-                "antigravity-oauth" => {
-                    Some(muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS)
+                "anthropic" => Some(muta_contracts::model_providers::ANTHROPIC_BUILTIN_MODELS),
+                "openai-subscription" => {
+                    Some(muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS)
                 }
-                "kimi-code" => Some(muta_contracts::provider_presets::KIMI_CODE_MODELS),
-                "openai" => Some(muta_contracts::provider_presets::OPENAI_BUILTIN_MODELS),
-                "opencode-go" => Some(muta_contracts::provider_presets::OPENCODE_GO_MODELS),
-                "zai-code" => Some(muta_contracts::provider_presets::ZAI_CODE_MODELS),
-                "xai-oauth" => Some(muta_contracts::provider_presets::XAI_BUILTIN_MODELS),
+                "deepseek" => Some(muta_contracts::model_providers::DEEPSEEK_BUILTIN_MODELS),
+                "github-copilot" => Some(muta_contracts::model_providers::COPILOT_SEED_MODELS),
+                "google" => Some(muta_contracts::model_providers::GOOGLE_BUILTIN_MODELS),
+                "google-antigravity" => {
+                    Some(muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS)
+                }
+                "kimi-code" => Some(muta_contracts::model_providers::KIMI_CODE_MODELS),
+                "openai" => Some(muta_contracts::model_providers::OPENAI_BUILTIN_MODELS),
+                "opencode-go" => Some(muta_contracts::model_providers::OPENCODE_GO_MODELS),
+                "glm-cn" => Some(muta_contracts::model_providers::ZAI_CODE_MODELS),
+                "xai" => Some(muta_contracts::model_providers::XAI_BUILTIN_MODELS),
                 _ => None,
             };
             if let Some(expected) = referenced {
                 assert_eq!(
                     t.models, expected,
-                    "preset {} model list diverged from the shared constant",
+                    "template {} model list diverged from the shared constant",
                     t.id
                 );
             }
@@ -1426,69 +1440,67 @@ mod tests {
     }
 
     #[test]
-    fn preset_ids_are_unique() {
+    fn template_ids_are_unique() {
         let mut ids: Vec<&str> = PROVIDER_PRESETS
             .iter()
-            .chain(std::iter::once(&CUSTOM_CONNECTION))
+            .chain(std::iter::once(&CUSTOM_TEMPLATE))
             .map(|t| t.id)
             .collect();
         ids.sort_unstable();
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
-        assert!(dups.is_empty(), "duplicate preset ids: {dups:?}");
+        assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
     }
 
     #[test]
-    fn openai_platform_preset_is_labeled_to_distinguish_chatgpt() {
-        // The `openai` preset is the platform/API-key billing plan, distinct
-        // from the ChatGPT Subscription preset that shares its wire protocol.
+    fn openai_platform_template_is_labeled_to_distinguish_chatgpt() {
+        // The `openai` template is the platform/API-key billing plan, distinct
+        // from the ChatGPT Subscription template that shares its wire protocol.
         // The label must say so — a bare "OpenAI" reads as the company and
         // matches the subscription plan users actually have.
         let openai = PROVIDER_PRESETS.iter().find(|t| t.id == "openai").unwrap();
         assert_eq!(openai.label, "OpenAI Platform");
         let chatgpt = PROVIDER_PRESETS
             .iter()
-            .find(|t| t.id == "chatgpt-oauth")
+            .find(|t| t.id == "openai-subscription")
             .unwrap();
         assert_eq!(openai.protocol, WireProtocol::OpenAiChatCompletions);
         assert_eq!(chatgpt.protocol, WireProtocol::OpenAiResponses);
         assert!(
             chatgpt.models.contains(&"gpt-5.6-sol"),
-            "the subscription preset must expose the Sol model seed"
+            "the subscription template must expose the Sol model seed"
         );
     }
 
     #[test]
-    fn editor_title_resolves_by_preset_id_not_protocol() {
-        // Several presets share the `openai` wire protocol (chatgpt-oauth is
+    fn editor_title_resolves_by_provider_id_not_protocol() {
+        // Several providers share the `openai` wire (openai-subscription is
         // declared first). A create-mode editor title must resolve from the
-        // seeded preset id, otherwise every openai-protocol flow would be
+        // seeded provider id, otherwise every openai-wire flow would be
         // headed "ChatGPT Subscription".
-        assert_eq!(preset_label_for(Some("openai")), "OpenAI Platform");
+        assert_eq!(provider_label_for(Some("openai")), "OpenAI Platform");
         assert_eq!(
-            preset_label_for(Some("chatgpt-oauth")),
+            provider_label_for(Some("openai-subscription")),
             "ChatGPT Subscription"
         );
-        assert_eq!(preset_label_for(Some("custom-openai")), "Custom connection");
-        assert_eq!(preset_label_for(Some("deepseek")), "DeepSeek");
+        assert_eq!(provider_label_for(Some("custom")), "Custom connection");
+        assert_eq!(provider_label_for(Some("deepseek")), "DeepSeek");
         // Unknown / unseeded ids fall back to the generic header.
-        assert_eq!(preset_label_for(None), "＋ Add connection");
+        assert_eq!(provider_label_for(None), "＋ Add connection");
         assert_eq!(
-            preset_label_for(Some("no-such-preset")),
+            provider_label_for(Some("no-such-provider")),
             "＋ Add connection"
         );
     }
 
     #[test]
-    fn custom_connection_is_not_a_preset_chooser_row() {
+    fn custom_template_is_not_a_chooser_row() {
         assert!(
-            PROVIDER_PRESETS
-                .iter()
-                .all(|preset| preset.id != "custom-openai"),
+            PROVIDER_PRESETS.iter().all(|t| t.id != "custom"),
             "custom connections have their own Connections-level branch"
         );
         assert_eq!(
-            connection_definition("custom-openai").map(|definition| definition.id),
-            Some("custom-openai")
+            connection_definition("custom").map(|definition| definition.id),
+            Some("custom")
         );
     }
 
@@ -1508,10 +1520,10 @@ mod tests {
             ]
         );
 
-        // A preset API-key provider derives its Base URL from the preset spec,
-        // so it only exposes Name and Token.
-        let preset_fields = edit_fields(true, ConnectionAuth::ApiKey);
-        assert_eq!(preset_fields, vec![CustomField::Name, CustomField::Token]);
+        // A curated API-key provider derives its Base URL from the provider
+        // spec, so it only exposes Name and Token.
+        let curated_fields = edit_fields(true, ConnectionAuth::ApiKey);
+        assert_eq!(curated_fields, vec![CustomField::Name, CustomField::Token]);
     }
 
     #[test]

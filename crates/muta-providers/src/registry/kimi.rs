@@ -4,13 +4,13 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, OpenAiProviderSpec, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, OpenAiProviderSpec, RemoteCatalogSource};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
 /// platform's current flagship; `kimi-k2.7-code` remains as the previous
 /// pinned alias.
-pub use muta_contracts::provider_presets::KIMI_CODE_MODELS;
+pub use muta_contracts::model_providers::KIMI_CODE_MODELS;
 
 // Kimi Code — Moonshot AI's coding platform (api.kimi.com/coding/v1).
 // The platform pins the model id to the fixed `k3` alias (Kimi K3, 1M
@@ -110,7 +110,7 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
     }
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
     id: "kimi-code",
     baselines: MODELS,
@@ -119,13 +119,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     protocol: WireProtocol::OpenAiChatCompletions,
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this preset track the platform's actual model list.
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    // It is also a trusted first-party endpoint whose /models advertises
-    // real capability fields: platform-native ids the static registry does
-    // not know (e.g. `kimi-for-coding`, and every future model) are fitted
-    // with their advertised metadata instead of being intersected away —
-    // new platform models become usable with zero client changes.
-    fitting: true,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
     models: KIMI_CODE_MODELS,
 };

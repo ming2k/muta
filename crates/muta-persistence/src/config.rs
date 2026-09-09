@@ -10,7 +10,7 @@ use crate::fsutil;
 use crate::paths;
 use muta_contracts::{
     CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, RemoteModelMetadata,
-    SecretString, SkillsConfig, VariantSelection, WebSearchConfig,
+    SecretString, SkillsConfig, VariantSelection, WebConfig, WebProviderAxis,
 };
 
 /// Re-export so server/TUI can use the config-layer path without depending on
@@ -25,23 +25,20 @@ use std::path::PathBuf;
 /// Reasoning isn't a tool, so each frontend addresses it by name.
 pub const THINKING_KEY: &str = "thinking";
 
-/// User-tunable master (top-level agent) behaviour, deserialized from the optional `[master]`
-/// table of `config.toml`. All fields default sensibly, so a
-/// `config.toml` with no `[master]` table (or a partially specified one)
-/// is valid.
+/// User-tunable top-level agent behaviour, deserialized from the optional `[agent]`
+/// table of `config.toml` (legacy `[master]` spelling accepted on load).
+/// All fields default sensibly, so a `config.toml` with no `[agent]` table
+/// (or a partially specified one) is valid.
 ///
 /// ```toml
-/// [master]
+/// [agent]
 /// # Hard-stop a round after this many total ReAct turns. 0 (the default)
-/// # means no hard stop — an opt-in execution budget only. This is the sole
-/// # per-round turn cap; the loop otherwise runs until the model stops, the user
-/// # interrupts, or context compaction cannot relieve pressure (ADR-0009).
+/// # means no hard stop — an opt-in execution budget only.
 /// # hard_stop_turns = 0
 ///
 /// # Never pop the interactive-input panel for a command needing stdin
 /// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
-/// # with a non-interactive remedy hint — like delegated autonomous mode, but without
-/// # turning the master itself delegated.
+/// # with a non-interactive remedy hint.
 /// # skip_interactive_input = false
 ///
 /// # Doom-loop guard (variant-loop defense). On by default; one
@@ -49,13 +46,13 @@ pub const THINKING_KEY: &str = "thinking";
 /// here, or restore the strict first-repeat block with `threshold = 2`.
 /// See [`DoomGuardConfig`]. The historical `nudge` key spelling still
 /// loads; saves write `doom_guard`.
-/// # [master.doom_guard]
+/// # [agent.doom_guard]
 /// # enabled = false
 /// # threshold = 2
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct MasterConfig {
+pub struct AgentConfig {
     /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
     /// `0` (the default) means uncapped. Mutated at runtime via
     /// `Agent::set_hard_stop_turns`.
@@ -106,6 +103,9 @@ pub struct MasterConfig {
     #[serde(default, alias = "nudge")]
     pub doom_guard: DoomGuardConfig,
 }
+
+/// Legacy alias for [`AgentConfig`].
+pub type MasterConfig = AgentConfig;
 
 // `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
 // above via `use muta_contracts::DoomGuardConfig`. It is the `[master.doom_guard]`
@@ -363,75 +363,82 @@ pub struct Credentials {
     /// API keys keyed by connection id.
     #[serde(default, alias = "providers")]
     pub connections: BTreeMap<String, SecretString>,
-    /// The web-tool API keys (`[websearch]`): search backends + the Jina
-    /// reader. Kept here — not in `config.toml`'s `[websearch]` — so
-    /// `config.toml` stays behavior-only and shareable. Merged into
-    /// [`Config::websearch`] at load time by [`Config::load`].
-    #[serde(default, skip_serializing_if = "WebSearchKeys::is_empty")]
-    pub websearch: WebSearchKeys,
+    /// Credentials keyed by compiled web provider id, not connection id.
+    #[serde(
+        default,
+        alias = "websearch",
+        skip_serializing_if = "WebCredentials::is_empty"
+    )]
+    pub web: WebCredentials,
+    /// One-shot migration markers. These prevent preserved legacy secrets from
+    /// being re-imported after a user deliberately clears their new value.
+    #[serde(default, skip_serializing_if = "CredentialMigrations::is_empty")]
+    pub migrations: CredentialMigrations,
 }
 
-/// The six web-tool API keys, persisted as `credentials.toml [websearch]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct WebSearchKeys {
+pub struct CredentialMigrations {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web_connections_v1: bool,
+}
+
+impl CredentialMigrations {
+    fn is_empty(&self) -> bool {
+        !self.web_connections_v1
+    }
+}
+
+/// Web credentials. Flat fields are accepted only as legacy migration input;
+/// serialization emits the search and reader maps.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebCredentials {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub search: BTreeMap<String, SecretString>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reader: BTreeMap<String, SecretString>,
+    #[serde(default, skip_serializing)]
     pub exa_api_key: Option<SecretString>,
+    #[serde(default, skip_serializing)]
     pub parallel_api_key: Option<SecretString>,
+    #[serde(default, skip_serializing)]
     pub tavily_api_key: Option<SecretString>,
+    #[serde(default, skip_serializing)]
     pub bocha_api_key: Option<SecretString>,
+    #[serde(default, skip_serializing)]
     pub jina_api_key: Option<SecretString>,
 }
 
-impl WebSearchKeys {
-    /// Whether any key is set — drives `skip_serializing_if` so a clean
-    /// credentials file does not grow an empty table.
+impl WebCredentials {
     pub fn is_empty(&self) -> bool {
-        self.exa_api_key.is_none()
+        self.search.is_empty()
+            && self.reader.is_empty()
+            && self.exa_api_key.is_none()
             && self.parallel_api_key.is_none()
             && self.tavily_api_key.is_none()
             && self.bocha_api_key.is_none()
             && self.jina_api_key.is_none()
     }
 
-    /// Overlay onto a `[websearch]` config table: a key set here wins, an
-    /// absent one leaves whatever the config already carries (which after
-    /// migration is always `None`).
-    fn merge_into(self, websearch: &mut muta_contracts::WebSearchConfig) {
-        if self.exa_api_key.is_some() {
-            websearch.exa_api_key = self.exa_api_key;
+    fn normalize_legacy(&mut self) -> bool {
+        let mut changed = false;
+        for (id, secret) in [
+            ("exa", self.exa_api_key.take()),
+            ("parallel", self.parallel_api_key.take()),
+            ("tavily", self.tavily_api_key.take()),
+            ("bocha", self.bocha_api_key.take()),
+        ] {
+            if let Some(secret) = secret {
+                self.search.entry(id.to_string()).or_insert(secret);
+                changed = true;
+            }
         }
-        if self.parallel_api_key.is_some() {
-            websearch.parallel_api_key = self.parallel_api_key;
+        if let Some(secret) = self.jina_api_key.take() {
+            self.reader.entry("jina".to_string()).or_insert(secret);
+            changed = true;
         }
-        if self.tavily_api_key.is_some() {
-            websearch.tavily_api_key = self.tavily_api_key;
-        }
-        if self.bocha_api_key.is_some() {
-            websearch.bocha_api_key = self.bocha_api_key;
-        }
-        if self.jina_api_key.is_some() {
-            websearch.jina_api_key = self.jina_api_key;
-        }
-    }
-
-    /// Fill any unset key from `other` (used when folding the historical
-    /// `config.toml` location into the credentials file).
-    fn absorb(&mut self, other: WebSearchKeys) {
-        if self.exa_api_key.is_none() {
-            self.exa_api_key = other.exa_api_key;
-        }
-        if self.parallel_api_key.is_none() {
-            self.parallel_api_key = other.parallel_api_key;
-        }
-        if self.tavily_api_key.is_none() {
-            self.tavily_api_key = other.tavily_api_key;
-        }
-        if self.bocha_api_key.is_none() {
-            self.bocha_api_key = other.bocha_api_key;
-        }
-        if self.jina_api_key.is_none() {
-            self.jina_api_key = other.jina_api_key;
-        }
+        changed
     }
 }
 
@@ -447,8 +454,21 @@ impl Credentials {
         let Ok(content) = fs::read_to_string(&path) else {
             return Self::default();
         };
-        match toml::from_str(&content) {
-            Ok(c) => c,
+        match toml::from_str::<Self>(&content) {
+            Ok(mut credentials) => {
+                let mut changed = credentials.web.normalize_legacy();
+                if !credentials.migrations.web_connections_v1
+                    && crate::web_migration::migrate_connection_credentials(&mut credentials)
+                        .is_some()
+                {
+                    credentials.migrations.web_connections_v1 = true;
+                    changed = true;
+                }
+                if changed && let Err(error) = credentials.save() {
+                    tracing::warn!(%error, "could not persist migrated web credentials");
+                }
+                credentials
+            }
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -475,11 +495,38 @@ impl Credentials {
             .filter(|k| !k.expose_secret().trim().is_empty())
     }
 
-    /// Replace the whole `[websearch]` key table. Serialization already
-    /// skips an empty table, so a cleared configuration never grows an empty
-    /// `[websearch]` section in `credentials.toml`.
-    pub fn set_websearch_keys(&mut self, keys: WebSearchKeys) {
-        self.websearch = keys;
+    pub fn web_credential(
+        &self,
+        axis: WebProviderAxis,
+        provider_id: &str,
+    ) -> Option<&SecretString> {
+        let credentials = match axis {
+            WebProviderAxis::Search => &self.web.search,
+            WebProviderAxis::Reader => &self.web.reader,
+        };
+        credentials
+            .get(provider_id)
+            .filter(|secret| !secret.expose_secret().trim().is_empty())
+    }
+
+    pub fn set_web_credential(
+        &mut self,
+        axis: WebProviderAxis,
+        provider_id: &str,
+        secret: Option<SecretString>,
+    ) {
+        let credentials = match axis {
+            WebProviderAxis::Search => &mut self.web.search,
+            WebProviderAxis::Reader => &mut self.web.reader,
+        };
+        match secret {
+            Some(secret) if !secret.expose_secret().trim().is_empty() => {
+                credentials.insert(provider_id.to_string(), secret);
+            }
+            _ => {
+                credentials.remove(provider_id);
+            }
+        }
     }
 
     /// Set (or clear) the credential for `connection_id`.
@@ -497,6 +544,80 @@ impl Credentials {
     /// Remove the credential for `connection_id`, if any.
     pub fn remove_api_key(&mut self, connection_id: &str) {
         self.connections.remove(connection_id);
+    }
+}
+
+pub struct ResolvedWebConfig {
+    pub runtime: muta_contracts::WebRuntimeConfig,
+    pub search_credential: muta_contracts::WebCredentialStatus,
+    pub reader_credential: muta_contracts::WebCredentialStatus,
+}
+
+pub fn resolve_web_config(config: &WebConfig, credentials: &Credentials) -> ResolvedWebConfig {
+    use muta_contracts::{WebCredentialRequirement as Requirement, WebCredentialStatus as Status};
+
+    fn resolve(
+        axis: WebProviderAxis,
+        provider_id: &str,
+        requirement: Requirement,
+        env_name: Option<&str>,
+        credentials: &Credentials,
+    ) -> (Option<SecretString>, Status) {
+        if requirement == Requirement::None {
+            return (None, Status::NotRequired);
+        }
+        if let Some(env_name) = env_name
+            && let Ok(value) = std::env::var(env_name)
+            && !value.trim().is_empty()
+        {
+            return (Some(SecretString::new(value)), Status::Environment);
+        }
+        if let Some(secret) = credentials.web_credential(axis, provider_id) {
+            return (Some(secret.clone()), Status::Stored);
+        }
+        let status = match requirement {
+            Requirement::Required => Status::RequiredMissing,
+            Requirement::Optional => Status::OptionalMissing,
+            Requirement::None => Status::NotRequired,
+        };
+        (None, status)
+    }
+
+    let search = config.provider.capability();
+    let reader = config.reader.capability();
+    let (search_credential, search_status) = search
+        .as_ref()
+        .map(|capability| {
+            resolve(
+                WebProviderAxis::Search,
+                &capability.id,
+                capability.credential,
+                capability.default_env_var.as_deref(),
+                credentials,
+            )
+        })
+        .unwrap_or((None, Status::NotRequired));
+    let (reader_credential, reader_status) = reader
+        .as_ref()
+        .map(|capability| {
+            resolve(
+                WebProviderAxis::Reader,
+                &capability.id,
+                capability.credential,
+                capability.default_env_var.as_deref(),
+                credentials,
+            )
+        })
+        .unwrap_or((None, Status::NotRequired));
+
+    ResolvedWebConfig {
+        runtime: muta_contracts::WebRuntimeConfig {
+            behavior: config.clone(),
+            search_credential,
+            reader_credential,
+        },
+        search_credential: search_status,
+        reader_credential: reader_status,
     }
 }
 
@@ -688,14 +809,14 @@ pub struct Config {
     /// user overrides/additional rules and guard toggles.
     #[serde(default)]
     pub bash_policy: BashPolicyConfig,
-    /// Web tool configuration (`[websearch]` table): search backend, proxy, timeout.
+    /// Web-tool behavior (`[web]`): one provider per axis and shared network policy.
     #[serde(default)]
-    pub websearch: WebSearchConfig,
-    /// Master behaviour (`[master]` table): opt-in hard-stop budget and the
-    /// doom-loop guard toggle. See [`MasterConfig`] for the per-field
-    /// semantics and TOML examples.
-    #[serde(default)]
-    pub master: MasterConfig,
+    pub web: WebConfig,
+    /// Top-level agent behaviour (`[agent]` table, legacy `[master]` alias accepted on load):
+    /// opt-in hard-stop budget and the doom-loop guard toggle. See [`AgentConfig`]
+    /// for the per-field semantics and TOML examples.
+    #[serde(default, alias = "master")]
+    pub agent: AgentConfig,
     /// Lifecycle event hooks (`[[hooks]]` array, ADR-0025). Each entry fires a
     /// shell command at one lifecycle point; see [`HookSpec`].
     #[serde(default)]
@@ -806,7 +927,7 @@ impl ToolVariantsConfig {
 /// ```
 ///
 /// The command receives the [`muta_contracts::HookContext`] as JSON on stdin and
-/// communicates a decision via exit code / stdout JSON (see the CLI runner).
+/// communicates a decision via exit code / stdout JSON (see the CLI subagent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookSpec {
     /// When this hook fires.
@@ -862,9 +983,13 @@ struct RawConfig {
     #[serde(default)]
     bash_policy: Option<BashPolicyConfig>,
     #[serde(default)]
-    websearch: Option<WebSearchConfig>,
+    web: Option<WebConfig>,
     #[serde(default)]
-    master: Option<MasterConfig>,
+    websearch: Option<WebConfig>,
+    #[serde(default)]
+    agent: Option<AgentConfig>,
+    #[serde(default)]
+    master: Option<AgentConfig>,
     #[serde(default)]
     hooks: Option<Vec<HookSpec>>,
     #[serde(default)]
@@ -944,11 +1069,11 @@ impl<'de> Deserialize<'de> for Config {
         if let Some(b) = raw.bash_policy {
             cfg.bash_policy = b;
         }
-        if let Some(w) = raw.websearch {
-            cfg.websearch = w;
+        if let Some(web) = raw.web.or(raw.websearch) {
+            cfg.web = web;
         }
-        if let Some(m) = raw.master {
-            cfg.master = m;
+        if let Some(a) = raw.agent.or(raw.master) {
+            cfg.agent = a;
         }
         if let Some(h) = raw.hooks {
             cfg.hooks = h;
@@ -979,8 +1104,8 @@ impl Default for Config {
             permissions: PermissionConfig::default(),
             workspace: WorkspaceConfig::default(),
             bash_policy: BashPolicyConfig::default(),
-            websearch: WebSearchConfig::default(),
-            master: MasterConfig::default(),
+            web: WebConfig::default(),
+            agent: AgentConfig::default(),
             hooks: Vec::new(),
             tool_variants: ToolVariantsConfig::default(),
             daemon: DaemonConfig::default(),
@@ -988,74 +1113,33 @@ impl Default for Config {
     }
 }
 
-/// Whether none of the six web-tool keys is set (helper for
-/// [`Config::merge_websearch_keys`]).
-fn keys_eq_none(keys: &muta_contracts::WebSearchConfig) -> bool {
-    keys.exa_api_key.is_none()
-        && keys.parallel_api_key.is_none()
-        && keys.tavily_api_key.is_none()
-        && keys.bocha_api_key.is_none()
-        && keys.jina_api_key.is_none()
-}
-
 impl Config {
     pub fn load() -> Self {
         let config_path = Self::config_file_path();
-        let mut config = match fs::read_to_string(&config_path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    // A corrupt config must never block startup, but falling
-                    // back to defaults *silently* would discard the user's
-                    // entire setup with no trace of why. Warn loudly (the
-                    // log carries the file and the error) so a typo'd
-                    // config.toml is diagnosable instead of reading as
-                    // "muta forgot my settings".
-                    tracing::error!(
-                        path = %config_path.display(),
-                        %error,
-                        "config.toml is unparseable; continuing with defaults \
-                         (fix the syntax error to restore the saved configuration)"
-                    );
-                    Config::default()
+        match fs::read_to_string(&config_path) {
+            Ok(content) => {
+                match toml::from_str(&crate::web_migration::migrate_config_source(&content)) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        // A corrupt config must never block startup, but falling
+                        // back to defaults *silently* would discard the user's
+                        // entire setup with no trace of why. Warn loudly (the
+                        // log carries the file and the error) so a typo'd
+                        // config.toml is diagnosable instead of reading as
+                        // "muta forgot my settings".
+                        tracing::error!(
+                            path = %config_path.display(),
+                            %error,
+                            "config.toml is unparseable; continuing with defaults \
+                             (fix the syntax error to restore the saved configuration)"
+                        );
+                        Config::default()
+                    }
                 }
-            },
+            }
             // Absent is the normal first-run condition; nothing to report.
             Err(_) => Config::default(),
-        };
-        Self::merge_websearch_keys(&mut config);
-        config
-    }
-
-    /// Merge `credentials.toml [websearch]` into the in-memory `[websearch]`
-    /// table, and migrate any keys found in `config.toml [websearch]` (the
-    /// historical location) into the credentials file — one-shot and
-    /// idempotent. `config.toml` is behavior-only and shareable; the six API
-    /// keys are secrets and must not live there.
-    fn merge_websearch_keys(config: &mut Config) {
-        // Pull the secret keys out of the parsed table. Serialization already
-        // skips them (they cannot come back through a save); this moves any
-        // keys a pre-migration file still carries.
-        let keys_in_config = config.websearch.secret_keys_only();
-        let from_config = (!keys_eq_none(&keys_in_config)).then_some(WebSearchKeys {
-            exa_api_key: keys_in_config.exa_api_key,
-            parallel_api_key: keys_in_config.parallel_api_key,
-            tavily_api_key: keys_in_config.tavily_api_key,
-            bocha_api_key: keys_in_config.bocha_api_key,
-            jina_api_key: keys_in_config.jina_api_key,
-        });
-        let mut creds = Credentials::load();
-        if let Some(migrated) = from_config {
-            // Fold into the credentials store (an explicit credentials entry
-            // wins: it is the location the user edits going forward) and
-            // persist both files. A failed save is non-fatal — the keys stay
-            // in memory for this run and the migration retries next load.
-            creds.websearch.absorb(migrated);
-            if let Err(e) = creds.save() {
-                tracing::warn!("could not migrate websearch keys into credentials.toml: {e}");
-            }
         }
-        creds.websearch.clone().merge_into(&mut config.websearch);
     }
 
     /// Load only the `[mcp.*]` table from a project-local `.muta/config.toml`
@@ -1439,38 +1523,33 @@ mod tests {
 
     #[test]
     fn agent_table_round_trips_through_toml() {
-        // The `[master]` table must round-trip: partial TOML keeps defaults,
-        // full TOML preserves explicit overrides. Legacy `[agent.review]`
-        // sub-tables (ADR-0016) are accepted but ignored — `hard_stop_turns`
-        // now lives directly under `[master]` (ADR-0018).
-        let toml_full = r#"
+        // The `[agent]` table must round-trip: partial TOML keeps defaults,
+        // full TOML preserves explicit overrides. Legacy `[master]` table is
+        // accepted on load.
+        let toml_canonical = r#"
+            [agent]
+            hard_stop_turns = 40
+        "#;
+        let cfg: Config = toml::from_str(toml_canonical).unwrap();
+        assert_eq!(cfg.agent.hard_stop_turns, 40);
+
+        let toml_legacy_master = r#"
             [master]
             hard_stop_turns = 40
         "#;
-        let cfg: Config = toml::from_str(toml_full).unwrap();
-        assert_eq!(cfg.master.hard_stop_turns, 40);
+        let cfg_legacy: Config = toml::from_str(toml_legacy_master).unwrap();
+        assert_eq!(cfg_legacy.agent.hard_stop_turns, 40);
 
-        // Missing `[master]` table → defaults match the documented values.
+        // Missing `[agent]` table → defaults match the documented values.
         let cfg: Config = toml::from_str("").unwrap();
-        assert_eq!(cfg.master.hard_stop_turns, 0);
-
-        // A legacy `[agent.review]` block no longer maps to anything; it must
-        // not break parsing (unknown sub-tables are ignored) and the new
-        // direct field still round-trips.
-        let toml_legacy = r#"
-            [agent.review]
-            review_start_turn = 64
-            hard_stop_turns = 99
-        "#;
-        let cfg: Config = toml::from_str(toml_legacy).unwrap();
-        assert_eq!(cfg.master.hard_stop_turns, 0);
+        assert_eq!(cfg.agent.hard_stop_turns, 0);
 
         // Round-trip through save+load format (serialize then parse).
         let mut cfg = Config::default();
-        cfg.master.hard_stop_turns = 99;
+        cfg.agent.hard_stop_turns = 99;
         let serialised = toml::to_string(&cfg).unwrap();
         let parsed: Config = toml::from_str(&serialised).unwrap();
-        assert_eq!(parsed.master.hard_stop_turns, 99);
+        assert_eq!(parsed.agent.hard_stop_turns, 99);
     }
 
     #[test]
@@ -1496,17 +1575,17 @@ mod tests {
         // `enabled = false` under the old `nudge` key must survive — dropping
         // it would silently flip the user's opt-out back to blocking.
         let legacy: Config =
-            toml::from_str("[master.nudge]\nenabled = false\nwindow = 24\n").unwrap();
+            toml::from_str("[agent.nudge]\nenabled = false\nwindow = 24\n").unwrap();
         let canonical: Config =
-            toml::from_str("[master.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
-        assert_eq!(legacy.master.doom_guard, canonical.master.doom_guard);
-        assert!(!canonical.master.doom_guard.enabled);
-        assert_eq!(canonical.master.doom_guard.window, 24);
+            toml::from_str("[agent.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
+        assert_eq!(legacy.agent.doom_guard, canonical.agent.doom_guard);
+        assert!(!canonical.agent.doom_guard.enabled);
+        assert_eq!(canonical.agent.doom_guard.window, 24);
 
         // Save always writes the canonical key; the alias is load-only.
         let serialized = toml::to_string(&canonical).unwrap();
         assert!(
-            serialized.contains("[master.doom_guard]"),
+            serialized.contains("[agent.doom_guard]"),
             "got: {serialized}"
         );
         assert!(
@@ -1571,7 +1650,7 @@ mod tests {
 
     /// Tests that mutate the process-wide paths override (`set_test_default`)
     /// and read/write the throwaway config/credentials/cache files must
-    /// serialise against each other so the parallel runner never observes
+    /// serialise against each other so the parallel subagent never observes
     /// another test's Dirs. Mirrors the `ENV_GUARD` pattern in `paths.rs`.
     static PATHS_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

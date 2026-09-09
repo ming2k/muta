@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn visible_context_is_not_hidden() {
-        let message = visible_user(InjectionKind::RunnerSteer, "new task");
+        let message = visible_user(InjectionKind::SubagentSteer, "new task");
         assert_eq!(message.role, Role::User);
         assert!(!message.hidden);
     }

@@ -108,11 +108,11 @@ mod tests {
     #[test]
     fn key_affordance_renders_atomic_unit() {
         let theme = Theme::default();
-        let affordance = KeyAffordance::new("Ctrl+X", "menu");
+        let affordance = KeyAffordance::new("Ctrl-x", "menu");
         assert_eq!(affordance.width(), 6 + 1 + 4);
 
         let [key_span, label_span] = affordance.render_spans(&theme, theme.body());
-        assert_eq!(key_span.content, "Ctrl+X");
+        assert_eq!(key_span.content, "Ctrl-x");
         assert_eq!(key_span.style.fg, theme.keycap_fg());
         assert_eq!(label_span.content, " menu");
         assert_eq!(label_span.style.fg, theme.keycap_label());
@@ -121,6 +121,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "label must not be empty")]
     fn key_affordance_disallows_empty_label() {
-        let _ = KeyAffordance::new("Ctrl+X", "");
+        let _ = KeyAffordance::new("Ctrl-x", "");
     }
 }

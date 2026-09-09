@@ -92,7 +92,7 @@ impl<K: Clone + Eq + Hash> UiRuntime<K> {
 
     /// Refine a measured allocation before presentation. Descendant clips are
     /// recomputed from declarations, never adjusted from stale screen boxes.
-    pub fn place(&mut self, key: &K, layout: super::LayoutBox) -> Result<NodeLayout, UiError> {
+    pub fn place(&mut self, key: &K, layout: super::LayoutBox<K>) -> Result<NodeLayout, UiError> {
         let scene = self.pending.as_mut().ok_or(UiError::NoPendingFrame)?;
         let index = *scene.keys.get(key).ok_or(UiError::MissingNode)?;
         scene.nodes[index].component.layout = layout;

@@ -136,13 +136,13 @@ going blank.
 | Waiting for provider (first byte or retry in flight) | `waiting for model` |
 | Reasoning stream producing deltas | `thinking` |
 | Answer stream producing deltas | `answering` |
-| Tool execution | `exploring` / `searching codebase` / `making edits` / `running command` / `updating tasks` / `running runner` / `using MCP` |
+| Tool execution | `exploring` / `searching codebase` / `making edits` / `running command` / `updating tasks` / `running subagent` / `using MCP` |
 | Human gate (permission / ask_user) | `awaiting permission` |
 | Finalizing stream | `finalizing response` |
 
 Transport setbacks own **no label**: a provider backoff renders as the
 muted clause `· retry 2/8 next in 4s` beside whatever master label is live,
-and its details stay in the Activity modal. The runner-side peek row
+and its details stay in the Activity modal. The subagent-side peek row
 likewise shows bare `waiting to retry …` rather than `running waiting to
 retry`, because a backoff is a pause, not progress.
 

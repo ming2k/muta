@@ -1054,7 +1054,8 @@ async fn oauth_token_endpoint_with_empty_access_token_fails() {
         .token_url(format!("{}/token", server.url()))
         .build();
 
-    let client = reqwest::Client::new();
+    // The owned transport, matching what the OAuth flows now use.
+    let client = muta_providers::http::Http::control_plane().expect("http client");
     let pkce = muta_providers::oauth::PkceCodes::generate();
     let res = muta_providers::oauth::token::exchange_code(
         &client,
@@ -1075,7 +1076,8 @@ async fn oauth_token_endpoint_with_empty_access_token_fails() {
 async fn oauth_browser_login_validates_oidc_nonce() {
     use base64::Engine;
     let mut server = Server::new_async().await;
-    let client = reqwest::Client::new();
+    // The owned transport, matching what the OAuth flows now use.
+    let client = muta_providers::http::Http::control_plane().expect("http client");
 
     // 1. Correct nonce succeeds
     let cfg_good = muta_providers::oauth::OAuthConfig::builder("test_oidc_good")

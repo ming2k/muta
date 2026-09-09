@@ -377,42 +377,42 @@ fn tool_step_collapses_and_restores_full_semantic_detail() {
 }
 
 #[test]
-fn runner_task_is_detected_and_addressable() {
+fn subagent_task_is_detected_and_addressable() {
     let task = TranscriptMessage::tool_step(
         "call_42",
-        "runner",
+        "spawn_agent",
         r#"{"description":"explore src","prompt":"..."}"#,
     );
-    assert!(task.is_runner_task());
+    assert!(task.is_subagent_task());
     assert_eq!(task.tool_step_call_id(), Some("call_42"));
-    assert_eq!(task.runner_children().map(|c| c.len()), Some(0));
-    assert_eq!(task.runner_description(), "explore src");
-    assert_eq!(task.runner_role(), None);
+    assert_eq!(task.subagent_children().map(|c| c.len()), Some(0));
+    assert_eq!(task.subagent_description(), "explore src");
+    assert_eq!(task.subagent_role(), None);
 
-    // A regular tool step is not an runner task.
+    // A regular tool step is not a subagent task.
     let read = TranscriptMessage::tool_step("call_1", "read_text", r#"{"path":"a"}"#);
-    assert!(!read.is_runner_task());
-    assert!(read.runner_status_line().is_none());
+    assert!(!read.is_subagent_task());
+    assert!(read.subagent_status_line().is_none());
 }
 
 #[test]
-fn runner_started_event_labels_step_by_role() {
+fn subagent_started_event_labels_step_by_role() {
     // A `Started` event stamps the bound profile name on the step so the
     // page header can read the role out as its `[ROLE]` tag.
     let mut task = TranscriptMessage::tool_step(
         "call_7",
-        "runner",
+        "spawn_agent",
         r#"{"description":"write the plan","prompt":"..."}"#,
     );
-    assert_eq!(task.runner_description(), "write the plan");
-    assert_eq!(task.runner_role(), None);
+    assert_eq!(task.subagent_description(), "write the plan");
+    assert_eq!(task.subagent_role(), None);
     assert!(
-        task.push_runner_event(&muta_contracts::RunnerEvent::Started {
+        task.push_subagent_event(&muta_contracts::SubagentEvent::Started {
             profile: "explore".to_string()
         })
     );
-    assert_eq!(task.runner_role().as_deref(), Some("explore"));
-    assert_eq!(task.runner_description(), "write the plan");
+    assert_eq!(task.subagent_role().as_deref(), Some("explore"));
+    assert_eq!(task.subagent_description(), "write the plan");
     // The collapsed header carries only the description — the role is
     // shown by the renderer's `[PROFILE]` badge in front of it.
     let header = task.tool_step_summary().expect("summary");
@@ -420,43 +420,46 @@ fn runner_started_event_labels_step_by_role() {
 }
 
 #[test]
-fn runner_status_reflects_children_and_completion() {
-    let mut task =
-        TranscriptMessage::tool_step("call_9", "runner", r#"{"description":"d","prompt":"p"}"#);
+fn subagent_status_reflects_children_and_completion() {
+    let mut task = TranscriptMessage::tool_step(
+        "call_9",
+        "spawn_agent",
+        r#"{"description":"d","prompt":"p"}"#,
+    );
 
     // No children yet, still running — the peek row opens with the
-    // generic `running` state until the runner reports more.
-    let running = task.runner_status_line().expect("running status");
+    // generic `running` state until the subagent reports more.
+    let running = task.subagent_status_line().expect("running status");
     assert!(running.starts_with("running"), "got: {running}");
 
     // A reported activity line (e.g. during the first model call) is
     // surfaced so the row reads as alive, not stuck on a bare state.
-    task.push_runner_event(&RunnerEvent::Activity("waiting for model".into()));
-    let waiting = task.runner_status_line().expect("waiting status");
+    task.push_subagent_event(&SubagentEvent::Activity("waiting for model".into()));
+    let waiting = task.subagent_status_line().expect("waiting status");
     assert!(
         waiting.starts_with("running waiting for model"),
         "got: {waiting}"
     );
 
     // Streaming assistant text => the peek row reports `thinking`.
-    task.push_runner_event(&RunnerEvent::StreamStart { round: 1, turn: 0 });
-    task.push_runner_event(&RunnerEvent::StreamDelta("partial".into()));
-    let thinking = task.runner_status_line().expect("thinking status");
+    task.push_subagent_event(&SubagentEvent::StreamStart { round: 1, turn: 0 });
+    task.push_subagent_event(&SubagentEvent::StreamDelta("partial".into()));
+    let thinking = task.subagent_status_line().expect("thinking status");
     assert!(thinking.starts_with("running thinking"), "got: {thinking}");
 
     // An in-flight child tool call surfaces the tool's header.
-    task.push_runner_event(&RunnerEvent::ToolCall {
+    task.push_subagent_event(&SubagentEvent::ToolCall {
         id: "inner".into(),
         name: "search_text".into(),
         arguments: r#"{"query":"foo"}"#.into(),
         round: 1,
         turn: 0,
     });
-    let running = task.runner_status_line().expect("running status");
+    let running = task.subagent_status_line().expect("running status");
     assert!(running.contains("Search"), "got: {running}");
 
     // Completing the parent hides the peek row; the outcome row takes over
-    // with the runner's one-line conclusion.
+    // with the subagent's one-line conclusion.
     assert!(task.finish_tool_step(
         "call_9",
         "final answer",
@@ -464,33 +467,33 @@ fn runner_status_reflects_children_and_completion() {
         1500
     ));
     assert!(
-        task.runner_status_line().is_none(),
-        "the peek row must disappear once the runner terminates"
+        task.subagent_status_line().is_none(),
+        "the peek row must disappear once the subagent terminates"
     );
     assert_eq!(
-        task.runner_outcome_line().as_deref(),
+        task.subagent_outcome_line().as_deref(),
         Some("final answer"),
-        "the outcome row carries the runner's conclusion"
+        "the outcome row carries the subagent's conclusion"
     );
 
-    // Children are accessible for the dedicated runner view.
-    assert_eq!(task.runner_children().map(|c| c.len()), Some(2));
+    // Children are accessible for the dedicated subagent view.
+    assert_eq!(task.subagent_children().map(|c| c.len()), Some(2));
 }
 
 #[test]
-fn runner_failed_status_reports_failure() {
+fn subagent_failed_status_reports_failure() {
     let mut task =
-        TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
-    task.push_runner_event(&RunnerEvent::ToolCall {
+        TranscriptMessage::tool_step("c", "spawn_agent", r#"{"description":"d","prompt":"p"}"#);
+    task.push_subagent_event(&SubagentEvent::ToolCall {
         id: "i".into(),
         name: "execute_command".into(),
         arguments: "{}".into(),
         round: 1,
         turn: 0,
     });
-    // The runner failure is now signalled by the structured `failed`
-    // flag on `ToolOutput::Runner`, not by an "Error:" text prefix.
-    let structured = muta_contracts::ToolOutput::Runner {
+    // The subagent failure is now signalled by the structured `failed`
+    // flag on `ToolOutput::Subagent`, not by an "Error:" text prefix.
+    let structured = muta_contracts::ToolOutput::Subagent {
         summary: "Error: boom".into(),
         messages: Vec::new(),
         usage: muta_contracts::TokenUsage::default(),
@@ -500,18 +503,18 @@ fn runner_failed_status_reports_failure() {
     };
     assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
     assert!(
-        task.runner_status_line().is_none(),
-        "a terminal runner hides the peek row"
+        task.subagent_status_line().is_none(),
+        "a terminal subagent hides the peek row"
     );
     // The outcome row surfaces the error summary's first line.
-    assert_eq!(task.runner_outcome_line().as_deref(), Some("Error: boom"));
+    assert_eq!(task.subagent_outcome_line().as_deref(), Some("Error: boom"));
 }
 
 #[test]
-fn runner_peek_reports_awaiting_approval_while_parked() {
+fn subagent_peek_reports_awaiting_approval_while_parked() {
     let mut task =
-        TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
-    task.push_runner_event(&RunnerEvent::ToolCall {
+        TranscriptMessage::tool_step("c", "spawn_agent", r#"{"description":"d","prompt":"p"}"#);
+    task.push_subagent_event(&SubagentEvent::ToolCall {
         id: "i".into(),
         name: "execute_command".into(),
         arguments: r#"{"command":"rm -rf x"}"#.into(),
@@ -519,12 +522,12 @@ fn runner_peek_reports_awaiting_approval_while_parked() {
         turn: 0,
     });
     // The in-flight tool normally drives the peek row…
-    let peek = task.runner_status_line().unwrap();
+    let peek = task.subagent_status_line().unwrap();
     assert!(peek.starts_with("running Run rm"), "got: {peek}");
 
-    // …but a parked permission request takes over the row: the runner is
+    // …but a parked permission request takes over the row: the subagent is
     // blocked on a human, not making progress.
-    task.push_runner_event(&RunnerEvent::PermissionRequest(
+    task.push_subagent_event(&SubagentEvent::PermissionRequest(
         muta_contracts::PermissionRequest {
             id: "p1".into(),
             tool: "execute_command".into(),
@@ -538,44 +541,44 @@ fn runner_peek_reports_awaiting_approval_while_parked() {
             ..Default::default()
         },
     ));
-    let peek = task.runner_status_line().unwrap();
+    let peek = task.subagent_status_line().unwrap();
     assert!(peek.starts_with("awaiting approval"), "got: {peek}");
 
-    // The next progress event from the runner clears the parked wait.
-    task.push_runner_event(&RunnerEvent::ToolResult {
+    // The next progress event from the subagent clears the parked wait.
+    task.push_subagent_event(&SubagentEvent::ToolResult {
         id: "i".into(),
         name: "execute_command".into(),
         output: "done".into(),
         duration_ms: 3,
     });
-    task.push_runner_event(&RunnerEvent::StreamStart { round: 1, turn: 0 });
-    task.push_runner_event(&RunnerEvent::StreamDelta("…".into()));
-    let peek = task.runner_status_line().unwrap();
+    task.push_subagent_event(&SubagentEvent::StreamStart { round: 1, turn: 0 });
+    task.push_subagent_event(&SubagentEvent::StreamDelta("…".into()));
+    let peek = task.subagent_status_line().unwrap();
     assert!(peek.starts_with("running thinking"), "got: {peek}");
 }
 
 #[test]
-fn interrupted_runner_status_reports_interrupted_not_failed() {
+fn interrupted_subagent_status_reports_interrupted_not_failed() {
     let mut task =
-        TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
-    task.push_runner_event(&RunnerEvent::ToolCall {
+        TranscriptMessage::tool_step("c", "spawn_agent", r#"{"description":"d","prompt":"p"}"#);
+    task.push_subagent_event(&SubagentEvent::ToolCall {
         id: "i".into(),
         name: "read_text".into(),
         arguments: "{}".into(),
         round: 1,
         turn: 0,
     });
-    task.push_runner_event(&RunnerEvent::ToolResult {
+    task.push_subagent_event(&SubagentEvent::ToolResult {
         id: "i".into(),
         name: "read_text".into(),
         output: "found 1 of 3 handlers".into(),
         duration_ms: 5,
     });
-    // An interrupted runner carries `interrupted: true, failed: false`:
+    // An interrupted subagent carries `interrupted: true, failed: false`:
     // the partial work was preserved, so it must classify as Interrupted
     // — never as Failed (it did not error) and never as Ok (it did not
     // finish).
-    let structured = muta_contracts::ToolOutput::Runner {
+    let structured = muta_contracts::ToolOutput::Subagent {
         summary: "Interrupted: stopped by the user".into(),
         messages: Vec::new(),
         usage: muta_contracts::TokenUsage::default(),
@@ -587,14 +590,14 @@ fn interrupted_runner_status_reports_interrupted_not_failed() {
     assert_eq!(
         task.tool_step_status(),
         Some(ToolStepStatus::Interrupted),
-        "an interrupted runner classifies as Interrupted"
+        "an interrupted subagent classifies as Interrupted"
     );
     assert!(
-        task.runner_status_line().is_none(),
-        "a terminal runner hides the peek row"
+        task.subagent_status_line().is_none(),
+        "a terminal subagent hides the peek row"
     );
     assert_eq!(
-        task.runner_outcome_line().as_deref(),
+        task.subagent_outcome_line().as_deref(),
         Some("Interrupted: stopped by the user"),
         "the outcome row carries the interruption summary"
     );
@@ -729,39 +732,42 @@ fn cancel_only_acts_on_the_matching_call_id() {
 }
 
 #[test]
-fn cancelling_a_runner_also_cancels_its_running_children() {
-    let mut task =
-        TranscriptMessage::tool_step("task_1", "runner", r#"{"description":"d","prompt":"p"}"#);
+fn cancelling_a_subagent_also_cancels_its_running_children() {
+    let mut task = TranscriptMessage::tool_step(
+        "task_1",
+        "spawn_agent",
+        r#"{"description":"d","prompt":"p"}"#,
+    );
     // A nested tool call still in flight.
-    task.push_runner_event(&RunnerEvent::ToolCall {
+    task.push_subagent_event(&SubagentEvent::ToolCall {
         id: "inner".into(),
         name: "search_text".into(),
         arguments: r#"{"query":"foo"}"#.into(),
         round: 1,
         turn: 0,
     });
-    let children = task.runner_children().expect("has children");
+    let children = task.subagent_children().expect("has children");
     assert_eq!(
         children[0].tool_step_status(),
         Some(ToolStepStatus::Running)
     );
 
     // Interrupting the parent task cancels it AND the nested running child,
-    // so the runner view never shows a stuck "running" step.
+    // so the subagent view never shows a stuck "running" step.
     assert!(task.cancel_tool_step("task_1"));
     assert_eq!(task.tool_step_status(), Some(ToolStepStatus::Cancelled));
-    let children = task.runner_children().expect("has children");
+    let children = task.subagent_children().expect("has children");
     assert_eq!(
         children[0].tool_step_status(),
         Some(ToolStepStatus::Cancelled),
         "nested child must converge with the parent"
     );
 
-    // A cancelled runner is terminal: the peek row disappears and the
+    // A cancelled subagent is terminal: the peek row disappears and the
     // outcome row falls back to the legacy output text (none was recorded
     // here, so the row hides entirely).
-    assert!(task.runner_status_line().is_none());
-    assert!(task.runner_outcome_line().is_none());
+    assert!(task.subagent_status_line().is_none());
+    assert!(task.subagent_outcome_line().is_none());
 }
 
 #[test]

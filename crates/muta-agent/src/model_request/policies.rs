@@ -17,8 +17,11 @@ use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
 // turn state, which arrives via [`SystemPromptContext`]. That makes each section
 // individually unit-testable and individually re-orderable / disable-able.
 
-/// Opening identity sentence (name/mission/persona), composed by the
-/// embedding. Empty preamble (tests / identity-less agents) → inactive.
+/// Opening identity line, composed by the embedding. The shipped coding CLI
+/// supplies none, so this section is normally inactive; it carries text when
+/// the embedding sets an identity (a subagent's full task prompt, the daemon's
+/// named coordinator) or when a `/role` switch installs an imperative role
+/// directive. Empty preamble → inactive.
 struct IdentityPreamble;
 
 impl SystemPromptSection for IdentityPreamble {
@@ -52,7 +55,10 @@ impl SystemPromptSection for HostEnvironmentGuidance {
         InstructionTier::Base
     }
     fn order(&self) -> InstructionOrder {
-        InstructionOrder::After("system.identity_preamble")
+        // Head, like the identity line it follows: registration order puts the
+        // identity first when an embedding supplies one, and this section is
+        // the prompt's opening line otherwise.
+        InstructionOrder::Head
     }
     fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
         true
@@ -234,9 +240,7 @@ impl SystemPromptSection for DelegationGuidance {
         InstructionOrder::Tail
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.tool_names
-            .iter()
-            .any(|name| name == "runner" || name == "task")
+        ctx.has_subagent_tool
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(DELEGATION))
@@ -345,50 +349,6 @@ impl SystemPromptSection for WorkspaceRootsGuidance {
     }
 }
 
-/// Specialized, hyper-compact system prompt section for an autonomous
-/// runner. `preset` is a runner preset name; known presets map to curated
-/// guidance, unknown ones to the generic mission framing.
-struct RunnerRoleGuidance {
-    preset: String,
-}
-
-impl SystemPromptSection for RunnerRoleGuidance {
-    fn id(&self) -> &'static str {
-        "system.runner_role"
-    }
-    fn tier(&self) -> InstructionTier {
-        InstructionTier::Task
-    }
-    fn order(&self) -> InstructionOrder {
-        InstructionOrder::Head
-    }
-    fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
-        true
-    }
-    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        let text = match self.preset.as_str() {
-            "explore" => {
-                "You are an autonomous Research Runner. Your goal is to thoroughly inspect, find, and analyze code, documentation, and architecture, then return a concise, high-signal, structured answer. You are read-only: do not propose file edits directly."
-            }
-            "title" => {
-                "You are a Session Title Runner. Produce a short, specific, lowercase title for the conversation you are shown. Return only the title."
-            }
-            "code" => {
-                "You are an autonomous Implementation Runner. Implement the requested changes cleanly, maintain codebase idioms, verify your edits, and return a comprehensive technical summary of modified files and verification results."
-            }
-            "mcp_specialist" => {
-                "You are a Specialized Integration Runner with access to dynamic MCP tools. Execute necessary API/tool interactions, handle errors gracefully, and summarize outputs succinctly."
-            }
-            other => {
-                return Some(format!(
-                    "You are a specialized autonomous runner assigned mission: {other}. Focus strictly on your assigned task and provide a concise, high-signal final answer."
-                ));
-            }
-        };
-        Some(text.to_string())
-    }
-}
-
 /// Build the registry with the default system-prompt sections.
 pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
@@ -403,20 +363,5 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(FileEditingGuidance);
     registry.register(WorkspaceRootsGuidance);
     registry.register(WebUntrustedContentGuidance);
-    registry
-}
-
-/// Build a specialized, minimal system prompt registry for a runner preset (ADR-0144).
-pub fn runner_system_prompt_registry(preset: &str) -> SystemPromptRegistry {
-    let mut registry = SystemPromptRegistry::new();
-    registry.register(IdentityPreamble);
-    registry.register(HostEnvironmentGuidance);
-    registry.register(RunnerRoleGuidance {
-        preset: preset.to_string(),
-    });
-    registry.register(ToneGuidance);
-    registry.register(ModelGuidance);
-    registry.register(FileEditingGuidance);
-    registry.register(WorkspaceRootsGuidance);
     registry
 }

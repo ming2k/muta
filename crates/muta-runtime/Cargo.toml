@@ -10,13 +10,13 @@ muta-contracts = { path = "../muta-contracts" }
 muta-paths = { path = "../muta-paths" }
 muta-persistence = { path = "../muta-persistence" }
 muta-platform = { path = "../muta-platform" }
+muta-net = { path = "../muta-net" }
 muta-providers = { path = "../muta-providers" }
 muta-skills = { path = "../muta-skills" }
 muta-agent = { path = "../muta-agent" }
 muta-models-dev = { path = "../muta-models-dev" }
 ignore = { workspace = true }
 muta-mcp = { path = "../muta-mcp" }
-reqwest = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true }

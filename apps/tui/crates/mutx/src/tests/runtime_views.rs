@@ -296,18 +296,15 @@ async fn console_kill_arm_cancels_on_selection_move() {
 #[test]
 fn websearch_provider_dropdown_builds_and_selects() {
     let ws = muta_contracts::WebSearchConfigView {
-        provider: "exa".to_string(),
-        reader: "none".to_string(),
+        revision: 0,
+        provider: muta_contracts::WebSearchProvider::Exa,
+        reader: muta_contracts::WebReaderProvider::Disabled,
         proxy: None,
         timeout_secs: 20,
         searxng_url: None,
-        exa_api_key_set: true,
-        parallel_api_key_set: false,
-        tavily_api_key_set: true,
-        bocha_api_key_set: false,
-        jina_api_key_set: false,
-        search_connections: Vec::new(),
-        reader_connections: Vec::new(),
+        search_credential: muta_contracts::WebCredentialStatus::Stored,
+        reader_credential: muta_contracts::WebCredentialStatus::NotRequired,
+        capabilities: muta_contracts::web_provider_capabilities(),
     };
     let dropdown = crate::overlays::build_websearch_provider_dropdown("tavily", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_provider"));
@@ -315,44 +312,54 @@ fn websearch_provider_dropdown_builds_and_selects() {
         dropdown.selected_payload().map(|s| s.as_str()),
         Some("tavily")
     );
-    assert_eq!(dropdown.items.len(), 8);
+    // The six compiled search providers plus the `disabled` entry.
+    assert_eq!(dropdown.items.len(), 7);
+    assert_eq!(
+        dropdown
+            .items
+            .iter()
+            .find(|item| item.id == "exa")
+            .and_then(|item| item.indicator),
+        Some(crate::components::dropdown::DropdownIndicator::Ready)
+    );
+    assert_eq!(
+        dropdown
+            .items
+            .iter()
+            .find(|item| item.id == "tavily")
+            .and_then(|item| item.indicator),
+        None,
+        "the daemon reports readiness only for the active provider"
+    );
 }
 
 #[test]
 fn websearch_reader_dropdown_builds_and_selects() {
     let mut ws = muta_contracts::WebSearchConfigView {
-        provider: "exa".to_string(),
-        reader: "my-jina".to_string(),
+        revision: 0,
+        provider: muta_contracts::WebSearchProvider::Exa,
+        reader: muta_contracts::WebReaderProvider::Jina,
         proxy: None,
         timeout_secs: 20,
         searxng_url: None,
-        exa_api_key_set: false,
-        parallel_api_key_set: false,
-        tavily_api_key_set: false,
-        bocha_api_key_set: false,
-        jina_api_key_set: false,
-        search_connections: Vec::new(),
-        reader_connections: vec![muta_contracts::WebReaderConnection {
-            id: "my-jina".to_string(),
-            name: Some("Custom Jina".to_string()),
-            preset_id: Some("jina".to_string()),
-            api_key_env: None,
-            base_url: None,
-            custom_headers: None,
-            enabled: true,
-        }],
+        search_credential: muta_contracts::WebCredentialStatus::Stored,
+        reader_credential: muta_contracts::WebCredentialStatus::Stored,
+        capabilities: muta_contracts::web_provider_capabilities(),
     };
-    let dropdown = crate::overlays::build_websearch_reader_dropdown("my-jina", Some(&ws));
+    let dropdown = crate::overlays::build_websearch_reader_dropdown("jina", Some(&ws));
     assert_eq!(dropdown.context.as_deref(), Some("websearch_reader"));
     assert_eq!(
         dropdown.selected_payload().map(|s| s.as_str()),
-        Some("my-jina")
+        Some("jina")
     );
-    assert_eq!(dropdown.items.len(), 3); // my-jina + disabled + add_new
+    // The single compiled reader plus the `disabled` entry.
+    assert_eq!(dropdown.items.len(), 2);
 
-    ws.reader_connections.clear();
-    let empty_dropdown = crate::overlays::build_websearch_reader_dropdown("none", Some(&ws));
-    assert_eq!(empty_dropdown.items.len(), 2); // disabled + add_new
+    // A snapshot that advertises no reader capability offers only `disabled`.
+    ws.capabilities
+        .retain(|capability| capability.axis == muta_contracts::WebProviderAxis::Search);
+    let empty_dropdown = crate::overlays::build_websearch_reader_dropdown("disabled", Some(&ws));
+    assert_eq!(empty_dropdown.items.len(), 1);
 }
 
 /// Sheet-mount focus consistency (ADR-0173 §3 × ADR-0174): an agent-driven

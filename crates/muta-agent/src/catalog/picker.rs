@@ -101,9 +101,7 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                 })
                 .collect();
             let connection = stores.connections.get(&entry.id);
-            let preset_id = connection
-                .and_then(|p| p.preset_id.clone())
-                .unwrap_or_default();
+            let provider = connection.map(|p| p.provider.clone()).unwrap_or_default();
             let client_identity = connection
                 .map(|p| p.client_identity.clone())
                 .unwrap_or_default();
@@ -119,7 +117,7 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                 protocol,
                 base_url,
                 key_ready: entry.key_ready(),
-                preset_id,
+                provider,
                 client_identity,
                 last_used_ms: if recency == 0 { None } else { Some(recency) },
                 auth,
@@ -137,7 +135,7 @@ pub fn prune_stale_models(config: &mut Config, usage: &mut ConnectionUsage) -> b
         .connections
         .connections
         .iter()
-        .map(|c| c.id.clone())
+        .map(|c| c.name.clone())
         .collect();
 
     let mut connection_models_map: std::collections::HashMap<
@@ -151,7 +149,7 @@ pub fn prune_stale_models(config: &mut Config, usage: &mut ConnectionUsage) -> b
         for m in &models {
             all_valid_models.insert(m.clone());
         }
-        connection_models_map.insert(conn.id.clone(), models.into_iter().collect());
+        connection_models_map.insert(conn.name.clone(), models.into_iter().collect());
     }
 
     let mut changed = false;

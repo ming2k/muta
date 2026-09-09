@@ -52,8 +52,8 @@ mod boundary {
             ),
             (
                 "muta-providers",
-                "ADR-0197 edge debt (cleared): provider presets and OAuth login \
-                 profiles are contract data — use `muta_contracts::provider_presets` \
+                "ADR-0197 edge debt (cleared): model provider specs and OAuth login \
+                 profiles are contract data — use `muta_contracts::model_providers` \
                  and `muta_contracts::provider_auth`",
             ),
             (

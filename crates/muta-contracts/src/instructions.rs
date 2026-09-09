@@ -25,7 +25,7 @@ pub enum InstructionTier {
     /// Session-stable context: project rules (AGENTS.md), workspace roots, static tool category guidelines.
     /// Cacheable for the duration of a project / session.
     Session = 1,
-    /// Task-stable mission guidance: runner role, subagent task framing.
+    /// Task-stable mission guidance: subagent role, subagent task framing.
     Task = 2,
     /// Ephemeral / turn-dynamic modifiers: runtime execution mode (Delegated mode), recency nudges.
     /// Volatile per-round state that should not invalidate static prefixes.
@@ -188,7 +188,7 @@ mod tests {
             "Follow project rules.",
         ));
         bundle.push(InstructionSlice::new(
-            "task.runner",
+            "task.subagent",
             InstructionTier::Task,
             "Analyze code carefully.",
         ));

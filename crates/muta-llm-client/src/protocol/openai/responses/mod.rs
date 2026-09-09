@@ -22,7 +22,7 @@ use muta_contracts::{
 };
 use std::sync::{Arc, Mutex};
 
-use crate::transport::{decode_response_json, ensure_success, transport_error};
+use crate::transport::{decode_response_json, ensure_success};
 use crate::{Client, ClientProfile, Endpoint};
 
 fn parse_retry_after_from_message(message: &str) -> Option<u64> {
@@ -139,7 +139,7 @@ fn decode_stream_payload(
     }
 }
 
-fn models_etag(headers: &reqwest::header::HeaderMap) -> Option<String> {
+fn models_etag(headers: &http::header::HeaderMap) -> Option<String> {
     headers
         .get("x-models-etag")
         .and_then(|value| value.to_str().ok())
@@ -267,13 +267,11 @@ impl OpenAiResponsesProvider {
         &self,
         body: &serde_json::Value,
         auth: &ResolvedAuth,
-    ) -> reqwest::RequestBuilder {
-        let mut req = self
-            .client
-            .http()
-            .post(self.endpoint.base_url())
-            .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
-            .json(body);
+    ) -> crate::request::RequestBuilder {
+        let mut req =
+            crate::request::RequestBuilder::new(http::Method::POST, self.endpoint.base_url())
+                .header(http::header::USER_AGENT, self.endpoint.user_agent())
+                .json(body);
         let copilot = self.dialect == muta_contracts::OpenAiResponsesDialect::Copilot;
         let chatgpt = self.dialect == muta_contracts::OpenAiResponsesDialect::ChatGpt;
         let is_copilot_vision = copilot && request::has_input_image(body);
@@ -315,7 +313,7 @@ impl OpenAiResponsesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
+    ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
@@ -325,12 +323,9 @@ impl OpenAiResponsesProvider {
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
-        let response = req
-            .send()
-            .await
-            .map_err(|error| transport_error(self.label(), error))?;
+        let response = self.client.send_raw(req, self.label()).await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
             tracing::warn!(
                 provider = %self.endpoint.id,
                 model = %self.endpoint.model,
@@ -346,11 +341,7 @@ impl OpenAiResponsesProvider {
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
-            let retried_resp = retry_req
-                .send()
-                .await
-                .map_err(|error| transport_error(self.label(), error))?;
-            return ensure_success(retried_resp, self.label()).await;
+            return self.client.send(retry_req, self.label()).await;
         }
 
         ensure_success(response, self.label()).await
@@ -500,6 +491,10 @@ impl Provider for OpenAiResponsesProvider {
         true
     }
 
+    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
+        self.client.take_transport_timings()
+    }
+
     async fn chat(
         &self,
         request: ModelRequest,
@@ -582,7 +577,7 @@ impl Provider for OpenAiResponsesProvider {
         let label = self.label();
         let body = self.build_body(request, true)?;
         let resp = self.send_request(&body, true).await?;
-        let model_catalog_etag = models_etag(resp.headers());
+        let model_catalog_etag = models_etag(&resp.headers);
 
         // One stateful parser threads the function-call item state across the
         // whole stream; each SSE payload becomes zero or more events. Terminal
@@ -688,7 +683,7 @@ mod stream_protocol_tests {
 
     #[test]
     fn models_etag_header_becomes_a_catalog_control_event() {
-        let mut headers = reqwest::header::HeaderMap::new();
+        let mut headers = http::header::HeaderMap::new();
         headers.insert("X-Models-Etag", "  etag-42  ".parse().unwrap());
         assert_eq!(models_etag(&headers).as_deref(), Some("etag-42"));
     }

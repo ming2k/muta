@@ -1,0 +1,171 @@
+# Subagent view
+
+When the user zooms into a `subagent` tool call, the TUI swaps the root
+conversation for that subagent's child messages, hides the footer, and pins a
+one-row navigation bar at the bottom of the transcript area. This page
+documents that view's layout and key bindings. The isolation model and
+event streaming that produce the children live on the
+[Subagents](../../explanation/agent-design/subagents.md) explanation page;
+the inline (non-zoomed) rendering of the task step lives on the
+[Tool step](tool-step.md#subagent-children) page.
+
+## Two render modes
+
+An `subagent` tool step has two render modes, switched by the
+[focus stack](#focus-stack):
+
+| Mode | When | What renders |
+|------|------|--------------|
+| **Inline** (default) | Focus stack does not include this step's call id | `draw_subagent_inline_step` — a one-line summary plus an optional live status line, flat on `app_bg` |
+| **Zoomed** | Focus stack's top is this step's call id | The task's `subagent_children()` become the message stream; the footer is hidden and a navigation bar is drawn at the bottom of the transcript area |
+
+The inline step never expands inline. `Enter` on a focused inline task step
+navigates into the zoomed view rather than toggling a body — the step is
+registered as a tool-step summary (sentinel `block_idx = usize::MAX`) purely
+so the existing click / `Enter` machinery recognizes it.
+
+## Inline step
+
+The inline step is exactly **two rows**: a summary line with a `[profile]`
+role badge, and a single `└`-edged second row that shows a live **peek**
+while running and is replaced in place by the one-line conclusion once the
+subagent terminates.
+
+Running:
+
+```text
+  [EXPLORE]  Explore the codebase to find the login bug
+    └ running Grep "session"  12s
+```
+
+Finished:
+
+```text
+  [EXPLORE]  Explore the codebase to find the login bug · 8.2s
+    └ The bug is in src/auth/session.rs:42 — token expiry is not …
+```
+
+| Attribute | Value |
+|-----------|-------|
+| Background | `theme.surface()` (`app_bg`), inset 2 cols (`TRANSCRIPT_H_INSET`) |
+| Marker | None — the step navigates; disclosure is conveyed by Enter/click, not `▸`/`▾` |
+| Role badge | `[PROFILE]` (uppercased) in `theme.brand()` (falls back to `[SUBAGENT]` before the `Started` event lands); two plain spaces separate badge and summary (R2 peers) |
+| Summary color | `summary_text_color(accent, Collapsed, Hovered?)` via the shared [step state machine](step-state.md); `Running` reads as a steady `info` accent (no per-step breathing — see [ADR-0008](../../adr/0008-single-breathing-anchor.md)) |
+| Second row | Always prefixed `  └ ` in `theme.muted()`. **Peek** (running): `theme.info()`, current activity + live elapsed. **Outcome** (terminal): `theme.muted()`, the subagent's conclusion. The whole row is part of the same clickable summary so clicking anywhere enters the zoom |
+| Lifecycle accent | Same wiring as a tool step: `Ok → None`, `Failed → Some(theme.error_fg)`, `Denied → Some(theme.warn)`, `Cancelled → Some(theme.text_muted)`, `Running → Some(theme.info)` |
+
+The step is always two rows, so the `└` edge is constant — the second row is
+always the leaf. The running / terminated distinction is carried by color and
+content, not by the glyph.
+
+### Peek row (running)
+
+`TranscriptMessage::subagent_status_line` derives the peek from the subagent's
+children, its reported activity, and `started_at`. Every running state is
+prefixed `running` so the row unambiguously reads as *in progress* — a bare
+tool name or `starting` could be either live work or a stuck call, and the
+prefix plus the ticking timer disambiguate at a glance:
+
+| State | Peek shows |
+|-------|-----------|
+| Nothing observable yet | `running  0ms` |
+| No child event, but the subagent reported an activity (`SubagentEvent::Activity`, e.g. during the first model call) | `running waiting for model  8s` |
+| A child tool in flight | `running <that tool's summary>`, e.g. `running Grep "session"  12s` |
+| Between tools (assistant streaming) | `running thinking  8s` |
+| Parked on a permission / `ask_user` / input request | `awaiting approval  45s` — bare, no `running` prefix, because nothing is moving while the subagent waits on a human (an `awaiting` flag set by `SubagentEvent::{Permission,UserQuestion,Input}Request` and cleared by the next progress event) |
+
+The activity and its elapsed time are same-rank metadata joined by plain
+whitespace (R2 on the [join ladder](visual-language.md)) — never a `·` glyph.
+The elapsed timer is derived from `started_at` at render time — it stays fresh
+on every animation tick without storing any ticking state.
+
+### Outcome row (terminal)
+
+`TranscriptMessage::subagent_outcome_line` replaces the peek in place once the
+step terminates. It takes the first non-empty line of the subagent's conclusion
+(`ToolOutput::Subagent.summary`, falling back to the legacy `output` text for
+restored sessions), so the answer surfaces without opening the zoom.
+
+## Zoomed view
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   ... the focused task's child messages, rendered        │
+│   exactly like the root conversation (user messages,     │
+│   assistant text, tool steps, thinking steps, ...)       │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│ Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← subagent bar
+└──────────────────────────────────────────────────────────┘
+```
+
+The message stream above is rendered by the same `draw_transcript` pass as
+the root conversation, just against `focused_messages()` instead of
+`self.messages`. The footer (activity bar, input box, model bar)
+collapses to 0 height — the zoomed view is read-only, and the navigation
+bar is its only chrome. See [Frame layout → Subagent zoom view](layout.md#subagent-zoom-view)
+for the rect math.
+
+### Subagent bar
+
+Drawn by `draw_subagent_bar` at the bottom of the transcript chunk, across
+the full transcript width inside the `app_bg` gutters. The layout is
+left / spacer / right:
+
+| Region | Contents | Style |
+|--------|----------|-------|
+| Left label | ` Task` | `fg` bold on `theme.body()` |
+| Description | the focused task's label | `theme.brand()` |
+| Sibling count | ` (N of M) ` when `M > 1`, else a single space | `theme.muted()` |
+| Spacer | pad to fill the row | `theme.body()` |
+| Right hint | `Esc back   [ prev   ] next ` | `theme.muted()` |
+
+The bar uses `theme.body()` (not `theme.panel()`) so it reads as a thin
+navigation strip rather than as another modal panel.
+
+## Focus stack
+
+The focus stack is a `Vec<String>` of `subagent` call ids stored on `App`. It
+is the source of truth for "which conversation are we looking at":
+
+| State | `focused_messages()` returns | `in_subagent_view()` |
+|-------|------------------------------|----------------------|
+| Empty | `&self.messages` (the root conversation) | `false` |
+| Non-empty | The `subagent_children()` of the root-level `subagent` step whose call id equals the stack's top | `true` |
+
+Transitions are entirely caller-driven — the renderer never pushes or pops.
+The stack supports nesting: zooming into a `subagent` that itself spawned a
+`subagent` pushes a second call id, and the focused slice is the innermost
+subagent's children.
+
+| Action | Effect on focus stack |
+|--------|-----------------------|
+| `Enter` / click on an inline `subagent` summary | Push that step's call id; `reset_view_state` clears scroll, selection, sticky pinning |
+| `Esc` from a zoomed view | Pop the top; if the stack is now empty, restore the root view |
+| `[` (left bracket) | Pop the top and re-push the previous sibling's call id — cycle to the previous sibling task at this depth |
+| `]` (right bracket) | Pop the top and re-push the next sibling's call id — cycle to the next sibling |
+
+When cycling siblings, the bar's `(N of M)` indicator reflects the new
+sibling's 1-based position among the parent's child tasks. The previous
+scroll position is not restored — each sibling enters with
+`reset_view_state`, since the streams are unrelated.
+
+## Re-entering an existing subagent
+
+If the user re-opens a subagent that already has children (e.g. a subagent that
+finished earlier in the session), the existing children are shown
+immediately — they are persisted on the message via `subagent_children()`.
+Live updates still go through `push_subtask_event`; the resume path uses
+`attach_subagent_children` to rebuild the nested view from persisted
+storage. See `document.rs` for both entry points.
+
+## Source
+
+| File | Responsibility |
+|------|----------------|
+| `disclosure/renderers.rs` | `draw_subagent_inline_step` |
+| `render/mod.rs` | `SubagentBarInfo`, wiring the zoomed-subagent footer via `draw_subagent_footer` when `props.subagent_bar` is `Some` |
+| `app/mod.rs` | `focus_stack`, `focused_messages`, `reset_view_state` |
+| `model/document.rs` | `is_subagent_task`, `tool_step_call_id`, `subagent_children`, `subagent_children_mut`, `subagent_profile`, `subagent_status_line` |
+| `input/mod.rs` | `in_subagent_view` flag on `InputContext`, used so `Enter` on an inline subagent step navigates instead of submitting the composer |

@@ -23,7 +23,7 @@ impl SearchProvider for SearxngProvider {
 
     async fn search(
         &self,
-        client: &reqwest::Client,
+        client: &crate::tools::web::http::WebHttp,
         query: &str,
     ) -> Result<ProviderOutput, String> {
         let base = self
@@ -36,26 +36,29 @@ impl SearchProvider for SearxngProvider {
                  Configure a JSON endpoint, e.g. \"http://localhost:8080/search\"."
                     .to_string()
             })?;
-        let response = client
-            .get(base)
-            .header(reqwest::header::USER_AGENT, MOZILLA_UA)
-            .query(&[
+        let url = crate::tools::web::http::with_query(
+            base,
+            &[
                 ("q", query),
                 ("format", "json"),
                 ("categories", "general"),
                 ("pageno", "1"),
-            ])
-            .send()
+            ],
+        );
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_static(MOZILLA_UA),
+        );
+        let response = client
+            .get(&url, headers)
             .await
             .map_err(|e| format!("SearXNG request failed: {e}"))?;
-        let status = response.status();
+        let status = response.status;
         if !status.is_success() {
             return Err(format!("SearXNG returned HTTP {status} for {base}"));
         }
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read SearXNG response: {e}"))?;
+        let body = response.body;
         let json: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| format!("SearXNG returned invalid JSON: {e}"))?;
         let results = json

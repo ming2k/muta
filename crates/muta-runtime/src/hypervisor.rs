@@ -8,7 +8,7 @@ use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MonitorAction, Tool
 
 use crate::registry::SessionRegistry;
 
-/// The single Hypervisor station per muta daemon (staffed by a Master agent).
+/// The single Hypervisor station per muta daemon (staffed by an agent in Root posture).
 ///
 /// Responsible for orchestrating sessions, tracking progress across projects,
 /// joint debugging / cross-session coordination (联调), and dispatching top-down
@@ -61,7 +61,7 @@ impl Hypervisor {
         );
 
         let agent = Arc::new(Agent::new(provider, tools, identity));
-        agent.set_kind(muta_contracts::AgentKind::Master);
+        agent.set_kind(muta_contracts::AgentKind::Root);
 
         Self {
             agent,
@@ -239,7 +239,7 @@ impl Tool for HypervisorInspectSessionTool {
     }
 }
 
-/// Tool for Hypervisor to send top-down instructions or guidance to a session Master over the mesh.
+/// Tool for Hypervisor to send top-down instructions or guidance to a session root agent over the mesh.
 pub struct HypervisorInstructSessionTool {
     tracker: Arc<MeshTracker>,
     hypervisor_address: MeshAddress,
@@ -423,7 +423,7 @@ mod tests {
     use super::*;
     use crate::registry::HostParams;
     use crate::ui_bridge::{CopyOutcome, UiBridge};
-    use muta_contracts::{MasterPreset, MeshStation, Message, ModelRequest, Provider, Role};
+    use muta_contracts::{AgentPreset, MeshStation, Message, ModelRequest, Provider, Role};
 
     struct DummyUi;
     #[async_trait::async_trait]
@@ -462,8 +462,8 @@ mod tests {
     #[tokio::test]
     async fn hypervisor_construction_and_tools() {
         let params = HostParams {
-            identity: AgentIdentity::new("muta", "coding"),
-            master: MasterPreset::developer(),
+            identity: AgentIdentity::from_mission("coding"),
+            preset: AgentPreset::developer(),
             ui: Arc::new(DummyUi),
         };
         let registry = SessionRegistry::new(params);

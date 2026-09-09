@@ -1,12 +1,11 @@
 use std::sync::{OnceLock, RwLock};
 
 use async_trait::async_trait;
-use muta_contracts::{SharedWebSearchConfig, Tool, WebSearchConfig};
+use muta_contracts::{SharedWebConfig, Tool, WebRuntimeConfig, WebSearchProvider};
 use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
 use crate::tools::search::SearchProvider;
-use crate::tools::web::client::http_client;
 
 #[derive(ToolSchema, Deserialize)]
 struct WebSearchArgs {
@@ -15,28 +14,31 @@ struct WebSearchArgs {
 }
 
 pub struct WebSearchTool {
-    config: SharedWebSearchConfig,
+    config: SharedWebConfig,
     provider: RwLock<Option<ProviderCache>>,
 }
 
 struct ProviderCache {
-    sig: String,
+    revision: u64,
     provider: Box<dyn SearchProvider>,
-    client: Result<reqwest::Client, String>,
+    client: Result<std::sync::Arc<crate::tools::web::http::WebHttp>, String>,
 }
 
-type ProviderPair = (Box<dyn SearchProvider>, reqwest::Client);
+type ProviderPair = (
+    Box<dyn SearchProvider>,
+    std::sync::Arc<crate::tools::web::http::WebHttp>,
+);
 
 impl WebSearchTool {
     pub fn new() -> Self {
-        Self::with_config(WebSearchConfig::default())
+        Self::with_config(WebRuntimeConfig::default())
     }
 
-    pub fn with_config(config: WebSearchConfig) -> Self {
-        Self::with_shared_config(SharedWebSearchConfig::new(config))
+    pub fn with_config(config: WebRuntimeConfig) -> Self {
+        Self::with_shared_config(SharedWebConfig::new(config))
     }
 
-    pub fn with_shared_config(config: SharedWebSearchConfig) -> Self {
+    pub fn with_shared_config(config: SharedWebConfig) -> Self {
         Self {
             config,
             provider: RwLock::new(None),
@@ -44,15 +46,14 @@ impl WebSearchTool {
     }
 
     pub(crate) fn current_provider(&self) -> Result<ProviderPair, String> {
-        let snapshot = self.config.get();
-        let sig = snapshot.signature();
+        let (revision, snapshot) = self.config.snapshot();
         {
             let guard = self
                 .provider
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(cache) = guard.as_ref()
-                && cache.sig == sig
+                && cache.revision == revision
             {
                 return Ok((
                     clone_provider(cache.provider.as_ref()),
@@ -60,13 +61,14 @@ impl WebSearchTool {
                 ));
             }
         }
-        let provider = crate::tools::search::build_provider(&snapshot, &snapshot.provider);
-        let client = http_client(&snapshot);
+        let provider = crate::tools::search::build_provider(&snapshot);
+        let client =
+            crate::tools::web::http::WebHttp::new(&snapshot.behavior).map(std::sync::Arc::new);
         *self
             .provider
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ProviderCache {
-            sig,
+            revision,
             provider: clone_provider(provider.as_ref()),
             client: client.clone(),
         });
@@ -98,31 +100,21 @@ impl Tool for WebSearchTool {
     }
     fn is_available(&self) -> bool {
         let snapshot = self.config.get();
-        let provider = snapshot.provider.trim();
-        if provider.is_empty()
-            || provider == "none"
-            || provider == "disabled"
-            || provider == "(none)"
-        {
-            return false;
-        }
-        match provider {
-            "tavily" => snapshot
-                .tavily_api_key
+        match snapshot.behavior.provider {
+            WebSearchProvider::Disabled => false,
+            WebSearchProvider::Tavily | WebSearchProvider::Bocha => snapshot
+                .search_credential
                 .as_ref()
-                .map(|k| !k.expose_secret().trim().is_empty())
+                .map(|key| !key.expose_secret().trim().is_empty())
                 .unwrap_or(false),
-            "bocha" => snapshot
-                .bocha_api_key
-                .as_ref()
-                .map(|k| !k.expose_secret().trim().is_empty())
-                .unwrap_or(false),
-            "searxng" => snapshot
+            WebSearchProvider::Searxng => snapshot
+                .behavior
                 .searxng_url
-                .as_ref()
-                .map(|u| !u.trim().is_empty())
-                .unwrap_or(false),
-            _ => true,
+                .as_deref()
+                .is_some_and(|url| !url.trim().is_empty()),
+            WebSearchProvider::Exa
+            | WebSearchProvider::Parallel
+            | WebSearchProvider::DuckDuckGo => true,
         }
     }
     fn description(&self) -> &str {

@@ -7,23 +7,23 @@ capability model that decides which path to take, see
 
 muta resolves every provider through one catalog
 (`build_catalog` in `crates/muta-agent/src/catalog/`): it derives the
-concrete routes (per-model transport/endpoint/credential/reasoning) from each
-connection's preset plus the discovery cache, then constructs the
+concrete routes (per-model protocol/endpoint/credential/reasoning) from each
+connection's model provider plus the discovery cache, then constructs the
 concrete `Provider` via `build_provider_for_channel` in
 `crates/muta-providers/src/registry/mod.rs`.
 Startup and a `/models` pick share this single path — there is no separate
-dispatch `match` to edit for presets or user entries.
+dispatch `match` to edit for built-in providers or user connections.
 
 ## Choose a path
 
 | Provider speaks... | Path | Effort |
 |--------------------|------|--------|
-| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom connection** in the TUI (`/connections`, then `c`), or a user-defined entry in `providers.toml` | None (no code) |
+| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom connection** in the TUI (`/connections`, then `c`), or a user-defined `[[connections]]` entry with `provider = "custom"` | None (no code) |
 | OpenAI Chat Completions, and you want it shipped as a built-in | Per-provider file in `registry/` | Small |
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
-path for a vendor preset every muta user would want.
+path for a model provider every muta user would want.
 
 ## Path 0: Custom connection (no code, no config editing)
 
@@ -41,117 +41,116 @@ Two properties worth knowing:
 - **Model ids are case-sensitive and travel verbatim.** Some relays serve
   cased ids (`GLM-5.2`, not `glm-5.2`); nothing in the editor, the config
   layer, or the request builder normalizes the id.
-- **The connection is never re-seeded.** Unlike curated presets there is no
+- **The connection is never re-seeded.** Unlike a curated provider there is no
   model snapshot to mirror, so a later startup never replaces the typed id.
 
 The equivalent hand-written state looks like this (see [Path 1](#path-1-user-defined-entry-no-code)
-for the full field reference). Instances live in `providers.toml`
+for the full field reference). Connections live in `connections.toml`
 (`$XDG_STATE_HOME/muta/`), credentials in `credentials.toml`, and only the
-selection (`default_provider` / `default_model`) in `config.toml`:
+selection (`default_connection` / `default_model`) in `config.toml`:
 
 ```toml
 # $XDG_CONFIG_HOME/muta/config.toml — behavior only
-default_provider = "wechat"
+default_connection = "wechat"
 default_model = "GLM-5.2"
 ```
 
 ```toml
-# $XDG_STATE_HOME/muta/providers.toml — connections
-[[providers]]
-id = "wechat"
-name = "WeChat OpenAI"
-transport = "OpenAi"
+# $XDG_STATE_HOME/muta/connections.toml — connections
+[[connections]]
+name = "wechat"
+provider = "custom"
+protocol = "openai-chat-completions"
 base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions"
-models = ["GLM-5.2"]
+models.include = ["GLM-5.2"]
 ```
 
 ```toml
 # $XDG_CONFIG_HOME/muta/credentials.toml — secrets
-[providers]
+[connections]
 wechat = "sk-..."
 ```
 
 ## Path 1: User-defined entry (no code)
 
 Any OpenAI-compatible, Google-native, or Anthropic-format endpoint can be
-added to `providers.toml` without touching code. Declare a pure-custom
-connection (no `preset_id`) with its transport, endpoint, and model ids:
+added to `connections.toml` without touching code. Declare a connection to the
+`custom` provider with its protocol, endpoint, and model ids:
 
 ```toml
-[[providers]]
-id = "acme"
-name = "Acme"
-transport = "OpenAi"          # OpenAi | OpenAiResponses | Anthropic | Google
+[[connections]]
+name = "acme"
+provider = "custom"
+protocol = "openai-chat-completions"  # openai-chat-completions | openai-responses | anthropic-messages | google-generate-content
 base_url = "https://api.acme.example/v1/chat/completions"
 # api_key_env = "ACME_API_KEY"   # optional env var holding the credential
-models = ["acme-1"]
+models.include = ["acme-1"]
 ```
 
 ```toml
-[providers]
+[connections]
 acme = "sk-..."               # $XDG_CONFIG_HOME/muta/credentials.toml
 ```
 
-A **native-Google relay / 中转站** uses `Google`. The `base_url` is the
-versioned base (carry the `/v1beta` prefix — the `/models/{id}:generateContent`
-path is appended for you). Auth stays on the `?key=` query param:
+A **native-Google relay / 中转站** uses `protocol = "google-generate-content"`.
+The `base_url` is the versioned base (carry the `/v1beta` prefix — the
+`/models/{id}:generateContent` path is appended for you). Auth stays on the
+`?key=` query param:
 
 ```toml
-[[providers]]
-id = "my-gemini-relay"
-name = "My Google Relay"
-transport = "Google"
+[[connections]]
+name = "my-gemini-relay"
+provider = "custom"
+protocol = "google-generate-content"
 base_url = "https://relay.example.com/v1beta"
-models = ["gemini-2.5-flash"]
+models.include = ["gemini-2.5-flash"]
 ```
 
-To redirect the **built-in** `google` preset instead (so picking `google` in
-`/models` and `default_provider = "google"` route through the relay), create
-a connection referencing the preset with a `base_url` override — the override
-wins over the preset's default endpoint:
+To redirect the **built-in** `google` provider instead (so picking `google` in
+`/models` and `default_connection = "google"` route through the relay), create
+a connection to that provider with a `base_url` override — the override wins
+over the provider's default endpoint:
 
 ```toml
-[[providers]]
-id = "google"
-name = "Google"
-preset_id = "google"
+[[connections]]
+name = "google-relay"
+provider = "google"
 base_url = "https://relay.example.com/v1beta"
 ```
 
-Instance fields:
+Connection fields:
 
 | Field | Meaning |
 |-------|---------|
-| `id` | Unique connection id; referenced by `default_provider` and by `credentials.toml` |
-| `name` | Display name; defaults to the id |
-| `preset_id` | Optional: derive routes from a preset (`deepseek`, `kimi-code`, `google`, ...). Pure-custom connections omit it and declare `transport` / `base_url` / `models` below |
+| `name` | The connection's identity; unique (case-insensitive), referenced by `default_connection` and by `credentials.toml` |
+| `provider` | **Required**: the model provider id this connection points at (`openai`, `anthropic`, `google`, `deepseek`, `kimi-code`, `custom`, ...). See `muta_contracts::model_providers::MODEL_PROVIDER_IDS` |
 | `auth` | `ApiKey` (default), or an OAuth variant for subscription connections |
 | `api_key_env` | Optional env var *name* holding the credential; wins over `credentials.toml` |
-| `transport` | `OpenAi`, `OpenAiResponses`, `Anthropic`, or `Google` (pure-custom only) |
-| `base_url` | Full chat-completions URL (OpenAI), `/responses` URL (Responses), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
-| `user_agent` | OpenAI-compatible and native Google (pure-custom only) |
-| `models` | The declared model ids a pure-custom connection serves |
+| `protocol` | Optional wire-protocol override: `openai-chat-completions`, `openai-responses`, `anthropic-messages`, or `google-generate-content`. Defaults to the provider's protocol |
+| `base_url` | Optional endpoint override. Full chat-completions URL (OpenAI), `/responses` URL (Responses), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
+| `user_agent` | Optional `User-Agent` override (OpenAI-compatible and native Google) |
+| `models` | Optional connection-level delta: `models.include` / `models.exclude` / `models.overrides`. A connection may narrow or override the provider's universe; it must not invent models except under `provider = "custom"` |
 
 Per-model reasoning (`effort` / `thinking`) is **not** a persisted field — it
 lives per `(connection, model)` in the discovery cache, edited from the model `e`
 picker. See [Reasoning effort](../reference/effort.md).
 
-Multiple connections of the same preset (e.g. two `deepseek` connections with
-different keys or endpoints) are ordinary: each is its own `[[providers]]` row
-with the same `preset_id`, and each owns its own credential keyed by its own
-`id`. The preset defines the routes once; connections never repeat them.
+Multiple connections to the same provider (e.g. two `deepseek` connections with
+different keys or endpoints) are ordinary: each is its own `[[connections]]` row
+with the same `provider`, and each owns its own credential keyed by its own
+`name`. The provider defines the model universe once; connections narrow it.
 
 ## Path 2: Built-in provider (per-provider file)
 
 Create a new file `crates/muta-providers/src/registry/<name>.rs`. Each
 provider file owns three things: a model-id list, a baseline metadata table,
-and a preset spec. Use `deepseek.rs` as a minimal reference.
+and a model provider spec. Use `deepseek.rs` as a minimal reference.
 
 ```rust
 use muta_contracts::thinking::ThinkingSupport;
-use muta_contracts::{Model, WireFormat};
+use muta_contracts::{Model, WireFormat, WireProtocol};
 
-use super::ProviderPresetSpec;
+use super::{DiscoveryProtocol, LiveCatalog, ModelProviderSpec};
 
 /// The model ids this provider serves (display order).
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
@@ -175,13 +174,17 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
+    prompt_cache: super::unsupported_prompt_cache,
     id: "acme",
     baselines: MODELS,
-    protocol: "openai",
+    base_url: "https://api.acme.example/v1/chat/completions",
+    user_agent: None,
+    protocol: WireProtocol::OpenAiChatCompletions,
     models: ACME_BUILTIN_MODELS,
-    discovery: true,
+    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
     fitting: false,
+    wire_overrides: &[],
 };
 ```
 
@@ -190,11 +193,13 @@ Then wire the file into the aggregate tables in
 
 1. Add `pub mod acme;` (alphabetical order).
 2. Add `pub use acme::ACME_BUILTIN_MODELS;` to the re-export block.
-3. Add `acme::PRESET_SPEC` to the `PROVIDER_PRESET_SPECS` array.
+3. Add `acme::MODEL_PROVIDER_SPEC` to the `MODEL_PROVIDER_SPECS` array.
+4. Add the new id to `muta_contracts::model_providers::MODEL_PROVIDER_IDS` —
+   the closed set is contract data because every connection persists one.
 
-The catalog loops over `PROVIDER_PRESET_SPECS` automatically, so no `match`
+The catalog loops over `MODEL_PROVIDER_SPECS` automatically, so no `match`
 arm is needed. `build_provider_for_channel` constructs the concrete
-`OpenAiChatCompletionsProvider`, stamping the preset `id` so assistant
+`OpenAiChatCompletionsProvider`, stamping the provider `id` so assistant
 messages are attributed correctly. The `MODELS` table feeds the model
 registry via `inventory` at link time — `resolve("acme-1")` returns the
 context window and capabilities you declared, with no manual registration
@@ -202,8 +207,8 @@ call.
 
 ### Optional: persist the API key
 
-A connection's credential is stored in `credentials.toml` keyed by connection id
-(`[providers.<id>] api_key`), or read live from an `api_key_env` env var when
+A connection's credential is stored in `credentials.toml` keyed by connection
+name (`[connections]` table), or read live from an `api_key_env` env var when
 the connection declares one. No code change is needed — every connection already
 resolves its credential this way. The catalog resolves env-first
 (`api_key_env`), then `credentials.toml`, then empty (a keyless relay sends no
@@ -241,7 +246,7 @@ Then wire the adapter into the two construction sites:
    in `build_provider_for_channel`
    (`crates/muta-providers/src/registry/mod.rs`) that constructs the adapter
    from the channel.
-2. Register the preset in `PROVIDER_PRESET_SPECS` (add a `route_for_model`
+2. Register the provider in `MODEL_PROVIDER_SPECS` (add a `route_for_model`
    arm if the adapter routes by model wire format) so the catalog's derivation
    (`crates/muta-agent/src/catalog/derive.rs`) exposes it by `id`.
 
@@ -259,7 +264,7 @@ cargo test -p muta-agent catalog
 Then exercise the provider end-to-end:
 
 1. Set the API key env var and start the agent with
-   `default_provider = "acme"` in `config.toml`.
+   `default_connection = "acme"` in `config.toml`.
 2. Send a prompt that should trigger a tool call. Confirm the tool step
    renders with the right arguments and result.
 3. If the model advertises reasoning support (e.g. an `acme-reasoner`
@@ -273,13 +278,13 @@ Then exercise the provider end-to-end:
 ## Update documentation
 
 - Add a row to the appropriate table in [Providers](../reference/providers.md)
-  (registry preset table for OpenAI-compatible presets, bespoke table for
-  standalone adapters). User-defined entries need no doc change — they are
+  (model provider route table for OpenAI-compatible providers, bespoke table for
+  standalone adapters). User-defined connections need no doc change — they are
   config, not code.
 - If the provider introduces a new capability shape (e.g. a third standalone
   adapter), update
   [Provider capabilities](../explanation/provider-capabilities.md).
-- If the provider's env vars or `default_provider` key differ from the obvious
+- If the provider's env vars or `default_connection` key differ from the obvious
   naming, call that out explicitly.
 
 ## See also
@@ -287,7 +292,7 @@ Then exercise the provider end-to-end:
 - [Providers](../reference/providers.md) — existing provider matrix
 - [Provider capabilities](../explanation/provider-capabilities.md) — capability
   layering and why providers differ
-- [Request flow](../explanation/request-flow.md) — the wire contract registry
-  presets inherit
+- [Request flow](../explanation/request-flow.md) — the wire contract model
+  providers inherit
 - [ADR-0002](../adr/0002-model-channel-abstraction.md) — the catalog and
   channel abstraction

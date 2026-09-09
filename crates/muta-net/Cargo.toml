@@ -1,0 +1,31 @@
+[package]
+name = "muta-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+brotli = "8"
+bytes = { workspace = true }
+flate2 = { version = "1.1", features = ["zlib-rs"] }
+http = "1.4"
+libc = { workspace = true }
+muta-http1 = { path = "../muta-http1" }
+muta-trace = { path = "../muta-trace" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
+rustls-platform-verifier = "0.6"
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "rt"] }
+tokio-rustls = "0.26"
+
+[dev-dependencies]
+base64 = { workspace = true }
+brotli = "8"
+flate2 = { version = "1.1", features = ["zlib-rs"] }
+http = "1.4"
+rcgen = "0.14"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[lints]
+workspace = true

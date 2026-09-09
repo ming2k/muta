@@ -6,7 +6,7 @@ use super::*;
 impl Agent {
     /// Fire PostToolUse (success) or PostToolUseFailure (error) hooks and append
     /// any injected context as hidden user messages (ADR-0025). No-op when the
-    /// registry is empty, which is the common case (runners, tests, no
+    /// registry is empty, which is the common case (subagents, tests, no
     /// `[hooks]` config).
     pub(crate) async fn run_post_tool_hooks(
         &self,
@@ -256,7 +256,7 @@ impl Agent {
         };
 
         // ADR-0141 posture gate: an ask_user call only parks when a human
-        // channel exists. Autonomous sessions (headless no-TTY, CI, runners
+        // channel exists. Autonomous sessions (headless no-TTY, CI, subagents
         // with `allow_user_interaction: false`) never fabricate a user —
         // they settle by the configured fallback policy, labeled as such.
         let posture = self.human_posture();
@@ -625,11 +625,11 @@ impl Agent {
             StdinPolicy::default()
         };
 
-        // The Runner / ToolStream events must carry the same id as the
+        // The Subagent / ToolStream events must carry the same id as the
         // up-front ToolCall event (the dispatch-generated `call_id`), not the
         // model's `call.id` — the UI keys its step off the ToolCall event id,
-        // so using `call.id` here would orphan every runner child stream and
-        // every live tool stream, leaving the runner view empty.
+        // so using `call.id` here would orphan every subagent child stream and
+        // every live tool stream, leaving the subagent view empty.
         let parent_call_id = call_id.to_string();
         let stream_call_id = call_id.to_string();
         let stream_tx = event_tx.clone();
@@ -644,7 +644,7 @@ impl Agent {
                 call_id,
                 &call.arguments,
                 Box::new(|event| {
-                    let _ = event_tx.send(AgentEvent::Runner {
+                    let _ = event_tx.send(AgentEvent::Subagent {
                         parent_call_id: parent_call_id.clone(),
                         event,
                     });
@@ -666,7 +666,7 @@ impl Agent {
     /// Used by text-fallback paths (one tool call at a time).
     ///
     /// Cancellation-aware: if `cancel` fires while the tool is in flight, a
-    /// cooperatively-cancellable tool (an runner) is given a bounded grace
+    /// cooperatively-cancellable tool (a subagent) is given a bounded grace
     /// period to drain and return its terminal result — the interrupted
     /// result is carried in [`SingleToolOutcome`] so the caller can record the
     /// partial work before ending the round. A non-cancellable tool keeps the
@@ -707,13 +707,13 @@ impl Agent {
                         });
                     }
                     // Cooperative drain: signal the tool, then race its
-                    // future against a bounded grace period. The runner stops
+                    // future against a bounded grace period. The subagent stops
                     // at its next safe boundary and returns its partial
                     // transcript as a terminal result.
                     if let Some(sourced) = self.tool_manager.find(&call.name) {
                         sourced.tool.request_cancel(call_id);
                     }
-                    let grace = tokio::time::sleep(RUNNER_DRAIN_GRACE);
+                    let grace = tokio::time::sleep(SUBAGENT_DRAIN_GRACE);
                     tokio::pin!(grace);
                     loop {
                         tokio::select! {

@@ -185,7 +185,7 @@ pub fn draw_tool_step(
             }
         }
 
-        // Nested runner children
+        // Nested subagent children
         if let crate::model::document::MessageKind::ToolStep { children, .. } = &msg.kind {
             if !children.is_empty() {
                 draw_blank_rows(ctx, pad, TOOL_STEP_CHILDREN_GAP_ROWS);

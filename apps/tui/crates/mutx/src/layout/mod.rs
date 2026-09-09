@@ -303,13 +303,13 @@ fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usi
 /// step; final prose-only responses retain the ordinary transcript shape.
 fn is_turn_component(message: &TranscriptMessage) -> bool {
     message.is_tool_step()
-        || message.is_runner_task()
+        || message.is_subagent_task()
         || message.is_reasoning()
         || message.role == muta_contracts::Role::Assistant
 }
 
 fn is_tool_like(message: &TranscriptMessage) -> bool {
-    message.is_tool_step() || message.is_runner_task()
+    message.is_tool_step() || message.is_subagent_task()
 }
 
 fn default_group_start(messages: &[TranscriptMessage], index: usize) -> bool {
@@ -438,7 +438,7 @@ impl<'a, 'f> Stream<'a, 'f> {
     pub fn badge(&mut self, _mi: usize) {}
 
     /// Dispatch a single message to its per-kind drawer, honoring the
-    /// height-cache fast path for every settled message. Running tool/runner/
+    /// height-cache fast path for every settled message. Running tool/subagent/
     /// reasoning steps retain their live renderer because their visible height
     /// can still change; completed expanded steps are safe to cache and can be
     /// skipped wholesale when fully off-screen.
@@ -463,7 +463,7 @@ impl<'a, 'f> Stream<'a, 'f> {
         // the old hard `skippable == false` rule existed only because the
         // rev was never bumped on reasoning deltas.
         let skippable = (msg.is_notice() && !msg.is_provider_retry())
-            || (!msg.is_runner_task()
+            || (!msg.is_subagent_task()
                 && if msg.is_tool_step() {
                     !msg.tool_step_status()
                         .is_some_and(|status| status.is_running())
@@ -499,7 +499,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.hovered_step == Some(mi),
                 self.focused_target == Some(InteractiveTarget::notice(mi)),
             );
-        } else if msg.is_runner_task() {
+        } else if msg.is_subagent_task() {
             let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
@@ -511,7 +511,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.content_lines,
                 &mut self.height_cache.wrap,
             );
-            super::disclosure::draw_runner_inline_step(&mut ctx, msg, mi, hovered, focused_tool);
+            super::disclosure::draw_subagent_inline_step(&mut ctx, msg, mi, hovered, focused_tool);
         } else if msg.is_tool_step() {
             let mut ctx = RenderCtx::from_cursor(
                 self.frame,

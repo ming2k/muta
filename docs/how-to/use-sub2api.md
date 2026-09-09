@@ -2,7 +2,7 @@
 
 Use a sub2api relay when the service exposes an OpenAI, Anthropic, or Google
 compatible HTTP surface and gives you a token plus a relay URL. muta's
-provider editor creates a named provider instance, stores the token, and seeds
+connection editor creates a named connection, stores the token, and seeds
 the model list from the selected template.
 
 For templates with live model discovery, muta queries the relay's `/models`
@@ -82,54 +82,54 @@ is not listed.
 Google-native relays use the versioned base URL. muta appends
 `/models/{model}:generateContent` for each request.
 
-## Configure a relay instance
+## Configure a relay connection
 
-Edit the state store when you want a reproducible provider definition without
-using the TUI. Instances live in `providers.toml`
+Edit the state store when you want a reproducible connection definition without
+using the TUI. Connections live in `connections.toml`
 (`$XDG_STATE_HOME/muta/`), the selection in `config.toml`, and tokens in the
 credentials file or an environment variable.
 
 ```toml
 # $XDG_CONFIG_HOME/muta/config.toml — behavior only
-default_provider = "example-openai"
+default_connection = "example-openai"
 ```
 
 ```toml
-# $XDG_STATE_HOME/muta/providers.toml — instances
-[[providers]]
-id = "example-openai"
-name = "Example OpenAI"
-transport = "OpenAi"
+# $XDG_STATE_HOME/muta/connections.toml — connections
+[[connections]]
+name = "example-openai"
+provider = "custom"
+protocol = "openai-chat-completions"
 base_url = "https://relay.example.com/v1/chat/completions"
-models = ["gpt-5.5"]
+models.include = ["gpt-5.5"]
 ```
 
 ```toml
 # $XDG_CONFIG_HOME/muta/credentials.toml — secrets (or set RELAY_API_KEY in the env)
-[providers]
+[connections]
 example-openai = "sk-..."
 ```
 
 For Anthropic:
 
 ```toml
-[[providers]]
-id = "example-claude"
-name = "Example Claude"
-transport = "Anthropic"
+[[connections]]
+name = "example-claude"
+provider = "custom"
+protocol = "anthropic-messages"
 base_url = "https://relay.example.com/v1/messages"
-models = ["claude-sonnet-5"]
+models.include = ["claude-sonnet-5"]
 ```
 
 For Google-native Antigravity:
 
 ```toml
-[[providers]]
-id = "antigravity"
-name = "Antigravity"
-transport = "Google"
+[[connections]]
+name = "antigravity"
+provider = "custom"
+protocol = "google-generate-content"
 base_url = "https://relay.example.com/antigravity/v1beta"
-models = ["gemini-3-flash"]
+models.include = ["gemini-3-flash"]
 ```
 
 ## Check a relay endpoint

@@ -12,7 +12,7 @@ frontends:
   [`capability.rs`][cap]);
 - conversation, event, and tool-output protocol types;
 - shared value policy such as capability scopes and context budgets;
-- repeat / todo domain types, envoy profiles, skills/MCP config
+- repeat / todo domain types, subagent presets, skills/MCP config
   schemas;
 - the wire events the harness and frontends exchange.
 

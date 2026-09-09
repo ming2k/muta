@@ -412,7 +412,7 @@ pub fn route_event(
             // Surface Dispatch (ADR-0172)
             // Each full-screen view owns the keys for its own focus planes
             // while no modal is up: the Session view's chat scheme (and its
-            // Runner / Side siblings) resolves them here, before the modal /
+            // Subagent / Side siblings) resolves them here, before the modal /
             // global arms below. A key the surface does not own falls through
             // to the shared affordance library and the modal arms.
             if bare_chat_surface(&dispatch)
@@ -462,7 +462,7 @@ pub fn route_event(
 
             match key.code {
                 KeyCode::Esc => {
-                    // Chat-surface Esc (close completion / exit side or runner
+                    // Chat-surface Esc (close completion / exit side or subagent
                     // / clear step focus / interrupt) is resolved by the
                     // Session view's own scheme (ADR-0172) before this match.
                     // This arm is modal-only.

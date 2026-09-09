@@ -4,14 +4,14 @@
 //! [`assemble`] performs the full session startup that used to live inline in
 //! the `muta` binary's `main`: channel creation, custom-command discovery,
 //! config load + migrations, background live model discovery, store opens,
-//! the repeat scheduler, provider/skills/toolset wiring, `RunnerTool` layering,
+//! the repeat scheduler, provider/skills/toolset wiring, `SubagentTool` layering,
 //! agent construction, MCP background connect, pursuit/todo/session-state
 //! restore, and finally [`SessionDriver`] construction — in the exact order
 //! the original `main` did, with the same background spawns.
 //!
 //! The crate stays application-neutral (ADR-0054): the caller supplies the
-//! [`AgentIdentity`], the [`MasterPreset`], and the [`UiBridge`] as
-//! parameters. Nothing here names a product or a master.
+//! [`AgentIdentity`], the [`AgentPreset`], and the [`UiBridge`] as
+//! parameters. Nothing here names a product.
 //!
 //! `SessionStart::Version`, `SessionStart::Doctor`, `SessionStart::Attach`, and
 //! `SessionStart::Showcase` are **not** handled here: they are purely local
@@ -20,10 +20,10 @@
 
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
-use muta_agent::{Agent, AgentIdentity, MasterPreset, RoundLifecycle, RunnerTool};
+use muta_agent::{Agent, AgentIdentity, AgentPreset, RoundLifecycle, SubagentTool};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, RUNNER_EXPLORE, RoundEvent, ToolContextBuilder, ToolSet,
+    NoticeSurface, Provider, RoundEvent, SUBAGENT_EXPLORE, ToolContextBuilder, ToolSet,
     WorkspaceTrustState, collect_toolset,
 };
 
@@ -49,9 +49,9 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 pub struct BootstrapParams {
     /// The agent's identity (name + mission), bound at construction.
     pub identity: AgentIdentity,
-    /// The declarative master profile (ADR-0053), applied after
-    /// construction and before the `[master]` config overlay.
-    pub master: MasterPreset,
+    /// The declarative agent preset profile (ADR-0053), applied after
+    /// construction and before the `[agent]` config overlay.
+    pub preset: AgentPreset,
     /// The frontend's clipboard/UI bridge (used by `/export`).
     pub ui: Arc<dyn UiBridge>,
     /// How the session begins (ADR-0116: only the assembly-relevant
@@ -149,7 +149,7 @@ pub fn ensure_app_roots() {
 pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std::error::Error>> {
     let BootstrapParams {
         identity,
-        master,
+        preset,
         ui,
         startup,
         project_root: project_override,
@@ -313,7 +313,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // discovering skills (scanning local dirs, cloning/fetching remote repos)
     // never blocks the first frame; the background refresh loop re-scans all
     // sources immediately on spawn and then every hour. The `Arc` is shared
-    // across the skill tools, the runner profile, and the frontend, so once the
+    // across the skill tools, the subagent profile, and the frontend, so once the
     // background load lands they all observe the populated state.
     //
     // Pin the session's project root into the skills config so the
@@ -360,7 +360,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // tools' search config, the shared skill registry, the embedding index +
     // session store) pull it out of the context by type — see
     // `muta_contracts::tool_registry`. Stateful/meta tools that genuinely depend on the
-    // *rest* of the toolset (the runner dispatch `task`) cannot
+    // *rest* of the toolset (the subagent dispatch `task`) cannot
     // self-register and are assembled explicitly below. MCP tools are
     // discovered at runtime and published directly to the master Agent;
     // they are not part of this static capability set.
@@ -381,13 +381,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         );
     }
     let additional_roots: Vec<std::path::PathBuf> = resolved_additional.admitted;
-    // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
-    // (via the tool context below), and `UpdateWebSearchConfig` /
-    // `/settings reload` write into it, so backend/reader/proxy changes
-    // reach the tools on their next call without a toolset rebuild.
-    let websearch_shared = Arc::new(muta_contracts::SharedWebSearchConfig::new(
-        config.websearch.clone(),
-    ));
+    // Hot-updatable `[web]` handle: the web tools receive the same handle via
+    // the tool context, and `UpdateWebSearchConfig` atomically replaces its
+    // resolved snapshot. Changes reach the next call without a toolset rebuild.
+    let resolved_web = muta_persistence::config::resolve_web_config(
+        &config.web,
+        &muta_persistence::config::Credentials::load(),
+    );
+    let websearch_shared = muta_contracts::SharedWebConfig::new(resolved_web.runtime);
     let execution_env = Arc::new(
         muta_agent::execution::WorkspaceExecutionEnvironment::with_additional_roots(
             project_root.clone(),
@@ -409,7 +410,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
         builder.provide(websearch_shared.clone());
-        builder.provide(config.websearch.clone());
+        builder.provide(websearch_shared.get());
         builder.provide(skills_registry.clone());
         builder.provide(session.clone());
         builder.provide(execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>);
@@ -435,40 +436,40 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // its connector-neutral dynamic-tool sink. The MCP runtime owns protocol
     // and connection state; the agent owns advertisement and dispatch.
     // Snapshot of the shared toolset (built-in default variants) before the
-    // `RunnerTool` is layered on. A `/btw` side session (ADR-0017) rebuilds
-    // its `Agent` from this same snapshot — minus its own `RunnerTool` and
+    // `SubagentTool` is layered on. A `/btw` side session (ADR-0017) rebuilds
+    // its `Agent` from this same snapshot — minus its own `SubagentTool` and
     // without inheriting the master's session-scoped connector sources.
     let base_tools: Arc<Vec<Arc<dyn muta_contracts::Tool>>> = Arc::new(toolset.default_view());
-    // RunnerTool gets the static capability set (excluding itself) so spawned
-    // runners cannot recurse and inherit the live provider. Dynamic connector
+    // SubagentTool gets the static capability set (excluding itself) so spawned
+    // subagents cannot recurse and inherit the live provider. Dynamic connector
     // sources are master-only unless a future policy explicitly delegates
-    // them. It binds the RUNNER_EXPLORE profile (read-only / non-interactive /
+    // them. It binds the SUBAGENT_EXPLORE profile (read-only / non-interactive /
     // non-recursive).
-    let runner_tool = Arc::new(RunnerTool::new(
+    let subagent_tool = Arc::new(SubagentTool::new(
         agent_provider.clone(),
         toolset.clone(),
-        &RUNNER_EXPLORE,
+        &SUBAGENT_EXPLORE,
     ));
-    // Runners resolve relative write-grants against the session's project
+    // Subagents resolve relative write-grants against the session's project
     // root, not the daemon process's cwd (ADR-0096).
-    runner_tool.set_workspace_root(Some(project_root.clone()));
-    // Runners inherit the session's connection retry configuration.
-    runner_tool.bind_retry_policy(
+    subagent_tool.set_workspace_root(Some(project_root.clone()));
+    // Subagents inherit the session's connection retry configuration.
+    subagent_tool.bind_retry_policy(
         config.connection_retry_max_attempts,
         config.connection_retry_base_ms,
         config.connection_retry_max_ms,
     );
-    // Full-duplex (ADR-0029): capture the runner tool's runner registry so the
+    // Full-duplex (ADR-0029): capture the subagent tool's subagent registry so the
     // request loop can route a user's permission / ask_user reply down into the
     // specific live child that surfaced the request (looked up by the parent
     // tool-call id the frontend tags onto the reply). Captured before
-    // `runner_tool` is layered into the capability set.
-    let runner_registry = runner_tool.registry();
+    // `subagent_tool` is layered into the capability set.
+    let subagent_registry = subagent_tool.registry();
     // Keep a typed handle so we can bind the parent's variant selection into the
-    // runner tool once the agent (which owns that selection) exists. The same
-    // underlying `Arc<RunnerTool>` is what gets layered into the toolset.
-    let runner_tool_handle = runner_tool.clone();
-    toolset.insert(runner_tool);
+    // subagent tool once the agent (which owns that selection) exists. The same
+    // underlying `Arc<SubagentTool>` is what gets layered into the toolset.
+    let subagent_tool_handle = subagent_tool.clone();
+    toolset.insert(subagent_tool);
     let mut agent = Agent::builder_from_toolset(agent_provider, toolset, identity)
         .with_skills((*skills_registry).clone())
         .build();
@@ -478,21 +479,21 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     agent.set_additional_workspace_roots(additional_roots.clone());
     agent.bind_shared_confinement(shared_confinement.clone());
     let agent = Arc::new(agent);
-    // Override axis (model): runners are agents on the same model, so they
+    // Override axis (model): subagents are agents on the same model, so they
     // inherit the parent's tool-variant selection. The profile still owns the
     // orthogonal scope axis.
-    runner_tool_handle.bind_variant_selection(agent.variant_selection_handle());
-    runner_tool_handle.bind_workspace_security(agent.workspace_security_handle());
-    runner_tool_handle.bind_execution_policy(agent.execution_policy());
+    subagent_tool_handle.bind_variant_selection(agent.variant_selection_handle());
+    subagent_tool_handle.bind_workspace_security(agent.workspace_security_handle());
+    subagent_tool_handle.bind_execution_policy(agent.execution_policy());
     // ADR-0138 §2: expose the master's live dynamic (MCP) tool registry to
-    // runner dispatch. The mcp_specialist child resolves its toolset from this
+    // subagent dispatch. The mcp_specialist child resolves its toolset from this
     // source at spawn time, so McpCatalog re-discovery reaches later children
     // without re-binding. Other profiles are unaffected — only mcp_specialist
     // consults the source.
-    runner_tool_handle.bind_dynamic_tool_source(agent.dynamic_tool_source());
-    // ADR-0141: runners inherit the session's live human channel.
+    subagent_tool_handle.bind_dynamic_tool_source(agent.dynamic_tool_source());
+    // ADR-0141: subagents inherit the session's live human channel.
     if let Some(accountant) = human_channel.as_ref() {
-        runner_tool_handle.bind_human_channel(Arc::clone(accountant));
+        subagent_tool_handle.bind_human_channel(Arc::clone(accountant));
     }
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
@@ -576,7 +577,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                     "Some additional workspace roots could not be loaded",
                     NoticeSource::Harness,
                 )
-                .with_surface(NoticeSurface::Toast)
+                .with_surface(NoticeSurface::Inline)
                 .with_body(format!("Skipped roots: {details}")),
             ),
         ));
@@ -706,20 +707,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // provider; re-seeded on provider/model switch.
     crate::agent_setup::reseed_tool_variants(&agent, &config);
 
-    // Bind the caller-supplied master profile (ADR-0053). Identity was
+    // Bind the caller-supplied agent preset (ADR-0053). Identity was
     // supplied to the constructor above (immutable past build); this applies
     // the profile's capability scope, operation boundary, runtime knobs, and
-    // attended flag in one call. The profile makes the role declarative so
-    // future masters (quant/research/ops) are another profile, not a fork.
-    agent.apply_master_profile(&master);
+    // attended flag in one call. The profile makes the role declarative.
+    agent.apply_preset(&preset);
 
-    // Wire the `[master]` config table: the opt-in hard-stop budget, the
-    // model-supplied-stdin toggle, the interactive-input-panel opt-out, and
-    // the anti-anchoring nudge config. (Session review is on-demand via
-    // `/review`, so it has no config to seed.) All default to sensible values
-    // when the table is absent, so this is a no-op for the common case — the
-    // nudge config defaults to disabled. These run *after* the profile binding
-    // so per-installation config wins.
+    // Wire the `[agent]` config table (or legacy `[master]`): the opt-in hard-stop
+    // budget, the model-supplied-stdin toggle, the interactive-input-panel opt-out,
+    // and the anti-anchoring nudge config. All default to sensible values
+    // when the table is absent, so this is a no-op for the common case.
+    // These run *after* the profile binding so per-installation config wins.
     // ADR-0141: bind the human-channel posture source. With an accountant
     // the agent reads the OR of attached clients (live). Without one
     // (one-shot CLI paths that never attach) the static posture from the
@@ -731,11 +729,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // headless (`-p` runs, remote automation) declares Autonomous.
         agent.set_human_posture(muta_contracts::human_request::HumanChannelPosture::Interactive);
     }
-    agent.set_hard_stop_turns(config.master.hard_stop_turns);
-    agent.set_doom_guard_config(config.master.doom_guard);
-    agent.set_allow_model_stdin(config.master.allow_model_stdin);
-    agent.set_skip_interactive_input(config.master.skip_interactive_input);
-    agent.set_autonomous_fallback_policy(config.master.ask_user_fallback);
+    agent.set_hard_stop_turns(config.agent.hard_stop_turns);
+    agent.set_doom_guard_config(config.agent.doom_guard);
+    agent.set_allow_model_stdin(config.agent.allow_model_stdin);
+    agent.set_skip_interactive_input(config.agent.skip_interactive_input);
+    agent.set_autonomous_fallback_policy(config.agent.ask_user_fallback);
     // Bash safety is action-based and independent from project-extension trust.
     // Workspace authority is enforced by the permission chain; unconditional
     // destructive denies and explicit high-risk confirmations remain here.
@@ -844,7 +842,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         muta_persistence::usage_stats::UsageStatsStore::new(),
     ));
     token_ledger.set_usage_project(muta_persistence::paths::project_bucket_name(&project_root));
-    runner_tool_handle.bind_accounting(
+    subagent_tool_handle.bind_accounting(
         token_ledger.clone(),
         agent.thread_id_handle(),
         agent.round_counter_handle(),
@@ -908,7 +906,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         provider_usage,
         provider_holder: provider_for_task,
         skills_registry,
-        runner_registry,
+        subagent_registry,
         mcp_runtime,
         workspace_security: workspace_security.clone(),
         shared_additional_roots: shared_additional_roots.clone(),

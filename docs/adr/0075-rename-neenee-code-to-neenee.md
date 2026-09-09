@@ -133,7 +133,7 @@ four insta snapshot tests whose files were renamed.
 
 - [ADR-0005](0005-strict-layering-and-renames.md) — the original "binary stays
   `neenee`" sub-decision this restores.
-- [ADR-0035](0035-application-layer-split.md) — the rename being reversed
+- [ADR-0035](archive/0035-application-layer-split.md) — the rename being reversed
   (superseded).
 - [ADR-0073](0073-flat-coding-focused-workspace.md) — removed the editor and
   quant products, leaving `neenee-code` as the sole application and making this

@@ -45,7 +45,7 @@ pub enum ToolStatus {
     Ok,
     /// Output present and the call failed. Failure is determined by the
     /// structured [`ToolStepStatus`] (set from `ToolOutput::is_error()` in
-    /// `document.rs`), not by string-sniffing the output text — runner
+    /// `document.rs`), not by string-sniffing the output text — subagent
     /// failures carry an explicit `failed` flag and tool errors use
     /// `ToolOutput::Error`.
     Failed,
@@ -55,7 +55,7 @@ pub enum ToolStatus {
     Cancelled,
     /// The user interrupted the turn while the call was in flight, but the
     /// call drained and its partial result was preserved (an interrupted
-    /// runner). More alive than `Cancelled`: there is recovered work to
+    /// subagent). More alive than `Cancelled`: there is recovered work to
     /// inspect and possibly resume.
     Interrupted,
 }
@@ -75,7 +75,7 @@ impl ToolStatus {
     }
 
     /// Theme color used for the status rail / step accent. Centralizes the
-    /// status→color mapping that step headers, sticky pins, and runner steps
+    /// status→color mapping that step headers, sticky pins, and subagent steps
     /// previously each duplicated.
     pub fn color(self, theme: &Theme) -> Color {
         match self {
@@ -93,7 +93,7 @@ impl ToolStatus {
             ToolStatus::Cancelled => theme.dim(),
             // Interrupted carries the same user-intervention tone as Denied,
             // but on a brighter accent: unlike a dropped call, an interrupted
-            // runner preserved partial work worth noticing.
+            // subagent preserved partial work worth noticing.
             ToolStatus::Interrupted => theme.warn(),
         }
     }
@@ -141,9 +141,9 @@ pub enum ArgLayout {
 pub struct ToolView<'a> {
     pub name: &'a str,
     pub args: &'a serde_json::Map<String, Value>,
-    /// The runner profile name (`explore` / `plan` / …) when this step is a
-    /// runner run that has announced its role; `None` otherwise. Lets the
-    /// `RunnerPresenter` label the step by role instead of "Runner".
+    /// The subagent profile name (`explore` / `plan` / …) when this step is a
+    /// subagent run that has announced its role; `None` otherwise. Lets the
+    /// `SubagentPresenter` label the step by role instead of "Subagent".
     pub profile: Option<&'a str>,
 }
 
@@ -203,7 +203,7 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "read_url" => &web::WebReaderPresenter,
         "search_web" => &web::WebSearchPresenter,
         "write_todos" | "update_todo" | "todo" | "todo_update" => &meta::TodoPresenter,
-        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => &meta::RunnerPresenter,
+        "spawn_agent" | "delegate_code" | "delegate_mcp" => &meta::SubagentPresenter,
         "use_skill" => &meta::UseSkillPresenter,
         _ => &fallback::FallbackPresenter,
     }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::tools::web::html::extract_html_title;
-use muta_contracts::{Tool, WebSearchConfig};
+use muta_contracts::Tool;
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -49,11 +49,9 @@ mod guarded_get_tests {
         format!("http://{addr}/hop")
     }
 
-    fn test_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+    fn test_client() -> crate::tools::web::http::WebHttp {
+        crate::tools::web::http::WebHttp::new(&muta_contracts::WebConfig::default())
+            .expect("test client")
     }
 
     #[tokio::test]
@@ -91,20 +89,33 @@ mod guarded_get_tests {
 
 mod shared_config_tests {
     use super::*;
-    use muta_contracts::SharedWebSearchConfig;
+    use muta_contracts::{
+        SecretString, SharedWebConfig, WebConfig, WebReaderProvider, WebRuntimeConfig,
+        WebSearchProvider,
+    };
+
+    fn runtime(behavior: WebConfig) -> WebRuntimeConfig {
+        WebRuntimeConfig {
+            behavior,
+            search_credential: None,
+            reader_credential: None,
+        }
+    }
 
     #[test]
     fn websearch_chain_rebuilds_when_shared_config_changes() {
-        let shared = SharedWebSearchConfig::new(WebSearchConfig::default());
+        let shared = SharedWebConfig::new(WebRuntimeConfig::default());
         let tool = WebSearchTool::with_shared_config(shared.clone());
         let (primary, _) = tool.current_provider().expect("default provider builds");
         assert_eq!(primary.name(), "Exa");
 
-        shared.set(WebSearchConfig {
-            provider: "tavily".to_string(),
-            tavily_api_key: Some(muta_contracts::SecretString::new("tvly-x")),
-            ..WebSearchConfig::default()
+        let mut next = runtime(WebConfig {
+            provider: WebSearchProvider::Tavily,
+            ..WebConfig::default()
         });
+        next.search_credential = Some(SecretString::new("tvly-x"));
+        shared.replace(next);
+
         let (primary, _) = tool.current_provider().expect("rebuilt provider builds");
         assert_eq!(primary.name(), "Tavily");
 
@@ -113,80 +124,93 @@ mod shared_config_tests {
     }
 
     #[test]
-    fn signature_ignores_nothing_that_matters_and_hides_secrets() {
-        let mut a = WebSearchConfig::default();
-        let b = WebSearchConfig::default();
-        assert_eq!(a.signature(), b.signature());
-        a.provider = "bocha".to_string();
-        assert_ne!(a.signature(), b.signature());
-        a.provider = b.provider.clone();
-        a.bocha_api_key = Some(muta_contracts::SecretString::new("sk-secret-value"));
-        let sig = a.signature();
-        assert!(!sig.contains("sk-secret-value"));
-        let mut c = a.clone();
-        c.bocha_api_key = Some(muta_contracts::SecretString::new("sk-other"));
-        assert_ne!(a.signature(), c.signature());
-        c.bocha_api_key = None;
-        assert_ne!(a.signature(), c.signature());
+    fn webreader_client_cache_rebuilds_on_revision_change() {
+        let shared = SharedWebConfig::new(WebRuntimeConfig::default());
+        let reader = WebReaderTool::with_shared_config(shared.clone());
+        let first = reader.client().expect("initial client builds");
+
+        shared.replace(shared.get());
+        let second = reader.client().expect("replacement client builds");
+
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &second),
+            "a new authoritative revision must invalidate the reader client cache"
+        );
+    }
+
+    #[test]
+    fn runtime_debug_hides_secrets_and_revision_is_the_cache_identity() {
+        let mut with_secret = runtime(WebConfig::default());
+        with_secret.search_credential = Some(SecretString::new("sk-secret-value"));
+        assert!(!format!("{with_secret:?}").contains("sk-secret-value"));
+
+        let shared = SharedWebConfig::new(WebRuntimeConfig::default());
+        assert_eq!(shared.snapshot().0, 0);
+        assert_eq!(shared.replace(with_secret), 1);
+        assert_eq!(shared.snapshot().0, 1);
     }
 
     #[test]
     fn websearch_and_webreader_is_available_reflects_configuration() {
-        let shared = SharedWebSearchConfig::new(WebSearchConfig::default());
+        let shared = SharedWebConfig::new(WebRuntimeConfig::default());
         let search = WebSearchTool::with_shared_config(shared.clone());
         let reader = WebReaderTool::with_shared_config(shared.clone());
 
-        // Default search (exa) is available, but default reader (jina) without key is not ready.
+        // Default search (exa) is available; the default reader is disabled.
         assert!(search.is_available());
         assert!(!reader.is_available());
 
-        // Supplying jina_api_key makes reader available.
-        shared.set(WebSearchConfig {
-            reader: "jina".to_string(),
-            jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
-            ..WebSearchConfig::default()
-        });
+        // Selecting Jina makes the reader available.
+        shared.replace(runtime(WebConfig {
+            reader: WebReaderProvider::Jina,
+            ..WebConfig::default()
+        }));
         assert!(reader.is_available());
 
-        shared.set(WebSearchConfig {
-            provider: "none".to_string(),
-            reader: "jina".to_string(),
-            jina_api_key: Some(muta_contracts::SecretString::new("jina_xxx")),
-            ..WebSearchConfig::default()
-        });
+        // Disabling search leaves the reader intact.
+        shared.replace(runtime(WebConfig {
+            provider: WebSearchProvider::Disabled,
+            reader: WebReaderProvider::Jina,
+            ..WebConfig::default()
+        }));
         assert!(!search.is_available());
         assert!(reader.is_available());
 
-        shared.set(WebSearchConfig {
-            provider: "tavily".to_string(),
-            tavily_api_key: None,
-            ..WebSearchConfig::default()
-        });
+        // A credentialed provider without a credential is unavailable.
+        shared.replace(runtime(WebConfig {
+            provider: WebSearchProvider::Tavily,
+            ..WebConfig::default()
+        }));
         assert!(!search.is_available());
-        shared.set(WebSearchConfig {
-            provider: "tavily".to_string(),
-            tavily_api_key: Some(muta_contracts::SecretString::new("tvly-xxx")),
-            ..WebSearchConfig::default()
+        let mut with_key = runtime(WebConfig {
+            provider: WebSearchProvider::Tavily,
+            ..WebConfig::default()
         });
+        with_key.search_credential = Some(SecretString::new("tvly-xxx"));
+        shared.replace(with_key);
         assert!(search.is_available());
 
-        shared.set(WebSearchConfig {
-            provider: "searxng".to_string(),
+        // SearXNG needs an endpoint.
+        shared.replace(runtime(WebConfig {
+            provider: WebSearchProvider::Searxng,
             searxng_url: None,
-            ..WebSearchConfig::default()
-        });
+            ..WebConfig::default()
+        }));
         assert!(!search.is_available());
-        shared.set(WebSearchConfig {
-            provider: "searxng".to_string(),
+        shared.replace(runtime(WebConfig {
+            provider: WebSearchProvider::Searxng,
             searxng_url: Some("http://localhost:8080".to_string()),
-            ..WebSearchConfig::default()
-        });
+            ..WebConfig::default()
+        }));
         assert!(search.is_available());
 
-        shared.set(WebSearchConfig {
-            reader: "none".to_string(),
-            ..WebSearchConfig::default()
-        });
+        // Disabling the reader leaves search intact.
+        shared.replace(runtime(WebConfig {
+            provider: WebSearchProvider::Searxng,
+            reader: WebReaderProvider::Disabled,
+            searxng_url: Some("http://localhost:8080".to_string()),
+            ..WebConfig::default()
+        }));
         assert!(search.is_available());
         assert!(!reader.is_available());
     }

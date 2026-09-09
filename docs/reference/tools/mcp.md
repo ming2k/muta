@@ -6,7 +6,7 @@ server over its configured transport — a spawned stdio child (`command`) or a
 Streamable HTTP endpoint (`url`). The wrapper inherits the server's
 `read_only` flag as its `ToolAccess`: a `read_only` server's tools are `Read`,
 and any other server's are `Write`. This classification affects permission
-policy; it does not automatically propagate the connection to an envoy or
+policy; it does not automatically propagate the connection to a subagent or
 side agent. Connect and `tools/list` are bounded by
 `MCP_CONNECT_TIMEOUT = 8s`.
 Configuration lives in `config.toml` under `[mcp.<server>]`.

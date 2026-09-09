@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
 use crate::{Client, ClientProfile, Endpoint};
-use crate::{decode_response_json, ensure_success, transport_error};
+use crate::{decode_response_json, ensure_success};
 
 pub mod request;
 pub mod response;
@@ -251,12 +251,11 @@ impl GoogleProvider {
         is_stream: bool,
         omit_thinking: bool,
         timeout: Option<std::time::Duration>,
-    ) -> Result<reqwest::Response, ProviderError> {
+    ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let _cache_plan = self
             .prompt_cache
             .resolve(request)
             .map_err(|e| ProviderError::invalid_request("Google", e))?;
-        let client = self.client.http();
         let auth = self
             .endpoint
             .resolve_auth()
@@ -265,16 +264,15 @@ impl GoogleProvider {
         let (url, headers, body) =
             self.prepare_request_for_auth(request.clone(), is_stream, omit_thinking, &auth);
 
-        let mut req_builder = client.post(&url).headers(headers.clone()).json(&body);
+        let mut req_builder = crate::request::RequestBuilder::new(http::Method::POST, &url)
+            .headers(headers.clone())
+            .json(&body);
         if let Some(t) = timeout {
             req_builder = req_builder.timeout(t);
         }
-        let response = req_builder
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self.client.send_raw(req_builder, "Google").await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
             tracing::warn!(
                 model = %self.endpoint.model,
                 "OAuth token rejected by Google (401 Unauthorized); attempting force-refresh and retry"
@@ -290,17 +288,14 @@ impl GoogleProvider {
                 omit_thinking,
                 &refreshed_auth,
             );
-            let mut retry_builder = client
-                .post(&retry_url)
-                .headers(retry_headers)
-                .json(&retry_body);
+            let mut retry_builder =
+                crate::request::RequestBuilder::new(http::Method::POST, &retry_url)
+                    .headers(retry_headers)
+                    .json(&retry_body);
             if let Some(t) = timeout {
                 retry_builder = retry_builder.timeout(t);
             }
-            return retry_builder
-                .send()
-                .await
-                .map_err(|error| transport_error("Google", error));
+            return self.client.send_raw(retry_builder, "Google").await;
         }
 
         Ok(response)
@@ -308,7 +303,7 @@ impl GoogleProvider {
 
     fn wrap_event_stream(
         &self,
-        response: reqwest::Response,
+        response: crate::egress::HttpResponse,
     ) -> BoxStream<'static, Result<ProviderStreamEvent, ProviderError>> {
         let next_tool_index = std::sync::Arc::new(std::sync::Mutex::new(0usize));
         let thought_signatures = Arc::new(Mutex::new(Map::new()));
@@ -523,7 +518,7 @@ impl GoogleProvider {
         request: ModelRequest,
         is_stream: bool,
         omit_thinking: bool,
-    ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
+    ) -> (String, http::header::HeaderMap, serde_json::Value) {
         let auth = muta_contracts::ResolvedAuth::default();
         self.prepare_request_for_auth(request, is_stream, omit_thinking, &auth)
     }
@@ -534,7 +529,7 @@ impl GoogleProvider {
         is_stream: bool,
         omit_thinking: bool,
         auth: &muta_contracts::ResolvedAuth,
-    ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
+    ) -> (String, http::header::HeaderMap, serde_json::Value) {
         let key = auth.token.expose_secret();
         let include_thoughts = self.capabilities.reasoning() && !omit_thinking;
         let thinking = if omit_thinking {
@@ -562,13 +557,13 @@ impl GoogleProvider {
             },
         );
 
-        let mut headers = reqwest::header::HeaderMap::new();
+        let mut headers = http::header::HeaderMap::new();
         if let Ok(ua) = self.endpoint.user_agent().parse() {
             headers.insert("User-Agent", ua);
         }
         headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
+            http::header::CONTENT_TYPE,
+            http::header::HeaderValue::from_static("application/json"),
         );
 
         let client_headers = self
@@ -581,8 +576,8 @@ impl GoogleProvider {
             .session_affinity_headers(self.prompt_cache.routing_key());
         for (k, v) in client_headers.chain(affinity_headers) {
             if let (Ok(hname), Ok(hval)) = (
-                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                reqwest::header::HeaderValue::from_str(&v),
+                http::header::HeaderName::from_bytes(k.as_bytes()),
+                http::header::HeaderValue::from_str(&v),
             ) {
                 headers.insert(hname, hval);
             }
@@ -609,8 +604,8 @@ impl GoogleProvider {
             }
 
             headers.insert(
-                reqwest::header::HeaderName::from_static("x-goog-api-client"),
-                reqwest::header::HeaderValue::from_static("gl-go/1.23.2 gdcl/0.1"),
+                http::header::HeaderName::from_static("x-goog-api-client"),
+                http::header::HeaderValue::from_static("gl-go/1.23.2 gdcl/0.1"),
             );
 
             let project = auth
@@ -688,6 +683,10 @@ impl Provider for GoogleProvider {
 
     fn usage_supported(&self) -> bool {
         true
+    }
+
+    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
+        self.client.take_transport_timings()
     }
 
     async fn chat(

@@ -47,7 +47,7 @@ impl App {
     }
 
     /// The full-screen view the user stands in (ADR-0141) — the terminal is
-    /// this view. Single source of truth behind `in_runner_view()` /
+    /// this view. Single source of truth behind `in_subagent_view()` /
     /// `in_side_view()`, replacing the bare `focus_stack` emptiness check
     /// and the bare `in_side_view` boolean.
     pub(crate) fn current_view(&self) -> crate::surfaces::View {
@@ -55,7 +55,7 @@ impl App {
     }
 
     /// Navigate to a full-screen view, remembering a scoped view
-    /// (`Runner`/`Side`) so closing the destination returns to it.
+    /// (`Subagent`/`Side`) so closing the destination returns to it.
     pub(crate) fn show_view_surface(&mut self, view: crate::surfaces::View) {
         self.surfaces.show_view(view);
     }
@@ -434,7 +434,7 @@ impl App {
                 self.config_dropdown = None;
             }
             crate::surfaces::View::Session
-            | crate::surfaces::View::Runner
+            | crate::surfaces::View::Subagent
             | crate::surfaces::View::Side => {}
         }
     }
@@ -488,14 +488,14 @@ impl App {
             true
         } else if self.current_view() != crate::surfaces::View::Session {
             // Esc from a full-screen destination returns to the scoped view
-            // it was opened over (runner/side), else home — not a hard reset,
+            // it was opened over (subagent/side), else home — not a hard reset,
             // which would drop the zoom/side return frames.
             let leaving = self.current_view();
             self.surfaces.back_view();
-            // Leaving Runner/Side via the router must also drop their frame
+            // Leaving Subagent/Side via the router must also drop their frame
             // data, or `focus_stack`/`in_side_view` would dangle past the
             // surface that gave them meaning.
-            if leaving == crate::surfaces::View::Runner {
+            if leaving == crate::surfaces::View::Subagent {
                 self.focus_stack.clear();
                 self.reset_view_state();
             }

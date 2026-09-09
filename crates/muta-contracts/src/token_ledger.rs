@@ -101,6 +101,37 @@ pub enum StreamTokenSource {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct RequestPerformance {
+    /// Name resolution, when the attempt needed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dns_us: Option<u64>,
+    /// TCP connect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tcp_us: Option<u64>,
+    /// TLS handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tls_us: Option<u64>,
+    /// Dispatch to the request's last byte handed to the kernel.
+    ///
+    /// The closest a client can get to "the server acknowledged my request":
+    /// the peer's ACK is the kernel's business. Excludes connection setup and
+    /// the upload, so it is the anchor the latency timeline's TTFT uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_sent_us: Option<u64>,
+    /// Dispatch to the first origin-emitted protocol frame of any class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_frame_us: Option<u64>,
+    /// Smallest smoothed RTT observed via `TCP_INFO` (Linux, L1 tap).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rtt_us: Option<u64>,
+    /// Retransmitted segments observed via `TCP_INFO`.
+    #[serde(default)]
+    pub retransmits: u32,
     /// Request dispatch to the provider returning a live response stream
     /// (normally HTTP response headers received).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,7 +155,8 @@ pub struct RequestPerformance {
     #[ts(optional)]
     pub e2e_us: Option<u64>,
     /// Client-counted output tokens across streamed text, reasoning, and tool
-    /// payloads. Kept separate from provider-reported completion usage.
+    /// payloads. Diagnostic only: the rate uses the attempt's completion count
+    /// (provider reported when available), which a reader can verify.
     #[serde(default)]
     pub streamed_output_tokens: u64,
     /// Tokens carried by the first output-bearing event. These tokens are
@@ -157,6 +189,36 @@ pub struct RequestPerformance {
     pub provider_output_tokens: Option<u64>,
 }
 
+/// Transport-level timings an attempt observed, handed up by the egress.
+///
+/// Deliberately separate from [`RequestPerformance`]: these come from the
+/// socket and the HTTP layer, not from the protocol adapter, and a provider
+/// that cannot supply them reports `None` rather than zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct TransportTimings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dns_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tcp_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tls_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_sent_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stream_ready_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rtt_us: Option<u64>,
+    #[serde(default)]
+    pub retransmits: u32,
+}
+
 /// Minimum duration of an observed streaming span required for the streaming
 /// rate sample to be statistically and physically defensible (20ms).
 pub const MIN_DEFENSIBLE_STREAM_SPAN_US: u64 = 20_000;
@@ -167,18 +229,24 @@ pub const MIN_DEFENSIBLE_STREAM_SPAN_US: u64 = 20_000;
 pub const MAX_PLAUSIBLE_STREAM_TPS: f64 = 2_000.0;
 
 impl RequestPerformance {
-    /// Client-observed stream rate, excluding the first output event from the
-    /// numerator. A single event, a zero-length/sub-20ms span, or an implausible
-    /// burst rate has no defensible rate.
-    pub fn observed_stream_tps(self) -> Option<f64> {
+    /// The streaming rate: `output_tokens / (last token − first token)`.
+    ///
+    /// One rate, one anchor. `output_tokens` is whatever the caller trusts most
+    /// — the provider's completion count when it reported one, the local
+    /// estimate otherwise — so a reader can reproduce the division from the two
+    /// numbers on screen. There is deliberately no end-to-end rate: it answers a
+    /// different question in the same units, and a label cannot carry that.
+    ///
+    /// `None` when the span cannot support a rate: fewer than two output
+    /// events, a span below [`MIN_DEFENSIBLE_STREAM_SPAN_US`], no tokens, or a
+    /// result above [`MAX_PLAUSIBLE_STREAM_TPS`] (burst arrival, not decode).
+    pub fn stream_tps(self, output_tokens: i64) -> Option<f64> {
         let stream_us = self.stream_us?;
-        let tokens = self
-            .streamed_output_tokens
-            .checked_sub(self.first_output_tokens)?;
-        if stream_us < MIN_DEFENSIBLE_STREAM_SPAN_US || tokens == 0 || self.output_events < 2 {
+        if stream_us < MIN_DEFENSIBLE_STREAM_SPAN_US || output_tokens <= 0 || self.output_events < 2
+        {
             return None;
         }
-        let tps = tokens as f64 * 1_000_000.0 / stream_us as f64;
+        let tps = output_tokens as f64 * 1_000_000.0 / stream_us as f64;
         if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
             return None;
         }
@@ -194,20 +262,6 @@ impl RequestPerformance {
             return None;
         }
         let tps = tokens as f64 * 1_000_000.0 / decode_us as f64;
-        if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
-            return None;
-        }
-        Some(tps)
-    }
-
-    /// End-to-end output rate using the provider/ledger completion count and
-    /// the client-observed request-to-validation duration.
-    pub fn e2e_output_tps(self, completion_tokens: i64) -> Option<f64> {
-        let e2e_us = self.e2e_us?;
-        if e2e_us == 0 || completion_tokens <= 0 {
-            return None;
-        }
-        let tps = completion_tokens as f64 * 1_000_000.0 / e2e_us as f64;
         if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
             return None;
         }
@@ -230,8 +284,16 @@ pub struct RequestUsageKey {
     pub attempt: u32,
 }
 
+/// Canonical actor ID for the top-level session root agent (ADR-0183).
+pub const ROOT_ACTOR_ID: &str = "root";
+
+/// Whether the given actor ID represents the root agent (including legacy `"master"` records).
+pub fn is_root_actor(actor_id: &str) -> bool {
+    actor_id == ROOT_ACTOR_ID || actor_id == "master"
+}
+
 fn default_request_actor() -> String {
-    "master".to_string()
+    ROOT_ACTOR_ID.to_string()
 }
 
 /// One request attempt's lifecycle and token accounting. This is the durable
@@ -307,20 +369,10 @@ pub struct TurnPerformanceSnapshot {
 }
 
 impl TurnPerformanceSnapshot {
-    pub fn observed_stream_tps(self) -> Option<f64> {
-        self.performance.observed_stream_tps()
-    }
-
-    pub fn e2e_output_tps(self) -> Option<f64> {
-        self.performance
-            .e2e_output_tps(self.completion_tokens as i64)
-    }
-
-    /// Preferred display rate: returns the client-observed stream TPS if defensible,
-    /// falling back to the end-to-end output rate (e.g. for single-chunk streams,
-    /// tool-call turns, or burst streams).
-    pub fn preferred_tps(self) -> Option<f64> {
-        self.observed_stream_tps().or_else(|| self.e2e_output_tps())
+    /// The streaming rate, using the attempt's own completion count (provider
+    /// reported when available, local estimate otherwise).
+    pub fn stream_tps(self) -> Option<f64> {
+        self.performance.stream_tps(self.completion_tokens as i64)
     }
 }
 
@@ -984,7 +1036,7 @@ impl TokenSourceLedger {
 fn request_display_order(record: &RequestUsageRecord) -> (u64, u8, u32, u32, &str) {
     (
         record.key.round,
-        u8::from(record.key.actor_id != "master"),
+        u8::from(!is_root_actor(&record.key.actor_id)),
         record.key.turn,
         record.key.attempt,
         record.key.actor_id.as_str(),
@@ -1027,7 +1079,7 @@ pub struct TokenSourceReport {
 
 impl TokenSourceReport {
     /// Most recent completed primary-model attempt carrying structured
-    /// performance telemetry. Runner actors are deliberately excluded from
+    /// performance telemetry. Subagent actors are deliberately excluded from
     /// the session hint: it describes the principal conversation's last
     /// model turn.
     pub fn latest_turn_performance(&self) -> Option<TurnPerformanceSnapshot> {
@@ -1035,7 +1087,7 @@ impl TokenSourceReport {
             .iter()
             .flat_map(|row| row.requests.iter())
             .filter(|record| {
-                record.key.actor_id == "master"
+                is_root_actor(&record.key.actor_id)
                     && record.status == RequestUsageStatus::Completed
                     && record.performance.is_some()
             })
@@ -1050,7 +1102,7 @@ pub fn latest_turn_performance(records: &[RequestUsageRecord]) -> Option<TurnPer
     records
         .iter()
         .filter(|record| {
-            record.key.actor_id == "master"
+            is_root_actor(&record.key.actor_id)
                 && record.status == RequestUsageStatus::Completed
                 && record.performance.is_some()
         })
@@ -1124,9 +1176,9 @@ mod tests {
         let first = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
         let retry = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
         let other = ledger.begin_request("s2", "anthropic", "claude", 1, 1, 500);
-        let envoy = ledger.begin_request_for_actor(BeginRequestParams {
+        let subagent = ledger.begin_request_for_actor(BeginRequestParams {
             session_id: "s1",
-            actor_id: "envoy:call-1",
+            actor_id: "subagent:call-1",
             provider: "openai",
             model: "gpt",
             round: 3,
@@ -1136,7 +1188,7 @@ mod tests {
         assert_eq!(first.attempt, 1);
         assert_eq!(retry.attempt, 2);
         assert_eq!(other.attempt, 1);
-        assert_eq!(envoy.attempt, 1, "a distinct actor has its own attempts");
+        assert_eq!(subagent.attempt, 1, "a distinct actor has its own attempts");
 
         ledger.settle_request(&first, RequestUsageStatus::Failed, None, 25, 0);
         ledger.settle_request(
@@ -1153,7 +1205,7 @@ mod tests {
         );
         // A duplicate weaker terminal event cannot downgrade reported usage.
         ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 999, 9_999);
-        ledger.settle_request(&envoy, RequestUsageStatus::Completed, None, 30, 1_000);
+        ledger.settle_request(&subagent, RequestUsageStatus::Completed, None, 30, 1_000);
 
         let report = ledger.snapshot_for_session("s1");
         assert_eq!(report.rows.len(), 1);
@@ -1598,18 +1650,12 @@ mod tests {
         assert_eq!(performance.ttft_us, Some(120_000));
         assert_eq!(performance.output_events, 101);
 
-        // Stream rate excludes the first event's tokens from the numerator:
-        // 100 tokens over 1_000_000 µs → exactly 100 tok/s.
-        let stream = performance.observed_stream_tps().expect("stream rate");
-        assert!((stream - 100.0).abs() < f64::EPSILON);
-        // E2E folds TTFT into the denominator: 101 tokens over 1.128 s.
-        let e2e = performance
-            .e2e_output_tps(record.completion_tokens)
-            .expect("e2e");
-        assert!(
-            (e2e - 101.0 * 1_000_000.0 / 1_128_000.0).abs() < 0.001,
-            "unexpected e2e rate {e2e}"
-        );
+        // One rate: the attempt's completion count over the first→last token
+        // span. 101 tokens over 1_000_000 µs → exactly 101 tok/s.
+        let stream = performance
+            .stream_tps(record.completion_tokens)
+            .expect("stream rate");
+        assert!((stream - 101.0).abs() < f64::EPSILON);
         // No provider-native telemetry yet → decode rate stays absent, never 0.
         assert_eq!(performance.provider_decode_tps(), None);
 
@@ -1617,80 +1663,50 @@ mod tests {
         let snapshot = record.performance_snapshot().expect("snapshot");
         assert_eq!(snapshot.round, 1);
         assert_eq!(snapshot.completion_tokens, 101);
-        assert_eq!(snapshot.observed_stream_tps(), Some(stream));
+        assert_eq!(snapshot.stream_tps(), Some(stream));
     }
 
     #[test]
-    fn defensible_rate_filtering_and_preferred_tps_fallback() {
-        // 1. Defensible stream: 100 tokens over 1s (100 tok/s) -> valid stream TPS
+    fn the_streaming_rate_is_one_division_with_honest_refusals() {
+        // 100 tokens over 1 s → 100 tok/s. The reader can reproduce it.
         let normal = RequestPerformance {
-            ttft_us: Some(100_000),
             stream_us: Some(1_000_000),
-            e2e_us: Some(1_100_000),
-            streamed_output_tokens: 101,
-            first_output_tokens: 1,
             output_events: 101,
             ..Default::default()
         };
-        assert_eq!(normal.observed_stream_tps(), Some(100.0));
+        assert_eq!(normal.stream_tps(100), Some(100.0));
 
-        let snap_normal = TurnPerformanceSnapshot {
-            round: 1,
-            turn: 1,
-            attempt: 1,
-            completion_tokens: 101,
-            usage_source: RequestUsageSource::Reported,
-            performance: normal,
-        };
-        assert_eq!(snap_normal.preferred_tps(), Some(100.0));
-
-        // 2. Single-event / 0-span (e.g. Gemini single chunk / tool call):
-        // stream TPS is None, but preferred_tps falls back to e2e rate (100 tokens / 1.0s = 100 tok/s).
-        let single_chunk = RequestPerformance {
-            ttft_us: Some(1_000_000),
-            stream_us: Some(0),
-            e2e_us: Some(1_000_000),
-            streamed_output_tokens: 100,
-            first_output_tokens: 100,
-            output_events: 1,
-            ..Default::default()
-        };
-        assert_eq!(single_chunk.observed_stream_tps(), None);
-        assert_eq!(single_chunk.e2e_output_tps(100), Some(100.0));
-
-        let snap_single = TurnPerformanceSnapshot {
+        let snapshot = TurnPerformanceSnapshot {
             round: 1,
             turn: 1,
             attempt: 1,
             completion_tokens: 100,
             usage_source: RequestUsageSource::Reported,
-            performance: single_chunk,
+            performance: normal,
         };
-        assert_eq!(snap_single.preferred_tps(), Some(100.0));
+        assert_eq!(snapshot.stream_tps(), Some(100.0));
 
-        // 3. Burst packet arrival (e.g. 500 tokens in 5ms = 100,000 tok/s):
-        // Filtered out as implausible (>2000 tok/s and <20ms span). Preferred falls back to e2e.
+        // A single event has no span: `–`, never a fabricated rate.
+        let single_chunk = RequestPerformance {
+            stream_us: Some(0),
+            output_events: 1,
+            ..Default::default()
+        };
+        assert_eq!(single_chunk.stream_tps(100), None);
+
+        // A sub-20 ms span is a burst, not a decode pace.
         let burst = RequestPerformance {
-            ttft_us: Some(500_000),
-            stream_us: Some(5_000),  // 5ms
-            e2e_us: Some(1_000_000), // 1.0s e2e
-            streamed_output_tokens: 505,
-            first_output_tokens: 5,
+            stream_us: Some(5_000),
             output_events: 2,
             ..Default::default()
         };
-        assert_eq!(burst.observed_stream_tps(), None);
-        assert_eq!(burst.e2e_output_tps(505), Some(505.0));
+        assert_eq!(burst.stream_tps(505), None);
 
-        let snap_burst = TurnPerformanceSnapshot {
-            round: 1,
-            turn: 1,
-            attempt: 1,
-            completion_tokens: 505,
-            usage_source: RequestUsageSource::Reported,
-            performance: burst,
-        };
-        assert_eq!(snap_burst.preferred_tps(), Some(505.0));
+        // No tokens → no rate.
+        assert_eq!(normal.stream_tps(0), None);
+        // A span the attempt never recorded → no rate.
+        let untimed = RequestPerformance::default();
+        assert_eq!(untimed.stream_tps(100), None);
     }
 
     #[test]
@@ -1806,10 +1822,10 @@ mod tests {
             Some(sample_performance()),
             Some("boom".to_string()),
         );
-        // A runner actor is excluded even when completed.
-        let envoy = ledger.begin_request_for_actor(BeginRequestParams {
+        // A subagent actor is excluded even when completed.
+        let subagent = ledger.begin_request_for_actor(BeginRequestParams {
             session_id: "s1",
-            actor_id: "runner:call_1",
+            actor_id: "subagent:call_1",
             provider: "openai",
             model: "gpt-4o",
             round: 2,
@@ -1817,7 +1833,7 @@ mod tests {
             projected_prompt_tokens: 0,
         });
         ledger.settle_request_with_performance_and_error(
-            &envoy,
+            &subagent,
             RequestUsageStatus::Completed,
             None,
             500,

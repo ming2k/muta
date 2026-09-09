@@ -5,7 +5,7 @@ use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 ///
@@ -14,7 +14,7 @@ use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
 /// signed-in account and may add generations this seed does not list. The seed
 /// stays current enough that a connection with no network still offers the
 /// current tiered generation.
-pub use muta_contracts::provider_presets::ANTIGRAVITY_OAUTH_MODELS;
+pub use muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS;
 
 /// Baseline capability metadata for the models this provider serves.
 pub const MODELS: &[Model] = &[
@@ -242,24 +242,16 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::unsupported_prompt_cache,
-    id: "antigravity-oauth",
+    id: "google-antigravity",
     baselines: MODELS,
     base_url: "https://daily-cloudcode-pa.googleapis.com",
     user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
     protocol: WireProtocol::GoogleGenerateContent,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(
-        DiscoveryProtocol::GoogleCloudCode,
-    )),
-    // The `/v1internal:fetchAvailableModels` catalog is Google's official
-    // first-party surface, guarded by this account's OAuth subscription, and
-    // every advertised entry carries real capability fields (maxTokens,
-    // supportsThinking, supportsImages). Fitting is therefore safe and is what
-    // lets a freshly shipped generation (3.8, 3.9, …) materialize for the
-    // signed-in account with zero client changes — the same trust decision the
-    // ChatGPT Codex and Copilot catalogs already make.
-    fitting: true,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::GoogleCloudCode),
+    default_client_profile: muta_contracts::ClientPreset::Antigravity,
+    client_profile_sensitive: true,
     wire_overrides: &[],
     models: ANTIGRAVITY_OAUTH_MODELS,
 };

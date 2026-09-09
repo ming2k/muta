@@ -22,7 +22,7 @@ exposed here.
 
 This crate holds **no product name or mission** (ADR-0054). The embedding
 binary supplies an `AgentIdentity` to `Agent::new` and binds a
-`MasterPreset` via `apply_master_profile` (ADR-0144 tier vocabulary).
+`AgentPreset` via `apply_preset` (ADR-0144 tier vocabulary).
 `muta` keeps the coding identity; a future sibling binary would bring its
 own. The `/btw` side session reuses the primary agent's identity via
 `Agent::identity()` rather than naming a product here.

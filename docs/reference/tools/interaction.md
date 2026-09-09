@@ -8,8 +8,8 @@ agent installs them automatically with its own task-list context.
 ## `ask_user`
 
 `AskUserTool` overrides `requires_user() = true`, so it is excluded from every
-envoy profile — an envoy has no user reachable to answer it. See
-[Envoy admission](../../explanation/agent-design/envoys.md#tool-admission)
+subagent profile — a subagent has no user reachable to answer it. See
+[Subagent admission](../../explanation/agent-design/subagents.md#tool-admission)
 and [User questions](../../explanation/agent-design/user-questions.md).
 
 | Parameter | Type | Required | Notes |

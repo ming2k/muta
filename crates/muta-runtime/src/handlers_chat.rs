@@ -28,7 +28,7 @@ pub(crate) async fn chat(
 ) {
     let SideEnv {
         side,
-        master: agent,
+        agent,
         primary_session: session,
         primary_lifecycle: lifecycle,
         tx: resp_tx,
@@ -49,7 +49,7 @@ pub(crate) async fn chat(
     start_active_turn(
         SideEnv {
             side,
-            master: agent,
+            agent,
             primary_session: session,
             primary_lifecycle: lifecycle,
             tx: resp_tx,
@@ -130,7 +130,7 @@ pub(crate) async fn follow_up(
 ) {
     let SideEnv {
         side,
-        master: agent,
+        agent,
         primary_session: session,
         primary_lifecycle: lifecycle,
         tx: resp_tx,
@@ -177,7 +177,7 @@ pub(crate) async fn start_queued_follow_up(
 ) {
     let SideEnv {
         side,
-        master: agent,
+        agent,
         primary_session: session,
         primary_lifecycle: lifecycle,
         tx: resp_tx,
@@ -187,7 +187,7 @@ pub(crate) async fn start_queued_follow_up(
         &session_id,
         SideEnv {
             side,
-            master: agent,
+            agent,
             primary_session: session,
             primary_lifecycle: lifecycle,
             tx: resp_tx,

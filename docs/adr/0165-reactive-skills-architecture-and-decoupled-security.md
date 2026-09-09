@@ -47,8 +47,8 @@ Rejected. Silent omission breaks user feedback loops when creating or editing pr
 
 ## References
 
-- [ADR-0013: Skills XDG Paths and Bundled Embed](0013-skills-xdg-paths-and-bundled-embed.md)
+- [ADR-0013: Skills XDG Paths and Bundled Embed](archive/0013-skills-xdg-paths-and-bundled-embed.md)
 - [ADR-0058: Remove the Bundled Skill Tier](0058-remove-bundled-skill-tier.md)
-- [ADR-0107: Trust Gate Covers Project Skills and Commands](0107-trust-gate-covers-project-skills-and-commands.md)
-- [ADR-0145: Decoupled Workspace Asset Trust and Tool Hazard Model](0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md)
+- [ADR-0107: Trust Gate Covers Project Skills and Commands](archive/0107-trust-gate-covers-project-skills-and-commands.md)
+- [ADR-0145: Decoupled Workspace Asset Trust and Tool Hazard Model](archive/0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md)
 - [Skills Architecture Guide](../explanation/agent-design/skills.md)

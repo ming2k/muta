@@ -21,7 +21,7 @@ use muta_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
 use std::sync::Mutex;
 
 /// Tests that mutate process-wide env vars or the paths override must
-/// serialize against each other so the parallel runner never observes a
+/// serialize against each other so the parallel subagent never observes a
 /// half-set environment or a foreign `Dirs`.
 static ENV_GUARD: Mutex<()> = Mutex::new(());
 
@@ -65,11 +65,10 @@ fn sandboxed_paths() -> PathsSandbox {
     }
 }
 
-fn instance(id: &str, preset_id: Option<&str>) -> Connection {
+fn instance(name: &str, provider: Option<&str>) -> Connection {
     Connection {
-        id: id.to_string(),
-        name: Some(id.to_string()),
-        preset_id: preset_id.map(str::to_string),
+        name: name.to_string(),
+        provider: provider.unwrap_or("custom").to_string(),
         ..Default::default()
     }
 }
@@ -216,6 +215,68 @@ fn custom_instance_serves_its_declared_models() {
         entry.channels[0].transport,
         Transport::OpenAi { .. }
     ));
+}
+
+#[test]
+fn adr0203_connection_pipe_valve_algebra() {
+    use muta_contracts::{ConnectionFilterPolicy, NamedFilterPolicy};
+    let mut cache = DiscoveryCache::default();
+    cache.connection_models.insert(
+        "my-openai".to_string(),
+        vec![
+            "gpt-5.6-sol".to_string(),
+            "gpt-5.6-luna".to_string(),
+            "gpt-4o-mini".to_string(),
+            "gpt-6-astra".to_string(),
+        ],
+    );
+
+    // 1. Default safe filter ("baseline"): only models in baseline pass through.
+    // gpt-6-astra is remote-discovered but NOT in baseline, so it is filtered out.
+    let mut conn = instance("my-openai", Some("openai"));
+    let models = route_models(&conn, &cache);
+    assert!(models.contains(&"gpt-5.6-sol".to_string()));
+    assert!(models.contains(&"gpt-5.6-luna".to_string()));
+    assert!(
+        !models.contains(&"gpt-6-astra".to_string()),
+        "baseline filter blocks unannotated astra"
+    );
+
+    // 2. Open filter ("all"): all remote models pass through pipe!
+    conn.models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All));
+    let models = route_models(&conn, &cache);
+    assert!(
+        models.contains(&"gpt-6-astra".to_string()),
+        "open filter admits remote astra"
+    );
+
+    // 3. Glob pattern filter: admits matching pattern only.
+    conn.models.filter = Some(ConnectionFilterPolicy::Glob(vec!["gpt-5.6*".to_string()]));
+    let models = route_models(&conn, &cache);
+    assert!(models.contains(&"gpt-5.6-sol".to_string()));
+    assert!(models.contains(&"gpt-5.6-luna".to_string()));
+    assert!(!models.contains(&"gpt-4o-mini".to_string()));
+    assert!(!models.contains(&"gpt-6-astra".to_string()));
+
+    // 4. Sovereign injection (inject): bypasses filter unconditionally!
+    conn.models.include = vec![muta_persistence::connections::DeclaredModel {
+        id: "gpt-6-astra".into(),
+        context_window: Some(1_050_000),
+        ..Default::default()
+    }];
+    let models = route_models(&conn, &cache);
+    assert!(
+        models.contains(&"gpt-6-astra".to_string()),
+        "inject bypasses glob filter"
+    );
+
+    // 5. Absolute block: prunes model unconditionally!
+    conn.models.exclude = vec!["gpt-5.6-luna".to_string()];
+    let models = route_models(&conn, &cache);
+    assert!(
+        !models.contains(&"gpt-5.6-luna".to_string()),
+        "block prunes unconditionally"
+    );
 }
 
 #[test]
@@ -395,8 +456,8 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         m
     });
     let copilot = Connection {
-        id: "copilot".to_string(),
-        preset_id: Some("copilot-oauth".to_string()),
+        name: "copilot".to_string(),
+        provider: "github-copilot".to_string(),
         auth: muta_contracts::ConnectionAuth::CopilotOAuth,
         ..Default::default()
     };
@@ -444,7 +505,7 @@ fn build_picker_state_reflects_instances() {
         .find(|r| r.id == "deepseek")
         .expect("deepseek row");
     assert_eq!(row.name, "deepseek");
-    assert_eq!(row.preset_id, "deepseek");
+    assert_eq!(row.provider, "deepseek");
     assert!(row.models.contains(&"deepseek-v4-flash".to_string()));
 }
 
@@ -493,8 +554,8 @@ async fn live_discovery_writes_the_per_instance_cache() {
     // An instance pointed at the mock; its base_url override feeds discovery.
     let instances = Connections {
         connections: vec![Connection {
-            id: "deepseek".to_string(),
-            preset_id: Some("deepseek".to_string()),
+            name: "deepseek".to_string(),
+            provider: "deepseek".to_string(),
             base_url: Some(format!("{}/v1/responses", server.url())),
             ..Default::default()
         }],
@@ -552,7 +613,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         .create_async()
         .await;
 
-    let mut conn = instance("agy-live", Some("antigravity-oauth"));
+    let mut conn = instance("agy-live", Some("google-antigravity"));
     conn.auth = ConnectionAuth::AntigravityOAuth;
     conn.base_url = Some(format!("{}/v1internal", server.url()));
     let connections = Connections {
@@ -628,8 +689,8 @@ async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
     let _sandbox = sandboxed_paths();
     let instances = Connections {
         connections: vec![Connection {
-            id: "opencode-go".to_string(),
-            preset_id: Some("opencode-go".to_string()),
+            name: "opencode-go".to_string(),
+            provider: "opencode-go".to_string(),
             base_url: None,
             ..Default::default()
         }],
@@ -675,11 +736,10 @@ async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
 }
 
 #[tokio::test]
-async fn first_party_failure_falls_back_to_models_dev_catalog() {
-    // zai declares ProviderEndpointWithFallback: first-party GET /models is
-    // primary; when it fails (401 here), the models.dev entry for zai covers
-    // the gap instead of blanking the picker. The result is still intersected
-    // with the compiled baseline (fitting is off).
+async fn single_source_endpoint_failure_records_failure_and_preserves_determinism() {
+    // Under ADR-0203 INV-CATALOG-02 / INV-CATALOG-03: single-source determinism.
+    // When the configured endpoint returns 401, it reports failure without flapping
+    // to an unrelated fallback source.
     let _sandbox = sandboxed_paths();
     let mut server = mockito::Server::new_async().await;
     server
@@ -691,8 +751,8 @@ async fn first_party_failure_falls_back_to_models_dev_catalog() {
 
     let instances = Connections {
         connections: vec![Connection {
-            id: "zai".to_string(),
-            preset_id: Some("zai-code".to_string()),
+            name: "zai".to_string(),
+            provider: "glm-cn".to_string(),
             base_url: Some(format!(
                 "{}/api/coding/paas/v4/chat/completions",
                 server.url()
@@ -703,27 +763,14 @@ async fn first_party_failure_falls_back_to_models_dev_catalog() {
     instances.save().unwrap();
 
     let outcome = discover_provider_models(true).await;
-    assert!(outcome.changed, "fallback discovery must record a change");
     assert!(
-        outcome.failures.is_empty(),
-        "a fallback that succeeds must not be reported as a failure: {:?}",
+        !outcome.changed,
+        "failed discovery must not record a change"
+    );
+    assert!(
+        outcome.failures.iter().any(|(name, _)| name == "zai"),
+        "the failed endpoint must be reported as a failure: {:?}",
         outcome.failures
-    );
-
-    let cache = DiscoveryCache::load();
-    let models = cache
-        .connection_models
-        .get("zai")
-        .expect("models.dev fallback lands in the cache");
-    assert!(
-        models.contains(&"glm-5.2".to_string()),
-        "a zai model from models.dev must be served"
-    );
-    // The fallback is intersected against the compiled baseline, so a models.dev
-    // id the client baseline does not know must NOT be materialized (fitting off).
-    assert!(
-        !models.iter().any(|id| id == "glm-5-turbo"),
-        "glm-5-turbo (models.dev-only, no local baseline) must be intersected away"
     );
 }
 
@@ -752,14 +799,14 @@ async fn connection_discovery_never_touches_unrelated_connections() {
     Connections {
         connections: vec![
             Connection {
-                id: "selected".to_string(),
-                preset_id: Some("deepseek".to_string()),
+                name: "selected".to_string(),
+                provider: "deepseek".to_string(),
                 base_url: Some(format!("{}/v1/responses", selected_server.url())),
                 ..Default::default()
             },
             Connection {
-                id: "unrelated".to_string(),
-                preset_id: Some("deepseek".to_string()),
+                name: "unrelated".to_string(),
+                provider: "deepseek".to_string(),
                 base_url: Some(format!("{}/v1/responses", unrelated_server.url())),
                 ..Default::default()
             },
@@ -803,8 +850,8 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
 
     let instances = Connections {
         connections: vec![Connection {
-            id: "deepseek".to_string(),
-            preset_id: Some("deepseek".to_string()),
+            name: "deepseek".to_string(),
+            provider: "deepseek".to_string(),
             base_url: Some(format!("{}/v1/responses", server.url())),
             ..Default::default()
         }],
@@ -893,7 +940,7 @@ fn catalog_builds_from_the_state_store_only() {
 #[test]
 fn antigravity_models_derivation_and_hidden_filter() {
     let _sandbox = sandboxed_paths();
-    let mut conn = instance("g11", Some("antigravity-oauth"));
+    let mut conn = instance("g11", Some("google-antigravity"));
     conn.auth = muta_contracts::ConnectionAuth::AntigravityOAuth;
     let connections = Connections {
         connections: vec![conn],
@@ -1109,15 +1156,17 @@ async fn discovery_never_resurrects_deleted_connection() {
 
 #[test]
 fn adr0199_preset_scope_and_instance_scope_cascade() {
-    use super::derive::route_models_with_presets;
-    use muta_persistence::presets::Presets;
+    use super::derive::route_models_with_providers;
+    use muta_persistence::model_providers::ModelProviders;
 
-    let mut presets = Presets::default();
-    let ds_preset = presets.get_or_create_mut("deepseek");
-    ds_preset.include.push(muta_contracts::model::DeclaredModel {
-        id: "deepseek-preset-preview".to_string(),
-        ..Default::default()
-    });
+    let mut providers = ModelProviders::default();
+    let ds_preset = providers.get_or_create_mut("deepseek");
+    ds_preset
+        .include
+        .push(muta_contracts::model::DeclaredModel {
+            id: "deepseek-preset-preview".to_string(),
+            ..Default::default()
+        });
     // Preset excludes deepseek-chat
     ds_preset.exclude.push("deepseek-chat".to_string());
 
@@ -1125,20 +1174,35 @@ fn adr0199_preset_scope_and_instance_scope_cascade() {
     // Connection instance excludes deepseek-coder
     conn1.models.exclude.push("deepseek-coder".to_string());
     // Connection instance includes an instance-specific model
-    conn1.models.include.push(muta_contracts::model::DeclaredModel {
-        id: "deepseek-instance-private".to_string(),
-        ..Default::default()
-    });
+    conn1
+        .models
+        .include
+        .push(muta_contracts::model::DeclaredModel {
+            id: "deepseek-instance-private".to_string(),
+            ..Default::default()
+        });
 
-    let models1 = route_models_with_presets(&conn1, &DiscoveryCache::default(), &presets);
-    assert!(models1.contains(&"deepseek-preset-preview".to_string()), "preset include present");
-    assert!(models1.contains(&"deepseek-instance-private".to_string()), "instance include present");
-    assert!(!models1.contains(&"deepseek-chat".to_string()), "preset exclude applied");
-    assert!(!models1.contains(&"deepseek-coder".to_string()), "instance exclude applied");
+    let models1 = route_models_with_providers(&conn1, &DiscoveryCache::default(), &providers);
+    assert!(
+        models1.contains(&"deepseek-preset-preview".to_string()),
+        "preset include present"
+    );
+    assert!(
+        models1.contains(&"deepseek-instance-private".to_string()),
+        "instance include present"
+    );
+    assert!(
+        !models1.contains(&"deepseek-chat".to_string()),
+        "preset exclude applied"
+    );
+    assert!(
+        !models1.contains(&"deepseek-coder".to_string()),
+        "instance exclude applied"
+    );
 
     // Second connection with same preset inherits preset include/exclude, but not instance1's deltas
     let conn2 = instance("ds-personal", Some("deepseek"));
-    let models2 = route_models_with_presets(&conn2, &DiscoveryCache::default(), &presets);
+    let models2 = route_models_with_providers(&conn2, &DiscoveryCache::default(), &providers);
     assert!(models2.contains(&"deepseek-preset-preview".to_string()));
     assert!(!models2.contains(&"deepseek-chat".to_string()));
     assert!(!models2.contains(&"deepseek-instance-private".to_string()));

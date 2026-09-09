@@ -21,7 +21,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-reqwest = { workspace = true }
+muta-net = { path = "../muta-net" }
+bytes = { workspace = true }
+http = "1.4"
 uuid = { workspace = true }
 regex = "1"
 fastrand = { workspace = true }

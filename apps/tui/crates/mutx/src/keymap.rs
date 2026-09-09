@@ -84,7 +84,7 @@ pub const fn chord_token(code: KeyCode) -> &'static str {
         },
         KeyCode::Enter => "enter",
         KeyCode::Tab => "tab",
-        KeyCode::BackTab => "shift+tab",
+        KeyCode::BackTab => "shift-tab",
         KeyCode::Delete => "del",
         KeyCode::Backspace => "backspace",
         KeyCode::Esc => "esc",
@@ -105,36 +105,62 @@ pub const fn chord_token(code: KeyCode) -> &'static str {
     }
 }
 
-/// The display token for a core [`KeyCode`] in capitalized human notation.
+/// The display token for a core [`KeyCode`] in human notation, preserving exact case.
 pub const fn display_token(code: KeyCode) -> &'static str {
     match code {
-        KeyCode::Char(c) => match c.to_ascii_lowercase() {
-            'a' => "A",
-            'b' => "B",
-            'c' => "C",
-            'd' => "D",
-            'e' => "E",
-            'f' => "F",
-            'g' => "G",
-            'h' => "H",
-            'i' => "I",
-            'j' => "J",
-            'k' => "K",
-            'l' => "L",
-            'm' => "M",
-            'n' => "N",
-            'o' => "O",
-            'p' => "P",
-            'q' => "Q",
-            'r' => "R",
-            's' => "S",
-            't' => "T",
-            'u' => "U",
-            'v' => "V",
-            'w' => "W",
-            'x' => "X",
-            'y' => "Y",
-            'z' => "Z",
+        KeyCode::Char(c) => match c {
+            'a' => "a",
+            'b' => "b",
+            'c' => "c",
+            'd' => "d",
+            'e' => "e",
+            'f' => "f",
+            'g' => "g",
+            'h' => "h",
+            'i' => "i",
+            'j' => "j",
+            'k' => "k",
+            'l' => "l",
+            'm' => "m",
+            'n' => "n",
+            'o' => "o",
+            'p' => "p",
+            'q' => "q",
+            'r' => "r",
+            's' => "s",
+            't' => "t",
+            'u' => "u",
+            'v' => "v",
+            'w' => "w",
+            'x' => "x",
+            'y' => "y",
+            'z' => "z",
+            'A' => "A",
+            'B' => "B",
+            'C' => "C",
+            'D' => "D",
+            'E' => "E",
+            'F' => "F",
+            'G' => "G",
+            'H' => "H",
+            'I' => "I",
+            'J' => "J",
+            'K' => "K",
+            'L' => "L",
+            'M' => "M",
+            'N' => "N",
+            'O' => "O",
+            'P' => "P",
+            'Q' => "Q",
+            'R' => "R",
+            'S' => "S",
+            'T' => "T",
+            'U' => "U",
+            'V' => "V",
+            'W' => "W",
+            'X' => "X",
+            'Y' => "Y",
+            'Z' => "Z",
             '0' => "0",
             '1' => "1",
             '2' => "2",
@@ -147,6 +173,9 @@ pub const fn display_token(code: KeyCode) -> &'static str {
             '9' => "9",
             '?' => "?",
             '/' => "/",
+            '[' => "[",
+            ']' => "]",
+            ' ' => "Space",
             _ => "·",
         },
         KeyCode::Enter => "Enter",
@@ -353,91 +382,91 @@ impl Key {
 
         if ctrl && shift {
             match self.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => "ctrl+shift+c",
+                KeyCode::Char('c') | KeyCode::Char('C') => "ctrl-shift-c",
                 _ => "·",
             }
         } else if ctrl {
             match self.code {
                 KeyCode::Char(c) => match c.to_ascii_lowercase() {
-                    'a' => "ctrl+a",
-                    'b' => "ctrl+b",
-                    'c' => "ctrl+c",
-                    'd' => "ctrl+d",
-                    'e' => "ctrl+e",
-                    'f' => "ctrl+f",
-                    'g' => "ctrl+g",
-                    'h' => "ctrl+h",
-                    'i' => "ctrl+i",
-                    'j' => "ctrl+j",
-                    'k' => "ctrl+k",
-                    'l' => "ctrl+l",
-                    'm' => "ctrl+m",
-                    'n' => "ctrl+n",
-                    'o' => "ctrl+o",
-                    'p' => "ctrl+p",
-                    'q' => "ctrl+q",
-                    'r' => "ctrl+r",
-                    's' => "ctrl+s",
-                    't' => "ctrl+t",
-                    'u' => "ctrl+u",
-                    'v' => "ctrl+v",
-                    'w' => "ctrl+w",
-                    'x' => "ctrl+x",
-                    'y' => "ctrl+y",
-                    'z' => "ctrl+z",
+                    'a' => "ctrl-a",
+                    'b' => "ctrl-b",
+                    'c' => "ctrl-c",
+                    'd' => "ctrl-d",
+                    'e' => "ctrl-e",
+                    'f' => "ctrl-f",
+                    'g' => "ctrl-g",
+                    'h' => "ctrl-h",
+                    'i' => "ctrl-i",
+                    'j' => "ctrl-j",
+                    'k' => "ctrl-k",
+                    'l' => "ctrl-l",
+                    'm' => "ctrl-m",
+                    'n' => "ctrl-n",
+                    'o' => "ctrl-o",
+                    'p' => "ctrl-p",
+                    'q' => "ctrl-q",
+                    'r' => "ctrl-r",
+                    's' => "ctrl-s",
+                    't' => "ctrl-t",
+                    'u' => "ctrl-u",
+                    'v' => "ctrl-v",
+                    'w' => "ctrl-w",
+                    'x' => "ctrl-x",
+                    'y' => "ctrl-y",
+                    'z' => "ctrl-z",
                     _ => "·",
                 },
-                KeyCode::Up => "ctrl+↑",
-                KeyCode::Down => "ctrl+↓",
-                KeyCode::Left => "ctrl+←",
-                KeyCode::Right => "ctrl+→",
+                KeyCode::Up => "ctrl-↑",
+                KeyCode::Down => "ctrl-↓",
+                KeyCode::Left => "ctrl-←",
+                KeyCode::Right => "ctrl-→",
                 _ => "·",
             }
         } else if alt {
             match self.code {
                 KeyCode::Char(c) => match c.to_ascii_lowercase() {
-                    'a' => "alt+a",
-                    'b' => "alt+b",
-                    'c' => "alt+c",
-                    'd' => "alt+d",
-                    'e' => "alt+e",
-                    'f' => "alt+f",
-                    'g' => "alt+g",
-                    'h' => "alt+h",
-                    'i' => "alt+i",
-                    'j' => "alt+j",
-                    'k' => "alt+k",
-                    'l' => "alt+l",
-                    'm' => "alt+m",
-                    'n' => "alt+n",
-                    'o' => "alt+o",
-                    'p' => "alt+p",
-                    'q' => "alt+q",
-                    'r' => "alt+r",
-                    's' => "alt+s",
-                    't' => "alt+t",
-                    'u' => "alt+u",
-                    'v' => "alt+v",
-                    'w' => "alt+w",
-                    'x' => "alt+x",
-                    'y' => "alt+y",
-                    'z' => "alt+z",
+                    'a' => "alt-a",
+                    'b' => "alt-b",
+                    'c' => "alt-c",
+                    'd' => "alt-d",
+                    'e' => "alt-e",
+                    'f' => "alt-f",
+                    'g' => "alt-g",
+                    'h' => "alt-h",
+                    'i' => "alt-i",
+                    'j' => "alt-j",
+                    'k' => "alt-k",
+                    'l' => "alt-l",
+                    'm' => "alt-m",
+                    'n' => "alt-n",
+                    'o' => "alt-o",
+                    'p' => "alt-p",
+                    'q' => "alt-q",
+                    'r' => "alt-r",
+                    's' => "alt-s",
+                    't' => "alt-t",
+                    'u' => "alt-u",
+                    'v' => "alt-v",
+                    'w' => "alt-w",
+                    'x' => "alt-x",
+                    'y' => "alt-y",
+                    'z' => "alt-z",
                     _ => "·",
                 },
-                KeyCode::Enter => "alt+enter",
-                KeyCode::Up => "alt+↑",
-                KeyCode::Down => "alt+↓",
+                KeyCode::Enter => "alt-enter",
+                KeyCode::Up => "alt-↑",
+                KeyCode::Down => "alt-↓",
                 _ => "·",
             }
         } else if shift {
             match self.code {
-                KeyCode::Tab | KeyCode::BackTab => "shift+tab",
-                KeyCode::Delete => "shift+delete",
+                KeyCode::Tab | KeyCode::BackTab => "shift-tab",
+                KeyCode::Delete => "shift-delete",
                 _ => chord_token(self.code),
             }
         } else if cmd {
             match self.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => "cmd+c",
+                KeyCode::Char('c') | KeyCode::Char('C') => "cmd-c",
                 _ => "·",
             }
         } else {
@@ -453,91 +482,123 @@ impl Key {
 
         if ctrl && shift {
             match self.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => "Ctrl+Shift+C",
+                KeyCode::Char('c') | KeyCode::Char('C') => "Ctrl-Shift-c",
+                KeyCode::Char('p') | KeyCode::Char('P') => "Ctrl-Shift-p",
+                KeyCode::Char('r') | KeyCode::Char('R') => "Ctrl-Shift-r",
+                KeyCode::Char('q') | KeyCode::Char('Q') => "Ctrl-Shift-q",
                 _ => "·",
             }
         } else if ctrl {
             match self.code {
                 KeyCode::Char(c) => match c.to_ascii_lowercase() {
-                    'a' => "Ctrl+A",
-                    'b' => "Ctrl+B",
-                    'c' => "Ctrl+C",
-                    'd' => "Ctrl+D",
-                    'e' => "Ctrl+E",
-                    'f' => "Ctrl+F",
-                    'g' => "Ctrl+G",
-                    'h' => "Ctrl+H",
-                    'i' => "Ctrl+I",
-                    'j' => "Ctrl+J",
-                    'k' => "Ctrl+K",
-                    'l' => "Ctrl+L",
-                    'm' => "Ctrl+M",
-                    'n' => "Ctrl+N",
-                    'o' => "Ctrl+O",
-                    'p' => "Ctrl+P",
-                    'q' => "Ctrl+Q",
-                    'r' => "Ctrl+R",
-                    's' => "Ctrl+S",
-                    't' => "Ctrl+T",
-                    'u' => "Ctrl+U",
-                    'v' => "Ctrl+V",
-                    'w' => "Ctrl+W",
-                    'x' => "Ctrl+X",
-                    'y' => "Ctrl+Y",
-                    'z' => "Ctrl+Z",
+                    'a' => "Ctrl-a",
+                    'b' => "Ctrl-b",
+                    'c' => "Ctrl-c",
+                    'd' => "Ctrl-d",
+                    'e' => "Ctrl-e",
+                    'f' => "Ctrl-f",
+                    'g' => "Ctrl-g",
+                    'h' => "Ctrl-h",
+                    'i' => "Ctrl-i",
+                    'j' => "Ctrl-j",
+                    'k' => "Ctrl-k",
+                    'l' => "Ctrl-l",
+                    'm' => "Ctrl-m",
+                    'n' => "Ctrl-n",
+                    'o' => "Ctrl-o",
+                    'p' => "Ctrl-p",
+                    'q' => "Ctrl-q",
+                    'r' => "Ctrl-r",
+                    's' => "Ctrl-s",
+                    't' => "Ctrl-t",
+                    'u' => "Ctrl-u",
+                    'v' => "Ctrl-v",
+                    'w' => "Ctrl-w",
+                    'x' => "Ctrl-x",
+                    'y' => "Ctrl-y",
+                    'z' => "Ctrl-z",
                     _ => "·",
                 },
-                KeyCode::Up => "Ctrl+↑",
-                KeyCode::Down => "Ctrl+↓",
-                KeyCode::Left => "Ctrl+←",
-                KeyCode::Right => "Ctrl+→",
+                KeyCode::Up => "Ctrl-↑",
+                KeyCode::Down => "Ctrl-↓",
+                KeyCode::Left => "Ctrl-←",
+                KeyCode::Right => "Ctrl-→",
                 _ => "·",
             }
         } else if alt {
             match self.code {
                 KeyCode::Char(c) => match c.to_ascii_lowercase() {
-                    'a' => "Alt+A",
-                    'b' => "Alt+B",
-                    'c' => "Alt+C",
-                    'd' => "Alt+D",
-                    'e' => "Alt+E",
-                    'f' => "Alt+F",
-                    'g' => "Alt+G",
-                    'h' => "Alt+H",
-                    'i' => "Alt+I",
-                    'j' => "Alt+J",
-                    'k' => "Alt+K",
-                    'l' => "Alt+L",
-                    'm' => "Alt+M",
-                    'n' => "Alt+N",
-                    'o' => "Alt+O",
-                    'p' => "Alt+P",
-                    'q' => "Alt+Q",
-                    'r' => "Alt+R",
-                    's' => "Alt+S",
-                    't' => "Alt+T",
-                    'u' => "Alt+U",
-                    'v' => "Alt+V",
-                    'w' => "Alt+W",
-                    'x' => "Alt+X",
-                    'y' => "Alt+Y",
-                    'z' => "Alt+Z",
+                    'a' => "Alt-a",
+                    'b' => "Alt-b",
+                    'c' => "Alt-c",
+                    'd' => "Alt-d",
+                    'e' => "Alt-e",
+                    'f' => "Alt-f",
+                    'g' => "Alt-g",
+                    'h' => "Alt-h",
+                    'i' => "Alt-i",
+                    'j' => "Alt-j",
+                    'k' => "Alt-k",
+                    'l' => "Alt-l",
+                    'm' => "Alt-m",
+                    'n' => "Alt-n",
+                    'o' => "Alt-o",
+                    'p' => "Alt-p",
+                    'q' => "Alt-q",
+                    'r' => "Alt-r",
+                    's' => "Alt-s",
+                    't' => "Alt-t",
+                    'u' => "Alt-u",
+                    'v' => "Alt-v",
+                    'w' => "Alt-w",
+                    'x' => "Alt-x",
+                    'y' => "Alt-y",
+                    'z' => "Alt-z",
                     _ => "·",
                 },
-                KeyCode::Enter => "Alt+Enter",
-                KeyCode::Up => "Alt+↑",
-                KeyCode::Down => "Alt+↓",
+                KeyCode::Enter => "Alt-Enter",
+                KeyCode::Up => "Alt-↑",
+                KeyCode::Down => "Alt-↓",
                 _ => "·",
             }
         } else if shift {
             match self.code {
                 KeyCode::Tab | KeyCode::BackTab => keyvocab::SHIFT_TAB,
                 KeyCode::Delete => keyvocab::SHIFT_DELETE,
+                KeyCode::Char(c) => match c {
+                    'a' => "Shift-a",
+                    'b' => "Shift-b",
+                    'c' => "Shift-c",
+                    'd' => "Shift-d",
+                    'e' => "Shift-e",
+                    'f' => "Shift-f",
+                    'g' => "Shift-g",
+                    'h' => "Shift-h",
+                    'i' => "Shift-i",
+                    'j' => "Shift-j",
+                    'k' => "Shift-k",
+                    'l' => "Shift-l",
+                    'm' => "Shift-m",
+                    'n' => "Shift-n",
+                    'o' => "Shift-o",
+                    'p' => "Shift-p",
+                    'q' => "Shift-q",
+                    'r' => "Shift-r",
+                    's' => "Shift-s",
+                    't' => "Shift-t",
+                    'u' => "Shift-u",
+                    'v' => "Shift-v",
+                    'w' => "Shift-w",
+                    'x' => "Shift-x",
+                    'y' => "Shift-y",
+                    'z' => "Shift-z",
+                    _ => display_token(self.code),
+                },
                 _ => display_token(self.code),
             }
         } else if cmd {
             match self.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => "Cmd+C",
+                KeyCode::Char('c') | KeyCode::Char('C') => "Cmd-c",
                 _ => "·",
             }
         } else {
@@ -659,7 +720,7 @@ pub struct AppContext {
     pub has_input: bool,
     pub has_selection: bool,
     pub has_running_task: bool,
-    pub in_runner_view: bool,
+    pub in_subagent_view: bool,
     pub in_side_view: bool,
     pub queue_count: usize,
     pub has_focused_target: bool,
@@ -741,7 +802,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::CommandPalette,
         label: "Command Palette",
-        hint: "Ctrl+P",
+        hint: "Ctrl-p",
         category: CommandCategory::Global,
         scope: Scope::Global,
         bindings: &[Key::CTRL_P, Key::CTRL_L],
@@ -780,7 +841,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Quit,
         label: "Quit Muta",
-        hint: "Ctrl+C",
+        hint: "Ctrl-c",
         category: CommandCategory::Global,
         scope: Scope::Global,
         bindings: &[Key::CTRL_C],
@@ -788,12 +849,12 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
         danger: DangerLevel::Dangerous,
-        description: "Exit application gracefully (Ctrl+C twice)",
+        description: "Exit application gracefully (Ctrl-c twice)",
     },
     CommandSpec {
         id: CommandId::CopySelection,
         label: "Copy Selection",
-        hint: "Ctrl+Shift+C",
+        hint: "Ctrl-Shift-c",
         category: CommandCategory::Global,
         scope: Scope::Global,
         bindings: &[Key::CTRL_SHIFT_C, Key::CMD_C],
@@ -859,7 +920,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::HistorySearch,
         label: "Search History",
-        hint: "Ctrl+R",
+        hint: "Ctrl-r",
         category: CommandCategory::Session,
         scope: Scope::Composer,
         bindings: &[Key::CTRL_R],
@@ -925,7 +986,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::OpenTelemetry,
         label: "Session Stats",
-        hint: "Ctrl+O",
+        hint: "Ctrl-o",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
         bindings: &[Key::CTRL_O],
@@ -964,7 +1025,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::OpenActiveConnectionDetail,
         label: "Active Connection Detail",
-        hint: "Ctrl+N",
+        hint: "Ctrl-n",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
         bindings: &[Key::CTRL_N],
@@ -1289,8 +1350,8 @@ pub fn command_id_from_name(name: &str) -> Option<CommandId> {
     })
 }
 
-/// Parse a `[keybindings]` chord spec like `"ctrl+shift+p"`, `"f1"`, or
-/// `"alt+enter"` into the exact [`Key`] the input layer produces for that
+/// Parse a `[keybindings]` chord spec like `"ctrl-shift-p"`, `"ctrl+p"`, `"f1"`, or
+/// `"alt-enter"` into the exact [`Key`] the input layer produces for that
 /// keystroke (normalized through [`Key::from_event`]), so a config chord and a
 /// pressed key compare equal.
 pub fn parse_key(spec: &str) -> Option<Key> {
@@ -1300,8 +1361,12 @@ pub fn parse_key(spec: &str) -> Option<Key> {
     let mut cmd = false;
     let mut code = None;
 
-    for part in spec.split('+') {
+    let parts: Vec<&str> = spec.split(['+', '-']).collect();
+    for part in parts {
         let p = part.trim().to_ascii_lowercase();
+        if p.is_empty() {
+            continue;
+        }
         match p.as_str() {
             "ctrl" | "control" => ctrl = true,
             "alt" | "option" => alt = true,
@@ -1437,7 +1502,7 @@ pub enum SurfaceVerb {
     /// Jump the focused step's scroll to the conversation edges (`Home`/`End`).
     ScrollTop,
     ScrollBottom,
-    /// Runner-zoom sibling navigation (`[` / `]`).
+    /// Subagent-zoom sibling navigation (`[` / `]`).
     PrevSibling,
     NextSibling,
 }
@@ -1672,8 +1737,11 @@ mod tests {
     fn parse_key_round_trips_chord_specs() {
         // Each spec parses to the exact Key the input layer produces for that
         // keystroke (via Key::from_event), so comparisons hold.
+        // Seamlessly supports both '-' and '+' delimiters.
         assert_eq!(parse_key("ctrl+p"), Some(Key::CTRL_P));
+        assert_eq!(parse_key("ctrl-p"), Some(Key::CTRL_P));
         assert_eq!(parse_key("ctrl+shift+c"), Some(Key::CTRL_SHIFT_C));
+        assert_eq!(parse_key("ctrl-shift-c"), Some(Key::CTRL_SHIFT_C));
         assert_eq!(parse_key("f1"), Some(Key::F1));
         assert_eq!(parse_key("esc"), Some(Key::ESC));
         assert_eq!(
@@ -1684,10 +1752,63 @@ mod tests {
             })
         );
         assert_eq!(parse_key("shift+tab"), Some(Key::BACKTAB));
+        assert_eq!(parse_key("shift-tab"), Some(Key::BACKTAB));
         assert_eq!(parse_key("alt+s"), Some(Key::ALT_S));
+        assert_eq!(parse_key("alt-s"), Some(Key::ALT_S));
         assert_eq!(parse_key("ctrl+x"), Some(Key::ctrl('x')));
+        assert_eq!(parse_key("ctrl-x"), Some(Key::ctrl('x')));
         assert_eq!(parse_key("nonsense"), None);
         assert_eq!(parse_key(""), None);
+    }
+
+    #[test]
+    fn key_display_preserves_case_and_uses_hyphen_convention() {
+        assert_eq!(Key::CTRL_O.display(), "Ctrl-o");
+        assert_eq!(Key::CTRL_N.display(), "Ctrl-n");
+        assert_eq!(Key::CTRL_P.display(), "Ctrl-p");
+        assert_eq!(Key::CTRL_C.display(), "Ctrl-c");
+        assert_eq!(Key::CTRL_SHIFT_C.display(), "Ctrl-Shift-c");
+        assert_eq!(Key::ALT_S.display(), "Alt-s");
+        assert_eq!(Key::ALT_ENTER.display(), "Alt-Enter");
+        assert_eq!(Key::CMD_C.display(), "Cmd-c");
+        assert_eq!(Key::ESC.display(), "Esc");
+        assert_eq!(Key::ENTER.display(), "Enter");
+        assert_eq!(Key::TAB.display(), "Tab");
+        assert_eq!(Key::BACKTAB.display(), "⇧Tab");
+        assert_eq!(Key::F1.display(), "F1");
+        assert_eq!(Key::F5.display(), "F5");
+        assert_eq!(
+            Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('o')
+            }
+            .display(),
+            "o"
+        );
+        assert_eq!(
+            Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('O')
+            }
+            .display(),
+            "O"
+        );
+        assert_eq!(
+            Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('?')
+            }
+            .display(),
+            "?"
+        );
+        assert_eq!(
+            Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('/')
+            }
+            .display(),
+            "/"
+        );
     }
 
     #[test]

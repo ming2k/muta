@@ -17,13 +17,13 @@ use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash, Pro, and
 /// Flash Vision over the Responses API, one key). Each id exists in the model
 /// registry. The dated ids pin a snapshot (`-0731` / `-0813`); the bare ids
 /// float with the upstream latest.
-pub use muta_contracts::provider_presets::DEEPSEEK_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::DEEPSEEK_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -105,7 +105,7 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
     }
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
     id: "deepseek",
     baselines: MODELS,
@@ -113,8 +113,9 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::OpenAiResponses,
     models: DEEPSEEK_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };
 

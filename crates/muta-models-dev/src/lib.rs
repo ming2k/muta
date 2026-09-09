@@ -80,6 +80,9 @@ const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// block the app on a slow/unreachable directory.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The upstream catalog endpoint.
+const CATALOG_URL: &str = "https://models.dev/api.json";
+
 const USER_AGENT: &str = concat!("muta/", env!("CARGO_PKG_VERSION"));
 
 /// Errors produced by the models.dev client.
@@ -183,22 +186,39 @@ fn read_cached_catalog() -> Option<BTreeMap<String, DevProvider>> {
 
 /// Fetch `api.json` and write it to the cache under a cross-process lock.
 async fn fetch_and_cache() -> Result<BTreeMap<String, DevProvider>, ModelsDevError> {
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
+    // The owned transport (ADR-0200): platform trust store, redirects and
+    // content-encoding handled by the same code the model path uses.
+    let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector)
         .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    let resp = client
-        .get("https://models.dev/api.json")
-        .send()
-        .await
+    let client = muta_net::Client::new(
+        connector,
+        muta_net::Pool::default(),
+        muta_net::ClientConfig {
+            user_agent: USER_AGENT.to_string(),
+            ..Default::default()
+        },
+    );
+    let (target, path) = muta_net::Target::from_url(CATALOG_URL)
         .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    if !resp.status().is_success() {
-        return Err(ModelsDevError::Fetch(format!("HTTP {}", resp.status())));
-    }
-    let body = resp
-        .text()
+    let head = muta_net::RequestHead::new(muta_net::Method::GET, path)
+        .with_header("accept", "application/json");
+    // One overall bound, request and body alike — the owned transport has no
+    // client-wide timeout by design (a streaming turn must not be cut), so the
+    // caller owns the deadline.
+    let fetch = async {
+        let mut response = client.request(&target, head, None).await?;
+        if !response.head.status.is_success() {
+            return Err(muta_net::NetError::Connect(format!(
+                "HTTP {}",
+                response.head.status
+            )));
+        }
+        let body = response.body.read_to_end().await?;
+        Ok::<_, muta_net::NetError>(String::from_utf8_lossy(&body).into_owned())
+    };
+    let body = tokio::time::timeout(REQUEST_TIMEOUT, fetch)
         .await
+        .map_err(|_| ModelsDevError::Fetch("timed out".to_string()))?
         .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
     let catalog = parse_catalog(&body).map_err(ModelsDevError::Parse)?;
 

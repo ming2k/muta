@@ -4,11 +4,11 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// xAI Grok models over OpenAI-compatible chat completions (SuperGrok OAuth or
 /// `XAI_API_KEY`).
-pub use muta_contracts::provider_presets::XAI_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::XAI_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -63,15 +63,16 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::unsupported_prompt_cache,
-    id: "xai-oauth",
+    id: "xai",
     baselines: MODELS,
     base_url: "https://api.x.ai/v1/chat/completions",
     user_agent: None,
     protocol: WireProtocol::OpenAiChatCompletions,
     models: XAI_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::OpenAi)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };

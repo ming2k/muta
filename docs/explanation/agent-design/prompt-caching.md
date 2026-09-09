@@ -16,7 +16,7 @@ The key design rule is:
 
 A third-party endpoint that accepts an OpenAI-shaped request is not thereby
 guaranteed to accept every OpenAI cache extension. Muta enables a control only
-when that exact preset and model declare it. Custom and undocumented relays
+when that exact provider and model declare it. Custom and undocumented relays
 start unsupported.
 
 ## Four separate questions

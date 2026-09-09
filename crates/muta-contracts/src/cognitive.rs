@@ -2,7 +2,7 @@
 //!
 //! # Why Cognitive Tasks exist
 //!
-//! `Master` and `Runner` are *actors* serving operational production (user conversations,
+//! `Root` and `Subagent` are *actors* serving operational production (user conversations,
 //! autonomous coding missions, tool execution) and system orchestration (Hypervisor).
 //!
 //! In contrast, harness cognitive tasks are stateless, zero-tool, single-shot LLM transformations
@@ -168,7 +168,58 @@ impl CognitiveTask for StreamLoopReviewerTask {
     }
 }
 
-// 1. Session Digest
+// 1. Session Title & Digest
+
+/// Input for lightweight session title generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTitleInput {
+    /// Opening user prompt or conversation excerpt.
+    pub excerpt: String,
+}
+
+/// Task definition: distill an opening conversation excerpt into a concise session title.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionTitleTask;
+
+impl CognitiveTask for SessionTitleTask {
+    type Input = SessionTitleInput;
+    type Output = String;
+
+    fn name(&self) -> &'static str {
+        "session_title"
+    }
+
+    fn model_preference(&self) -> CognitiveModelPreference {
+        CognitiveModelPreference::FlashLite
+    }
+
+    fn system_prompt(&self) -> &'static str {
+        "You are a title generator. You output ONLY a thread title. Nothing else.\n\
+         Generate a brief title that captures what the conversation is about.\n\
+         Rules:\n\
+         - Reply with only the title (3 to 7 words, <=50 characters, plain text, single line).\n\
+         - No quotes, no markdown, no trailing punctuation, no preamble.\n\
+         - You MUST use the same language as the conversation.\n\
+         - Name the concrete subject (a feature, file, bug, or question).\n\
+         - Never include tool names or generic words like \"chat\" or \"help\"."
+    }
+
+    fn render_prompt(&self, input: &Self::Input) -> String {
+        format!(
+            "Generate a title for this conversation:\n\n{}\n\nTitle:",
+            input.excerpt
+        )
+    }
+
+    fn parse_output(&self, raw: &str) -> Result<Self::Output, String> {
+        crate::session_title::clean_title(raw)
+            .ok_or_else(|| "could not derive clean title from model response".to_string())
+    }
+
+    fn timeout_ms(&self) -> u64 {
+        2_000
+    }
+}
 
 /// The resume-time "working memory" projection of a session: a headline, the
 /// user's intent, and a running checklist of what has happened.
@@ -182,61 +233,6 @@ pub struct SessionDigest {
     pub intent: String,
     /// Running checklist of what has been done and decided, oldest first.
     pub history: Vec<String>,
-}
-
-/// Input for session digest generation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionDigestInput {
-    /// Condensed excerpt of the conversation.
-    pub excerpt: String,
-    /// The previous digest serialized as JSON, for incremental revision;
-    /// `None` on first generation.
-    pub previous: Option<String>,
-}
-
-/// Task definition: distill a conversation excerpt into a [`SessionDigest`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SessionDigestTask;
-
-impl CognitiveTask for SessionDigestTask {
-    type Input = SessionDigestInput;
-    type Output = SessionDigest;
-
-    fn name(&self) -> &'static str {
-        "session_digest"
-    }
-
-    fn model_preference(&self) -> CognitiveModelPreference {
-        CognitiveModelPreference::FlashLite
-    }
-
-    fn system_prompt(&self) -> &'static str {
-        "You are the session digest generator for the Agent Harness. You maintain a session's working-memory digest so a returning user can reorient at a glance.\n\
-         Respond in strict JSON with schema:\n\
-         {\n\
-           \"title\": \"<3-7 word title naming the concrete subject>\",\n\
-           \"intent\": \"<1-2 sentences: what the user wants from this session>\",\n\
-           \"history\": [\"<one terse factual line per completed step or decision>\"]\n\
-         }\n\
-         Rules: write in the same language as the conversation. Keep `history` at most 12 entries, oldest first; when it would exceed 12, merge the oldest related entries into one line — never silently drop work. Each history line states what was done or decided (e.g. \"Fixed login redirect loop in auth.rs\"), never a next action. If a previous digest is supplied, revise it: keep its structure, update title/intent only if the session's focus actually shifted, and append or merge new history."
-    }
-
-    fn render_prompt(&self, input: &Self::Input) -> String {
-        match &input.previous {
-            Some(previous) => format!(
-                "Previous digest (revise it):\n{previous}\n\nConversation excerpt:\n\n{}\n\nOutput JSON:",
-                input.excerpt
-            ),
-            None => format!(
-                "Generate a digest for this conversation:\n\n{}\n\nOutput JSON:",
-                input.excerpt
-            ),
-        }
-    }
-
-    fn timeout_ms(&self) -> u64 {
-        2_500
-    }
 }
 
 // 2. Pre-flight Intent & Tier Routing
@@ -378,13 +374,6 @@ mod tests {
             CognitiveModelPreference::Flash
         );
         assert_eq!(loop_task.timeout_ms(), 2000);
-
-        let digest_task = SessionDigestTask;
-        assert_eq!(digest_task.name(), "session_digest");
-        assert_eq!(
-            digest_task.model_preference(),
-            CognitiveModelPreference::FlashLite
-        );
     }
 
     #[test]
@@ -397,15 +386,27 @@ mod tests {
     }
 
     #[test]
-    fn digest_parser_handles_json_and_fences() {
-        let task = SessionDigestTask;
-        let json = r#"{"title":"Fix Auth","intent":"Fix bug","history":["step 1"]}"#;
-        let parsed = task.parse_output(json).unwrap();
-        assert_eq!(parsed.title, "Fix Auth");
+    fn session_title_task_metadata_and_parser() {
+        let task = SessionTitleTask;
+        assert_eq!(task.name(), "session_title");
+        assert_eq!(task.model_preference(), CognitiveModelPreference::FlashLite);
+        assert_eq!(task.timeout_ms(), 2000);
 
-        let fenced = format!("```json\n{json}\n```");
-        let parsed2 = task.parse_output(&fenced).unwrap();
-        assert_eq!(parsed2.title, "Fix Auth");
+        // Plain title
+        assert_eq!(
+            task.parse_output("Fix login crash").unwrap(),
+            "Fix login crash"
+        );
+
+        // Code fence and think block
+        let model_reply = "<think>The user wants to fix CI</think>\n```\nFix failing CI tests\n```";
+        assert_eq!(
+            task.parse_output(model_reply).unwrap(),
+            "Fix failing CI tests"
+        );
+
+        // Empty response fails cleanly
+        assert!(task.parse_output("   \n\t  ").is_err());
     }
 
     #[test]

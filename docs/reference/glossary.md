@@ -39,7 +39,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 |------|------------|
 | **agent** | The sole autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Runs a full ReAct loop, intent reasoning, and tool dispatch. |
 | **root agent** | The top-level agent (`depth = 0`, formerly "master") directly interacting with the user, bound to the session, holding human interaction authority and sub-agent delegation rights. |
-| **sub-agent / child agent** | An isolated agent (`depth > 0`, formerly "runner") spawned by a parent agent via `spawn_agent` / `delegate_code` with fresh context, scoped tools, and single-task lifecycle. |
+| **sub-agent / child agent** | An isolated agent (`depth > 0`) spawned by a parent agent via `spawn_agent` / `delegate_code` with fresh context, scoped tools, and single-task lifecycle. |
 | **hypervisor** | The singleton daemon-level governance station (staffed by an Agent in root posture) orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md), [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
 | **cognitive pipeline** | Harness-internal, stateless, zero-tool typed LLM execution pipeline (`CognitiveTask`: stream repetition detection, working memory digest, session titling, pre-flight routing). Zero-tool, fail-open. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
 | **spatiotemporal aspect engine** | The 5-phase deterministic lifecycle hook engine (PreFlight, TurnIntake, InFlightStream, ToolGating, RoundEol) protecting against trajectory derailment. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
@@ -113,8 +113,8 @@ before the round runs.
 | Term | Definition |
 |------|------------|
 | **surface** | The TUI's exact foreground navigation unit (ADR-0141): a full-screen `View` (the base), a `Panel(PanelId)` floating over it, or a `Transient(Modal)`. `SurfaceRouter` is the sole owner of the active surface and its return stacks. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md), [ADR-0141](../adr/0141-view-means-fullscreen-and-modal-means-modal.md) |
-| **view** | An independent, full-screen TUI destination (ADR-0141): `Session`, `Dashboard`, `Settings`, `Envoy`, or `Side`. The terminal is the view. Owned exclusively by the `SurfaceRouter`; `App::current_view` is the accessor, and `in_envoy_view`/`in_side_view` derive from it. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
-| **panel** | A *retained modal* (ADR-0141): one of the browse overlays (Help, Activity, Todos, Tools, MCP, Skills, Permissions, Usage stats, Context report, Performance report, Asides, Models, Connections, History, Queue, Sessions, Session tree) with an exact `PanelId`, retained cursor/scroll/parked drafts, MRU presence in the quick switcher, and the complete create/show/hide/switch/close lifecycle of ADR-0139. Retention is orthogonal to geometry: a panel is still a modal floating over the active view. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
+| **view** | An independent, full-screen TUI destination (ADR-0141): `Session`, `Dashboard`, `Settings`, `Subagent`, or `Side`. The terminal is the view. Owned exclusively by the `SurfaceRouter`; `App::current_view` is the accessor, and `in_subagent_view`/`in_side_view` derive from it. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
+| **panel** | A *retained modal* (ADR-0141): one of the browse overlays (Help, Activity, Todos, Tools, MCP, Skills, Permissions, Usage stats, Session Telemetry, Asides, Models, Connections, History, Queue, Sessions, Session tree) with an exact `PanelId`, retained cursor/scroll/parked drafts, MRU presence in the quick switcher, and the complete create/show/hide/switch/close lifecycle of ADR-0139. Retention is orthogonal to geometry: a panel is still a modal floating over the active view. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
 | **transient surface** | A request sheet, quick switcher, or transactional editor that temporarily pushes over a parent surface and pops back to that exact parent. It is not retained or listed as a view. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md) |
 | **modal** | A presentation/input discriminant for an overlay. `Modal` determines rendering, recess, and input dispatch, but is not navigation identity and cannot be inverted into a `PanelId` or `View`. Under ADR-0141 every surface projects one-way to its modal. [TUI architecture](tui/architecture.md#surface-routing-and-shared-presentation-discriminants) |
 
@@ -128,7 +128,7 @@ before the round runs.
 | **archived transcript** | Original messages moved out of the model window by pruning or compaction but retained in the durable session for full recovery. [Session persistence](../explanation/agent-design/session-persistence.md) |
 | **context pruning** | The cheap first projection layer: clears stale tool-result bodies while preserving the `tool_call_id` chain. [Context pruning](../explanation/agent-design/context-pruning.md) |
 | **context compaction** | The heavier second projection layer: summarizes older complete rounds into a durable checkpoint with a visible `Compacted` notice. [Context compaction](../explanation/agent-design/context-compaction.md) |
-| **overflow recovery** | The reactive backstop: if a provider reports context overflow before any tool event, the runner may compact and retry once. [Harness architecture](../explanation/agent-design/harness.md) |
+| **overflow recovery** | The reactive backstop: if a provider reports context overflow before any tool event, the subagent may compact and retry once. [Harness architecture](../explanation/agent-design/harness.md) |
 | **pressure** | Context size estimated in tokens (~4 chars/token), compared against thresholds derived from the active model's context window. [Configuration](configuration.md) |
 | **current context** | Replaceable token projection of the next provider input for one session. It is a state value, not an accumulated usage total. [Token accounting](../explanation/agent-design/token-accounting.md) |
 | **request attempt** | One concrete provider request, identified within a session by actor, round, turn, and attempt number. Retries are separate attempts because each may be billable. [ADR-0055](../adr/0055-session-scoped-request-lifecycle-accounting.md) |
@@ -138,17 +138,22 @@ before the round runs.
 
 | Term | Definition |
 |------|------------|
-| **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/models` switch. [Providers](providers.md) |
+| **model provider** | A service surface that serves models, identified by exactly one triple: endpoint family, wire dialect, and model universe (ADR-0201). A wire protocol or an authentication mode never appears in its identity. Persisted on a connection as the required `provider` field; the closed id set lives in `muta_contracts::model_providers::MODEL_PROVIDER_IDS` (`openai`, `openai-subscription`, `anthropic`, `google`, `google-antigravity`, `github-copilot`, `xai`, `deepseek`, `glm-cn`, `kimi-code`, `opencode-go`, `custom`). [Providers](providers.md#model-provider-routes) |
+| **provider** | Shorthand for **model provider** when the subject is the upstream service. Never use it for a connection — a connection is a named pipe to a provider (ADR-0201). [Providers](providers.md) |
+| **connection** | A named pipe to one model provider: it binds a credential and a client identity, and may narrow or override the provider's model set. Its identity is its `name` (unique, compared case-insensitively); it has no `id`. Persisted as one `[[connections]]` row in `connections.toml`. [Configuration](configuration.md#connections-and-credentials) |
+| **`ConnectionTemplate`** (preset) | A creation-time template for the add-connection chooser — a prefill of provider, endpoint, and protocol, consumed at creation and never persisted as identity. User-facing copy may still say "preset". [Providers](providers.md#connections-and-route-derivation) |
+| **route** | One connection plus one model, resolved to a concrete protocol, dialect, endpoint, credential, and capability set. Derived at runtime from the connection's provider and the discovery cache; never persisted. [ADR-0123](../adr/0123-provider-instances-as-state-derived-routes.md) |
+| **model scope** | The model-set delta for one scope: provider-level include/exclude/overrides in `model_providers.toml` plus a connection-level delta in `connections.toml`. A connection may narrow or override the resolved set but must not invent models, except under `provider = "custom"`. [Configuration](configuration.md#model-provider-scope) |
 | **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
-| **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, transport, and optional provider-scoped remote metadata; one per `[[providers.channels]]` entry. [Model Metadata](model-metadata.md) |
+| **`Channel`** | The fully resolved materialization of one derived route: credentials, model id, protocol, and optional provider-scoped remote metadata. [Model Metadata](model-metadata.md) |
 | **effort** | Reasoning **depth** — the per-model "how hard should it think" knob (`none`…`max`), abstracted from every provider's depth field onto one ladder. Orthogonal to thinking on/off. [Reasoning effort](effort.md) |
 | **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Model Metadata](model-metadata.md#thinking-support) |
-| **transport** | The wire protocol a channel uses (`OpenAi`, `Anthropic`, `Google`). [Configuration](configuration.md) |
+| **wire protocol** | The inference API a route speaks: `openai-chat-completions`, `openai-responses`, `anthropic-messages`, or `google-generate-content`. A connection may override the provider's default `protocol`. [Providers](providers.md#implemented-inference-protocols) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[MUTA_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
-| **fitted model** | A model id the static registry does not know, materialized from a trusted provider's live `/models` capability fields (context window, reasoning, vision, effort tiers); persisted per instance and overlaid onto `model::resolve` behind the static registry. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
-| **model discovery** | Live `GET /models` fetch for preset-sourced connections (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted presets. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
+| **fitted model** | A model id the static registry does not know, materialized from a trusted provider's live `/models` capability fields (context window, reasoning, vision, effort tiers); persisted per connection and overlaid onto `model::resolve` behind the static registry. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
+| **model discovery** | Live `GET /models` fetch for provider-sourced connections (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted providers. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
 | **remote model metadata** | A trusted provider's persisted capability and endpoint snapshot for one channel. Explicit remote fields override the static baseline only for that provider route. [Model Metadata](model-metadata.md) |
 
 ## Persistence
@@ -211,22 +216,30 @@ documentation and ADRs.
 
 | Term | Superseded by | Reference |
 |------|---------------|-----------|
+| `preset_id` (on a connection) | `provider` — the model provider id | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `presets.toml` | `model_providers.toml`, keyed by model provider id | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `AddProvider` / `EditProvider` / `ConnectProvider` / `DeleteProvider` / `SwitchProvider` / `EditProviderModel` | `AddConnection` / `EditConnection` / `ConnectConnection` / `DeleteConnection` / `SwitchConnection` / `EditConnectionModel`, plus `RenameConnection` | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `ModelTargetScope::Preset` | `ModelTargetScope::Provider` | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `custom-openai` (provider id) | `custom` | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| pure-custom connection (`preset_id = None`) | a connection to the `custom` provider with its own `protocol` / `base_url` | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `Connection.id` | `Connection.name` (unique, case-insensitive) | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) |
+| `default_provider` | `default_connection` | [Configuration](configuration.md#connection-selection-and-retry) |
 | `neenee` (project and command) | Muta project; `muta` core plus `mutx` terminal app | [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-host` | `neenee-runtime`, then `muta-runtime` | [Crate layering](../explanation/crate-layering.md) |
-| `neenee-server` (binary) | merged into `neenee`, then split as the `muta` core | [ADR-0102](../adr/0102-unified-binary-and-runtime-rename.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-server` (binary) | merged into `neenee`, then split as the `muta` core | [ADR-0102](../adr/archive/0102-unified-binary-and-runtime-rename.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-app` | `neenee-persistence`, then `muta-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
-| `neenee-cli` | the former unified package; split into `muta` and `mutx` | [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-cli` | the former unified package; split into `muta` and `mutx` | [ADR-0080](../adr/archive/0080-rename-neenee-to-neenee-cli.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-code` | `neenee`, then the Muta project | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-server` (ADR-0037 server library) | `neenee-session`, `neenee-transport`, `neenee-host`, `neenee-runtime`, then `muta-runtime` | [ADR-0037](../adr/0037-server-layer.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-core` | `neenee-contracts`, then `muta-contracts` | [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `neenee-auth` / `neenee-oauth` | merged into providers, now `muta-providers` | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
-| session mirroring (`Mirror` / `MirrorUpdate`, `SessionHosting::Mirrored`) | removed — unified daemon ownership (ADR-0096) makes standalone sessions obsolete | [ADR-0095](../adr/0095-standalone-session-mirroring.md), [ADR-0096](../adr/0096-unified-session-daemon.md) |
+| session mirroring (`Mirror` / `MirrorUpdate`, `SessionHosting::Mirrored`) | removed — unified daemon ownership (ADR-0096) makes standalone sessions obsolete | [ADR-0095](../adr/archive/0095-standalone-session-mirroring.md), [ADR-0096](../adr/0096-unified-session-daemon.md) |
 | `neenee-harness` | `neenee-agent`, then `muta-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | `neenee-tui-view` / `neenee-tui` | the `mutx` terminal app | [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | `muta-mcp` (ADR-0060 crate) | merged into `muta-agent` (`mcp` module), re-extracted as `muta-mcp` | [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
 | `/goal` + `/loop` | removed (`/pursue` removed in ADR-0082; `/repeat` kept) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
 | `[MUTA_GOAL_COMPLETE]` | removed (marker gone with the pursuit stop-gate) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
-| Plan mode | plan-as-an-envoy | [ADR-0027](../adr/0027-plan-as-subagent.md) |
+| Plan mode | plan-as-a-subagent | [ADR-0027](../adr/archive/0027-plan-as-subagent.md) |
 | per-plan progress panel | unified todo list | [ADR-0020](../adr/0020-unified-task-list.md) |
 | `plan` / `verify_plan_execution` tools | removed (planning is prompt-level) | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
 | `PLAN` / `VERIFY` profiles | removed | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |

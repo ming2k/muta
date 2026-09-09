@@ -80,6 +80,6 @@ Concretely:
 
 ## References
 
-- Supersedes [ADR-0007](0007-plan-progress-panel.md).
-- [ADR-0006](0006-plan-mode-v2.md) — Plan-mode workflow this plugs into.
+- Supersedes [ADR-0007](archive/0007-plan-progress-panel.md).
+- [ADR-0006](archive/0006-plan-mode-v2.md) — Plan-mode workflow this plugs into.
 - `crates/neenee-core/src/todos.rs`, `crates/neenee-core/src/plan.rs`.

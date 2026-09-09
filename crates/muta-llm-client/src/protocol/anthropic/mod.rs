@@ -23,7 +23,7 @@ use muta_contracts::{
     ProviderStreamEvent, ResolvedAuth,
 };
 
-use crate::transport::{decode_response_json, ensure_success, transport_error};
+use crate::transport::{decode_response_json, ensure_success};
 use crate::{Client, ClientProfile, Endpoint};
 
 pub mod request;
@@ -173,13 +173,11 @@ impl AnthropicMessagesProvider {
         &self,
         body: &serde_json::Value,
         auth: &ResolvedAuth,
-    ) -> reqwest::RequestBuilder {
-        let mut req = self
-            .client
-            .http()
-            .post(self.endpoint.base_url())
-            .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
-            .json(body);
+    ) -> crate::request::RequestBuilder {
+        let mut req =
+            crate::request::RequestBuilder::new(http::Method::POST, self.endpoint.base_url())
+                .header(http::header::USER_AGENT, self.endpoint.user_agent())
+                .json(body);
         for (name, value) in request::headers(
             auth.token.expose_secret(),
             &self.capabilities,
@@ -209,7 +207,7 @@ impl AnthropicMessagesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
+    ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
@@ -219,12 +217,9 @@ impl AnthropicMessagesProvider {
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
-        let response = req
-            .send()
-            .await
-            .map_err(|error| transport_error("Anthropic", error))?;
+        let response = self.client.send_raw(req, "Anthropic").await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
             tracing::warn!(
                 provider = %self.endpoint.id,
                 model = %self.endpoint.model,
@@ -239,11 +234,7 @@ impl AnthropicMessagesProvider {
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
-            let retried_resp = retry_req
-                .send()
-                .await
-                .map_err(|error| transport_error("Anthropic", error))?;
-            return ensure_success(retried_resp, "Anthropic").await;
+            return self.client.send(retry_req, "Anthropic").await;
         }
 
         ensure_success(response, "Anthropic").await
@@ -286,6 +277,10 @@ impl Provider for AnthropicMessagesProvider {
 
     fn usage_supported(&self) -> bool {
         true
+    }
+
+    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
+        self.client.take_transport_timings()
     }
 
     async fn chat(

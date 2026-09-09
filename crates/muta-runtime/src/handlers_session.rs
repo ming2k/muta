@@ -7,7 +7,7 @@
 
 use muta_agent::Agent;
 use muta_agent::orchestration::send_harness_state_for_session;
-use muta_contracts::{AgentResponse, LoopStatus, SessionOverview};
+use muta_contracts::{AgentResponse, LoopStatus};
 use muta_mcp::McpRuntime;
 use muta_persistence::{config::Config, session::SessionStore};
 use muta_skills::SkillRegistry;
@@ -24,13 +24,21 @@ pub async fn delete(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     id: String,
 ) {
+    let active_id_before = session.id().await;
     match session.delete(&id).await {
-        Ok(_deleted_id) => {
+        Ok(deleted_id) => {
+            if deleted_id == active_id_before {
+                let new_id = session.id().await;
+                let _ = resp_tx.send(AgentResponse::ConversationCleared { session_id: new_id });
+            }
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(session).await,
             ));
         }
         Err(error) => {
+            let _ = resp_tx.send(AgentResponse::SessionsOverview(
+                build_sessions_overview(session).await,
+            ));
             let _ = resp_tx.send(AgentResponse::Error(error));
         }
     }
@@ -51,30 +59,7 @@ pub async fn rename(
 ) {
     match session.rename(&id, title).await {
         Ok(()) => {
-            let mut overview = build_sessions_overview(session).await;
-            // A rename on the live, never-persisted session (empty
-            // transcript) is absent from the disk-backed list — but the
-            // monitor re-seeds its row from this snapshot, so the new title
-            // would be invisible until the first message lands. Synthesize
-            // the row from in-memory state in that case.
-            let matches_id =
-                |row_id: &str| row_id == id || (id.len() >= 4 && row_id.starts_with(id.as_str()));
-            if !overview.iter().any(|row| matches_id(&row.id)) {
-                let summary = session.active_summary().await;
-                if matches_id(&summary.id) {
-                    overview.push(SessionOverview {
-                        id: summary.id,
-                        overview: summary.overview,
-                        created_at: summary.created_at,
-                        updated_at: summary.updated_at,
-                        message_count: summary.message_count,
-                        active: summary.active,
-                        parent_id: summary.parent_id,
-                        fork_kind: summary.fork_kind,
-                        digest: summary.digest,
-                    });
-                }
-            }
+            let overview = build_sessions_overview(session).await;
             let _ = resp_tx.send(AgentResponse::SessionsOverview(overview));
         }
         Err(error) => {
@@ -518,5 +503,70 @@ mod tests {
             serde_json::to_value(expected).unwrap()
         );
         assert!(resp_rx.try_recv().is_err(), "query must not navigate");
+    }
+
+    #[tokio::test]
+    async fn delete_unpersisted_active_session_clears_conversation_and_pushes_overview() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::for_path(dir.path().join("session.json")));
+        let initial_id = store.id().await;
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+
+        delete(&store, &resp_tx, initial_id.clone()).await;
+
+        let Some(AgentResponse::ConversationCleared { session_id: new_id }) = resp_rx.recv().await
+        else {
+            panic!("expected ConversationCleared response when deleting active session");
+        };
+        assert_ne!(new_id, initial_id);
+
+        let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
+            panic!("expected SessionsOverview response after delete");
+        };
+        // The newly reset active session must be present in the overview snapshot.
+        let active_row = items
+            .iter()
+            .find(|item| item.active)
+            .expect("active session must be present");
+        assert_eq!(active_row.id, new_id);
+    }
+
+    #[tokio::test]
+    async fn delete_persisted_active_session_clears_conversation_and_pushes_overview() {
+        let (_dir, store) = store_with_prompt().await;
+        let initial_id = store.id().await;
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+
+        delete(&store, &resp_tx, initial_id.clone()).await;
+
+        let Some(AgentResponse::ConversationCleared { session_id: new_id }) = resp_rx.recv().await
+        else {
+            panic!("expected ConversationCleared response when deleting active session");
+        };
+        assert_ne!(new_id, initial_id);
+
+        let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
+            panic!("expected SessionsOverview response after delete");
+        };
+        assert!(!items.iter().any(|item| item.id == initial_id));
+        let active_row = items
+            .iter()
+            .find(|item| item.active)
+            .expect("active session must be present");
+        assert_eq!(active_row.id, new_id);
+    }
+
+    #[tokio::test]
+    async fn delete_already_absent_session_is_idempotent() {
+        let (_dir, store) = store_with_prompt().await;
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        let fake_uuid = uuid::Uuid::new_v4().to_string();
+
+        delete(&store, &resp_tx, fake_uuid.clone()).await;
+
+        let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
+            panic!("expected SessionsOverview response after idempotent delete");
+        };
+        assert!(!items.is_empty());
     }
 }

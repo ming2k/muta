@@ -111,14 +111,13 @@ the vocabulary is fixed by geometry:
 - A **view** is an independent, full-screen destination — the terminal *is*
   the view. The closed set is `Session` (the live conversation, the home
   every Esc falls back to), `Dashboard` (`/dashboard`), `Settings`
-  (`/config`), `Envoy` (zoomed into an envoy task), and `Side` (an aside's
-  transcript). Envoy zoom and the side view route through the surface
+  (`/config`), `Subagent` (zoomed into a subagent task), and `Side` (an aside's
+  transcript). Subagent zoom and the side view route through the surface
   router like any other view; their frame data (the zoom stack, the side
   session id) lives on the shell.
 - A **panel** is a *retained modal* — one of the browse overlays (Help,
   Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
-  Context report, Performance report, Asides, Models, Connections, History,
-  Queue, Sessions, Session tree) that floats over the active view and keeps
+  Usage stats, Session Telemetry, Asides, Models, Connections, History, Queue, Sessions, Session tree) that floats over the active view and keeps
   the create/show/hide/switch/close lifecycle of ADR-0139: retained cursor
   and scroll, per-panel parked drafts, MRU presence in the quick switcher.
   Retention is orthogonal to geometry: a panel is still a modal.
@@ -227,21 +226,21 @@ is the reliable trigger.
 
 ## Connections modal
 
-Provider-instance management surface. Rows are the configured provider
-instances, ranked last-used → name; each row shows the instance name and its
-provider *type* (`· OpenAI Platform`). This surface only *manages* instances — it has
-no activate concept, so switching the active provider is done from the Models
-picker. Adding a curated preset and adding a custom endpoint are separate,
-same-level actions.
+Connection-management surface. Rows are the configured connections, ranked
+last-used → name; each row shows the connection name and its model provider
+label (`· OpenAI Platform`). This surface only *manages* connections — it has
+no activate concept, so switching the active connection is done from the Models
+picker. Adding a connection from a curated template and adding a `custom`
+endpoint are separate, same-level actions.
 
 | Key | Effect |
 |-----|--------|
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
 | `/` | Enter the search sub-layer (`Esc` clears it) |
-| `a` | Add a preset connection |
+| `a` | Add a connection from a curated template |
 | `c` | Add a custom connection |
-| `e` | Edit — API key for presets, full editor for custom connections |
+| `e` | Edit — API key for curated connections, full editor for custom connections |
 | `D` | Delete a custom connection (confirm overlay) |
 | `Esc` | Close |
 
@@ -259,7 +258,7 @@ how it authenticates ("sign in with an API key" vs "authorizes in the browser")
 — so there is no separate badge or meta column. The wire protocol and the
 seeded model count are deliberately omitted: the models an endpoint actually
 serves are only knowable with a working credential, and the protocol is locked
-by the preset.
+by the provider.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────╮
@@ -297,9 +296,9 @@ starting a flow that cannot complete.
 
 The `c` branch opens the connection editor directly with a
 `Connections › Add custom connection` breadcrumb. It accepts Name, Base URL,
-Token, and Model. The resulting connection has no `preset_id`; its endpoint
-and model remain user-owned rather than being reconciled against a curated
-preset.
+Token, and Model. The resulting connection points at the `custom` model
+provider with its own `base_url` and protocol; its model set stays user-owned
+rather than being reconciled against a curated provider.
 
 ## Model editor
 
@@ -703,7 +702,7 @@ sentinel. Migrated surfaces:
 | Help (`?`) | The whole cheat sheet — keycap labels and descriptions |
 | Usage Statistics (`/usage`) | Summary KV, daily/model tables, event log |
 | Context Usage (`/usage` → round drill-in) | The round's KV read-out, turns table, legend |
-| Performance report (hint-bar rate segment → round drill-in) | Summary scopes, round table, per-attempt timing table |
+| Session Telemetry (`Ctrl+O` or model bar context/rate click) | Unified session stats, token totals, streaming pace, latency timeline |
 | Activity modal (Activity / Todos) | Prompt, status detail, last failure, todo items |
 | Sessions `i` info sub-view | Session id, title, timestamps, full last prompt |
 | History `Tab` preview | The full prompt text of the focused entry |

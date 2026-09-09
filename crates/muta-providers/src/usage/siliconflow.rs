@@ -34,15 +34,15 @@ pub struct SiliconFlowUsageFetcher;
 
 #[async_trait]
 impl ProviderUsageFetcher for SiliconFlowUsageFetcher {
-    fn matches(&self, preset_id: Option<&str>, base_url: &str) -> bool {
-        preset_id == Some("siliconflow")
+    fn matches(&self, provider: &str, base_url: &str) -> bool {
+        provider == "siliconflow"
             || base_url.contains("siliconflow.cn")
             || base_url.contains("siliconflow.com")
     }
 
     async fn fetch_usage(
         &self,
-        client: &reqwest::Client,
+        client: &crate::http::Http,
         base_url: &str,
         api_key: &str,
     ) -> Result<ProviderUsage, String> {
@@ -54,23 +54,23 @@ impl ProviderUsageFetcher for SiliconFlowUsageFetcher {
             "https://api.siliconflow.cn/v1/user/info".to_string()
         };
 
+        let auth = format!("Bearer {api_key}");
         let resp = client
-            .get(&endpoint)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
+            .get(
+                &endpoint,
+                &[
+                    ("authorization", auth.as_str()),
+                    ("accept", "application/json"),
+                ],
+            )
             .await
             .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP {status}: {text}"));
+        if !resp.is_success() {
+            return Err(format!("HTTP {}: {}", resp.status, resp.body));
         }
 
-        let body: SiliconFlowUserResponse = resp
-            .json()
-            .await
+        let body: SiliconFlowUserResponse = serde_json::from_str(&resp.body)
             .map_err(|e| format!("Failed to parse SiliconFlow user response: {e}"))?;
 
         parse_siliconflow_user(body)

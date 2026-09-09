@@ -4,7 +4,7 @@
 a shell command in a non-interactive shell. It is the one built-in tool in the
 `Execute` access tier — it runs commands but is not a file-mutation primitive,
 so it sits between pure reads and file writes. The permission broker still
-gates it (`Execute > Read`). It is excluded from every built-in envoy profile,
+gates it (`Execute > Read`). It is excluded from every built-in subagent profile,
 all of which carry a `Read` ceiling today, so `execute_command` runs only in
 the main agent. See [Tool access](access.md) and
 [ADR-0012](../../adr/0012-toolaccess-tier-split.md).
@@ -39,7 +39,7 @@ The `workspace` variant accepts only `command` and `timeout`.
 
 `execute_command` is broker-gated in the main agent: the user approves each
 call (or caches an `Always` rule scoped to the command). See
-[Envoy profiles](../../explanation/agent-design/envoys.md#profiles)
+[Subagent profiles](../../explanation/agent-design/subagents.md#profiles)
 for why a command-execution role is not among the built-in profiles.
 
 ## Rendering

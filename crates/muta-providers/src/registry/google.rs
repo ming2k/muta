@@ -4,14 +4,14 @@ use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, LiveCatalog, ProviderPresetSpec};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The Gemini model ids the built-in `google` provider serves (native Google
 /// API, one key). Each id exists in the model registry. The set is the
 /// canonical text-generation family that Google plus common relays/中转站
 /// advertise — image/embedding/video/audio-only models are excluded since an
 /// agent only consumes the `generateContent` text surface.
-pub use muta_contracts::provider_presets::GOOGLE_BUILTIN_MODELS;
+pub use muta_contracts::model_providers::GOOGLE_BUILTIN_MODELS;
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -165,7 +165,7 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
     }
 }
 
-pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: prompt_cache_for_model,
     id: "google",
     baselines: MODELS,
@@ -173,7 +173,8 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     user_agent: None,
     protocol: WireProtocol::GoogleGenerateContent,
     models: GOOGLE_BUILTIN_MODELS,
-    live_catalog: Some(LiveCatalog::ProviderEndpoint(DiscoveryProtocol::Google)),
-    fitting: false,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Google),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
     wire_overrides: &[],
 };

@@ -408,7 +408,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // Connections `Shift+D`: stage the highlighted custom
             // provider for deletion and open the confirm overlay over
             // the list (dimmed backdrop + centered panel). The actual
-            // `AgentRequest::DeleteProvider` only fires once the user
+            // `AgentRequest::DeleteConnection` only fires once the user
             // confirms inside the overlay. Built-in providers and the
             // synthetic "＋ Add connection" row are ignored by the
             // helper.
@@ -652,7 +652,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 let id = app
                     .connection_detail
                     .as_ref()
-                    .map(|d| d.id.clone())
+                    .map(|d| d.name.clone())
                     .or_else(|| {
                         let providers = app.providers_filtered();
                         providers
@@ -859,22 +859,24 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                 app.save_tui_config();
                             }
                             3 | 4 => {
+                                let Some(revision) =
+                                    app.websearch_config.as_ref().map(|config| config.revision)
+                                else {
+                                    return ActionFlow::NextEvent;
+                                };
                                 let is_search = app.config_category == 3;
-                                let connection_count = app
-                                    .websearch_config
-                                    .as_ref()
-                                    .map(|ws| {
-                                        if is_search {
-                                            ws.search_connections.len()
-                                        } else {
-                                            ws.reader_connections.len()
-                                        }
-                                    })
-                                    .unwrap_or(0);
                                 match app.config_detail_index {
                                     0 => {
-                                        let anchor =
-                                            crate::components::dropdown::DropdownAnchor::center_screen();
+                                        let anchor = if let Some(target_rect) =
+                                            app.config_selected_rect
+                                        {
+                                            crate::components::dropdown::DropdownAnchor::anchored(
+                                                target_rect,
+                                                crate::components::dropdown::DropdownPlacement::Auto,
+                                            )
+                                        } else {
+                                            crate::components::dropdown::DropdownAnchor::center_screen()
+                                        };
                                         if is_search {
                                             let current = app
                                                 .websearch_config
@@ -892,7 +894,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                                 .websearch_config
                                                 .as_ref()
                                                 .map(|ws| ws.reader.as_str())
-                                                .unwrap_or("none");
+                                                .unwrap_or("disabled");
                                             let dropdown =
                                                 crate::views::settings::build_websearch_reader_dropdown(
                                                     current,
@@ -914,49 +916,52 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                                         };
                                         app.send_intent(AgentRequest::UpdateWebSearchConfig(
                                             Box::new(muta_contracts::WebSearchConfigUpdate {
+                                                expected_revision: revision,
                                                 timeout_secs: Some(next),
                                                 ..Default::default()
                                             }),
                                         ));
                                     }
-                                    idx if idx < 2 + connection_count => {
-                                        let conn_idx = idx - 2;
-                                        if is_search {
-                                            if let Some(conn) = app
-                                                .websearch_config
-                                                .as_ref()
-                                                .and_then(|ws| ws.search_connections.get(conn_idx))
-                                            {
-                                                let request =
-                                                    AgentRequest::UpdateWebSearchConfig(Box::new(
-                                                        muta_contracts::WebSearchConfigUpdate {
-                                                            provider: Some(conn.id.clone()),
-                                                            ..Default::default()
-                                                        },
-                                                    ));
-                                                app.send_intent(request);
-                                            }
-                                        } else if let Some(conn) = app
-                                            .websearch_config
-                                            .as_ref()
-                                            .and_then(|ws| ws.reader_connections.get(conn_idx))
-                                        {
-                                            app.send_intent(AgentRequest::UpdateWebSearchConfig(
-                                                Box::new(muta_contracts::WebSearchConfigUpdate {
-                                                    reader: Some(conn.id.clone()),
-                                                    ..Default::default()
-                                                }),
-                                            ));
+                                    2 => {
+                                        // Collect the editor prefill while the config
+                                        // borrow is live, then drop it before mutating `app`.
+                                        let editor = app.websearch_config.as_ref().and_then(|ws| {
+                                            let (axis, id) = if is_search {
+                                                ("search", ws.provider.id())
+                                            } else {
+                                                ("reader", ws.reader.id())
+                                            };
+                                            let capability = ws.capabilities.iter().find(|capability| {
+                                                capability.id == id
+                                                    && capability.axis == if is_search {
+                                                        muta_contracts::WebProviderAxis::Search
+                                                    } else {
+                                                        muta_contracts::WebProviderAxis::Reader
+                                                    }
+                                            })?;
+                                            let endpoint = capability.endpoint
+                                                == muta_contracts::WebEndpointRequirement::UserSupplied;
+                                            let target = if endpoint {
+                                                format!("web_endpoint:{id}")
+                                            } else {
+                                                format!("web_credential:{axis}:{id}")
+                                            };
+                                            let initial = if endpoint {
+                                                ws.searxng_url.clone().unwrap_or_default()
+                                            } else {
+                                                String::new()
+                                            };
+                                            Some((target, capability.display_name.clone(), initial))
+                                        });
+                                        if let Some((target, display_name, initial)) = editor {
+                                            app.push_transient_surface(Modal::ModelEditor);
+                                            app.editor_target = Some(target);
+                                            app.editor_model = display_name;
+                                            app.editor_key.clear();
+                                            app.editor_field = 0;
+                                            app.input = initial;
+                                            app.set_cursor(app.input.len());
                                         }
-                                    }
-                                    idx if idx == 2 + connection_count => {
-                                        let dropdown =
-                                            crate::views::settings::build_add_web_connection_dropdown(
-                                                usize::from(!is_search),
-                                            );
-                                        let anchor =
-                                            crate::components::dropdown::DropdownAnchor::center_screen();
-                                        app.config_dropdown = Some((dropdown, anchor));
                                     }
                                     _ => {}
                                 }
@@ -964,39 +969,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             _ => {}
                         }
                     }
-                }
-            }
-        }
-        input::InputAction::ConfigDeleteConnection => {
-            if app.active_modal() == Modal::Config
-                && matches!(app.config_category, 3 | 4)
-                && app.config_detail_index >= 2
-            {
-                let conn_idx = app.config_detail_index - 2;
-                if app.config_category == 3 {
-                    if let Some(conn) = app
-                        .websearch_config
-                        .as_ref()
-                        .and_then(|ws| ws.search_connections.get(conn_idx))
-                    {
-                        app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
-                            muta_contracts::WebSearchConfigUpdate {
-                                delete_search_connection: Some(conn.id.clone()),
-                                ..Default::default()
-                            },
-                        )));
-                    }
-                } else if let Some(conn) = app
-                    .websearch_config
-                    .as_ref()
-                    .and_then(|ws| ws.reader_connections.get(conn_idx))
-                {
-                    app.send_intent(AgentRequest::UpdateWebSearchConfig(Box::new(
-                        muta_contracts::WebSearchConfigUpdate {
-                            delete_reader_connection: Some(conn.id.clone()),
-                            ..Default::default()
-                        },
-                    )));
                 }
             }
         }
@@ -1532,7 +1504,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                             target.message_idx,
                         )
                         .and_then(|message| {
-                            if message.is_runner_task() {
+                            if message.is_subagent_task() {
                                 message.tool_step_call_id().map(String::from)
                             } else {
                                 None
@@ -1540,7 +1512,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                         });
                         if let Some(id) = enter_id {
                             app.messages = messages;
-                            app.enter_runner(id);
+                            app.enter_subagent(id);
                         } else {
                             // Enter mirrors the mouse click on a tool
                             // step's summary: toggle its inline
@@ -1587,8 +1559,8 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // chip-or-inline logic as Ctrl+V without an async hop.
             clipboard_ops::apply_clipboard_paste(app, clipboard::ClipboardRead::Text(text));
         }
-        input::InputAction::ExitRunner => {
-            app.exit_runner();
+        input::InputAction::ExitSubagent => {
+            app.exit_subagent();
         }
         input::InputAction::ExitSideView => {
             // `/btw`: detach from the aside view and return to the primary
@@ -1674,7 +1646,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     crate::model::selection::SelectionState::None
                 ),
                 has_running_task: is_busy,
-                in_runner_view: app.in_runner_view(),
+                in_subagent_view: app.in_subagent_view(),
                 in_side_view: app.in_side_view,
                 queue_count: app.pending_dispatch.len(),
                 has_focused_target: app.focused_target.is_some(),
@@ -2080,7 +2052,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     // Drain the matching front so the per-frame sync
                     // closes the modal and restores the composer draft.
                     app.pending_inputs.pop_front();
-                    let parent_call_id = app.runner_question_parent.remove(&req.id);
+                    let parent_call_id = app.subagent_question_parent.remove(&req.id);
                     app.send_intent(AgentRequest::StdinReply {
                         request_id: req.id.clone(),
                         text,
@@ -2106,7 +2078,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 // stdin and fails fast with a non-interactive remedy.
                 app.pending_inputs.pop_front();
                 let next = app.pending_inputs.front().cloned();
-                let parent_call_id = app.runner_question_parent.remove(&req.id);
+                let parent_call_id = app.subagent_question_parent.remove(&req.id);
                 app.send_intent(AgentRequest::StdinReply {
                     request_id: req.id.clone(),
                     text: String::new(),
@@ -2191,7 +2163,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.permission_confirm_always = false;
             app.permission_show_details = false;
             for pending in queued {
-                let parent_call_id = app.runner_permission_parent.remove(&pending.id);
+                let parent_call_id = app.subagent_permission_parent.remove(&pending.id);
                 app.send_intent(AgentRequest::PermissionReply {
                     request_id: pending.id,
                     decision: PermissionDecision::Reject,
@@ -2405,7 +2377,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
             app.host_kill_confirm_id = None;
             None
         }
-        View::Session | View::Runner | View::Side => None,
+        View::Session | View::Subagent | View::Side => None,
     };
     if let Some(request) = request
         && !app.send_intent(request)
@@ -2426,7 +2398,9 @@ pub(crate) fn handle_wheel(app: &mut App, up: bool, x: u16, y: u16) {
         Some(UiKey::Modal(modal)) if app.ui.contains(UiKey::Modal(modal), x, y) => {
             scroll_tick(app, !up);
         }
-        Some(UiKey::OauthUrl | UiKey::OauthCode) => scroll_tick(app, !up),
+        Some(UiKey::OauthUrl | UiKey::OauthCode | UiKey::SettingsOption(_)) => {
+            scroll_tick(app, !up)
+        }
         Some(UiKey::ProviderDelete | UiKey::PreAttach) => {}
         Some(UiKey::Sheet(crate::sheet::SheetKind::Permission) | UiKey::PermissionAction(_))
             if app.permission_show_details =>

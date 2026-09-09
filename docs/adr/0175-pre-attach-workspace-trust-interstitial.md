@@ -2,11 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-04
-- **Builds on:** [ADR-0107](0107-trust-gate-covers-project-skills-and-commands.md),
+- **Builds on:** [ADR-0107](archive/0107-trust-gate-covers-project-skills-and-commands.md),
   [ADR-0134](0134-wire-protocol-negotiation.md),
   [ADR-0139](0139-unified-tui-surface-router-and-view-lifecycle.md),
-  [ADR-0140](0140-workspace-authority-and-content-bound-extension-trust.md),
-  [ADR-0145](0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md),
+  [ADR-0140](archive/0140-workspace-authority-and-content-bound-extension-trust.md),
+  [ADR-0145](archive/0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md),
   [ADR-0173](0173-unbounded-session-keyboard-ownership-claims-and-interaction-sheets.md)
 
 ## Context
@@ -208,16 +208,16 @@ ADR-0140 §3 "before work begins" posture unhonored.
 
 ## References
 
-- [ADR-0107](0107-trust-gate-covers-project-skills-and-commands.md) —
+- [ADR-0107](archive/0107-trust-gate-covers-project-skills-and-commands.md) —
   the trust gate this revises placementally
 - [ADR-0139](0139-unified-tui-surface-router-and-view-lifecycle.md) —
   the surface lifecycle model; PreAttach is modeled as a startup
   surface alongside `SessionsPicker`, not as a retained view or
   transient sheet
-- [ADR-0140](0140-workspace-authority-and-content-bound-extension-trust.md)
+- [ADR-0140](archive/0140-workspace-authority-and-content-bound-extension-trust.md)
   — workspace authority axes; §3 is the "disclose before work begins"
   posture this honors
-- [ADR-0145](0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md)
+- [ADR-0145](archive/0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md)
   — the per-domain trust model PreAttach presents
 - [ADR-0134](0134-wire-protocol-negotiation.md) — the bump discipline
   the deferred wire-level admission would have to follow

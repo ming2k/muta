@@ -253,11 +253,11 @@ pub(super) fn merge_command_rows(
     out
 }
 
-/// Rebuild the nested transcript of an runner run (the `children` carried by a
+/// Rebuild the nested transcript of a subagent run (the `children` carried by a
 /// Tool-role message) into the TUI document model. Mirrors the live
 /// event-driven build — assistant text, reasoning traces, and nested tool
-/// steps with their own results — and recurses for arbitrarily deep runner
-/// trees, so the drill-in runner view works after a resume.
+/// steps with their own results — and recurses for arbitrarily deep subagent
+/// trees, so the drill-in subagent view works after a resume.
 fn transcript_children_from_core(
     messages: Vec<Message>,
     config: &TuiConfig,
@@ -267,7 +267,7 @@ fn transcript_children_from_core(
 
 /// Shared restore engine. With `track_rounds` the caller gets the canonical
 /// Round → Turn reconstruction used for the top-level transcript; with it off
-/// (runner children) round/turn attribution is skipped, since nested transcripts
+/// (subagent children) round/turn attribution is skipped, since nested transcripts
 /// render inside their parent step rather than against the session's global
 /// round counter.
 fn transcript_from_core_inner(
@@ -403,16 +403,16 @@ fn transcript_from_core_inner(
             // orphan result is then rendered as a plain message below.
             if let Some(idx) = pending_steps.get_mut(name).and_then(|q| q.pop_front()) {
                 let item = &mut restored[idx];
-                let meta = message.runner_meta.take();
+                let meta = message.subagent_meta.take();
                 let children = message.children.take();
-                // Rebuild a structured output that preserves the runner's true
+                // Rebuild a structured output that preserves the subagent's true
                 // classification (failed / interrupted / ok) and real duration;
                 // the bare summary text cannot distinguish them. `children`
                 // round-trip separately below so the drill-in view works after
                 // resume.
                 let (structured, duration_ms) = match &meta {
                     Some(meta) => (
-                        muta_contracts::ToolOutput::Runner {
+                        muta_contracts::ToolOutput::Subagent {
                             summary: output.to_string(),
                             messages: Vec::new(),
                             usage: muta_contracts::TokenUsage::default(),
@@ -425,12 +425,12 @@ fn transcript_from_core_inner(
                     None => (muta_contracts::ToolOutput::text(output), 0),
                 };
                 if item.finish_tool_step(name, output, structured, duration_ms) {
-                    // Restore the runner's nested transcript so its partial /
+                    // Restore the subagent's nested transcript so its partial /
                     // completed work is drillable after resume.
                     if let Some(child_messages) = children {
                         let grand = transcript_children_from_core(child_messages, config);
                         if !grand.is_empty()
-                            && let Some(slot) = item.runner_children_mut()
+                            && let Some(slot) = item.subagent_children_mut()
                         {
                             *slot = grand;
                         }
@@ -579,19 +579,19 @@ mod tests {
         assert_eq!(messages[1].round, Some(42));
     }
 
-    /// An interrupted runner survives a resume with its true classification and
-    /// its partial children intact: the persisted `runner_meta.interrupted` flag
+    /// An interrupted subagent survives a resume with its true classification and
+    /// its partial children intact: the persisted `subagent_meta.interrupted` flag
     /// drives the `Interrupted` status (not `Ok` — the bare summary text cannot
     /// say it), and the nested transcript rebuilds the drill-in view.
     #[test]
-    fn restores_interrupted_runner_with_children_and_status() {
+    fn restores_interrupted_subagent_with_children_and_status() {
         use crate::config::TuiConfig;
-        use muta_contracts::message::RunnerMeta;
+        use muta_contracts::message::SubagentMeta;
         use muta_contracts::{Message, ToolCall};
 
         let call = ToolCall {
             id: "call_9".to_string(),
-            name: "runner".to_string(),
+            name: "spawn_agent".to_string(),
             arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
         };
         let inner_call = ToolCall {
@@ -599,7 +599,7 @@ mod tests {
             name: "read_text".to_string(),
             arguments: "{}".to_string(),
         };
-        // The runner's partial internal transcript: one completed read round.
+        // The subagent's partial internal transcript: one completed read round.
         let children = vec![
             Message {
                 role: Role::Assistant,
@@ -617,27 +617,30 @@ mod tests {
                 tool_calls: Some(vec![call.clone()]),
                 ..Message::new(Role::Assistant, "")
             },
-            Message::tool_result(&call, "[runner result]:\nInterrupted: stopped by the user")
-                .with_children(children)
-                .with_runner_meta(RunnerMeta {
-                    duration_ms: Some(42),
-                    failed: false,
-                    interrupted: true,
-                    ..Default::default()
-                }),
+            Message::tool_result(
+                &call,
+                "[spawn_agent result]:\nInterrupted: stopped by the user",
+            )
+            .with_children(children)
+            .with_subagent_meta(SubagentMeta {
+                duration_ms: Some(42),
+                failed: false,
+                interrupted: true,
+                ..Default::default()
+            }),
         ];
 
         let restored = super::transcript_messages_from_core(messages, &TuiConfig::default());
         let step = restored
             .iter()
-            .find(|m| m.is_runner_task())
-            .expect("the runner step must be restored");
+            .find(|m| m.is_subagent_task())
+            .expect("the subagent step must be restored");
         assert_eq!(
             step.tool_step_status(),
             Some(crate::model::document::ToolStepStatus::Interrupted),
-            "restored interrupted runner must classify as Interrupted, not Ok/Failed"
+            "restored interrupted subagent must classify as Interrupted, not Ok/Failed"
         );
-        let kids = step.runner_children().expect("children must be restored");
+        let kids = step.subagent_children().expect("children must be restored");
         assert_eq!(kids.len(), 1, "one completed child tool step expected");
         assert!(kids[0].is_tool_step());
         assert_eq!(
