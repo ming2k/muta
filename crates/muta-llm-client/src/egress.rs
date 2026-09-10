@@ -185,7 +185,7 @@ mod owned {
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use muta_contracts::ProviderError;
-    use netune::{Connector, Proxy, ProxyConnector, TcpConnector, TlsConnector};
+    use netune::{Connector, TcpConnector, TlsConnector};
     use netune_trace::{
         AttemptRef, ConnectionInfo, EndpointRef, Fidelity, Recorder, RequestTrace, TraceId,
     };
@@ -211,18 +211,11 @@ mod owned {
     impl MutaNetEgress<TlsConnector<TcpConnector>> {
         /// The production configuration: platform trust store, direct.
         pub fn new() -> Result<Self, String> {
-            TlsConnector::platform(TcpConnector::new())
-                .map(Self::from_connector)
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    impl MutaNetEgress<TlsConnector<ProxyConnector<TcpConnector>>> {
-        /// The production configuration routed through `proxy`.
-        pub fn with_proxy(proxy: Proxy) -> Result<Self, String> {
-            TlsConnector::platform(ProxyConnector::new(TcpConnector::new(), proxy))
-                .map(Self::from_connector)
-                .map_err(|error| error.to_string())
+            crate::network::direct_client(netune::ClientConfig::default()).map(|client| Self {
+                client,
+                sink: None,
+                timings: super::timings_slot(),
+            })
         }
     }
 

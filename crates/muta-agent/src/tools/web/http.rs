@@ -3,7 +3,7 @@
 //! Every web tool — search backends and the page reader — used to thread a
 //! `reqwest::Client` through its signatures. They now share this handle, which
 //! is the same transport the model path uses: platform trust roots, the
-//! configured proxy, content-encoding decoding, and **no automatic redirects**
+//! direct connections, content-encoding decoding, and **no automatic redirects**
 //! (the SSRF guard re-validates every hop itself, so the transport must not
 //! follow one behind its back).
 
@@ -13,8 +13,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use muta_contracts::WebConfig;
 use netune::{
-    Client, ClientConfig, Pool, Proxy, ProxyConnector, RequestHead, Response, Target, TcpConnector,
-    TlsConnector,
+    Client, ClientConfig, Pool, RequestHead, Response, Target, TcpConnector, TlsConnector,
 };
 
 /// A response whose body has been read.
@@ -31,11 +30,8 @@ impl Reply {
     }
 }
 
-/// The web tools' client: direct, or through the configured proxy.
-pub enum WebHttp {
-    Direct(Box<Client<TlsConnector<TcpConnector>>>),
-    Proxied(Box<Client<TlsConnector<ProxyConnector<TcpConnector>>>>),
-}
+/// Direct web client with public-address confinement.
+pub struct WebHttp(Box<Client<TlsConnector<TcpConnector>>>);
 
 impl WebHttp {
     /// Build the handle from resolved `[web]` behavior.
@@ -47,34 +43,13 @@ impl WebHttp {
             max_redirects: 0,
             ..Default::default()
         };
-        let proxy = config
-            .proxy
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        match proxy {
-            Some(url) => {
-                let proxy =
-                    Proxy::parse(url).map_err(|error| format!("Invalid proxy '{url}': {error}"))?;
-                let connector =
-                    TlsConnector::platform(ProxyConnector::new(TcpConnector::new(), proxy))
-                        .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
-                Ok(Self::Proxied(Box::new(Client::new(
-                    connector,
-                    Pool::default(),
-                    client_config,
-                ))))
-            }
-            None => {
-                let connector = TlsConnector::platform(TcpConnector::strict_public())
-                    .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
-                Ok(Self::Direct(Box::new(Client::new(
-                    connector,
-                    Pool::default(),
-                    client_config,
-                ))))
-            }
-        }
+        let connector = TlsConnector::platform(TcpConnector::strict_public())
+            .map_err(|error| format!("Failed to build HTTP client: {error}"))?;
+        Ok(Self(Box::new(Client::new(
+            connector,
+            Pool::default(),
+            client_config,
+        ))))
     }
 
     fn timeout(&self) -> Duration {
@@ -98,16 +73,10 @@ impl WebHttp {
             }
         }
         let send = async {
-            match self {
-                Self::Direct(client) => client
-                    .request(&target, head, request.body)
-                    .await
-                    .map_err(|error| error.to_string()),
-                Self::Proxied(client) => client
-                    .request(&target, head, request.body)
-                    .await
-                    .map_err(|error| error.to_string()),
-            }
+            self.0
+                .request(&target, head, request.body)
+                .await
+                .map_err(|error| error.to_string())
         };
         tokio::time::timeout(timeout, send)
             .await

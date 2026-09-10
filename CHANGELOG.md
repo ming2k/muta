@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Remove application proxy support (`MUTA_PROXY`, the Rust proxy constructor,
+  and web proxy configuration/API fields). Network requests connect directly;
+  legacy web proxy settings are ignored and omitted on save (ADR-0228).
+  Wire protocol and minimum supported version are now 12; update clients and
+  daemon together.
+- Route models.dev and endpoint discovery through the same HTTP helper and
+  10-second deadline, report timeout phases, share concurrent refresh successes
+  and failures, and make catalog reads strictly offline.
+
 ## [0.45.2] - 2026-09-10
 
 ### Changed

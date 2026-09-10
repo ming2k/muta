@@ -192,8 +192,7 @@ async fn fetch_models(job: DiscoveryJob, models_dev_refresh: ModelsDevRefresh) -
 }
 
 /// Resolve a models.dev provider entry into a discovery update. This is the
-/// shared fetch for both the dedicated `ModelsDev` source and the first-party
-/// fallback path.
+/// models.dev source; endpoint discovery never falls back to another source.
 async fn fetch_models_dev(provider: &str) -> Result<ModelDiscoveryUpdate, String> {
     muta_providers::models_dev_models(provider)
         .await

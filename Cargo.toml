@@ -30,7 +30,7 @@ tokio-util = { version = "0.7", features = ["codec"] }
 bytes = "1"
 tokio-tungstenite = "0.26"
 libc = "0.2"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "stream", "socks", "gzip", "brotli", "query", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "stream", "gzip", "brotli", "query", "form"] }
 glob = "0.3"
 ignore = "0.4"
 walkdir = "2"

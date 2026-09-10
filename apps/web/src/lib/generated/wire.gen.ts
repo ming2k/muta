@@ -2429,9 +2429,9 @@ export type WebConfigUpdate = {
  * Required compare-and-swap precondition. Callers must query the current
  * view before mutating it; stale writers are rejected rather than merged.
  */
-expected_revision: number, provider?: WebSearchProvider, reader?: WebReaderProvider, proxy?: string, timeout_secs?: number, searxng_url?: string, credential?: WebCredentialUpdate, };
+expected_revision: number, provider?: WebSearchProvider, reader?: WebReaderProvider, timeout_secs?: number, searxng_url?: string, credential?: WebCredentialUpdate, };
 
-export type WebConfigView = { revision: number, provider: WebSearchProvider, reader: WebReaderProvider, proxy?: string, timeout_secs: number, searxng_url?: string, search_credential: WebCredentialStatus, reader_credential: WebCredentialStatus, capabilities: Array<WebProviderCapability>, };
+export type WebConfigView = { revision: number, provider: WebSearchProvider, reader: WebReaderProvider, timeout_secs: number, searxng_url?: string, search_credential: WebCredentialStatus, reader_credential: WebCredentialStatus, capabilities: Array<WebProviderCapability>, };
 
 export type WebCredentialRequirement = "None" | "Optional" | "Required";
 

@@ -1,20 +1,18 @@
 //! The provider-side HTTP client, on the owned transport (ADR-0200).
 //!
-//! Every non-model egress in this crate — OAuth token exchange, usage/quota
-//! probes, model-list discovery — used to build its own `reqwest::Client`. They
-//! now share one handle over [`netune`], which is what makes them visible to
-//! the same trace, the same retry classification and the same timeout policy as
-//! the model path.
+//! OAuth, usage, endpoint discovery and models.dev use this bounded client.
+//! Inference and provider services share direct transport construction and
+//! platform trust; streaming inference owns its separate deadline policy.
 //!
 //! The surface is deliberately small and *bounded*: a request has an overall
 //! deadline (these are all short control-plane calls), the body is returned as
 //! text, and content-encoding is already decoded by the transport.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http::{HeaderMap, Method, StatusCode};
-use netune::{Client, ClientConfig, Pool, Target, TcpConnector, TlsConnector};
+use netune::{Client, ClientConfig, Target, TcpConnector, TlsConnector};
 
 /// Request body shapes these call sites use.
 #[derive(Debug, Clone)]
@@ -96,14 +94,10 @@ pub struct Http {
 impl Http {
     /// Build a handle with an overall per-request deadline.
     pub fn new(timeout: Duration) -> Result<Self, String> {
-        let connector =
-            TlsConnector::platform(TcpConnector::new()).map_err(|error| error.to_string())?;
         Ok(Self {
-            client: Arc::new(Client::new(
-                connector,
-                Pool::default(),
+            client: Arc::new(muta_llm_client::network::direct_client(
                 ClientConfig::default(),
-            )),
+            )?),
             timeout,
         })
     }
@@ -144,8 +138,12 @@ impl Http {
             Some(Body::Raw(body)) => Some(body.clone().into()),
         };
 
+        let recorder = Arc::new(Mutex::new(netune_trace::Recorder::start(256)));
         let exchange = async {
-            let mut response = self.client.request(&target, head, body).await?;
+            let mut response = self
+                .client
+                .send(&target, Arc::clone(&recorder), head, body)
+                .await?;
             let status = response.head.status;
             let headers = response.head.headers.clone();
             let bytes = response.body.read_to_end().await?;
@@ -153,7 +151,15 @@ impl Http {
         };
         let (status, headers, bytes) = tokio::time::timeout(self.timeout, exchange)
             .await
-            .map_err(|_| format!("request to {} timed out", request.url))?
+            .map_err(|_| {
+                let recorder = recorder.lock().unwrap_or_else(|error| error.into_inner());
+                format!(
+                    "request to {} timed out after {:.1}s during {}",
+                    request.url.split(['?', '#']).next().unwrap_or(&request.url),
+                    self.timeout.as_secs_f64(),
+                    timeout_phase(recorder.log())
+                )
+            })?
             .map_err(|error| error.to_string())?;
         Ok(Reply {
             status,
@@ -169,6 +175,30 @@ impl Http {
         }
         self.send(request).await
     }
+}
+
+/// Ignore sampling/read events and report the latest protocol phase. Iteration
+/// also handles redirects, whose DNS/TLS phases restart within the same trace.
+fn timeout_phase(log: &netune_trace::EventLog) -> &'static str {
+    use netune_trace::EventKind;
+    let mut phase = "request setup";
+    for event in log.iter() {
+        phase = match event.kind {
+            EventKind::DnsStart => "DNS resolution",
+            EventKind::DnsEnd | EventKind::TcpStart => "TCP connection",
+            EventKind::TcpEnd | EventKind::TlsStart => "TLS handshake",
+            EventKind::TlsEnd | EventKind::ConnectReused | EventKind::RequestWriteStart => {
+                "request write"
+            }
+            EventKind::RequestWriteEnd => "response headers",
+            EventKind::HeadComplete
+            | EventKind::BodyStart
+            | EventKind::ChunkBoundary
+            | EventKind::Trailers => "response body",
+            _ => phase,
+        };
+    }
+    phase
 }
 
 /// Percent-encode one URL component (query names and values, form fields).
@@ -207,6 +237,63 @@ fn percent_encode(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn timeout_reports_headers_or_body_and_redacts_query() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for send_headers in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                socket.read(&mut buffer).await.unwrap();
+                if send_headers {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nx")
+                        .await
+                        .unwrap();
+                }
+                futures::future::pending::<()>().await;
+            });
+            let error = Http::new(Duration::from_millis(100))
+                .unwrap()
+                .get(&format!("http://{addr}/models?key=secret"), &[])
+                .await
+                .unwrap_err();
+            server.abort();
+            assert!(
+                error.contains(if send_headers {
+                    "response body"
+                } else {
+                    "response headers"
+                }),
+                "{error}"
+            );
+            assert!(error.contains("after 0.1s"), "{error}");
+            assert!(!error.contains("secret"), "{error}");
+        }
+    }
+
+    #[test]
+    fn timeout_phase_tracks_redirects_and_ignores_sampling() {
+        use netune_trace::EventKind;
+        let mut recorder = netune_trace::Recorder::start(64);
+        for (event, expected) in [
+            (EventKind::DnsStart, "DNS resolution"),
+            (EventKind::TcpStart, "TCP connection"),
+            (EventKind::TlsStart, "TLS handshake"),
+            (EventKind::RequestWriteStart, "request write"),
+            (EventKind::RequestWriteEnd, "response headers"),
+            (EventKind::TcpInfo, "response headers"),
+            (EventKind::HeadComplete, "response body"),
+            (EventKind::Read, "response body"),
+            (EventKind::DnsStart, "DNS resolution"),
+        ] {
+            recorder.mark(event, 0, 0);
+            assert_eq!(timeout_phase(recorder.log()), expected);
+        }
+    }
 
     #[test]
     fn form_encoding_matches_the_url_standard() {

@@ -1,6 +1,6 @@
 # 0227. Catalog refresh is connection-scoped and user-initiated; the raw source catalog is an in-memory cache
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-10
 - **Amends:** [ADR-0171](0171-three-layer-model-catalog-and-pluggable-network-sources.md) — retires the on-disk
   `models.dev` catalog cache, its TTL/lock, and the hourly `DynamicModelsDev` background refresh; and collapses

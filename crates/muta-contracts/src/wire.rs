@@ -46,13 +46,13 @@ use serde::{Deserialize, Serialize};
 /// `AgentResponse::HistorySearch`), and provider model effort levels (`ProviderModelInfo.effort_levels`).
 /// v11 (ADR-0227): `AgentRequest::RefreshProviderModels` is a unit variant; the
 /// `user_initiated` flag is gone because every catalog refresh is user-initiated.
-pub const PROTOCOL_VERSION: u32 = 11;
+/// v12 (ADR-0228): web proxy configuration/update/view fields are removed.
+/// Older peers must not mistake an ignored proxy update for a successful one.
+pub const PROTOCOL_VERSION: u32 = 12;
 
-/// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
-/// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the
-/// previous tags cannot deserialize these shapes and must be rejected at
-/// handshake rather than misinterpreted.
-pub const MIN_PROTOCOL_VERSION: u32 = 7;
+/// Minimum served wire protocol version. ADR-0228 requires direct network
+/// access and rejects peers that can still submit application proxy settings.
+pub const MIN_PROTOCOL_VERSION: u32 = 12;
 
 /// Stable machine-readable error codes.
 pub const ERR_PROTOCOL_MISMATCH: &str = "protocol_mismatch";

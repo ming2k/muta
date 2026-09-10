@@ -49,7 +49,7 @@ impl WebReaderTool {
 
     /// Resolve the HTTP client against the exact runtime snapshot used by the
     /// rest of one operation. This prevents a hot update from mixing a reader
-    /// built at revision N+1 with proxy/timeout state built at revision N.
+    /// built at revision N+1 with timeout state built at revision N.
     fn client_for(
         &self,
         revision: u64,

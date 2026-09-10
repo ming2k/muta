@@ -454,7 +454,7 @@ configured here.
 | Table | Configures | Reference |
 |-------|------------|-----------|
 | `[skills]` | Skill sources, extra paths, disabled skills | [Skills](tools/skills.md) |
-| `[web]` | Singleton search and reader providers, proxy, timeout, and SearXNG endpoint (provider-scoped credentials live in `credentials.toml [web.*]`) | [Web tools](tools/web.md) |
+| `[web]` | Singleton search and reader providers, timeout, and SearXNG endpoint (provider-scoped credentials live in `credentials.toml [web.*]`) | [Web tools](tools/web.md) |
 | `[mcp.<server>]` | MCP servers (one table per server) | [MCP](tools/mcp.md) |
 
 ## Daemon

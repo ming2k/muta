@@ -25,7 +25,6 @@ mod tests {
     fn websearch_config_defaults_to_exa() {
         let cfg = WebConfig::default();
         assert_eq!(cfg.provider, WebSearchProvider::Exa);
-        assert!(cfg.proxy.is_none());
         assert_eq!(cfg.timeout_secs, 20);
     }
 
@@ -39,8 +38,8 @@ mod tests {
         "#;
         let cfg: WebConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.provider, WebSearchProvider::Searxng);
-        assert_eq!(cfg.proxy.as_deref(), Some("socks5h://127.0.0.1:1080"));
         assert_eq!(cfg.timeout_secs, 8);
+        assert!(!toml::to_string(&cfg).unwrap().contains("proxy"));
         assert_eq!(
             cfg.searxng_url.as_deref(),
             Some("http://localhost:8080/search")

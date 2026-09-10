@@ -20,9 +20,13 @@ connection instances, presets to create, or automatic fallback routes.
 provider = "exa"
 reader = "disabled"
 timeout_secs = 20
-# proxy = "socks5h://127.0.0.1:1080"
 # searxng_url = "https://search.example.com/search"
 ```
+
+Network access is direct. Application proxy configuration is not supported;
+legacy `[web].proxy` entries are ignored when loading and omitted when saving.
+Wire protocol 12 removes the corresponding update/view fields; clients and
+daemon must be upgraded together.
 
 The default search provider is Exa. The default reader is disabled, so the UI
 must not report a reader as active until one is selected. The old values

@@ -293,7 +293,6 @@ pub fn web_provider_capabilities() -> Vec<WebProviderCapability> {
 pub struct WebConfig {
     pub provider: WebSearchProvider,
     pub reader: WebReaderProvider,
-    pub proxy: Option<String>,
     pub timeout_secs: u64,
     pub searxng_url: Option<String>,
 }
@@ -303,7 +302,6 @@ impl Default for WebConfig {
         Self {
             provider: WebSearchProvider::Exa,
             reader: WebReaderProvider::Disabled,
-            proxy: None,
             timeout_secs: 20,
             searxng_url: None,
         }

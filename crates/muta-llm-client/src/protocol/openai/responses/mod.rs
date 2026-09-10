@@ -335,7 +335,7 @@ impl OpenAiResponsesProvider {
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication(self.label(), e))?;
-        let turn_state = turn_context.slot(format!(
+        let mut turn_state = turn_context.slot(format!(
             "codex:{}:{}:{:?}",
             self.endpoint.base_url(),
             self.endpoint.model,
@@ -360,6 +360,14 @@ impl OpenAiResponsesProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication(self.label(), error))?;
+            if refreshed_auth.account_id != auth.account_id {
+                turn_state = turn_context.slot(format!(
+                    "codex:{}:{}:{:?}",
+                    self.endpoint.base_url(),
+                    self.endpoint.model,
+                    refreshed_auth.account_id
+                ));
+            }
             let mut retry_req = self.build_request_for_auth(
                 body,
                 &refreshed_auth,
@@ -755,6 +763,70 @@ mod stream_protocol_tests {
             assert_eq!(response.is_ok(), status == 200);
             mock.assert_async().await;
             mock.remove_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn chatgpt_routing_state_follows_oauth_account_on_retry() {
+        use futures::future::BoxFuture;
+        use mockito::{Matcher, Server};
+        #[derive(Debug)]
+        struct RefreshingAuth(&'static str);
+        impl CredentialSource for RefreshingAuth {
+            fn resolve_auth(&self) -> BoxFuture<'_, Result<ResolvedAuth, String>> {
+                Box::pin(async { Ok(ResolvedAuth::new("old").with_account_id("account-a")) })
+            }
+            fn force_refresh(&self) -> BoxFuture<'_, Result<ResolvedAuth, String>> {
+                Box::pin(async { Ok(ResolvedAuth::new("new").with_account_id(self.0)) })
+            }
+            fn is_oauth(&self) -> bool {
+                true
+            }
+        }
+        for account in ["account-a", "account-b"] {
+            let mut server = Server::new_async().await;
+            let provider = OpenAiResponsesProvider::with_credentials(
+                Arc::new(RefreshingAuth(account)),
+                "gpt-6-astra".into(),
+                &server.url(),
+            )
+            .with_dialect(muta_contracts::OpenAiResponsesDialect::ChatGpt);
+            let round = muta_contracts::ProviderTurnContext::default();
+            let body = serde_json::json!({});
+            let warmup = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("x-codex-turn-state", "route-a")
+                .create_async()
+                .await;
+            provider.send_request(&body, true, &round).await.unwrap();
+            warmup.assert_async().await;
+            warmup.remove_async().await;
+            let rejected = server
+                .mock("POST", "/")
+                .match_header("authorization", "Bearer old")
+                .match_header("x-codex-turn-state", "route-a")
+                .with_status(401)
+                .create_async()
+                .await;
+            let retried = server
+                .mock("POST", "/")
+                .match_header("authorization", "Bearer new")
+                .match_header("chatgpt-account-id", account)
+                .match_header(
+                    "x-codex-turn-state",
+                    if account == "account-a" {
+                        Matcher::from("route-a")
+                    } else {
+                        Matcher::Missing
+                    },
+                )
+                .with_status(200)
+                .create_async()
+                .await;
+            provider.send_request(&body, true, &round).await.unwrap();
+            rejected.assert_async().await;
+            retried.assert_async().await;
         }
     }
 

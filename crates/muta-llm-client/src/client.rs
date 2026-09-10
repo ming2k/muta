@@ -62,19 +62,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// the turn forever.
 const CHAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Environment variable selecting the transport: `net` (owned) or anything else
-/// (`reqwest`, the default).
+/// Environment variable selecting the transport: `net` (production default)
+/// or `reqwest` (optional test oracle).
 pub const EGRESS_ENV: &str = "MUTA_EGRESS";
-
-/// Environment variable carrying a proxy URL for the owned transport
-/// (`http://user:pass@host:port` or `socks5://host:port`).
-pub const PROXY_ENV: &str = "MUTA_PROXY";
 
 /// Which transport the environment asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EgressChoice {
     Reqwest,
-    Owned { proxy: Option<String> },
+    Owned,
 }
 
 /// Whether the owned transport is the default when `MUTA_EGRESS` is unset.
@@ -93,18 +89,14 @@ const OWNED_BY_DEFAULT: bool = false;
 /// Pure so it can be tested without mutating process state; [`Client::new`]
 /// feeds it the real environment. `MUTA_EGRESS=reqwest` always wins, so an
 /// operator can escape the default without a rebuild.
-pub fn egress_choice(value: Option<&str>, proxy: Option<&str>) -> EgressChoice {
+pub fn egress_choice(value: Option<&str>) -> EgressChoice {
     let owned = match value {
         Some("net") | Some("owned") | Some("muta-net") => true,
         Some("reqwest") => false,
         _ => OWNED_BY_DEFAULT,
     };
     if owned {
-        EgressChoice::Owned {
-            proxy: proxy
-                .filter(|url| !url.trim().is_empty())
-                .map(str::to_string),
-        }
+        EgressChoice::Owned
     } else {
         EgressChoice::Reqwest
     }
@@ -112,20 +104,17 @@ pub fn egress_choice(value: Option<&str>, proxy: Option<&str>) -> EgressChoice {
 
 #[cfg(feature = "reqwest-oracle")]
 fn build_reqwest() -> reqwest::Client {
-    // `build` fails only on invalid TLS/proxy configuration, none of which this
-    // crate sets; fall back to stock defaults rather than panic if a future
-    // builder knob ever makes it fallible here.
+    // The comparison transport obeys the same direct-access policy. Never
+    // fall back to defaults that could enable environment proxy discovery.
     reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .unwrap_or_else(|error| panic!("direct oracle transport unavailable: {error}"))
 }
 
 fn egress_from_env(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
-    let choice = egress_choice(
-        std::env::var(EGRESS_ENV).ok().as_deref(),
-        std::env::var(PROXY_ENV).ok().as_deref(),
-    );
+    let choice = egress_choice(std::env::var(EGRESS_ENV).ok().as_deref());
     match choice {
         #[cfg(feature = "reqwest-oracle")]
         EgressChoice::Reqwest => Arc::new(ReqwestEgress::new(build_reqwest())),
@@ -134,22 +123,16 @@ fn egress_from_env(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
             tracing::warn!(
                 "{EGRESS_ENV}=reqwest needs the `reqwest-oracle` feature; using the owned transport"
             );
-            owned_egress(None, timings)
+            owned_egress(timings)
         }
-        EgressChoice::Owned { proxy } => owned_egress(proxy.as_deref(), timings),
+        EgressChoice::Owned => owned_egress(timings),
     }
 }
 
-/// Build the owned egress, optionally through a proxy.
-fn owned_egress(proxy: Option<&str>, timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
-    let built: Result<Arc<dyn Egress>, String> = match proxy {
-        Some(url) => netune::Proxy::parse(url)
-            .map_err(|error| error.to_string())
-            .and_then(crate::MutaNetEgress::with_proxy)
-            .map(|egress| Arc::new(egress.with_timings_slot(timings)) as Arc<dyn Egress>),
-        None => crate::MutaNetEgress::new()
-            .map(|egress| Arc::new(egress.with_timings_slot(timings)) as Arc<dyn Egress>),
-    };
+/// Build the direct owned egress.
+fn owned_egress(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
+    let built = crate::MutaNetEgress::new()
+        .map(|egress| Arc::new(egress.with_timings_slot(timings)) as Arc<dyn Egress>);
     match built {
         Ok(egress) => egress,
         Err(error) => {
@@ -195,8 +178,8 @@ impl Client {
     /// see the module docs for why streaming forbids both; the non-streaming
     /// bound is applied per request by [`Client::send_json`].
     ///
-    /// The transport is `reqwest` unless `MUTA_EGRESS=net` selects the owned
-    /// path (ADR-0200), optionally through `MUTA_PROXY`.
+    /// Production uses the direct owned transport (ADR-0200). The optional
+    /// `reqwest-oracle` build supports `MUTA_EGRESS=reqwest` for comparison.
     pub fn new() -> Self {
         let transport_timings = crate::egress::timings_slot();
         Self {
@@ -427,32 +410,15 @@ mod tests {
 
     #[test]
     fn the_transport_choice_is_pure_and_total() {
-        // With the cutover feature off (the default), an unset variable keeps
-        // reqwest; with it on, the owned transport is the default and
-        // `MUTA_EGRESS=reqwest` is the escape hatch.
         let default = if cfg!(feature = "net-transport-default") {
-            EgressChoice::Owned { proxy: None }
+            EgressChoice::Owned
         } else {
             EgressChoice::Reqwest
         };
-        assert_eq!(egress_choice(None, None), default);
-        assert_eq!(egress_choice(Some("reqwest"), None), EgressChoice::Reqwest);
-        assert_eq!(egress_choice(Some("reqwest"), None), EgressChoice::Reqwest);
-        assert_eq!(
-            egress_choice(Some("net"), None),
-            EgressChoice::Owned { proxy: None }
-        );
-        assert_eq!(
-            egress_choice(Some("net"), Some("http://127.0.0.1:8080")),
-            EgressChoice::Owned {
-                proxy: Some("http://127.0.0.1:8080".into())
-            }
-        );
-        // An empty proxy is the same as none.
-        assert_eq!(
-            egress_choice(Some("net"), Some("  ")),
-            EgressChoice::Owned { proxy: None }
-        );
+        assert_eq!(egress_choice(None), default);
+        assert_eq!(egress_choice(Some("reqwest")), EgressChoice::Reqwest);
+        assert_eq!(egress_choice(Some("net")), EgressChoice::Owned);
+        assert_eq!(egress_choice(Some("unknown")), default);
     }
 
     /// The streaming send path must NOT apply the non-streaming request

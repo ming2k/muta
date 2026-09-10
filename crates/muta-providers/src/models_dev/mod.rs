@@ -12,21 +12,24 @@
 //!
 //! The fetched catalog lives in **process memory only** — there is no on-disk
 //! cache, TTL, or background refresh. An explicit refresh ([`refresh`]) fetches
-//! once under a single-flight lock and replaces the in-memory document; every
-//! caller concurrently shares that one fetch. When the process starts cold and
-//! a fetch fails, the committed, pruned [`snapshot.json`](snapshot.json)
-//! embedded at build time is the offline floor. The per-connection reconciled
+//! once through a shared in-flight future and replaces the in-memory document; every
+//! caller concurrently shares that one fetch. On a cold read, the committed,
+//! pruned [`snapshot.json`](snapshot.json) embedded at build time is the offline
+//! floor; reads never fetch. The per-connection reconciled
 //! result is persisted by the caller (`muta-agent`'s `DiscoveryCache`), never
 //! here.
 
 mod schema;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use futures::{
+    FutureExt,
+    future::{BoxFuture, Shared},
+};
 use muta_contracts::ReasoningSupport;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::DiscoveredModel;
 
@@ -42,11 +45,32 @@ fn cell() -> &'static RwLock<Option<Arc<Catalog>>> {
     CELL.get_or_init(|| RwLock::new(None))
 }
 
-/// Single-flight guard: at most one upstream fetch runs at a time, and the
-/// losers of the race read the winner's result from [`cell`].
-fn fetch_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+/// A shared future retains the result for all overlapping callers, including
+/// failures. A later explicit refresh replaces a completed flight. If a caller
+/// is cancelled, another caller can continue polling the same bounded request.
+type RefreshFuture = Shared<BoxFuture<'static, Result<(), ModelsDevError>>>;
+
+#[derive(Default)]
+struct RefreshFlight(Mutex<Option<RefreshFuture>>);
+
+impl RefreshFlight {
+    async fn run(
+        &self,
+        fetch: impl Future<Output = Result<(), ModelsDevError>> + Send + 'static,
+    ) -> Result<(), ModelsDevError> {
+        let flight = {
+            let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            match slot.as_ref().filter(|flight| flight.peek().is_none()) {
+                Some(flight) => flight.clone(),
+                None => {
+                    let flight = fetch.boxed().shared();
+                    *slot = Some(flight.clone());
+                    flight
+                }
+            }
+        };
+        flight.await
+    }
 }
 
 /// Embedded snapshot of the models.dev catalog, pruned to the providers this
@@ -55,17 +79,13 @@ fn fetch_lock() -> &'static Mutex<()> {
 /// offline fallback on a cold start.
 static SNAPSHOT_JSON: &str = include_str!("snapshot.json");
 
-/// Hard timeout on a single fetch. Discovery runs on explicit user action; it
-/// must never block the app on a slow/unreachable directory.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// The upstream catalog endpoint.
 const CATALOG_URL: &str = "https://models.dev/api.json";
 
 const USER_AGENT: &str = concat!("muta/", env!("CARGO_PKG_VERSION"));
 
 /// Errors produced by the models.dev client.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ModelsDevError {
     /// The embedded snapshot is empty or unparseable (a build regression).
     Snapshot(String),
@@ -95,31 +115,28 @@ impl std::error::Error for ModelsDevError {}
 
 /// Force a single upstream fetch and replace the in-memory catalog (ADR-0227).
 ///
-/// This is the explicit refresh entry point. Concurrent and subsequent callers
+/// This is the explicit refresh entry point. Overlapping callers
 /// share the single fetch; on failure the last good in-memory catalog is left
 /// untouched and the error is returned, so a transient outage never shrinks the
 /// served set.
 pub async fn refresh() -> Result<(), ModelsDevError> {
-    let _guard = fetch_lock().lock().await;
-    let catalog = fetch().await?;
-    store(catalog).await;
-    Ok(())
+    static FLIGHT: OnceLock<RefreshFlight> = OnceLock::new();
+    FLIGHT
+        .get_or_init(RefreshFlight::default)
+        .run(async {
+            let catalog = fetch().await?;
+            store(catalog).await;
+            Ok(())
+        })
+        .await
 }
 
-/// Resolve a provider's model list, preferring the in-memory catalog. A cold
-/// process fetches once (single-flight) and caches the result; if that fetch
-/// fails, the embedded snapshot is the offline floor.
+/// Read the latest in-memory catalog or the compiled offline floor. Reading
+/// never starts network activity; only an explicit refresh fetches the source.
 pub async fn provider_models(provider_id: &str) -> Result<Vec<DevModel>, ModelsDevError> {
-    let catalog = match current_or_fetch().await {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                provider = provider_id,
-                "models.dev unavailable; using embedded snapshot"
-            );
-            Arc::new(parse_catalog(SNAPSHOT_JSON).map_err(ModelsDevError::Snapshot)?)
-        }
+    let catalog = match current().await {
+        Some(catalog) => catalog,
+        None => Arc::new(parse_catalog(SNAPSHOT_JSON).map_err(ModelsDevError::Snapshot)?),
     };
     provider_slice(&catalog, provider_id)
 }
@@ -184,20 +201,6 @@ fn from_dev_model(m: DevModel) -> DiscoveredModel {
     }
 }
 
-/// The current in-memory catalog, fetching it under the single-flight lock when
-/// the process has not populated it yet.
-async fn current_or_fetch() -> Result<Arc<Catalog>, ModelsDevError> {
-    if let Some(catalog) = current().await {
-        return Ok(catalog);
-    }
-    let _guard = fetch_lock().lock().await;
-    if let Some(catalog) = current().await {
-        return Ok(catalog);
-    }
-    let catalog = fetch().await?;
-    Ok(store(catalog).await)
-}
-
 async fn current() -> Option<Arc<Catalog>> {
     cell().read().await.clone()
 }
@@ -227,44 +230,73 @@ fn provider_slice(catalog: &Catalog, provider_id: &str) -> Result<Vec<DevModel>,
 /// Fetch `api.json` over the owned transport (ADR-0200): platform trust store,
 /// redirects and content-encoding handled by the same code the model path uses.
 async fn fetch() -> Result<Catalog, ModelsDevError> {
-    let connector = netune::TlsConnector::platform(netune::TcpConnector::new())
-        .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    let client = netune::Client::new(
-        connector,
-        netune::Pool::default(),
-        netune::ClientConfig {
-            user_agent: USER_AGENT.to_string(),
-            ..Default::default()
-        },
-    );
-    let (target, path) =
-        netune::Target::from_url(CATALOG_URL).map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    let head = netune::RequestHead::new(netune::Method::GET, path)
-        .with_header("accept", "application/json");
-    // One overall bound, request and body alike — the owned transport has no
-    // client-wide timeout by design (a streaming turn must not be cut), so the
-    // caller owns the deadline.
-    let request = async {
-        let mut response = client.request(&target, head, None).await?;
-        if !response.head.status.is_success() {
-            return Err(netune::NetError::Connect(format!(
-                "HTTP {}",
-                response.head.status
-            )));
-        }
-        let body = response.body.read_to_end().await?;
-        Ok::<_, netune::NetError>(String::from_utf8_lossy(&body).into_owned())
-    };
-    let body = tokio::time::timeout(REQUEST_TIMEOUT, request)
+    let response = crate::http::Http::control_plane()
+        .map_err(ModelsDevError::Fetch)?
+        .get(
+            CATALOG_URL,
+            &[("accept", "application/json"), ("user-agent", USER_AGENT)],
+        )
         .await
-        .map_err(|_| ModelsDevError::Fetch("timed out".to_string()))?
-        .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
+        .map_err(ModelsDevError::Fetch)?;
+    if !response.is_success() {
+        return Err(ModelsDevError::Fetch(format!("HTTP {}", response.status)));
+    }
+    let body = response.body;
     parse_catalog(&body).map_err(ModelsDevError::Parse)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_flight_shares_success_and_failure_then_allows_retry() {
+        for fails in [false, true] {
+            let flight = RefreshFlight::default();
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let producer_gate = Arc::clone(&gate);
+            let mut first = Box::pin(flight.run(async move {
+                producer_gate.notified().await;
+                if fails {
+                    Err(ModelsDevError::Fetch("offline".into()))
+                } else {
+                    Ok(())
+                }
+            }));
+            assert!(futures::poll!(&mut first).is_pending());
+            let mut second = Box::pin(flight.run(async { panic!("duplicate fetch") }));
+            assert!(futures::poll!(&mut second).is_pending());
+            gate.notify_one();
+            let (first, second) = tokio::join!(first, second);
+            assert_eq!(first.is_err(), fails);
+            assert_eq!(second.is_err(), fails);
+            if fails {
+                assert_eq!(
+                    first.unwrap_err().to_string(),
+                    second.unwrap_err().to_string()
+                );
+            }
+            assert!(flight.run(async { Ok(()) }).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_flight_survives_caller_cancellation() {
+        let flight = RefreshFlight::default();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let producer_gate = Arc::clone(&gate);
+        let mut first = Box::pin(flight.run(async move {
+            producer_gate.notified().await;
+            Ok(())
+        }));
+        assert!(futures::poll!(&mut first).is_pending());
+        drop(first);
+        let mut second =
+            Box::pin(flight.run(async { panic!("cancelled caller must not duplicate fetch") }));
+        assert!(futures::poll!(&mut second).is_pending());
+        gate.notify_one();
+        assert!(second.await.is_ok());
+    }
 
     fn snapshot() -> Catalog {
         parse_catalog(SNAPSHOT_JSON).expect("snapshot parses")

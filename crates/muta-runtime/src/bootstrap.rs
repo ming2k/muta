@@ -3,7 +3,7 @@
 //!
 //! [`assemble`] performs the full session startup that used to live inline in
 //! the `muta` binary's `main`: channel creation, custom-command discovery,
-//! config load + migrations, background live model discovery, store opens,
+//! config load + migrations, persisted model catalogs, store opens,
 //! the repeat scheduler, provider/skills/toolset wiring, `SubagentTool` layering,
 //! agent construction, MCP background connect, pursuit/todo/session-state
 //! restore, and finally [`SessionDriver`] construction — in the exact order

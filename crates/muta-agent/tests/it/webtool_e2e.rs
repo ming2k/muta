@@ -1,7 +1,7 @@
 //! Live-network end-to-end checks for the web tools.
 //!
 //! These are `#[ignore]`d by default (they hit the real network and depend on
-//! the local environment — e.g. a socks5 proxy on 127.0.0.1:1080). Run with:
+//! direct network access). Run with:
 //! `cargo test -p muta-agent --test webtool_e2e -- --ignored`.
 //!
 //! Together they verify the two-stage research pipeline end to end:
@@ -16,12 +16,11 @@
 use muta_agent::tools::{WebReaderTool, WebSearchTool};
 use muta_contracts::{Tool, WebConfig, WebReaderProvider, WebRuntimeConfig};
 
-/// Shape a config mirroring the developer workstation: socks5 proxy, Exa
+/// Shape a config mirroring the developer workstation: direct access, Exa
 /// one selected search provider plus the independently selected Jina reader.
 fn proxied_config() -> WebRuntimeConfig {
     WebRuntimeConfig {
         behavior: WebConfig {
-            proxy: Some("socks5h://127.0.0.1:1080".into()),
             timeout_secs: 30,
             reader: WebReaderProvider::Jina,
             ..WebConfig::default()
@@ -54,7 +53,7 @@ async fn search_then_reader_pipeline_works() {
     let results = search
         .call(r#"{"query":"rust async traits"}"#)
         .await
-        .expect("websearch through proxy");
+        .expect("websearch");
     assert!(results.contains("Search results"), "got: {results:.200}");
     assert!(results.contains("http"), "results should carry URLs");
 

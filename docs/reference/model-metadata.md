@@ -42,24 +42,37 @@ the corresponding value.
 An omitted remote field is not a negative capability. It retains the static
 baseline so partial provider responses do not erase useful local knowledge.
 
-## Discovery modes
+## Catalog discovery
 
-`model_source` applies only to a connection created from a built-in
-template.
+Each connection uses one source selected by its provider's `RemoteCatalogSource`
+or its `catalog_source` override:
 
-| Value | Behavior |
-|-------|----------|
-| `Fixed` | Uses the template's compiled-in seed list; no network request |
-| `Api` | Fetches the provider's model list at startup; the last valid result remains when the request fails or yields no usable models |
+| Source | Behavior |
+|--------|----------|
+| `Endpoint` | Reads the provider's catalog endpoint with the connection's credentials and client identity |
+| `ModelsDev` | Reads that provider's slice from the shared models.dev document |
+| `None` | Uses the compiled baseline without remote discovery |
 
-Most templates treat a live list as availability only. Their advertised ids are
-intersected with locally supported models, and static metadata remains active.
-Templates marked trusted may fit remote capability metadata and materialize
-provider-native model ids.
+Startup reads the persisted connection catalog and compiled baseline without
+fetching. Explicit refresh and connection lifecycle events fetch the selected
+source. There is no cross-source fallback or scheduled catalog refresh.
+Overlapping models.dev refreshes share one request and its result, including
+failures; a later explicit refresh starts another request. Reading the in-memory
+catalog or compiled snapshot never initiates a fetch.
+
+Directory requests use direct connections, platform certificate verification,
+and one 10-second deadline covering connection establishment, response headers,
+and the complete body. Timeout messages include the last observed transport
+phase. Model streams use their own streaming timeout policy.
+
+Each connection is persisted and published as it completes. Failed requests
+retain its previous model list and metadata. A valid empty endpoint catalog
+clears its discovered list. Source results still pass through provider and
+connection filtering and user include/exclude rules before becoming routes.
 
 ## GitHub Copilot
 
-The Copilot login template is a trusted `Api` source. Its model list controls
+The Copilot provider uses endpoint discovery. Its model list controls
 the selectable set and each selectable model's route.
 
 | Remote field | muta behavior |
@@ -77,23 +90,12 @@ than a generic static plan assumption.
 
 ## Persistence
 
-Trusted remote metadata is stored in the matching
-`[[providers.channels]]` entry as the optional `remote` table. It is managed by
-discovery; do not edit it to force unsupported provider behavior. A successful
-refresh replaces the snapshot. A failed refresh leaves the previous snapshot
-and its channel set intact.
+Discovery stores model ids, fitted capabilities, remote metadata, and ETag
+validation state per connection in
+`$XDG_STATE_HOME/muta/models_discovery.json`. Successful discovery replaces that
+connection's records; failures preserve them. Routes are derived from these
+records and the connection configuration rather than persisted as channel tables.
 
-```toml
-[[providers.channels]]
-label = "gpt-5"
-model = "gpt-5"
-auth = "CopilotOAuth"
-
-  [providers.channels.remote]
-  endpoint = "responses"
-  context_window = 200000
-  max_output_tokens = 16384
-  tool_call = true
-  vision = true
-  effort_levels = ["low", "medium", "high"]
-```
+The raw models.dev document exists only in daemon memory. The committed snapshot
+is the offline floor; `$XDG_CACHE_HOME/muta/models-dev.json` is not read or written.
+See [Paths](paths.md) for legacy file locations.

@@ -1165,7 +1165,6 @@ components:
           description: Revision returned by the last query or successful update.
         provider: { $ref: '#/components/schemas/WebSearchProvider' }
         reader: { $ref: '#/components/schemas/WebReaderProvider' }
-        proxy: { type: string, description: 'Empty string clears it.' }
         timeout_secs: { type: integer, minimum: 1 }
         searxng_url: { type: string, description: 'Required when search is searxng; empty clears.' }
         credential: { $ref: '#/components/schemas/WebCredentialUpdate' }
@@ -1226,7 +1225,6 @@ components:
         revision: { type: integer, minimum: 0 }
         provider: { $ref: '#/components/schemas/WebSearchProvider' }
         reader: { $ref: '#/components/schemas/WebReaderProvider' }
-        proxy: { type: string }
         timeout_secs: { type: integer, minimum: 1 }
         searxng_url: { type: string }
         search_credential: { $ref: '#/components/schemas/WebCredentialStatus' }

@@ -142,10 +142,7 @@ async fn main() {
         println!(
             "  selection: MUTA_EGRESS={:?} → {:?}",
             std::env::var("MUTA_EGRESS").unwrap_or_default(),
-            muta_llm_client::client::egress_choice(
-                std::env::var("MUTA_EGRESS").ok().as_deref(),
-                std::env::var("MUTA_PROXY").ok().as_deref(),
-            )
+            muta_llm_client::client::egress_choice(std::env::var("MUTA_EGRESS").ok().as_deref(),)
         );
     }
 

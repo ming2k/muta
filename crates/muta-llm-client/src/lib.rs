@@ -23,6 +23,7 @@ pub mod client;
 pub mod egress;
 pub mod endpoint;
 pub mod json;
+pub mod network;
 pub mod prompt_cache;
 pub mod protocol;
 pub mod request;

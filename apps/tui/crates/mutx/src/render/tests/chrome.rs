@@ -396,7 +396,6 @@ fn web_settings_split_search_and_reader_into_clear_panels() {
         revision: 0,
         provider: muta_contracts::WebSearchProvider::Exa,
         reader: muta_contracts::WebReaderProvider::Jina,
-        proxy: None,
         timeout_secs: 20,
         searxng_url: None,
         search_credential: muta_contracts::WebCredentialStatus::Stored,

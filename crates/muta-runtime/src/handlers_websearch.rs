@@ -13,7 +13,6 @@ fn view(config: &Config, shared: &SharedWebConfig) -> WebConfigView {
         revision: shared.revision(),
         provider: config.web.provider,
         reader: config.web.reader,
-        proxy: config.web.proxy.clone(),
         timeout_secs: config.web.timeout_secs,
         searxng_url: config.web.searxng_url.clone(),
         search_credential: resolved.search_credential,
@@ -73,7 +72,6 @@ pub async fn update(
 
     let changes_behavior = update.provider.is_some()
         || update.reader.is_some()
-        || update.proxy.is_some()
         || update.timeout_secs.is_some()
         || update.searxng_url.is_some();
     if changes_behavior && update.credential.is_some() {
@@ -123,13 +121,6 @@ pub async fn update(
     }
     if let Some(timeout) = update.timeout_secs {
         next.timeout_secs = timeout.max(1);
-    }
-    if let Some(proxy) = update.proxy.as_deref().map(str::trim) {
-        if !proxy.is_empty() && netune::Proxy::parse(proxy).is_err() {
-            let _ = resp_tx.send(AgentResponse::Error("Invalid web proxy URL".into()));
-            return;
-        }
-        next.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
     }
     if let Some(endpoint) = update.searxng_url.as_deref().map(str::trim) {
         if !endpoint.is_empty()

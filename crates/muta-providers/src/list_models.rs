@@ -11,17 +11,13 @@
 //! case); these ride along on [`DiscoveredModel`] as `Option`s, and the
 //! catalog decides per template whether to trust and persist them.
 //!
-//! ## Priority
+//! ## Source selection
 //!
-//! The catalog reconciliation layer decides which instances use live
-//! discovery via a `ModelSource` flag on `UserProviderConfig` (see
-//! `muta-persistence::config` and `muta_agent::catalog::reconcile_provider_models`).
-//! For `ModelSource::Api`, advertised capability fields ride on
-//! [`DiscoveredModel`] as `Option`s and the catalog folds them into the
-//! remote-catalog overlay (ADR-0203) per preset. Transport, status, and schema
-//! failures retain the last valid subset; a structurally valid empty catalog
-//! authoritatively clears it. `ModelSource::Fixed` skips the network entirely
-//! and uses the template snapshot.
+//! The preset's `RemoteCatalogSource` or the connection override selects one
+//! source. Endpoint discovery returns advertised metadata for reconciliation;
+//! transport, status and schema failures retain the previous connection list.
+//! A valid empty endpoint catalog is authoritative. Sources set to `None`
+//! use the compiled baseline without network discovery.
 //!
 //! ## Protocol details
 //!
@@ -48,7 +44,6 @@
 //! has a bare API root can pass it directly.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use muta_contracts::{ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol};
 use serde_json::Value;
@@ -168,11 +163,6 @@ impl std::error::Error for ModelListError {
         None
     }
 }
-
-/// How long a live model-list request may take before it is abandoned. Kept
-/// short: discovery runs at startup and must never block the app on a slow or
-/// unreachable relay — the snapshot fallback covers the gap.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// A model entry discovered from a provider's live `GET /models` list. The
 /// `id` is always present; every capability field is `None` when the endpoint
@@ -367,7 +357,7 @@ pub async fn discover_models(
     let endpoint = models_endpoint_for(req.protocol, req.base_url)?;
     let user_agent = req.user_agent.unwrap_or(crate::MUTA_USER_AGENT);
 
-    let client = crate::http::Http::new(REQUEST_TIMEOUT).map_err(ModelListError::Http)?;
+    let client = crate::http::Http::control_plane().map_err(ModelListError::Http)?;
 
     let response = match req.protocol {
         DiscoveryProtocol::OpenAi => {

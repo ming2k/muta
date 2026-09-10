@@ -258,13 +258,7 @@ fn draw_web_detail(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            ws.proxy
-                .as_deref()
-                .unwrap_or("Direct connection")
-                .to_string(),
-            Style::default().fg(props.theme.dim()),
-        ),
+        Span::styled("Direct connection", Style::default().fg(props.theme.dim())),
     ]));
 
     render_scrollable(

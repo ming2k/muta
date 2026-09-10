@@ -528,6 +528,93 @@ fn retry_metadata_is_data_on_provider_error() {
 }
 
 #[tokio::test]
+async fn provider_turn_context_survives_tools_and_retries_but_not_new_rounds() {
+    use std::sync::Mutex;
+    struct RecordingProvider {
+        inner: StreamingToolProvider,
+        contexts: Mutex<Vec<Arc<muta_contracts::ProviderTurnContext>>>,
+    }
+    #[async_trait]
+    impl Provider for RecordingProvider {
+        async fn chat(
+            &self,
+            request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+            self.inner.chat(request).await
+        }
+        async fn stream_chat(
+            &self,
+            request: muta_contracts::ModelRequest,
+        ) -> Result<
+            BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+            muta_contracts::ProviderError,
+        > {
+            self.inner.stream_chat(request).await
+        }
+        async fn stream_chat_events(
+            &self,
+            request: muta_contracts::ModelRequest,
+        ) -> Result<muta_contracts::ProviderEventStream, muta_contracts::ProviderError> {
+            let first = {
+                let mut contexts = self.contexts.lock().unwrap();
+                contexts.push(Arc::clone(&request.turn_context));
+                contexts.len() == 1
+            };
+            if first {
+                return Err(muta_contracts::ProviderError::new(
+                    "mock",
+                    muta_contracts::ProviderErrorKind::Unavailable,
+                    "retry",
+                )
+                .retryable(None));
+            }
+            self.inner.stream_chat_events(request).await
+        }
+    }
+    let provider = Arc::new(RecordingProvider {
+        inner: StreamingToolProvider(AtomicUsize::new(0)),
+        contexts: Mutex::default(),
+    });
+    let agent = Arc::new(Agent::new(
+        provider.clone(),
+        vec![Arc::new(StreamingReadTool(Arc::new(AtomicUsize::new(0))))],
+        crate::AgentIdentity::default(),
+    ));
+    let mut messages = vec![Message::new(Role::User, "run")];
+    let cancel = CancellationToken::new();
+    let mut round = agent.begin_streaming_round();
+    assert!(
+        agent
+            .resume_streaming_with_events(&mut messages, &cancel, &mut round, |_| {})
+            .await
+            .is_err()
+    );
+    agent
+        .resume_streaming_with_events(&mut messages, &cancel, &mut round, |_| {})
+        .await
+        .unwrap();
+    messages.push(Message::new(Role::User, "again"));
+    agent
+        .run_streaming_with_events(&mut messages, &cancel, |_| {})
+        .await
+        .unwrap();
+    let contexts = provider.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 4);
+    assert!(
+        Arc::ptr_eq(&contexts[0], &contexts[1]),
+        "retry preserves routing"
+    );
+    assert!(
+        Arc::ptr_eq(&contexts[1], &contexts[2]),
+        "tool continuation preserves routing"
+    );
+    assert!(
+        !Arc::ptr_eq(&contexts[2], &contexts[3]),
+        "new user round resets routing"
+    );
+}
+
+#[tokio::test]
 async fn streaming_tool_deltas_are_reassembled_and_executed() {
     let calls = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(

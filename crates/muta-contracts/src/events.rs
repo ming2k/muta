@@ -494,9 +494,6 @@ pub struct WebConfigUpdate {
     pub reader: Option<crate::WebReaderProvider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub proxy: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub timeout_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -521,9 +518,6 @@ pub struct WebConfigView {
     pub revision: u64,
     pub provider: crate::WebSearchProvider,
     pub reader: crate::WebReaderProvider,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub proxy: Option<String>,
     pub timeout_secs: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

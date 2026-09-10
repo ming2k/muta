@@ -1709,6 +1709,7 @@ dependencies = [
  "muta-llm-client",
  "muta-persistence",
  "netune",
+ "netune-trace",
  "serde",
  "serde_json",
  "sha2",

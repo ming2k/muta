@@ -792,6 +792,28 @@ pub enum ScopeTarget {
 mod tests {
     use super::Tool;
 
+    #[test]
+    fn provider_turn_context_is_transient_and_not_prompt_content() {
+        let request = super::ModelRequest::new(Vec::new());
+        let before = serde_json::to_value(&request).unwrap();
+        let token = request.turn_context.slot("route".into());
+        token.set("opaque-token".into()).unwrap();
+        let retry = request.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &request.turn_context,
+            &retry.turn_context
+        ));
+        assert_eq!(serde_json::to_value(&retry).unwrap(), before);
+        assert!(!format!("{request:?}").contains("opaque-token"));
+        assert!(
+            super::ModelRequest::ephemeral(Vec::new())
+                .turn_context
+                .slot("route".into())
+                .get()
+                .is_none()
+        );
+    }
+
     /// A minimal [`Tool`] stand-in so the schema tests can run without pulling
     /// in the whole tool crate.
     struct DummyTool {
