@@ -101,8 +101,8 @@ pub struct SessionData {
     /// Stats of the most recent model-context projection (prune or compaction).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_projection: Option<ContextProjectionCheckpoint>,
-    pub(crate) space: Option<String>,
     pub(crate) workspace: Option<muta_contracts::WorkspaceBinding>,
+    pub(crate) persona: Option<String>,
     /// Schema version of this session. Migrations are no longer applied —
     /// ADR-0186 is a clean break and legacy snapshots load as empty.
     pub(crate) schema_version: u32,
@@ -184,8 +184,8 @@ impl SessionData {
             updated_at: self.updated_at,
             transcript: muta_contracts::Transcript::default(),
             last_projection: self.last_projection.clone(),
-            space: self.space.clone(),
             workspace: self.workspace.clone(),
+            persona: self.persona.clone(),
             schema_version: self.schema_version,
             checksum: self.checksum,
             title: self.title.clone(),
@@ -247,8 +247,8 @@ impl Default for SessionData {
             updated_at: now,
             transcript: muta_contracts::Transcript::new(),
             last_projection: None,
-            space: None,
             workspace: default_workspace(),
+            persona: None,
             schema_version: CURRENT_SCHEMA_VERSION,
             checksum: None,
             title: None,
@@ -342,7 +342,7 @@ struct SessionRowChecksumView<'a> {
     id: &'a str,
     parent_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    space: Option<&'a str>,
+    persona: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<&'a muta_contracts::WorkspaceBinding>,
     provider_selection: Option<&'a ProviderSelection>,
@@ -371,7 +371,7 @@ impl<'a> From<&'a SessionData> for SessionRowChecksumView<'a> {
             generation: &data.generation,
             id: &data.id,
             parent_id: data.parent_id.as_deref(),
-            space: data.space.as_deref(),
+            persona: data.persona.as_deref(),
             workspace: data.workspace.as_ref(),
             provider_selection: data.provider_selection.as_ref(),
             request_usage_records: &data.request_usage_records,
@@ -520,8 +520,8 @@ impl SessionState {
 }
 
 pub struct SessionStore {
-    grouping: muta_contracts::SessionGrouping,
     workspace: Option<muta_contracts::WorkspaceBinding>,
+    persona: Option<String>,
     /// Directory holding every session file for this project (or, for
     /// [`SessionStore::for_path`], the parent of the pinned snapshot). All
     /// `reset` / `fork` / `open` targets live here, so the store never writes
@@ -567,8 +567,8 @@ fn load_or_seed(
     db_path: &Path,
     session_id: &str,
     blob_store: &BlobStore,
-    grouping: &muta_contracts::SessionGrouping,
     workspace: Option<&muta_contracts::WorkspaceBinding>,
+    persona: Option<&str>,
     legacy_file: Option<&Path>,
 ) -> SessionData {
     let engine_opt = crate::db::DatabaseEngine::open(db_path, None).ok();
@@ -614,8 +614,8 @@ fn load_or_seed(
     }
     SessionData {
         id,
-        space: grouping.space.clone(),
         workspace: workspace.cloned(),
+        persona: persona.map(str::to_string),
         ..Default::default()
     }
 }
@@ -1301,10 +1301,9 @@ pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), St
         .map_err(|e| format!("cannot open {}: {e}", db_path.display()))?;
     let mut examined = 0usize;
     let mut corrupt = 0usize;
-    let grouping =
-        project_root.map(|p| muta_contracts::SessionGrouping::workspace(p.to_path_buf()));
+    let filter = project_root.map(|p| muta_contracts::WorkspaceFilter::Path(p.to_path_buf()));
     for session in engine
-        .list_sessions(grouping.as_ref())
+        .list_sessions(filter.as_ref())
         .map_err(|e| e.to_string())?
     {
         examined += 1;

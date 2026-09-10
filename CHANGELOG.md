@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-09-10
+
+### Changed
+
+- **Session partition is the workspace only (ADR-0226, revised).** The
+  `SessionScope`/`SessionGrouping` abstraction and the follow-up `space`/
+  `Named`/`Personal` concept are removed. A session partitions by its
+  `workspace` (or is *unbound* when it has none); history queries use a
+  `WorkspaceFilter` (`Any` / `Path` / `Unbound`). SQLite schema v14 drops the
+  `space` column and adds a `persona` metadata column.
+- **`--resume`.** `mutx --persona <id> --resume` reopens the most recent
+  session for that persona (plus the resolved workspace when the persona binds
+  one); `--resume` alone reopens the most recent session in the current
+  workspace. Default remains a new session. A resumed session restores its
+  recorded persona identity.
+- `personas.toml` no longer accepts `space`.
+
 ## [0.45.0] - 2026-09-10
 
 ### Added
@@ -6745,7 +6762,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.45.1...HEAD
+[0.45.1]: https://github.com/ming2k/muta/compare/v0.45.0...v0.45.1
 [0.45.0]: https://github.com/ming2k/muta/compare/v0.44.0...v0.45.0
 [0.38.12]: https://github.com/ming2k/muta/compare/v0.38.11...v0.38.12
 [0.38.11]: https://github.com/ming2k/muta/compare/v0.38.10...v0.38.11

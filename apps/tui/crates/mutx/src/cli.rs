@@ -57,6 +57,8 @@ pub struct CliArgs {
     pub unattended: bool,
     /// `--persona <id>`: staff the new session with a persistent persona (ADR-0220).
     pub persona: Option<String>,
+    /// `--resume`: resume the most recent matching session instead of a new one.
+    pub resume: bool,
     /// `--no-confinement`: run with workspace filesystem confinement disabled.
     pub no_confinement: bool,
     /// `--interactive` / `-i`: force the TUI when headless would apply.
@@ -155,6 +157,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project = None;
     let mut unattended = false;
     let mut persona = None;
+    let mut resume = false;
     let mut no_confinement = false;
     let mut interactive = false;
     let mut prompt = None;
@@ -185,6 +188,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             }
             "--unattended" => unattended = true,
             "--persona" => persona = Some(flag_value("--persona", inline, &mut iter)?),
+            "--resume" => resume = true,
             "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
             "--json" | "-j" => json = true,
@@ -219,6 +223,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         project: project.clone(),
         unattended,
         persona: persona.clone(),
+        resume,
         no_confinement,
         interactive,
         prompt: prompt.clone(),

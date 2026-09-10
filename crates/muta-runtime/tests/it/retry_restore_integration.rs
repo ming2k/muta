@@ -32,7 +32,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
-        session_grouping: None,
+        persona: None,
         unattended: false,
         confined: true,
         teardown_token: None,
@@ -112,8 +112,8 @@ async fn retry_point_survives_process_death_and_projects_accurate_harness_state(
     }
 }
 
-/// ADR-0219/0220: a workspace-free explicit scope assembles without binding a
-/// filesystem workspace. The session store is pinned to the `persona:` lane
+/// ADR-0220/0226: a workspace-free explicit grouping assembles without binding
+/// a filesystem workspace. The store is pinned to the persona's named grouping
 /// and carries no workspace binding, so no workspace tool root is provided.
 #[tokio::test]
 async fn workspace_free_scope_assembles_without_a_workspace() {
@@ -126,7 +126,7 @@ async fn workspace_free_scope_assembles_without_a_workspace() {
         ui: Arc::new(HeadlessProbe),
         startup: SessionStart::Fresh,
         project_root: None,
-        session_grouping: Some(muta_contracts::SessionGrouping::named("english-practice")),
+        persona: Some("english-practice".to_string()),
         unattended: false,
         confined: true,
         teardown_token: None,
@@ -137,12 +137,12 @@ async fn workspace_free_scope_assembles_without_a_workspace() {
     .expect("workspace-free assemble succeeds");
 
     assert_eq!(
-        boot.session.grouping().label(),
-        "english-practice",
-        "the session must live in its persona lane"
+        boot.session.persona(),
+        Some("english-practice"),
+        "the staffing persona is recorded as metadata"
     );
     assert!(
         boot.session.workspace().is_none(),
-        "no workspace binding may be invented for a workspace-free scope"
+        "no workspace binding is bound for a workspace-free session"
     );
 }

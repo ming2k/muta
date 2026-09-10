@@ -143,6 +143,11 @@ pub struct SessionInitOptions {
     /// workspace-scoped coding principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
+    /// Resume the most recent matching session instead of creating a new one
+    /// (ADR-0226). With `persona`, matches by persona (and workspace when the
+    /// persona binds one).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume: bool,
 }
 
 const fn default_confined() -> bool {
@@ -155,6 +160,7 @@ impl Default for SessionInitOptions {
             unattended: false,
             confined: true,
             persona: None,
+            resume: false,
         }
     }
 }
@@ -165,6 +171,7 @@ impl SessionInitOptions {
             unattended,
             confined,
             persona: None,
+            resume: false,
         }
     }
 
@@ -173,8 +180,13 @@ impl SessionInitOptions {
         self
     }
 
+    pub fn with_resume(mut self, resume: bool) -> Self {
+        self.resume = resume;
+        self
+    }
+
     pub fn is_default(&self) -> bool {
-        !self.unattended && self.confined && self.persona.is_none()
+        !self.unattended && self.confined && self.persona.is_none() && !self.resume
     }
 }
 

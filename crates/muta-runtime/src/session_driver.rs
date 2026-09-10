@@ -1179,11 +1179,9 @@ impl SessionDriver {
                             .set_hooks(crate::hooks::build_hook_registry(&effective.hooks, &agent));
                         effective
                     } else {
-                        // Workspace-free scope: there are no project assets to trust.
+                        // Workspace-free session: there are no project assets to trust.
                         agent.set_workspace_security(
-                            muta_contracts::WorkspaceSecuritySnapshot::new(
-                                session.grouping().label(),
-                            ),
+                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
                         );
                         muta_persistence::config::Config::load()
                     };

@@ -50,9 +50,6 @@ pub struct Persona {
     pub persona: Option<String>,
     pub preset: String,
     pub workspace: Option<PersonaWorkspace>,
-    /// Optional default conversation space for a workspace-free persona
-    /// (ADR-0226). The space is the user's label, not the persona's identity.
-    pub space: Option<String>,
     pub unattended: bool,
     pub connection: Option<String>,
     pub model: Option<String>,
@@ -66,7 +63,6 @@ impl Default for Persona {
             persona: None,
             preset: default_preset(),
             workspace: None,
-            space: None,
             unattended: false,
             connection: None,
             model: None,
@@ -96,13 +92,6 @@ impl Persona {
                 PersonaWorkspace::Inherit
             }
         })
-    }
-
-    /// The persona's default conversation space, when declared (ADR-0226).
-    /// `None` means the Personal space. This is a convenience default, not an
-    /// identity: the space is user-owned and persona-independent.
-    pub fn resolved_space(&self) -> Option<String> {
-        self.space.clone()
     }
 
     /// The identity bound at agent construction (ADR-0053).
@@ -222,7 +211,6 @@ workspace = "none"
         let persona = config.get("english-practice").unwrap();
         assert_eq!(persona.preset_id(), AgentPersonaId::Conversational);
         assert_eq!(persona.resolved_workspace(), PersonaWorkspace::None);
-        assert_eq!(persona.resolved_space(), None);
         assert_eq!(
             persona.identity().preamble(),
             "You are English Practice, a patient English conversation partner who corrects gently."

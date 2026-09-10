@@ -587,8 +587,8 @@ impl SessionStore {
     pub async fn open_side(&self, side_id: &str) -> Result<SessionStore, String> {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let db_path = self.db_path.clone();
-        let grouping = self.grouping.clone();
         let workspace = self.workspace.clone();
+        let persona = self.persona.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
         let engine = crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
         let data = if let Some(data) = engine
@@ -601,16 +601,16 @@ impl SessionStore {
                 &db_path,
                 side_id,
                 &blob_store,
-                &grouping,
                 workspace.as_ref(),
+                persona.as_deref(),
                 Some(&side_path),
             )
         } else {
             return Err(format!("Side session '{side_id}' was not found."));
         };
         Ok(SessionStore {
-            grouping,
             workspace,
+            persona,
             sessions_dir: self.sessions_dir.clone(),
             db_path,
             blob_store,
@@ -692,8 +692,8 @@ fn admit_subagent_children(state: &mut SessionData, candidates: &[Message]) -> V
             id: subagent_id.clone(),
             parent_id: Some(state.id.clone()),
             fork_kind: muta_contracts::SessionForkKind::Subagent,
-            space: state.space.clone(),
             workspace: state.workspace.clone(),
+            persona: state.persona.clone(),
             ..Default::default()
         };
         subagent.transcript = rebuild_transcript_from_messages(children);

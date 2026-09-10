@@ -57,11 +57,11 @@ pub struct BootstrapParams {
     /// How the session begins (ADR-0116: only the assembly-relevant
     /// shapes exist here; one-shot CLI modes never reach the harness).
     pub startup: SessionStart,
-    /// `--project` override; when `None`, the current directory is used.
+    /// `--project` override: the workspace partition. `None` = workspace-free.
     pub project_root: Option<PathBuf>,
-    /// Explicit conversation scope (ADR-0219/0220): a persona lane whose
-    /// workspace is `project_root`. `None` = the default workspace scope.
-    pub session_grouping: Option<muta_contracts::SessionGrouping>,
+    /// The persona staffing this session, if any (ADR-0225). Recorded on
+    /// the session as metadata; `None` for the default coding principal.
+    pub persona: Option<String>,
     /// `--unattended` at start (unattended execution): auto-approve tool permissions.
     pub unattended: bool,
     /// Workspace filesystem confinement (default true). False (`--no-confinement`) bypasses confinement.
@@ -160,7 +160,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        session_grouping,
+        persona,
         unattended: unattended_at_start,
         confined: confined_at_start,
         human_channel,
@@ -243,29 +243,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // transient outage never degrades the catalog.
     muta_agent::dynamic::spawn_refresh(muta_models_dev::DynamicModelsDev);
 
-    // Resolve the binding (ADR-0219/0220). An explicit scope (persona/
-    // ephemeral) may be workspace-free (`project_root = None`); otherwise the
-    // session is a workspace scope rooted at the project override or cwd.
-    let explicit_grouping = session_grouping;
-    let workspace_root: Option<PathBuf> = if explicit_grouping.is_some() {
-        project_override.clone()
-    } else {
-        Some(project_override.clone().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        }))
-    };
-    let grouping = explicit_grouping.unwrap_or_else(|| {
-        muta_contracts::SessionGrouping::workspace(
-            workspace_root
-                .as_ref()
-                .map(|root| root.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        )
-    });
+    // A session's partition is its workspace: `--project`/cwd when present, or
+    // `None` for a workspace-free persona (ADR-0226). `persona` is recorded on
+    // the session as metadata (which principal staffed it), used for `--resume`.
+    let workspace_root: Option<PathBuf> = project_override;
     let workspace = workspace_root
         .as_ref()
         .map(muta_contracts::WorkspaceBinding::new);
-    let grouping_label = grouping.label();
 
     // Initialize Agent logic. The provider is resolved through the model
     // catalog (`build_provider_for`), the single source of truth for the
@@ -285,7 +269,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // `?`) rather than a silent fresh-session fallback, so the operator knows
     // the attach never happened. `mutx attach` (no id) opens the sessions
     // picker overlay instead of guessing.
-    let session = Arc::new(SessionStore::for_grouping(grouping, workspace));
+    let session = Arc::new(SessionStore::for_workspace(workspace, persona));
     let open_picker_on_start = match &startup {
         SessionStart::Fresh | SessionStart::FreshWithPrompt(_) => false,
         SessionStart::Picker => true,
@@ -402,7 +386,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
     let security_snapshot = match &workspace_root {
         Some(root) => workspace_security.snapshot(root),
-        None => muta_contracts::WorkspaceSecuritySnapshot::new(grouping_label),
+        None => muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
     };
     let mut additional_roots: Vec<std::path::PathBuf> = Vec::new();
     let resolved_additional = match &workspace_root {

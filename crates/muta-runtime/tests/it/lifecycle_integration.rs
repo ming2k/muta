@@ -120,7 +120,6 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
     ));
     registry
         .host(HostedSession {
-            grouping: muta_contracts::SessionGrouping::workspace(project),
             workspace_root: Some(std::path::PathBuf::from(project)),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
@@ -373,9 +372,6 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         ));
         registry
             .host(HostedSession {
-                grouping: muta_contracts::SessionGrouping::workspace(
-                    project_root.to_string_lossy().into_owned(),
-                ),
                 workspace_root: Some(project_root.to_path_buf()),
                 human_channel: std::sync::Arc::new(
                     muta_contracts::human_request::HumanChannelAccountant::new(),

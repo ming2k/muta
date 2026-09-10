@@ -21,6 +21,7 @@ pub async fn run_headless(
     unattended: bool,
     confined: bool,
     persona: Option<String>,
+    resume: bool,
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,8 +71,9 @@ pub async fn run_headless(
             muta_contracts::human_request::HumanChannelPosture::Autonomous
         });
     }
-    let init_options =
-        muta_contracts::SessionInitOptions::new(unattended, confined).with_persona(persona);
+    let init_options = muta_contracts::SessionInitOptions::new(unattended, confined)
+        .with_persona(persona)
+        .with_resume(resume);
     let action = AttachAction::New(if init_options.is_default() {
         None
     } else {

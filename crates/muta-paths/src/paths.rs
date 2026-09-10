@@ -250,16 +250,16 @@ impl Dirs {
         self.project_dir(project_root).join("sessions")
     }
 
-    /// Directory bucket for a non-workspace session grouping (ADR-0226):
-    /// `projects/<hash>`. Personal and named-space groupings have no workspace
-    /// path, so their stable bucket derives from the grouping key.
-    pub fn grouping_dir(&self, bucket_key: &str) -> PathBuf {
-        self.projects_dir().join(grouping_bucket_name(bucket_key))
+    /// Directory bucket for a workspace-free (unbound) session set:
+    /// `projects/<hash(key)>`. Unbound sessions have no workspace path, so
+    /// their stable bucket derives from a fixed key (ADR-0226).
+    pub fn bucket_dir(&self, bucket_key: &str) -> PathBuf {
+        self.projects_dir().join(bucket_name(bucket_key))
     }
 
-    /// Per-grouping sessions directory for a non-workspace grouping.
-    pub fn grouping_sessions_dir(&self, bucket_key: &str) -> PathBuf {
-        self.grouping_dir(bucket_key).join("sessions")
+    /// Sessions directory for a workspace-free (unbound) session set.
+    pub fn bucket_sessions_dir(&self, bucket_key: &str) -> PathBuf {
+        self.bucket_dir(bucket_key).join("sessions")
     }
 
     /// Per-project `/debug trace` capture directory: `projects/<bucket>/network`.
@@ -637,10 +637,10 @@ pub fn project_bucket_name(project_root: &Path) -> String {
     out
 }
 
-/// Map a non-workspace scope key to a stable, ASCII-safe bucket name. Mirrors
-/// [`project_bucket_name`] (first 16 hex chars of SHA-256) so a persona or
-/// ephemeral scope has one reproducible on-disk bucket.
-pub fn grouping_bucket_name(bucket_key: &str) -> String {
+/// Map a workspace-free bucket key to a stable, ASCII-safe bucket name.
+/// Mirrors [`project_bucket_name`] (first 16 hex chars of SHA-256) so the
+/// unbound session set has one reproducible on-disk bucket.
+pub fn bucket_name(bucket_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bucket_key.as_bytes());

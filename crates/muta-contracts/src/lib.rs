@@ -157,8 +157,8 @@ pub use execution::{
 };
 pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 
-pub mod grouping;
-pub use grouping::{SessionGrouping, WorkspaceBinding};
+pub mod workspace;
+pub use workspace::{WorkspaceBinding, WorkspaceFilter};
 
 pub mod session_title;
 

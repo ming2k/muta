@@ -232,7 +232,7 @@ impl Tool for ArchivistSearchHistoryTool {
         let query = args["query"].as_str().ok_or("Missing 'query' argument")?;
         let workspace = args["workspace"].as_str();
         let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 100) as usize;
-        let grouping = workspace.map(muta_contracts::SessionGrouping::workspace);
+        let filter = workspace.map(|w| muta_contracts::WorkspaceFilter::Path(w.into()));
 
         let engine = DatabaseEngine::open(&paths::get().db_file(), None)
             .map_err(|e| format!("could not open session store: {e}"))?;
@@ -241,12 +241,12 @@ impl Tool for ArchivistSearchHistoryTool {
         // words never co-occur still recalls candidates.
         let mut relaxed = false;
         let mut hits = engine
-            .search_history(query, grouping.as_ref(), limit)
+            .search_history(query, filter.as_ref(), limit)
             .map_err(|e| format!("history search failed: {e}"))?;
         if hits.is_empty() {
             relaxed = true;
             hits = engine
-                .search_history_relaxed(query, grouping.as_ref(), limit)
+                .search_history_relaxed(query, filter.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))?;
         }
 
@@ -256,7 +256,7 @@ impl Tool for ArchivistSearchHistoryTool {
                 json!({
                     "session_id": h.session_id,
                     "session_title": h.session_title,
-                    "scope": h.workspace_root.clone().or_else(|| h.space.clone()).unwrap_or_else(|| "Personal".to_string()),
+                    "scope": h.workspace_root.clone().unwrap_or_else(|| "workspace-free".to_string()),
                     "role": h.role,
                     "snippet": strip_highlight(&h.snippet),
                     "relevance": -h.score,
@@ -311,12 +311,12 @@ impl Tool for ArchivistListSessionsTool {
         let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let workspace = args["workspace"].as_str();
         let limit = args["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
-        let grouping = workspace.map(muta_contracts::SessionGrouping::workspace);
+        let filter = workspace.map(|w| muta_contracts::WorkspaceFilter::Path(w.into()));
 
         let engine = DatabaseEngine::open(&paths::get().db_file(), None)
             .map_err(|e| format!("could not open session store: {e}"))?;
         let rows = engine
-            .list_sessions(grouping.as_ref())
+            .list_sessions(filter.as_ref())
             .map_err(|e| format!("session listing failed: {e}"))?;
 
         let sessions: Vec<serde_json::Value> = rows
@@ -326,7 +326,7 @@ impl Tool for ArchivistListSessionsTool {
                 json!({
                     "session_id": s.id,
                     "title": s.title,
-                    "scope": s.workspace_root.clone().or_else(|| s.space.clone()).unwrap_or_else(|| "Personal".to_string()),
+                    "scope": s.workspace_root.clone().unwrap_or_else(|| "workspace-free".to_string()),
                     "message_count": s.msg_count,
                     "created_at_s": s.created_at_s,
                     "updated_at_s": s.updated_at_s,
@@ -427,7 +427,7 @@ impl Tool for ArchivistReadSessionTool {
             "session_id": view.id,
             "title": view.title,
             "digest": view.digest,
-            "scope": view.workspace_root.clone().or_else(|| view.space.clone()).unwrap_or_else(|| "Personal".to_string()),
+            "scope": view.workspace_root.clone().unwrap_or_else(|| "workspace-free".to_string()),
             "message_count": view.message_count,
             "returned_messages": messages.len(),
             "messages": messages,

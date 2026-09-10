@@ -1,111 +1,129 @@
-# 0226. Session grouping is derived (retire SessionScope; workspace + space)
+# 0226. Session partition is the workspace; persona is metadata (no scope type)
 
 - **Status:** Proposed
-- **Date:** 2026-09-10
-- **Supersedes:** [ADR-0219](0219-session-scope-and-optional-workspace-binding.md)'s `SessionScope` / `ScopeKind` model. The workspace-binding and lossless-migration decisions of ADR-0219 are retained.
-- **Builds on:** [ADR-0225](0225-persona-owns-identity-and-capability.md).
+- **Date:** 2026-09-10 (revised 2026-09-10)
+- **Supersedes:** [ADR-0219](0219-session-scope-and-optional-workspace-binding.md)'s `SessionScope` model. The workspace-binding and lossless-migration guarantees are retained.
+- **Builds on:** [ADR-0220](0220-personas-persisted-named-principals.md), [ADR-0225](0225-persona-owns-identity-and-capability.md).
 
 ## Context
 
-ADR-0219 decoupled the session partition key from `project_root` by introducing
-`SessionScope { Workspace(WorkspaceKey), Persona(PersonaKey), Ephemeral }`,
-stored as a single namespaced `scope_key`. Two problems surfaced:
+Sessions all live in one global SQLite database, so history must be partitioned:
+`list` / `resume` / search need an unambiguous "which sessions belong together".
 
-1. **Over-abstraction.** `ScopeKind`, namespaced keys, and `label()` elevate an
-   internal partition key into a named domain concept. Users do not think in
-   "lanes"; they think in projects and conversations.
-2. **Persona conflation.** `SessionScope::Persona(id)` makes the persona *own*
-   the history. But a persona is a switchable identity + capability
-   (ADR-0225) — a hat, not a room. Tying grouping to it means switching
-   identity would move or strand history.
+ADR-0219 modelled that partition as a first-class `SessionScope` enum
+(`Workspace` / `Persona` / `Ephemeral`) persisted as a namespaced `scope_key`.
+Two problems surfaced:
 
-Grouping is what actually matters: `list` / `resume` / search / isolation need
-one unambiguous, derivable key. It does not need to be a stored, typed object.
+1. **Over-abstraction.** A named, typed "scope/lane" with kinds and prefixes
+   elevated an internal partition key into a user-facing concept. The partition
+   is really just "which workspace, if any".
+2. **Persona conflation.** `SessionScope::Persona(id)` made the persona *own*
+   the history, contradicting the persona-as-switchable-principal model
+   (ADR-0225). A persona is a hat, not a room.
+
+A follow-up iteration added a user-configured `space` + `Named` variant so
+workspace-free personas could separate their histories. That too was rejected:
+it invented a partition concept for a case (`workspace = none`) that needs none,
+and required the user to hand-author a namespace.
 
 ## Decision
 
-### 1. Concrete session fields, no scope type
+### 1. The partition is the workspace, and nothing else
 
 ```rust
 pub struct Session {
-    /// Where tools act. When present it is the grouping key.
-    pub workspace: Option<PathBuf>,
-    /// Explicit, user-named conversation space for workspace-free sessions.
-    pub space: Option<String>,
-    // persona: AgentPersona — identity + capability, orthogonal to grouping.
+    pub workspace: Option<WorkspaceBinding>, // Some = a project; None = unbound
+    pub persona: Option<String>,             // metadata: which principal staffed it
 }
 ```
 
-### 2. Grouping is derived
+A session bound to a directory partitions by that directory; a session with no
+workspace is simply **unbound** (`workspace_root IS NULL`). There is no scope,
+no lane, no space, no `Named`, no `Personal` object — "unbound" is the absence
+of a workspace, not a named bucket.
 
+### 2. No partition type
+
+`SessionScope`, `ScopeKind`, `scope_key`, `SessionGrouping`, `space`, and the
+`Named`/`Personal` variants are deleted. The only remaining notion is a query
+filter:
+
+```rust
+pub enum WorkspaceFilter { Any, Path(PathBuf), Unbound }
 ```
-grouping_key = workspace_root  ??  space  ??  Personal
-```
 
-`Personal` is a single implicit space for workspace-free sessions that name
-none. A persona never contributes to the grouping key.
+`WorkspaceFilter` is the shape of a `WHERE` clause (any / a specific workspace /
+the unbound set), not a domain entity.
 
-### 3. Non-workspace separation is explicit
+### 3. Persona is metadata, used for resume
 
-A workspace-free session that wants its own space names it (`mutx --space
-philosophy`). A persona may declare a **default space** as a convenience, but
-the space is the user's label, not the persona's identity: two personas may
-share a space, and deleting a persona never affects a space.
+`persona` records which principal staffed a session. It does **not** partition
+history and never appears in the grouping key. It exists so a workspace-free
+conversation can be found again and its identity restored on resume.
 
-### 4. Storage
+### 4. Resume semantics
 
-DB v13 removes `scope_kind` / `scope_key` and adds `space`:
+- Default: a new session.
+- `--resume`: the most recent session matching the request —
+  - with `--persona <id>`: match `persona = id`, plus the resolved workspace
+    (`inherit` → current directory, `fixed` → declared path) or unbound
+    (`workspace = none`);
+  - without a persona: the most recent session in the current workspace (or
+    unbound) set.
+  If no match exists, a new session is created.
+
+On resume the stored `persona` restores the principal's identity (otherwise a
+resumed persona session would lose its identity).
+
+### 5. Storage (schema v14)
+
+`sessions` drops `space` and adds `persona`:
 
 ```sql
--- sessions
-workspace_root   TEXT,          -- retained from ADR-0219; grouping when present
-space            TEXT,          -- grouping for workspace-free sessions
--- scope_kind / scope_key dropped
+-- retained: workspace_root TEXT, additional_roots TEXT
+persona TEXT
+-- dropped: scope_kind, scope_key (v13), space (v14)
+CREATE INDEX idx_sessions_persona ON sessions(persona, workspace_root, updated_at_s DESC);
 ```
 
-Grouping queries filter on `workspace_root = ?1 OR (workspace_root IS NULL AND
-space = ?2)` (and `Personal` for both null). Existing rows migrate as
-`workspace_root` from `scope_key` when it is a workspace scope; persona /
-ephemeral rows migrate to `space = 'Personal'` (their histories are preserved,
-not re-keyed to a persona).
-
-### 5. `SessionStore` is pinned to a grouping, not a scope
-
-`SessionStore::for_grouping(workspace, space)` replaces `for_scope`.
+Migration is lossless for the partition: workspace sessions keep their
+`workspace_root`; every non-workspace session becomes unbound.
 
 ## Invariants & Behavioral Boundaries
 
-1. **Grouping is derived, never a stored opaque object.** No `SessionScope`,
-   `ScopeKind`, or `scope_key` survives.
-2. **Persona is orthogonal to grouping.** No persona id appears in the grouping
-   key; switching persona never moves history.
-3. **Workspace-first.** When a workspace is bound, it alone is the grouping key
-   (workspace-free subdivision does not apply).
-4. **`space` is user-owned.** Deleting/re-adding personas never affects a
-   space or its history.
-5. **Lossless migration.** Existing workspace sessions keep their grouping;
-   existing non-workspace sessions land in `Personal`.
+1. **Partition = workspace.** A session's partition is its workspace root, or
+   unbound. No other key exists.
+2. **No partition type.** No `SessionScope` / `SessionGrouping` / `space` /
+   `Named` / `Personal` concept survives.
+3. **Persona is metadata.** It never contributes to the partition; deleting a
+   persona never affects a session's partition.
+4. **Unbound is the absence of a workspace**, not a named bucket.
+5. **Resume restores identity.** A resumed session re-applies its recorded
+   persona.
+6. **Lossless migration.** Workspace grouping is preserved across v13 → v14.
 
 ## Alternatives considered
 
-- **Keep `SessionScope`.** Rejected. Over-abstracted and conflates persona with
-  grouping.
-- **Merge persona and grouping (persona owns the lane).** Rejected. Switching a
-  persona would move history; a workspace-bound persona would have two owners.
-- **No grouping for workspace-free sessions (one global recency list).**
-  Considered; rejected in favour of an explicit, optional `space` so a user can
-  separate topics without inventing a workspace.
-- **Single `Personal` space only.** Kept as the default; `space` is the opt-in
-  refinement.
+- **Keep `SessionScope` (Workspace/Persona/Ephemeral).** Rejected:
+  over-abstracted; conflates persona with grouping.
+- **Keep a user-configured `space`/`Named`.** Rejected: a partition concept
+  invented for a case that needs none; user-authored namespace with no domain
+  meaning.
+- **Group workspace-free conversations by persona (persona-owned lane).**
+  Rejected: switching a persona would move or strand history; a workspace-bound
+  persona would have two owners.
+- **A `SessionGrouping { workspace, space }` value type.** Rejected: two
+  `Option`s that cannot express "workspace wins" without normalization; a
+  single workspace binding suffices.
 
 ## Consequences
 
-- `SessionScope`/`ScopeKind`/`WorkspaceKey`/`PersonaKey`/`EphemeralKey` and
-  `scope_key` are deleted; `workspace` + `space` are the concrete fields.
-- Registry indexes and auto-bind key on the derived grouping.
-- `personas.toml` no longer defines a lane; it may carry a default space.
+- `SessionData` carries `workspace: Option<WorkspaceBinding>` and
+  `persona: Option<String>`; `SessionStore` is pinned to an optional workspace.
+- Every history query filters on `workspace_root` (`Any` / `Path` / `Unbound`).
+- `mutx --resume` (with optional `--persona`) resumes; default is new.
 - ADR-0219's scope model is superseded; its workspace-binding and migration
-  guarantees stand.
+  guarantees stand. ADR-0220's `personas.toml` no longer carries `space`.
 
 ## References
 
