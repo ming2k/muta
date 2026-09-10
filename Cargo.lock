@@ -1640,21 +1640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "muta-models-dev"
-version = "0.45.1"
-dependencies = [
- "chrono",
- "mockito",
- "muta-contracts",
- "muta-persistence",
- "netune",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "muta-paths"
 version = "0.45.1"
 dependencies = [
@@ -1722,7 +1707,6 @@ dependencies = [
  "mockito",
  "muta-contracts",
  "muta-llm-client",
- "muta-models-dev",
  "muta-persistence",
  "netune",
  "serde",
@@ -1748,7 +1732,6 @@ dependencies = [
  "muta-agent",
  "muta-contracts",
  "muta-mcp",
- "muta-models-dev",
  "muta-paths",
  "muta-persistence",
  "muta-platform",

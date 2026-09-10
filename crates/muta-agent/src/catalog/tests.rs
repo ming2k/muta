@@ -674,7 +674,7 @@ async fn live_discovery_writes_the_per_instance_cache() {
     creds.set_api_key("deepseek", Some("sk-test".into()));
     creds.save().unwrap();
 
-    let outcome = discover_provider_models(true).await;
+    let outcome = discover_provider_models().await;
     assert!(outcome.changed, "discovery must record a change");
     assert!(outcome.failures.is_empty());
 
@@ -756,7 +756,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         store.save().expect("auth store save");
     }
 
-    let outcome = discover_connection_models("agy-live", true).await;
+    let outcome = discover_connection_models("agy-live").await;
     assert!(
         outcome.changed,
         "antigravity live discovery must record a change"
@@ -806,7 +806,7 @@ async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models(true).await;
+    let outcome = discover_provider_models().await;
     assert!(outcome.changed, "models.dev discovery must record a change");
     assert!(
         outcome.failures.is_empty(),
@@ -871,7 +871,7 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models(true).await;
+    let outcome = discover_provider_models().await;
     assert!(
         !outcome.changed,
         "failed discovery must not record a change"
@@ -928,7 +928,7 @@ async fn connection_discovery_never_touches_unrelated_connections() {
     creds.set_api_key("unrelated", Some("sk-unrelated".into()));
     creds.save().unwrap();
 
-    let outcome = discover_connection_models("selected", true).await;
+    let outcome = discover_connection_models("selected").await;
     assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
     assert!(
         outcome.failures.is_empty(),
@@ -967,7 +967,7 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models(true).await;
+    let outcome = discover_provider_models().await;
     assert!(!outcome.changed);
     assert_eq!(outcome.failures.len(), 1);
     assert_eq!(outcome.failures[0].0, "deepseek");
@@ -1012,7 +1012,7 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
         .insert("deepseek".to_string(), ModelListCacheState::default());
     cache.save().unwrap();
 
-    let outcome = discover_connection_models("deepseek", true).await;
+    let outcome = discover_connection_models("deepseek").await;
     assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
     assert!(outcome.failures.is_empty());
     model_list.assert_async().await;
@@ -1306,7 +1306,7 @@ async fn discovery_never_resurrects_deleted_connection() {
     locked_cache.remove_connection("deleted-conn");
     locked_cache.save().unwrap();
 
-    let outcome = discover_connection_models("deleted-conn", true).await;
+    let outcome = discover_connection_models("deleted-conn").await;
     assert!(!outcome.changed);
 
     let final_cache = DiscoveryCache::load();

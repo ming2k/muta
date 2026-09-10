@@ -420,7 +420,7 @@ pub(crate) async fn add(
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
     if auth.is_oauth() && auth != muta_contracts::ConnectionAuth::AntigravityOAuth {
-        let outcome = catalog::discover_connection_models(&name, true).await;
+        let outcome = catalog::discover_connection_models(&name).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
             catalog::prune_stale_models_on_disk();
@@ -1326,7 +1326,7 @@ pub async fn connect_post_oauth(
     // fresh token so the picker shows the account's real entitlements right
     // away. A failure keeps the previous subset; each failure is reported back
     // as a warning so the user knows *why* the list did not refresh.
-    let outcome = catalog::discover_connection_models(&provider_id, true).await;
+    let outcome = catalog::discover_connection_models(&provider_id).await;
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
@@ -1640,32 +1640,50 @@ pub async fn set_default_model(
     .await;
 }
 
-/// Apply the result of a completed model discovery run without blocking the session loop during network fetch.
+/// Apply one connection's streamed discovery result (ADR-0227). Called as each
+/// connection completes, so a slow sibling never delays this one's picker
+/// update.
+pub fn apply_connection_update(
+    config: &mut Config,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ConnectionUsage,
+    update: catalog::ConnectionUpdate,
+) {
+    if update.changed {
+        catalog::sync_fitted_model_registry();
+        catalog::prune_stale_models(config, provider_usage);
+    }
+    if let Some(error) = &update.error {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            muta_contracts::ConnectStatus::DiscoveryWarning {
+                provider: update.connection.clone(),
+                message: error.clone(),
+            },
+        ));
+    }
+    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+        config,
+        provider_usage,
+    )));
+}
+
+/// Close a completed discovery pass: re-derive global state, emit the command
+/// acknowledgement, and publish the final provider keys and picker. Per-channel
+/// changes and warnings are streamed by [`apply_connection_update`]; this only
+/// settles the pass.
 pub fn apply_model_discovery_outcome(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ConnectionUsage,
     outcome: catalog::DiscoveryOutcome,
     session_id: Option<String>,
-    user_initiated: bool,
 ) {
     if outcome.changed {
         catalog::sync_fitted_model_registry();
-    }
-    catalog::prune_stale_models(config, provider_usage);
-
-    for (failed_provider, message) in &outcome.failures {
-        let _ = resp_tx.send(AgentResponse::ConnectStatus(
-            muta_contracts::ConnectStatus::DiscoveryWarning {
-                provider: failed_provider.clone(),
-                message: message.clone(),
-            },
-        ));
+        catalog::prune_stale_models(config, provider_usage);
     }
 
-    if let Some(session_id) = session_id
-        && user_initiated
-    {
+    if let Some(session_id) = session_id {
         let ack = if !outcome.failures.is_empty() && !outcome.changed {
             "Model refresh failed to reach upstream".to_string()
         } else if outcome.changed {
@@ -1684,32 +1702,6 @@ pub fn apply_model_discovery_outcome(
         config,
         provider_usage,
     )));
-}
-
-/// `AgentRequest::RefreshProviderModels` — run live model discovery for all
-/// discovery-enabled connections from upstream.
-pub async fn refresh_models(
-    config: &mut Config,
-    _agent: &Agent,
-    _provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
-    session: Option<&SessionStore>,
-    user_initiated: bool,
-) {
-    let outcome = catalog::discover_provider_models(user_initiated).await;
-    let session_id = match session {
-        Some(s) => Some(s.id().await),
-        None => None,
-    };
-    apply_model_discovery_outcome(
-        config,
-        resp_tx,
-        provider_usage,
-        outcome,
-        session_id,
-        user_initiated,
-    );
 }
 
 /// Mask an API key for safe display (e.g. `sk-12...abcd`).
@@ -2110,7 +2102,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn apply_model_discovery_outcome_surfaces_warning_and_picker() {
+    async fn connection_update_surfaces_warning_and_picker_then_final_keys() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
@@ -2125,12 +2117,16 @@ mod tests {
         let mut usage = ConnectionUsage::default();
         let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let outcome = catalog::DiscoveryOutcome {
-            changed: false,
-            failures: vec![("gmain".to_string(), "network error".to_string())],
-        };
-
-        apply_model_discovery_outcome(&mut config, &resp_tx, &mut usage, outcome, None, false);
+        apply_connection_update(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            catalog::ConnectionUpdate {
+                connection: "gmain".to_string(),
+                changed: false,
+                error: Some("network error".to_string()),
+            },
+        );
 
         let warning = resp_rx.recv().await.expect("warning expected");
         match warning {
@@ -2143,10 +2139,19 @@ mod tests {
             }
             other => panic!("expected DiscoveryWarning, got {other:?}"),
         }
+        let picker = resp_rx.recv().await.expect("picker expected");
+        assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
+
+        apply_model_discovery_outcome(
+            &mut config,
+            &resp_tx,
+            &mut usage,
+            catalog::DiscoveryOutcome::default(),
+            None,
+        );
 
         let keys = resp_rx.recv().await.expect("keys expected");
         assert!(matches!(keys, AgentResponse::ProviderKeys(_)));
-
         let picker = resp_rx.recv().await.expect("picker expected");
         assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
 

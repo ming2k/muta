@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Refresh the embedded models.dev snapshot used by the `muta-models-dev`
-# crate (ADR-0171, `LiveCatalog::ModelsDev`).
+# Refresh the embedded models.dev snapshot used by the `muta-providers`
+# `models_dev` source (ADR-0227, `RemoteCatalogSource::ModelsDev`).
 #
 # The snapshot is the *offline fallback* for third-party catalog providers.
 # It deliberately contains ONLY the providers the client actually consumes via
@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 # `LiveCatalog::ProviderEndpointWithFallback`.
 PROVIDER_IDS=("opencode-go" "zai")
 
-SNAPSHOT="crates/muta-models-dev/snapshot.json"
+SNAPSHOT="crates/muta-providers/src/models_dev/snapshot.json"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 

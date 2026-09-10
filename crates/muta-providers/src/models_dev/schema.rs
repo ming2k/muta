@@ -1,7 +1,6 @@
-//! Schema-neutral types mirroring the models.dev catalog JSON
-//! (`https://models.dev/api.json`). These deliberately depend on nothing in
-//! `muta-providers`; the mapping to the client's `DiscoveredModel` lives there
-//! so this crate stays a removable, low-level data source.
+//! Types mirroring the models.dev catalog JSON (`https://models.dev/api.json`).
+//! They keep the raw `Dev*` shape distinct from the client's `DiscoveredModel`
+//! so the mapping is explicit and testable inside [`super`].
 
 use serde::Deserialize;
 use std::collections::BTreeMap;

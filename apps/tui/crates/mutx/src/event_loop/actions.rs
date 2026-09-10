@@ -690,9 +690,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.active_dialog(),
                 Some(DialogKind::Models | DialogKind::Connections)
             ) {
-                app.send_intent(AgentRequest::RefreshProviderModels {
-                    user_initiated: true,
-                });
+                app.send_intent(AgentRequest::RefreshProviderModels);
             }
         }
         input::InputAction::OpenHistory => {

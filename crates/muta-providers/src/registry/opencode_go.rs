@@ -31,6 +31,17 @@ pub const WIRE_OVERRIDES: &[(&str, WireProtocol)] = &[
 pub const MODELS: &[Model] = &[
     // DeepSeek (opencode-go / direct)
     Model {
+        id: "deepseek-flash",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ReasoningSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        protocol: WireProtocol::ChatCompletions,
+        model_guidance: "",
+        effort_levels: EFFORT_LOW_HIGH_MAX,
+    },
+    Model {
         id: "deepseek-v4-flash",
         family: "deepseek",
         context_window: 1_000_000,

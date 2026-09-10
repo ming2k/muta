@@ -20,7 +20,7 @@ pub use list_models::{
     DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
     ModelDiscoveryUpdate, ModelListError, discover_models, list_models, models_endpoint_for,
 };
-pub use models_dev::{ModelsDevError, models_dev_models};
+pub use models_dev::{ModelsDevError, models_dev_models, refresh_models_dev};
 pub use muta_llm_client::{
     AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ChatCompletionsProvider, ClientIdentity,
     Effort, Endpoint, GOOGLE_DEFAULT_BASE_URL, GoogleGeminiProvider, GoogleProvider,

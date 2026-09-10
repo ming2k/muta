@@ -219,29 +219,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // resolve with their real capabilities from the very first request.
     catalog::sync_fitted_model_registry();
 
-    // Live model-list discovery for API-sourced instances. Runs in the
-    // BACKGROUND so slow/unreachable providers never delay the first frame:
-    // every instance already has either its fixed snapshot or last known valid
-    // subset. The live `GET /models` result feeds the catalog's remote-catalog
-    // overlay (ADR-0203); transport/status/schema failure leaves that subset
-    // untouched, while a valid empty catalog clears it. The session driver
-    // handles the refresh and broadcasts updated snapshots to the client.
-    let req_tx_for_discovery = req_tx.clone();
-    tokio::spawn(async move {
-        let _ = req_tx_for_discovery
-            .send(AgentRequest::RefreshProviderModels {
-                user_initiated: false,
-            })
-            .await;
-    });
-
-    // Background refresh of the models.dev third-party catalog cache
-    // (LiveCatalog::ModelsDev — opencode-go). This only keeps the *disk cache*
-    // fresh on an hourly cadence; the per-connection reconciliation runs when
-    // discovery next fires (startup, `/refresh`, per-round ETag) and reads the
-    // refreshed cache. A failure leaves the last good cache in place, so a
-    // transient outage never degrades the catalog.
-    muta_agent::dynamic::spawn_refresh(muta_models_dev::DynamicModelsDev);
+    // Startup is read-only for the remote catalog (ADR-0227). The persisted
+    // per-connection `DiscoveryCache` plus the compiled baseline/seed are the
+    // source of truth for the first frame; no network discovery or scheduled
+    // refresh runs here. A refresh happens only on explicit user action
+    // (`AgentRequest::RefreshProviderModels`) or a connection lifecycle event.
 
     // A session's partition is its workspace: `--project`/cwd when present, or
     // `None` for a workspace-free persona (ADR-0226). `persona` is recorded on

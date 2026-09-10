@@ -14,7 +14,6 @@ netune = "0.1.0"
 muta-providers = { path = "../muta-providers" }
 muta-skills = { path = "../muta-skills" }
 muta-agent = { path = "../muta-agent" }
-muta-models-dev = { path = "../muta-models-dev" }
 ignore = { workspace = true }
 muta-mcp = { path = "../muta-mcp" }
 async-trait = { workspace = true }

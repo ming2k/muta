@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Catalog refresh is connection-scoped and user-initiated (ADR-0227).** The
+  standalone `muta-models-dev` crate is collapsed into the internal
+  `muta-providers::models_dev` module (its only consumer), and the raw
+  models.dev catalog is now an in-memory, single-flight source cache: the
+  on-disk `$XDG_CACHE_HOME/muta/models-dev.json` file, its TTL/lock, and the
+  hourly `DynamicModelsDev` background refresh are removed. Startup renders the
+  persisted per-connection `DiscoveryCache` plus the compiled baseline/seed and
+  performs no network discovery; a refresh runs only on explicit user action or
+  a connection lifecycle event, fetches the shared catalog once, and applies and
+  emits results per connection (a slow connection no longer delays the rest). A
+  failed fetch retains the connection's existing list; the compiled snapshot is
+  the offline floor on a cold start. `AgentRequest::RefreshProviderModels` is now
+  a unit variant (wire v11) — the `user_initiated` flag is gone.
+
 ## [0.45.1] - 2026-09-10
 
 ### Changed

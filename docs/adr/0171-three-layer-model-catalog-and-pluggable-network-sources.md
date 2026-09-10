@@ -2,6 +2,9 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-02
+- **Amended by:** [ADR-0227](0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md) — retires the
+  on-disk `models.dev` cache and the hourly background refresh, and collapses the standalone `muta-models-dev`
+  crate into the `muta-providers::models_dev` module.
 
 ## Context
 

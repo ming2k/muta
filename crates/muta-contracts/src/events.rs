@@ -281,10 +281,7 @@ pub enum AgentRequest {
         id: String,
     },
     /// Refresh / rediscover available models for discovery-enabled providers from upstream.
-    RefreshProviderModels {
-        #[serde(default)]
-        user_initiated: bool,
-    },
+    RefreshProviderModels,
     /// Delete a session (active or archived) by id or short id prefix.
     DeleteSession {
         id: String,

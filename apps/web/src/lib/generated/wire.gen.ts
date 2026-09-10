@@ -61,7 +61,7 @@ overrides: CapabilityOverrides | null, } } | { "EditModelReasoning": { model: st
  * Capability overrides (ADR-0149 layer 1) — same semantics as
  * [`AgentRequest::EditConnectionModel::overrides`].
  */
-overrides: CapabilityOverrides | null, } } | { "DeleteConnection": { name: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryConnectionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
+overrides: CapabilityOverrides | null, } } | { "DeleteConnection": { name: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | "RefreshProviderModels" | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryConnectionDetail": { id: string, } } | "QuerySessionsOverview" | "QuerySessionTree" | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
 /**
  * How many recent events to include in the event-log tail.
  */
@@ -1160,9 +1160,8 @@ label: string,
  */
 description: string, arguments: string, scope: string, 
 /**
- * Whether this call is **outside** the agent's granted `OperationScope`
- * — an elevation the user, not a builtin limit, is being asked to grant
- * (the soft scope-gate, ADR-0028). The TUI renders such prompts with a
+ * Whether this call is an elevation the user, not a builtin limit, is
+ * being asked to grant (ADR-0028). The TUI renders such prompts with a
  * distinct ⚠ treatment so the operator understands they are authorising
  * access *beyond* the configured boundary, not a routine in-scope call.
  * `false` for ordinary broker prompts and bash-policy confirms.
@@ -1925,7 +1924,18 @@ unattended: boolean,
 /**
  * Whether workspace filesystem confinement is enforced (default true).
  */
-confined: boolean, };
+confined: boolean, 
+/**
+ * Persona id to staff this session with (ADR-0220). `None` = the default
+ * workspace-scoped coding principal.
+ */
+persona?: string | null, 
+/**
+ * Resume the most recent matching session instead of creating a new one
+ * (ADR-0226). With `persona`, matches by persona (and workspace when the
+ * persona binds one).
+ */
+resume?: boolean, };
 
 /**
  * A row in the sessions picker: enough to identify, describe and order a past

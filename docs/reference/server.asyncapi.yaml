@@ -1238,12 +1238,7 @@ components:
     RequestRefreshProviderModels:
       type: object
       required: [RefreshProviderModels]
-      properties:
-        RefreshProviderModels:
-          type: object
-          properties:
-            user_initiated: { type: boolean, default: false }
-          additionalProperties: false
+      properties: { RefreshProviderModels: { type: 'null' } }
       additionalProperties: false
 
     AgentResponse:

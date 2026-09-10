@@ -443,11 +443,15 @@ impl SessionDriver {
         }
         struct DiscoveryTaskResult {
             outcome: catalog::DiscoveryOutcome,
-            user_initiated: bool,
             session_id: Option<String>,
         }
         let mut active_oauth_task: Option<tokio::task::JoinHandle<OAuthResult>> = None;
         let mut active_discovery_task: Option<tokio::task::JoinHandle<DiscoveryTaskResult>> = None;
+        // ADR-0227: discovery streams one update per connection as it completes.
+        // This sender stays alive for the driver's lifetime, so `recv()` yields
+        // updates without ever observing a closed channel.
+        let (discovery_tx, mut discovery_rx) =
+            mpsc::unbounded_channel::<catalog::ConnectionUpdate>();
         let mut pending_oauth_authorization: Option<
             crate::handlers_provider::PendingOAuthAuthorization,
         > = None;
@@ -489,7 +493,19 @@ impl SessionDriver {
                             &mut provider_usage,
                             res.outcome,
                             res.session_id,
-                            res.user_initiated,
+                        );
+                    }
+                    continue;
+                }
+                update = discovery_rx.recv() => {
+                    if let Some(update) = update {
+                        let mut config = shared_config.write().await;
+                        let mut provider_usage = shared_provider_usage.write().await;
+                        crate::handlers_provider::apply_connection_update(
+                            &mut config,
+                            &resp_tx,
+                            &mut provider_usage,
+                            update,
                         );
                     }
                     continue;
@@ -966,31 +982,20 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::RefreshProviderModels { user_initiated } => {
-                    if !user_initiated
-                        && active_discovery_task
-                            .as_ref()
-                            .is_some_and(|t| !t.is_finished())
-                    {
-                        // Background discovery already in flight, keep it running.
-                    } else {
-                        let session_id = if user_initiated {
-                            Some(session.id().await)
-                        } else {
-                            None
-                        };
-                        if let Some(task) = active_discovery_task.take() {
-                            task.abort();
-                        }
-                        active_discovery_task = Some(tokio::spawn(async move {
-                            let outcome = catalog::discover_provider_models(user_initiated).await;
-                            DiscoveryTaskResult {
-                                outcome,
-                                user_initiated,
-                                session_id,
-                            }
-                        }));
+                AgentRequest::RefreshProviderModels => {
+                    // A user refresh always supersedes an in-flight one.
+                    if let Some(task) = active_discovery_task.take() {
+                        task.abort();
                     }
+                    let session_id = Some(session.id().await);
+                    let sink = discovery_tx.clone();
+                    active_discovery_task = Some(tokio::spawn(async move {
+                        let outcome = catalog::discover_provider_models_streaming(sink).await;
+                        DiscoveryTaskResult {
+                            outcome,
+                            session_id,
+                        }
+                    }));
                 }
                 AgentRequest::DeleteSession { id } => {
                     let session = session.clone();
@@ -1723,9 +1728,7 @@ mod tests {
             name: "github".to_string(),
             enabled: true,
         }));
-        assert!(!round_owned_request(&AgentRequest::RefreshProviderModels {
-            user_initiated: true,
-        }));
+        assert!(!round_owned_request(&AgentRequest::RefreshProviderModels));
         assert!(!round_owned_request(&AgentRequest::QuerySessionContext));
         assert!(!round_owned_request(&AgentRequest::PermissionReply {
             request_id: "r".to_string(),

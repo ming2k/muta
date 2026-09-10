@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # models.dev snapshot freshness guard (ADR-0171).
 #
-# The `muta-models-dev` crate embeds a *pruned, committed* snapshot of the
+# The `muta-providers` crate embeds a *pruned, committed* snapshot of the
 # models.dev catalog (only the providers the client consumes via
 # `LiveCatalog::ModelsDev` — currently opencode-go). If it drifts too far from
 # the live catalog, users lose offline fallback coverage for newly shipped
@@ -23,7 +23,7 @@ cd "$(dirname "$0")/.."
 # does not carry. We deliberately do NOT fail on the reverse (snapshot having
 # extra models): the snapshot may legitimately be ahead after a manual prune,
 # and extra offline models never harm the client.
-SNAPSHOT="crates/muta-models-dev/snapshot.json"
+SNAPSHOT="crates/muta-providers/src/models_dev/snapshot.json"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 

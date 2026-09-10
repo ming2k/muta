@@ -19,6 +19,8 @@ use muta_providers::{
     ModelProviderSpec, RemoteCatalogSource, model_provider_spec, route_for_model,
 };
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use tokio::sync::{OnceCell, mpsc};
 
 const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -98,26 +100,45 @@ const fn discovery_protocol_id(protocol: DiscoveryProtocol) -> &'static str {
 
 struct DiscoveryJob {
     connection: muta_persistence::connections::Connection,
-    spec: &'static ModelProviderSpec,
     source: DiscoverySource,
     api_key: muta_contracts::SecretString,
 }
 
 struct DiscoveryFetch {
     connection: muta_persistence::connections::Connection,
-    spec: &'static ModelProviderSpec,
     source_identity: String,
     update: Result<ModelDiscoveryUpdate, String>,
 }
 
-async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
+/// The shared models.dev fetch for one discovery pass. The first `ModelsDev`
+/// job to reach it starts the fetch; every sibling awaits the same result, and
+/// a failure is surfaced to each of them (never to first-party jobs).
+type ModelsDevRefresh = Arc<OnceCell<Result<(), String>>>;
+
+async fn fetch_models(job: DiscoveryJob, models_dev_refresh: ModelsDevRefresh) -> DiscoveryFetch {
     let source_identity = job.source.identity();
     match job.source {
         DiscoverySource::ModelsDev { provider } => {
+            // ADR-0227: refresh the shared catalog at most once per pass,
+            // concurrently with any first-party fetches. A failed refresh makes
+            // each `ModelsDev` connection keep its persisted list.
+            let refresh = models_dev_refresh
+                .get_or_init(|| async {
+                    muta_providers::refresh_models_dev()
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            if let Err(error) = refresh {
+                return DiscoveryFetch {
+                    connection: job.connection,
+                    source_identity,
+                    update: Err(error.clone()),
+                };
+            }
             let update = fetch_models_dev(&provider).await;
             DiscoveryFetch {
                 connection: job.connection,
-                spec: job.spec,
                 source_identity,
                 update,
             }
@@ -138,7 +159,6 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
                     Err(error) => {
                         return DiscoveryFetch {
                             connection: job.connection,
-                            spec: job.spec,
                             source_identity,
                             update: Err(error),
                         };
@@ -164,7 +184,6 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
                 .map_err(|error| error.to_string());
             DiscoveryFetch {
                 connection: job.connection,
-                spec: job.spec,
                 source_identity,
                 update,
             }
@@ -182,6 +201,19 @@ async fn fetch_models_dev(provider: &str) -> Result<ModelDiscoveryUpdate, String
         .map_err(|error| error.to_string())
 }
 
+/// One connection's result from a live discovery pass. Emitted in completion
+/// order so the frontend updates per connection without waiting on a slow
+/// sibling (ADR-0227).
+#[derive(Debug, Clone)]
+pub struct ConnectionUpdate {
+    /// The connection the update belongs to.
+    pub connection: String,
+    /// Whether the connection's cached model list or fitted metadata changed.
+    pub changed: bool,
+    /// The fetch error, when the source could not be refreshed.
+    pub error: Option<String>,
+}
+
 /// The result of a live model-discovery pass ([`discover_provider_models`]).
 #[derive(Debug, Default)]
 pub struct DiscoveryOutcome {
@@ -191,34 +223,30 @@ pub struct DiscoveryOutcome {
     pub failures: Vec<(String, String)>,
 }
 
-/// Canonical ADR-0203 alias for [`DiscoveryOutcome`].
-pub type RemoteCatalogOutcome = DiscoveryOutcome;
-
-/// Synchronize the remote model catalog across all connections (ADR-0203 canonical entry point).
-pub async fn sync_remote_catalog(force: bool) -> DiscoveryOutcome {
-    discover_provider_models(force).await
-}
-
-/// Synchronize the remote model catalog for one exact connection (ADR-0203 canonical entry point).
-pub async fn sync_connection_remote_catalog(
-    connection_name: &str,
-    force: bool,
-) -> DiscoveryOutcome {
-    discover_connection_models(connection_name, force).await
-}
-
 /// Fetch every discovery-capable connection's live model list and update the
-/// discovery cache.
-pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
-    discover_models_matching(None, force).await
+/// discovery cache. Used by single-shot callers that do not stream per
+/// connection.
+pub async fn discover_provider_models() -> DiscoveryOutcome {
+    discover_models_matching(None, None).await
+}
+
+/// Fetch every discovery-capable connection's live model list, emitting a
+/// [`ConnectionUpdate`] as each connection's result is applied.
+pub async fn discover_provider_models_streaming(
+    sink: mpsc::UnboundedSender<ConnectionUpdate>,
+) -> DiscoveryOutcome {
+    discover_models_matching(None, Some(sink)).await
 }
 
 /// Refresh one exact connection. Login and add flows use this path so an
 /// unrelated slow provider cannot delay or contaminate their result.
-pub async fn discover_connection_models(connection_name: &str, force: bool) -> DiscoveryOutcome {
-    discover_models_matching(Some(connection_name), force).await
+pub async fn discover_connection_models(connection_name: &str) -> DiscoveryOutcome {
+    discover_models_matching(Some(connection_name), None).await
 }
 
+/// Re-run discovery for one connection when the provider advertises a new
+/// catalog ETag on an in-flight response. This is event-initiated, not a
+/// scheduled poll (ADR-0227).
 pub async fn refresh_connection_models_for_etag(
     connection_name: &str,
     advertised_etag: &str,
@@ -236,13 +264,13 @@ pub async fn refresh_connection_models_for_etag(
     };
     let expected_source_identity = source.identity();
     let Some(state) = cached.model_lists.get(connection_name) else {
-        return discover_connection_models(connection_name, true).await;
+        return discover_connection_models(connection_name).await;
     };
     if state.etag.as_deref() != Some(advertised_etag)
         || state.client_version != CLIENT_VERSION
         || state.source_identity != expected_source_identity
     {
-        return discover_connection_models(connection_name, true).await;
+        return discover_connection_models(connection_name).await;
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -260,14 +288,14 @@ pub async fn refresh_connection_models_for_etag(
     };
     let Some(current) = locked.model_lists.get_mut(connection_name) else {
         drop(locked);
-        return discover_connection_models(connection_name, true).await;
+        return discover_connection_models(connection_name).await;
     };
     if current.etag.as_deref() != Some(advertised_etag)
         || current.client_version != CLIENT_VERSION
         || current.source_identity != expected_source_identity
     {
         drop(locked);
-        return discover_connection_models(connection_name, true).await;
+        return discover_connection_models(connection_name).await;
     }
     current.refreshed_at_ms = now_ms;
     match locked.save() {
@@ -279,10 +307,12 @@ pub async fn refresh_connection_models_for_etag(
     }
 }
 
-async fn discover_models_matching(target: Option<&str>, force: bool) -> DiscoveryOutcome {
+async fn discover_models_matching(
+    target: Option<&str>,
+    sink: Option<mpsc::UnboundedSender<ConnectionUpdate>>,
+) -> DiscoveryOutcome {
     let stores = Stores::load();
     let mut failures: Vec<(String, String)> = Vec::new();
-    let now_ms = chrono::Utc::now().timestamp_millis();
     let mut jobs = Vec::new();
 
     for connection in &stores.connections.connections {
@@ -296,7 +326,7 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
             continue;
         };
         let source_identity = source.identity();
-        let cache_identity_matches =
+        let identity_matches =
             stores
                 .cache
                 .model_lists
@@ -305,29 +335,12 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
                     state.client_version == CLIENT_VERSION
                         && state.source_identity == source_identity
                 });
-        if !force
-            && cache_identity_matches
-            && stores
-                .cache
-                .model_lists
-                .get(&connection.name)
-                .is_some_and(|state| {
-                    now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS
-                })
-            && stores
-                .cache
-                .connection_models
-                .get(&connection.name)
-                .is_some_and(|models| !models.is_empty())
-        {
-            continue;
-        }
-        if force || !cache_identity_matches {
+        if !identity_matches {
+            // The validator belongs to a different source; never send it.
             source.discard_validator();
         }
         jobs.push(DiscoveryJob {
             connection: connection.clone(),
-            spec,
             source,
             api_key: resolve_credential(connection, &stores.creds),
         });
@@ -337,133 +350,142 @@ async fn discover_models_matching(target: Option<&str>, force: bool) -> Discover
         return DiscoveryOutcome::default();
     }
 
-    // Requests are independent and bounded by their own timeout. Fetch with a
-    // fixed concurrency ceiling outside any lock, preserving connection order.
-    let fetched = stream::iter(jobs.into_iter().map(fetch_models))
-        .buffered(DISCOVERY_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-
-    // Acquire lock to reconcile with fresh connections and update cache atomically.
-    let mut locked_cache = match DiscoveryCache::lock().await {
-        Ok(lock) => lock,
-        Err(error) => {
-            return DiscoveryOutcome {
-                changed: false,
-                failures: vec![(target.unwrap_or("model-discovery-cache").to_string(), error)],
-            };
-        }
-    };
-
-    let current_connections = Connections::load();
+    // ADR-0227: one shared models.dev refresh for the pass, started lazily by
+    // the first `ModelsDev` job so it runs concurrently with first-party
+    // fetches. Requests are independent and bounded by their own timeout;
+    // reconcile each result as it completes so a slow connection never delays a
+    // fast one.
+    let models_dev_refresh: ModelsDevRefresh = Arc::new(OnceCell::new());
+    let mut fetched = stream::iter(jobs)
+        .map(|job| fetch_models(job, Arc::clone(&models_dev_refresh)))
+        .buffer_unordered(DISCOVERY_CONCURRENCY);
     let mut changed = false;
-    let mut cache_dirty = false;
 
-    for fetched in fetched {
-        let connection = &fetched.connection;
-        // Never merge or resurrect if connection was deleted during the network fetch!
-        if current_connections.get(&connection.name).is_none() {
+    while let Some(fetched) = fetched.next().await {
+        let connection_name = fetched.connection.name.clone();
+        // Never merge or resurrect a connection deleted during the network fetch.
+        if Connections::load().get(&connection_name).is_none() {
             continue;
         }
-        let _spec = fetched.spec;
-        match fetched.update {
-            Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {
-                let mut connection_changed = false;
-                let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
-                    .iter()
-                    .filter(|model| model.picker_enabled != Some(false))
-                    .filter(|model| muta_contracts::model::model_by_id(&model.id).is_none())
-                    .map(|model| (model.id.clone(), fitted_model_info(model)))
-                    .collect();
-                if locked_cache.fitted_models.get(&connection.name) != Some(&fitted) {
-                    locked_cache
-                        .fitted_models
-                        .insert(connection.name.clone(), fitted);
-                    connection_changed = true;
-                }
-                let supported: Vec<String> = models
-                    .iter()
-                    .filter(|model| model.picker_enabled != Some(false))
-                    .map(|model| model.id.clone())
-                    .collect();
-                let remote_metadata: std::collections::BTreeMap<String, _> = models
-                    .iter()
-                    .filter(|model| model.picker_enabled != Some(false))
-                    .map(|model| (model.id.clone(), model.remote_metadata()))
-                    .collect();
-                let prev_remote = locked_cache
-                    .remote_metadata
-                    .get(&connection.name)
-                    .cloned()
-                    .unwrap_or_default();
-                if prev_remote != remote_metadata {
-                    locked_cache
-                        .remote_metadata
-                        .insert(connection.name.clone(), remote_metadata);
-                    connection_changed = true;
-                }
-                if locked_cache.connection_models.get(&connection.name) != Some(&supported) {
-                    locked_cache
-                        .connection_models
-                        .insert(connection.name.clone(), supported);
-                    connection_changed = true;
-                }
-                let state = ModelListCacheState {
-                    etag,
-                    client_version: CLIENT_VERSION.to_string(),
-                    source_identity: fetched.source_identity.clone(),
-                    refreshed_at_ms: now_ms,
-                };
-                if locked_cache.model_lists.get(&connection.name) != Some(&state) {
-                    locked_cache
-                        .model_lists
-                        .insert(connection.name.clone(), state);
-                    cache_dirty = true;
-                }
-                if connection_changed {
-                    changed = true;
-                    cache_dirty = true;
-                    tracing::info!(
-                        connection = %connection.name,
-                        discovered_count = models.len(),
-                        "live model discovery updated connection"
-                    );
-                }
-            }
-            Ok(ModelDiscoveryUpdate::NotModified { etag }) => {
-                locked_cache.model_lists.insert(
-                    connection.name.clone(),
-                    ModelListCacheState {
-                        etag,
-                        client_version: CLIENT_VERSION.to_string(),
-                        source_identity: fetched.source_identity.clone(),
-                        refreshed_at_ms: now_ms,
-                    },
-                );
-                cache_dirty = true;
-                tracing::debug!(
-                    connection = %connection.name,
-                    "live model catalog revalidated without changes"
-                );
-            }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut cache = match DiscoveryCache::lock().await {
+            Ok(lock) => lock,
             Err(error) => {
-                tracing::warn!(
-                    connection = %connection.name,
-                    error = %error,
-                    "live model discovery failed; keeping previous models"
-                );
-                failures.push((connection.name.clone(), error.to_string()));
+                failures.push((connection_name.clone(), error.clone()));
+                emit(&sink, &connection_name, false, Some(error));
+                continue;
             }
+        };
+        let (connection_changed, error) = apply_fetched(&mut cache, fetched, now_ms);
+        if let Err(error) = cache.save() {
+            let error = error.to_string();
+            failures.push((connection_name.clone(), error.clone()));
+            emit(&sink, &connection_name, false, Some(error));
+            continue;
         }
-    }
-
-    if cache_dirty && let Err(error) = locked_cache.save() {
-        tracing::error!(?error, "could not persist model-discovery cache");
-        failures.push(("model-discovery-cache".to_string(), error.to_string()));
-        changed = false;
+        drop(cache);
+        if connection_changed {
+            changed = true;
+            tracing::info!(connection = %connection_name, "live model discovery updated connection");
+        }
+        if let Some(error) = &error {
+            tracing::warn!(
+                connection = %connection_name,
+                error = %error,
+                "live model discovery failed; keeping previous models"
+            );
+            failures.push((connection_name.clone(), error.clone()));
+        }
+        emit(&sink, &connection_name, connection_changed, error);
     }
 
     DiscoveryOutcome { changed, failures }
+}
+
+/// Fold one connection's fetched result into the discovery cache. A fetch
+/// error leaves the existing list untouched (ADR-0227: failure never diminishes
+/// a connection).
+fn apply_fetched(
+    cache: &mut DiscoveryCache,
+    fetched: DiscoveryFetch,
+    now_ms: i64,
+) -> (bool, Option<String>) {
+    let connection = &fetched.connection;
+    match fetched.update {
+        Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {
+            let mut changed = false;
+            let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
+                .iter()
+                .filter(|model| model.picker_enabled != Some(false))
+                .filter(|model| muta_contracts::model::model_by_id(&model.id).is_none())
+                .map(|model| (model.id.clone(), fitted_model_info(model)))
+                .collect();
+            if cache.fitted_models.get(&connection.name) != Some(&fitted) {
+                cache.fitted_models.insert(connection.name.clone(), fitted);
+                changed = true;
+            }
+            let supported: Vec<String> = models
+                .iter()
+                .filter(|model| model.picker_enabled != Some(false))
+                .map(|model| model.id.clone())
+                .collect();
+            let remote_metadata: std::collections::BTreeMap<String, _> = models
+                .iter()
+                .filter(|model| model.picker_enabled != Some(false))
+                .map(|model| (model.id.clone(), model.remote_metadata()))
+                .collect();
+            if cache.remote_metadata.get(&connection.name) != Some(&remote_metadata) {
+                cache
+                    .remote_metadata
+                    .insert(connection.name.clone(), remote_metadata);
+                changed = true;
+            }
+            if cache.connection_models.get(&connection.name) != Some(&supported) {
+                cache
+                    .connection_models
+                    .insert(connection.name.clone(), supported);
+                changed = true;
+            }
+            cache.model_lists.insert(
+                connection.name.clone(),
+                ModelListCacheState {
+                    etag,
+                    client_version: CLIENT_VERSION.to_string(),
+                    source_identity: fetched.source_identity,
+                    refreshed_at_ms: now_ms,
+                },
+            );
+            (changed, None)
+        }
+        Ok(ModelDiscoveryUpdate::NotModified { etag }) => {
+            cache.model_lists.insert(
+                connection.name.clone(),
+                ModelListCacheState {
+                    etag,
+                    client_version: CLIENT_VERSION.to_string(),
+                    source_identity: fetched.source_identity,
+                    refreshed_at_ms: now_ms,
+                },
+            );
+            (false, None)
+        }
+        Err(error) => (false, Some(error)),
+    }
+}
+
+fn emit(
+    sink: &Option<mpsc::UnboundedSender<ConnectionUpdate>>,
+    connection: &str,
+    changed: bool,
+    error: Option<String>,
+) {
+    if let Some(sink) = sink {
+        let _ = sink.send(ConnectionUpdate {
+            connection: connection.to_string(),
+            changed,
+            error,
+        });
+    }
 }
 
 fn discovery_source(

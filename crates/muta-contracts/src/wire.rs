@@ -44,7 +44,9 @@ use serde::{Deserialize, Serialize};
 /// v10 (ADR-0208, ADR-0211): Archivist single-shot control query (`ControlRequest::AskArchivist`),
 /// cross-project session history full-text search (`AgentRequest::SearchHistory`,
 /// `AgentResponse::HistorySearch`), and provider model effort levels (`ProviderModelInfo.effort_levels`).
-pub const PROTOCOL_VERSION: u32 = 10;
+/// v11 (ADR-0227): `AgentRequest::RefreshProviderModels` is a unit variant; the
+/// `user_initiated` flag is gone because every catalog refresh is user-initiated.
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
 /// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the
