@@ -24,7 +24,7 @@ use muta_contracts::{
     InstructionBundle, Message, ModelRequest, Provider, ProviderStreamEvent, Role,
 };
 use muta_llm_client::{Client, Egress, MutaNetEgress, OpenAiResponsesProvider, ReqwestEgress};
-use muta_trace::{RequestTrace, derive};
+use netune_trace::{RequestTrace, derive};
 
 struct Options {
     base_url: String,

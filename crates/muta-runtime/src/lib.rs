@@ -98,14 +98,23 @@ pub mod task_fault_tolerance;
 pub mod task_ledger;
 pub mod task_mailbox;
 pub use task_fault_tolerance as supervise;
+pub mod archivist;
+pub mod archivist_service;
 pub mod hypervisor;
 pub mod ui_bridge;
 pub mod wire_channel;
 
+pub use archivist::{archivist_address, build_archivist};
 pub use background_jobs::{BackgroundJobEvent, BackgroundJobManager, SessionJobService};
 pub use hypervisor::Hypervisor;
 pub use session_driver::SessionDriver;
 pub use ui_bridge::{CopyOutcome, UiBridge};
+
+/// Authoritative runtime configuration shared across all hosted sessions (ADR-0209).
+pub type SharedConfig = std::sync::Arc<tokio::sync::RwLock<muta_persistence::config::Config>>;
+/// Authoritative model recency telemetry shared across all hosted sessions (ADR-0209).
+pub type SharedConnectionUsage =
+    std::sync::Arc<tokio::sync::RwLock<muta_persistence::connection_usage::ConnectionUsage>>;
 
 // NOTE: identity (`MUTA_MISSION`/`muta_identity`/`agent_code`) used to live
 // here. It has moved to the application layer (each binary's own `identity`

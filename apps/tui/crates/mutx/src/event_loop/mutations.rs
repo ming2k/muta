@@ -139,6 +139,7 @@ pub(crate) enum TranscriptEdit {
     },
     /// A steer could not be admitted before the round closed: the staged
     /// entry waits for the next round.
+    #[allow(dead_code)]
     HoldInserted { insert_id: String },
     /// A typed slash-command reply: settle the newest *pending* row with
     /// this invocation, or append the fallback component.
@@ -251,12 +252,29 @@ pub(crate) enum AppMutation {
     QueueInput(InputRequest),
     ClearPermissions,
 
+    // Background task mutations (ADR-0212 TaskBar authority).
+    BackgroundTaskStarted {
+        id: String,
+        label: String,
+        started_at_ms: u64,
+    },
+    BackgroundTaskCompleted {
+        id: String,
+        success: bool,
+        exit_code: Option<i32>,
+        duration_secs: u64,
+    },
+    #[allow(dead_code)]
+    BackgroundTaskDismissSettled,
+
     // Dispatch-queue facts (former `OutboxSignal`s + the M4 queue snapshot).
     DispatchRemoved {
         session_id: String,
         input_id: String,
     },
-    DispatchRequeued {
+    /// ADR-0212: Steer missed the active round. Restored to composer draft,
+    /// never queued as a follow-up item.
+    SteerMissed {
         session_id: String,
         input_id: String,
     },

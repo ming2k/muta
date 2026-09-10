@@ -148,7 +148,7 @@ before the round runs.
 | **`Channel`** | The fully resolved materialization of one derived route: credentials, model id, protocol, and optional provider-scoped remote metadata. [Model Metadata](model-metadata.md) |
 | **effort** | Reasoning **depth** — the per-model "how hard should it think" knob (`none`…`max`), abstracted from every provider's depth field onto one ladder. Orthogonal to thinking on/off. [Reasoning effort](effort.md) |
 | **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Model Metadata](model-metadata.md#thinking-support) |
-| **wire protocol** | The inference API a route speaks: `openai-chat-completions`, `openai-responses`, `anthropic-messages`, or `google-generate-content`. A connection may override the provider's default `protocol`. [Providers](providers.md#implemented-inference-protocols) |
+| **wire protocol** | The inference API a route speaks: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini`. A connection may override the provider's default `protocol`. [Providers](providers.md#implemented-inference-protocols) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[MUTA_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |

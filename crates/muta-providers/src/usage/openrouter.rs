@@ -50,14 +50,7 @@ impl ProviderUsageFetcher for OpenRouterUsageFetcher {
         base_url: &str,
         api_key: &str,
     ) -> Result<ProviderUsage, String> {
-        let endpoint = if base_url.contains("openrouter.ai") {
-            let base = base_url.trim_end_matches('/');
-            let base = base.strip_suffix("/api/v1").unwrap_or(base);
-            let base = base.strip_suffix("/v1").unwrap_or(base);
-            format!("{base}/api/v1/auth/key")
-        } else {
-            "https://openrouter.ai/api/v1/auth/key".to_string()
-        };
+        let endpoint = openrouter_key_endpoint(base_url);
 
         let auth = format!("Bearer {api_key}");
         let resp = client
@@ -80,6 +73,20 @@ impl ProviderUsageFetcher for OpenRouterUsageFetcher {
 
         parse_openrouter_key(body)
     }
+}
+
+fn openrouter_key_endpoint(base_url: &str) -> String {
+    if !base_url.contains("openrouter.ai") {
+        return "https://openrouter.ai/api/v1/auth/key".to_string();
+    }
+    let base = base_url.trim_end_matches('/');
+    let base = base
+        .strip_suffix("/chat/completions")
+        .or_else(|| base.strip_suffix("/responses"))
+        .unwrap_or(base);
+    let base = base.strip_suffix("/api/v1").unwrap_or(base);
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    format!("{base}/api/v1/auth/key")
 }
 
 pub(crate) fn parse_openrouter_key(body: OpenRouterKeyResponse) -> Result<ProviderUsage, String> {
@@ -209,6 +216,20 @@ mod tests {
             assert_eq!(rate_limits[0].interval, "10s");
         } else {
             panic!("Expected Composite quota data");
+        }
+    }
+
+    #[test]
+    fn derives_key_endpoint_from_inference_url_or_api_root() {
+        for base_url in [
+            "https://openrouter.ai/api/v1",
+            "https://openrouter.ai/api/v1/chat/completions",
+            "https://openrouter.ai/api/v1/responses",
+        ] {
+            assert_eq!(
+                openrouter_key_endpoint(base_url),
+                "https://openrouter.ai/api/v1/auth/key"
+            );
         }
     }
 }

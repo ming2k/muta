@@ -4,4 +4,4 @@
  * The exact inference wire protocol used by a route. Provider dialects alter
  * authentication and envelopes without changing this protocol identity.
  */
-export type WireProtocol = "openai-chat-completions" | "openai-responses" | "anthropic-messages" | "google-generate-content";
+export type WireProtocol = "chat-completions" | "responses" | "anthropic-messages" | "google-gemini";

@@ -67,7 +67,7 @@ pub async fn request_device_code_at(
         cfg.client_id,
         crate::oauth::token::percent_encode_form_value(cfg.scope.as_ref())
     );
-    let request = crate::http::Request::new(muta_net::Method::POST, endpoint)
+    let request = crate::http::Request::new(netune::Method::POST, endpoint)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("accept", "application/json")
         .raw_body(body);
@@ -138,7 +138,7 @@ where
             crate::oauth::token::percent_encode_form_value(device.device_code.expose_secret())
         );
         let request =
-            crate::http::Request::new(muta_net::Method::POST, cfg.device_token_url.as_ref())
+            crate::http::Request::new(netune::Method::POST, cfg.device_token_url.as_ref())
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("accept", "application/json")
                 .raw_body(body);

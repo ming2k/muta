@@ -251,6 +251,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
+    "get_outline",
     "read_url",
     "search_web",
 ];
@@ -640,7 +641,7 @@ mod tests {
             thinking: crate::reasoning::ReasoningSupport::None,
             tool_call: true,
             vision: true,
-            protocol: crate::WireProtocol::OpenAiChatCompletions,
+            protocol: crate::WireProtocol::ChatCompletions,
             model_guidance: "",
             effort_levels: &[],
         }

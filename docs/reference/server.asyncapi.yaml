@@ -936,7 +936,7 @@ components:
     WireProtocolOverride:
       description: Canonical wire protocol, or null to inherit the provider default.
       type: [string, 'null']
-      enum: [openai-chat-completions, openai-responses, anthropic-messages, google-generate-content, null]
+      enum: [chat-completions, responses, anthropic-messages, google-gemini, openai-chat-completions, openai-responses, google-generate-content, null]
     RequestIncludeModel:
       type: object
       required: [IncludeModel]

@@ -54,6 +54,8 @@ pub(crate) enum FooterRowId {
     /// The ambient outbox summary (`QUEUE n · preview · keys`). Click →
     /// Queue modal.
     Queue,
+    /// The background tasks status bar (ADR-0212). Shows running/settled tasks.
+    Tasks,
     /// The transient live-status bar (breathing dot + status + elapsed).
     Activity,
     /// The composer (input box). Not click-routed through the registry —

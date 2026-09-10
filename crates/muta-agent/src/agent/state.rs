@@ -163,6 +163,7 @@ impl Agent {
             round_paused_ms: std::sync::atomic::AtomicU64::new(0),
             identity: std::sync::RwLock::new(identity),
             turn_persist: std::sync::Mutex::new(None),
+            title_established: std::sync::Mutex::new(None),
             model_request_assembler,
             variant_selection: Arc::new(std::sync::Mutex::new(
                 muta_contracts::VariantSelection::new(),
@@ -171,6 +172,9 @@ impl Agent {
             token_ledger: std::sync::Mutex::new(None),
             token_weights: std::sync::Arc::new(muta_contracts::MessageTokenWeights::new()),
             tool_schema_weights: std::sync::Arc::new(muta_contracts::ToolSchemaWeights::new()),
+            facets: Arc::new(std::sync::RwLock::new(vec![Arc::new(
+                crate::facet::CodeIntelligenceFacet::default(),
+            )])),
         }
     }
 
@@ -314,7 +318,7 @@ impl Agent {
     /// — and every estimate built on it — reuses those bytes. The weights
     /// cache makes the resulting request cheap to re-estimate; nothing in
     /// this path can stall the executor behind filesystem reads.
-    pub(super) fn model_request(&self, messages: &[Message]) -> muta_contracts::ModelRequest {
+    pub(crate) fn model_request(&self, messages: &[Message]) -> muta_contracts::ModelRequest {
         // One clone of the provider-relevant window: system rows are rare, so
         // filtering first halves the per-turn memcpy of the old
         // clone-then-clone pipeline. Skill injection still sees the
@@ -331,6 +335,21 @@ impl Agent {
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
         crate::agent::remove_empty_assistant_messages(&mut enriched);
         enriched.retain(|message| !message.is_command_echo());
+
+        // ADR-0211: Zone 3 True Ephemeral Context (Request Tail).
+        // Contributed by bound HarnessFacets (e.g. 1024-token Repo Map).
+        // Appended strictly to in-flight `enriched` memory at request dispatch;
+        // NEVER committed into persistent SQLite transcripts, preserving 100% prefix KV-cache.
+        let ws_root = self.workspace_root();
+        for facet in self.facets() {
+            if let Some(ephemeral) = facet.project_ephemeral_context(ws_root.as_deref()) {
+                enriched.push(crate::conversation_context::hidden_user(
+                    muta_contracts::InjectionKind::SystemReminder,
+                    ephemeral,
+                ));
+            }
+        }
+
         let tools = self.visible_tools();
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
@@ -628,6 +647,19 @@ impl Agent {
         *self.turn_persist.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 
+    /// Install the title-established observer fired by the background session
+    /// titler (ADR-0022). The closure receives the freshly persisted title
+    /// and should push a sessions-overview snapshot so attached clients see
+    /// the new picker title without reopening the dialog. Called once by the
+    /// session driver; subagents, the review diagnostic, and tests never call
+    /// this, so titling stays a silent background write there.
+    pub fn set_title_established(&self, f: TitleEstablishedFn) {
+        *self
+            .title_established
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
     /// Fire the mid-round save point if installed. Returns `Ok(())` when no
     /// closure is set (the subagent / review / test path) so the call site
     /// stays unconditional. Invoked at the turn boundary — after a turn's
@@ -827,13 +859,34 @@ impl Agent {
         *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = muta_contracts::TodoList::default();
     }
 
+    /// Access the harness internal task pipeline for out-of-band typed execution (ADR-0211).
+    pub fn harness_tasks(&self) -> crate::cognitive::HarnessTaskPipeline {
+        crate::cognitive::HarnessTaskPipeline::new(self.provider.clone())
+    }
+
     /// Access the harness cognitive pipeline for out-of-band typed execution.
     pub fn cognitive(&self) -> crate::cognitive::CognitivePipeline {
         crate::cognitive::CognitivePipeline::new(self.provider.clone())
     }
 
-    /// Access the Spatiotemporal Aspect Engine governing lifecycle phases (ADR-0183).
+    /// Access the Spatiotemporal Aspect Engine governing lifecycle phases (ADR-0183 / ADR-0211).
     pub fn aspects(&self) -> crate::aspects::AspectEngine {
-        crate::aspects::AspectEngine::new(self.cognitive())
+        crate::aspects::AspectEngine::new(self.harness_tasks())
+    }
+
+    /// Access the ambient harness facets bound to this agent (ADR-0211).
+    pub fn facets(&self) -> Vec<Arc<dyn muta_contracts::HarnessFacet>> {
+        self.facets
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Add an ambient harness facet to this agent.
+    pub fn add_facet(&self, facet: Arc<dyn muta_contracts::HarnessFacet>) {
+        self.facets
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(facet);
     }
 }

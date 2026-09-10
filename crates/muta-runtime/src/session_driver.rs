@@ -18,10 +18,7 @@ use muta_agent::orchestration::{round_response, send_harness_state_for_session};
 use muta_agent::{Agent, RoundLifecycle, SubagentRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
-use muta_persistence::{
-    config::Config, connection_usage::ConnectionUsage, session::SessionStore,
-    workspace_security::WorkspaceSecurityStore,
-};
+use muta_persistence::{session::SessionStore, workspace_security::WorkspaceSecurityStore};
 use muta_skills::SkillRegistry;
 
 use std::path::PathBuf;
@@ -161,10 +158,10 @@ pub struct SessionDriver {
     pub agent: Arc<Agent>,
     /// The primary session store.
     pub session: Arc<SessionStore>,
-    /// Live config; mutated by provider/favorite/default switches and saved.
-    pub config: Config,
-    /// Per-model usage telemetry; mutated by activations and switches.
-    pub provider_usage: ConnectionUsage,
+    /// Authoritative runtime configuration shared across all hosted sessions (ADR-0209).
+    pub config: crate::SharedConfig,
+    /// Authoritative connection usage shared across all hosted sessions (ADR-0209).
+    pub provider_usage: crate::SharedConnectionUsage,
     /// The shared provider holder backing the `ProxyProvider`
     /// (`provider_for_task` in the old code).
     pub provider_holder: Arc<RwLock<Arc<dyn Provider>>>,
@@ -242,8 +239,8 @@ impl SessionDriver {
             req_tx: req_tx_for_commands,
             agent,
             session,
-            mut config,
-            mut provider_usage,
+            config: shared_config,
+            provider_usage: shared_provider_usage,
             provider_holder: provider_for_task,
             skills_registry,
             subagent_registry,
@@ -343,66 +340,89 @@ impl SessionDriver {
             LoopStatus::Idle,
         )
         .await;
-        let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(&config)));
-        // Record that the default provider + model were activated on startup, so
-        // the picker's recency ordering reflects "last used = now" for both
-        // stages, and the provider is pinned to the exact model it booted under.
-        // Both signals are needed: `record` drives stage-1 provider ordering and
-        // `record_model` drives stage-2 model ordering *and* writes the
-        // `last_models` pin that `active_model_id_for_entry` consults on the next
-        // launch to re-open the provider on its exact model instead of a
-        // re-derived default. Recording only the provider (the previous behavior)
-        // left `last_models` stale, so a session that booted into a provider —
-        // never manually switched its model — reopened on the default-channel
-        // model rather than the one it actually ran with. Best-effort: usage
-        // tracking is rebuildable state and must never block startup.
         {
-            let initial_id = catalog::default_provider_id(&config).to_string();
-            // Resolve the model the way `build_provider_for` did when main.rs
-            // constructed the startup provider: `config.default_model` when the
-            // entry serves it, otherwise the entry's default-channel model. The
-            // config-only resolver (`resolved_model_name`, *not* the `_with_usage`
-            // variant) mirrors that precedence exactly — it ignores `last_models`,
-            // so it never pins a model the live provider was not actually built
-            // with. Pinning the exact live model (rather than a usage-derived one)
-            // is what lets the next launch re-open this provider on the same model.
-            let initial_model = catalog::resolved_model_name(&config, &initial_id);
-            provider_usage.record(&initial_id);
-            // Skip the model pin when the startup provider is unbuildable
-            // (`resolved_model_name` returns `None`): there is no real channel,
-            // so pinning a (non-existent) model would be a spurious `last_models`
-            // entry. The provider recency bump above still runs so the picker
-            // ordering is correct.
-            if let Some(model) = initial_model.as_deref() {
-                provider_usage.record_model(&initial_id, model);
+            let mut config = shared_config.write().await;
+            let mut provider_usage = shared_provider_usage.write().await;
+            let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(&config)));
+            // Session title (ADR-0022): when the background titler durably
+            // persists a session's first title, push a fresh sessions overview.
+            // The registry's broadcast-tap folds the snapshot into the monitor
+            // tracker and republishes `MonitorEvent::SessionUpdated`, so every
+            // attached client (TUI picker, web panel) sees the new title without
+            // reopening the dialog — the same refresh path a manual
+            // `RenameSession` takes. Absent on subagent/side sessions, where
+            // titling stays a silent background write.
+            {
+                let session_for_titler = Arc::clone(&session);
+                let resp_tx_for_titler = resp_tx.clone();
+                agent.set_title_established(std::sync::Arc::new(move |_title| {
+                    let session = Arc::clone(&session_for_titler);
+                    let resp_tx = resp_tx_for_titler.clone();
+                    Box::pin(async move {
+                        crate::handlers_session::overview(&session, &resp_tx).await;
+                    }) as futures::future::BoxFuture<'static, ()>
+                }));
             }
-            if let Err(error) = provider_usage.save() {
-                tracing::warn!(?error, "could not persist provider/model usage telemetry");
+            // Record that the default provider + model were activated on startup, so
+            // the picker's recency ordering reflects "last used = now" for both
+            // stages, and the provider is pinned to the exact model it booted under.
+            // Both signals are needed: `record` drives stage-1 provider ordering and
+            // `record_model` drives stage-2 model ordering *and* writes the
+            // `last_models` pin that `active_model_id_for_entry` consults on the next
+            // launch to re-open the provider on its exact model instead of a
+            // re-derived default. Recording only the provider (the previous behavior)
+            // left `last_models` stale, so a session that booted into a provider —
+            // never manually switched its model — reopened on the default-channel
+            // model rather than the one it actually ran with. Best-effort: usage
+            // tracking is rebuildable state and must never block startup.
+            {
+                let initial_id = catalog::default_provider_id(&config).to_string();
+                // Resolve the model the way `build_provider_for` did when main.rs
+                // constructed the startup provider: `config.default_model` when the
+                // entry serves it, otherwise the entry's default-channel model. The
+                // config-only resolver (`resolved_model_name`, *not* the `_with_usage`
+                // variant) mirrors that precedence exactly — it ignores `last_models`,
+                // so it never pins a model the live provider was not actually built
+                // with. Pinning the exact live model (rather than a usage-derived one)
+                // is what lets the next launch re-open this provider on the same model.
+                let initial_model = catalog::resolved_model_name(&config, &initial_id);
+                provider_usage.record(&initial_id);
+                // Skip the model pin when the startup provider is unbuildable
+                // (`resolved_model_name` returns `None`): there is no real channel,
+                // so pinning a (non-existent) model would be a spurious `last_models`
+                // entry. The provider recency bump above still runs so the picker
+                // ordering is correct.
+                if let Some(model) = initial_model.as_deref() {
+                    provider_usage.record_model(&initial_id, model);
+                }
+                if let Err(error) = provider_usage.save() {
+                    tracing::warn!(?error, "could not persist provider/model usage telemetry");
+                }
             }
-        }
-        catalog::prune_stale_models(&mut config, &mut provider_usage);
-        // Push the initial model-picker snapshot (default id + per-model
-        // favorite / key-ready / last-used) so the picker is ready the moment
-        // the user opens it.
-        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
-            &config,
-            &provider_usage,
-        )));
-        // Announce the active provider/model as a synthetic `ProviderSwitched`
-        // so an attach client (which subscribes to the broadcast only after the
-        // handshake and so misses the startup emissions) can seed its hint bar
-        // — model name, reasoning effort, `@instance`, context meter — from the
-        // same single source the in-process TUI reads. The driver resolved this
-        // pair from the global default overlaid with the session's provider pin
-        // (C6), so it is authoritative for this session. Emitting it here (after
-        // the picker snapshot) also lets the registry's attach-sync buffer
-        // capture and replay it. Resolved config-only (`resolved_model_name`,
-        // not the usage variant) to mirror exactly the model the live provider
-        // was built with.
-        {
-            let provider = catalog::default_provider_id(&config).to_string();
-            let model = catalog::resolved_model_name(&config, &provider).unwrap_or_default();
-            let _ = resp_tx.send(AgentResponse::ProviderSwitched { provider, model });
+            catalog::prune_stale_models(&mut config, &mut provider_usage);
+            // Push the initial model-picker snapshot (default id + per-model
+            // favorite / key-ready / last-used) so the picker is ready the moment
+            // the user opens it.
+            let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+                &config,
+                &provider_usage,
+            )));
+            // Announce the active provider/model as a synthetic `ProviderSwitched`
+            // so an attach client (which subscribes to the broadcast only after the
+            // handshake and so misses the startup emissions) can seed its hint bar
+            // — model name, reasoning effort, `@instance`, context meter — from the
+            // same single source the in-process TUI reads. The driver resolved this
+            // pair from the global default overlaid with the session's provider pin
+            // (C6), so it is authoritative for this session. Emitting it here (after
+            // the picker snapshot) also lets the registry's attach-sync buffer
+            // capture and replay it. Resolved config-only (`resolved_model_name`,
+            // not the usage variant) to mirror exactly the model the live provider
+            // was built with.
+            {
+                let provider = catalog::default_provider_id(&config).to_string();
+                let model = catalog::resolved_model_name(&config, &provider).unwrap_or_default();
+                let _ = resp_tx.send(AgentResponse::ProviderSwitched { provider, model });
+            }
         }
         if open_picker_on_start {
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
@@ -460,6 +480,8 @@ impl SessionDriver {
                 } => {
                     active_discovery_task = None;
                     if let Ok(res) = discovery_res {
+                        let mut config = shared_config.write().await;
+                        let mut provider_usage = shared_provider_usage.write().await;
                         crate::handlers_provider::apply_model_discovery_outcome(
                             &mut config,
                             &resp_tx,
@@ -496,6 +518,8 @@ impl SessionDriver {
                             }
                             OAuthResult::Connect { provider_id, success } => {
                                 if success {
+                                    let mut config = shared_config.write().await;
+                                    let mut provider_usage = shared_provider_usage.write().await;
                                     crate::handlers_provider::connect_post_oauth(
                                         &mut config,
                                         &agent,
@@ -564,6 +588,7 @@ impl SessionDriver {
                         continue;
                     }
                     if let Some(message) = followup_queue.dequeue_front(&target_id) {
+                        let config = shared_config.read().await;
                         crate::handlers_chat::start_queued_follow_up(
                             SideEnv {
                                 side: &side,
@@ -609,6 +634,8 @@ impl SessionDriver {
             // below the match and ADR-0091/0110.
             let reconcile_activity = needs_activity_reconcile(&req, &lifecycle).await;
             let may_mutate_context = request_may_mutate_context(&req);
+            let mut config = shared_config.write().await;
+            let mut provider_usage = shared_provider_usage.write().await;
             match req {
                 AgentRequest::Interrupt => {
                     crate::handlers_permission::interrupt(&agent, &session, &resp_tx, &lifecycle)
@@ -1337,6 +1364,18 @@ impl SessionDriver {
                 }
                 AgentRequest::QueryRouteSettings { provider_id, model } => {
                     crate::handlers_history::query_route_settings(&provider_id, &model, &resp_tx);
+                }
+                AgentRequest::SearchHistory {
+                    query,
+                    workspace,
+                    limit,
+                } => {
+                    crate::handlers_history::search_history(
+                        &query,
+                        workspace.as_deref(),
+                        limit,
+                        &resp_tx,
+                    );
                 }
                 AgentRequest::UpdateTuiLayout(layout) => {
                     let _ = resp_tx.send(AgentResponse::TuiLayoutUpdated(layout));

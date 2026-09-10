@@ -20,8 +20,8 @@ use futures::StreamExt;
 use http::Method;
 use muta_contracts::{ProviderError, ProviderErrorKind};
 use muta_llm_client::sse::{data_payloads, payloads_from_chunks};
-use muta_net::{Client, ClientConfig, NetError, Pool, RequestHead, Target, TcpConnector};
-use muta_trace::{
+use netune::{Client, ClientConfig, NetError, Pool, RequestHead, Target, TcpConnector};
+use netune_trace::{
     AttemptRef, ConnectionInfo, EndpointRef, EventKind, Fidelity, FrameClass, Recorder,
     RequestTrace, TraceId, derive,
 };

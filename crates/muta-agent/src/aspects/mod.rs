@@ -11,27 +11,32 @@ use std::path::Path;
 use std::sync::Arc;
 
 use muta_contracts::{
-    AspectVerdict, EnvironmentReminderOutput, EnvironmentSensorInput, ExecutionTier,
-    PreFlightRouteInput, PreFlightRouteOutput, StreamLoopReviewInput, StreamLoopVerdict,
+    AspectVerdict, ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput, StreamLoopReviewInput,
+    StreamLoopVerdict,
 };
 
-use crate::cognitive::CognitivePipeline;
+use crate::cognitive::{CognitivePipeline, HarnessTaskPipeline};
 
-/// Runtime engine managing the five spatiotemporal aspect phases.
+/// Runtime engine managing the five spatiotemporal aspect phases (ADR-0183 / ADR-0211).
 #[derive(Clone)]
 pub struct AspectEngine {
-    cognitive: CognitivePipeline,
+    harness_tasks: HarnessTaskPipeline,
 }
 
 impl AspectEngine {
-    /// Create a new aspect engine backed by `cognitive`.
-    pub fn new(cognitive: CognitivePipeline) -> Self {
-        Self { cognitive }
+    /// Create a new aspect engine backed by `harness_tasks`.
+    pub fn new(harness_tasks: HarnessTaskPipeline) -> Self {
+        Self { harness_tasks }
     }
 
-    /// Access the underlying cognitive pipeline.
+    /// Access the underlying harness internal task pipeline.
+    pub fn harness_tasks(&self) -> &HarnessTaskPipeline {
+        &self.harness_tasks
+    }
+
+    /// Legacy alias for [`Self::harness_tasks`].
     pub fn cognitive(&self) -> &CognitivePipeline {
-        &self.cognitive
+        &self.harness_tasks
     }
 
     // Phase 1: Pre-flight
@@ -51,7 +56,7 @@ impl AspectEngine {
             };
         }
 
-        self.cognitive
+        self.harness_tasks
             .route_pre_flight(PreFlightRouteInput {
                 user_prompt: prompt.to_string(),
                 has_active_error,
@@ -59,7 +64,7 @@ impl AspectEngine {
             .await
     }
 
-    // Phase 2: Turn Intake
+    // Phase 2: Turn Intake (ADR-0211: 0ms local synthesis)
 
     /// Sense workspace environment facts (e.g. git status) and synthesize a dynamic reminder.
     pub async fn evaluate_turn_intake(&self, workspace_cwd: Option<&Path>) -> Option<String> {
@@ -69,24 +74,63 @@ impl AspectEngine {
             return None;
         }
 
-        let output: EnvironmentReminderOutput = self
-            .cognitive
-            .sense_environment(EnvironmentSensorInput {
-                active_branch: branch,
-                dirty_files_count: dirty_count,
-                dirty_files_sample: dirty_sample,
-                compiler_error: None,
-            })
-            .await;
+        let sample_str = if dirty_sample.len() > 3 {
+            format!(
+                "{} and {} more",
+                dirty_sample[..3].join(", "),
+                dirty_count.saturating_sub(3)
+            )
+        } else {
+            dirty_sample.join(", ")
+        };
 
-        output.reminder_text
+        let mut reminder = format!(
+            "Workspace git status: branch '{branch}', {dirty_count} uncommitted dirty file(s) ({sample_str})."
+        );
+
+        // Extract AST symbol hints for dirty files (ADR-0211)
+        let mut ast_hints = Vec::new();
+        for file_rel in dirty_sample.iter().take(3) {
+            let full_path = cwd.join(file_rel);
+            let ext = full_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if crate::syntax::SupportedLanguage::from_extension(&ext).is_some()
+                && let Ok(content) = std::fs::read_to_string(&full_path)
+            {
+                let symbols = crate::syntax::extract_symbols(&ext, &content);
+                if !symbols.is_empty() {
+                    let mut file_syms = format!("  {file_rel}:");
+                    for sym in symbols.iter().take(3) {
+                        file_syms.push('\n');
+                        file_syms.push_str(sym);
+                    }
+                    ast_hints.push(file_syms);
+                }
+            }
+        }
+
+        if !ast_hints.is_empty() {
+            reminder.push_str("\nRecent AST symbols in modified files:\n");
+            reminder.push_str(&ast_hints.join("\n"));
+        }
+
+        // Active compiler diagnostics (ADR-0211 Decision 5)
+        if let Some(compiler_err) = detect_workspace_compiler_error(cwd).await {
+            reminder.push_str("\nActive compiler diagnostics:\n");
+            reminder.push_str(&compiler_err);
+        }
+
+        Some(reminder)
     }
 
     // Phase 3: In-flight Stream
 
     /// Confirm or clear an L1 in-flight stream loop candidate.
     pub async fn review_stream_loop(&self, input: StreamLoopReviewInput) -> StreamLoopVerdict {
-        self.cognitive.review_stream_loop(input).await
+        self.harness_tasks.review_stream_loop(input).await
     }
 
     // Phase 4: Tool Gating
@@ -171,6 +215,35 @@ async fn detect_workspace_git_summary(cwd: &Path) -> (String, usize, Vec<String>
     }
 
     (branch, dirty_count, dirty_sample)
+}
+
+/// Helper to detect fast compiler/linter diagnostics for Turn-Intake environment sensing (ADR-0211 Decision 5).
+async fn detect_workspace_compiler_error(cwd: &Path) -> Option<String> {
+    if cwd.join("Cargo.toml").exists() {
+        let child = tokio::process::Command::new("cargo")
+            .args(["check", "-q", "--message-format=short"])
+            .current_dir(cwd)
+            .output();
+
+        let Ok(Ok(output)) =
+            tokio::time::timeout(std::time::Duration::from_millis(2000), child).await
+        else {
+            return None;
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let errors: Vec<&str> = stderr
+                .lines()
+                .filter(|line| line.contains("error[") || line.contains("error:"))
+                .take(3)
+                .collect();
+            if !errors.is_empty() {
+                return Some(errors.join("\n"));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

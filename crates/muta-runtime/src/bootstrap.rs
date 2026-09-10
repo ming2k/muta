@@ -73,6 +73,10 @@ pub struct BootstrapParams {
     /// down (suspension, kill, daemon drain) instead of ticking forever.
     /// `None` = process-lifetime scheduling (single-session frontends).
     pub teardown_token: Option<tokio_util::sync::CancellationToken>,
+    /// ADR-0209: Daemon-wide authoritative configuration shared across all hosted sessions.
+    pub shared_config: Option<crate::SharedConfig>,
+    /// ADR-0209: Daemon-wide authoritative connection usage shared across all hosted sessions.
+    pub shared_provider_usage: Option<crate::SharedConnectionUsage>,
 }
 
 /// The assembled session harness: the driver (ready to `run`), the frontend
@@ -157,6 +161,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         confined: confined_at_start,
         human_channel,
         teardown_token: _,
+        shared_config,
+        shared_provider_usage,
     } = params;
     debug_assert!(
         matches!(
@@ -195,7 +201,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let (req_tx, req_rx) = mpsc::channel::<AgentRequest>(SESSION_REQUEST_CAPACITY);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
 
-    let mut config = Config::load();
+    let shared_config =
+        shared_config.unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(Config::load())));
+    let shared_provider_usage = shared_provider_usage.unwrap_or_else(|| {
+        Arc::new(tokio::sync::RwLock::new(
+            connection_usage::ConnectionUsage::load(),
+        ))
+    });
+
+    let mut config = shared_config.read().await.clone();
     // Overlay persisted fitted-model metadata onto model resolution, so ids a
     // trusted provider advertised (but the static registry does not know)
     // resolve with their real capabilities from the very first request.
@@ -659,14 +673,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ));
     }
 
-    // Kick off the two independent file reads on the blocking pool NOW so they
-    // run concurrently with the agent seeding, pursuit restore, and todo
-    // restore below (rather than serially blocking the executor). Both read
-    // from `paths::get()` globals and return owned, `Send` data, so a plain
-    // `spawn_blocking` closure is self-contained. They are awaited later where
-    // their results feed the harness / frontend.
-    let provider_usage_handle =
-        tokio::task::spawn_blocking(connection_usage::ConnectionUsage::load);
+    // ADR-0209: The authoritative usage telemetry lives in shared_provider_usage.
+    // Read the current state for startup model resolution without redundant disk I/O.
 
     // `mutx attach` (no id) opens the sessions picker at startup instead of
     // loading any session: no transcript, todos, or SessionStart hooks should
@@ -804,7 +812,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Load per-model usage telemetry (recency signal for the picker,
     // ADR-0002 phase 2). Moved into the agent task so both the startup
     // activation and runtime switches record through one instance.
-    let provider_usage = provider_usage_handle.await.unwrap_or_default();
+    let provider_usage = shared_provider_usage.read().await.clone();
 
     // Primary round lifecycle: at most one active round, superseded by the
     // next begin (replaces the old token-slot + generation-counter pair).
@@ -901,8 +909,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         req_tx: req_tx_for_commands,
         agent,
         session: session.clone(),
-        config,
-        provider_usage,
+        config: shared_config,
+        provider_usage: shared_provider_usage,
         provider_holder: provider_for_task,
         skills_registry,
         subagent_registry,

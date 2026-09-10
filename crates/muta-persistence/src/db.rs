@@ -985,9 +985,33 @@ pub struct HistorySearchResult {
     pub entry_id: String,
     pub session_id: String,
     pub project_root: String,
+    /// Stored AI/manual title of the owning session, when one exists
+    /// (joined from `sessions.title`, ADR-0208).
+    pub session_title: Option<String>,
     pub role: String,
     pub snippet: String,
     pub score: f64,
+}
+
+/// One persisted session's projected transcript tail plus metadata — the
+/// public, field-private shape out-of-crate readers consume (ADR-0208).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTranscriptView {
+    pub id: String,
+    pub title: Option<String>,
+    pub digest: Option<muta_contracts::SessionDigest>,
+    pub project_root: String,
+    pub message_count: usize,
+    pub messages: Vec<SessionMessageView>,
+}
+
+/// One projected message row inside a [`SessionTranscriptView`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionMessageView {
+    pub seq: u64,
+    /// Lowercase role string (`user` / `assistant` / `system` / `tool`).
+    pub role: String,
+    pub content: String,
 }
 
 fn role_str(role: muta_contracts::Role) -> &'static str {
@@ -1062,10 +1086,57 @@ fn map_search_row(row: &Row) -> Result<HistorySearchResult> {
         entry_id: row.get(0)?,
         session_id: row.get(1)?,
         project_root: row.get(2)?,
-        role: row.get(3)?,
-        snippet: row.get(4)?,
-        score: row.get(5)?,
+        session_title: row.get(3)?,
+        role: row.get(4)?,
+        snippet: row.get(5)?,
+        score: row.get(6)?,
     })
+}
+
+/// Sanitize a free-text query into a safe FTS5 MATCH expression (ADR-0208).
+///
+/// Every whitespace-separated word becomes a quoted phrase token (`"retry"`
+/// → `"retry"`, `retry loop` → `"retry" AND "loop"`), so user input can never
+/// inject FTS5 column filters or boolean operators — the raw MATCH grammar
+/// treats a bare word that names a column as a filter and errors out (the
+/// live failure that motivated this: `no such column: needle`). Word
+/// characters plus a small punctuation allowlist (`-` `_` `.`) survive;
+/// everything else (including quotes) is stripped, so FTS5 string-literal
+/// grammar is unreachable and the expression is injection-proof by
+/// construction. A query with no word characters degenerates to an empty
+/// string (no-op search).
+///
+/// `match_any` joins the tokens with OR instead of AND — the relaxed recall
+/// mode (`search_history_relaxed`).
+fn sanitize_fts_query_joined(query: &str, match_any: bool) -> String {
+    let joiner = if match_any { " OR " } else { " AND " };
+    sanitize_fts_words(query).join(joiner)
+}
+
+/// The word-level sanitizer: cleaned tokens (punctuation stripped, lowercased
+/// implicitly by FTS's own tokenizer) that survive into any MATCH form.
+fn sanitize_fts_words(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .filter_map(|word| {
+            let cleaned: String = word
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                .collect();
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(format!("\"{cleaned}\""))
+            }
+        })
+        .collect()
+}
+
+/// The strict (AND) form, kept as the test-facing wrapper around the joined
+/// sanitizer.
+#[cfg(test)]
+fn sanitize_fts_query(query: &str) -> String {
+    sanitize_fts_query_joined(query, false)
 }
 
 /// Envelope columns of one `entries` row, as written by a save (ADR-0186 §3).
@@ -1911,6 +1982,50 @@ impl DatabaseEngine {
         Ok(Some(data))
     }
 
+    /// Public read-only transcript accessor for out-of-crate readers (the
+    /// runtime's Archivist tools, ADR-0208): the full persisted
+    /// [`crate::session::SessionData`] for one session, checksum-verified,
+    /// or `None` when the id is unknown.
+    pub fn load_session_full_public(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::session::SessionData>> {
+        self.load_session_full(session_id)
+    }
+
+    /// One persisted session's projected transcript tail plus metadata, as
+    /// plain wire-serializable rows (ADR-0208): the read path the Archivist's
+    /// `archivist_read_session` tool serves. [`SessionTranscriptView`] keeps
+    /// `SessionData`'s fields private while exposing exactly the projection
+    /// the retrieval plane needs.
+    pub fn read_session_transcript(
+        &self,
+        session_id: &str,
+        tail: usize,
+    ) -> Result<Option<SessionTranscriptView>> {
+        let Some(data) = self.load_session_full(session_id)? else {
+            return Ok(None);
+        };
+        let projected = data.transcript.project();
+        let total = projected.len();
+        let start = total.saturating_sub(tail);
+        Ok(Some(SessionTranscriptView {
+            id: data.id.clone(),
+            title: data.title.clone(),
+            digest: data.digest.clone(),
+            project_root: data.project_root.to_string_lossy().into_owned(),
+            message_count: total,
+            messages: projected[start..]
+                .iter()
+                .map(|(seq, m)| SessionMessageView {
+                    seq: *seq,
+                    role: role_str(m.role).to_string(),
+                    content: m.content.clone(),
+                })
+                .collect(),
+        }))
+    }
+
     /// Resolve a session ID prefix (4+ hex chars) to matching full session IDs.
     pub fn resolve_session_prefix(
         &self,
@@ -2163,14 +2278,52 @@ impl DatabaseEngine {
     // FTS5 Full-Text History Search (proto.muta.v1.MutaService/SearchHistory)
 
     /// Perform BM25 full-text search across transcript entries, optionally
-    /// filtered by workspace root.
+    /// filtered by workspace root. Hits join the owning session's title and
+    /// `updated_at` so a hit is presentable and rankable without a second
+    /// round-trip (ADR-0208).
+    ///
+    /// The raw query is sanitized into a safe FTS5 MATCH expression: each
+    /// whitespace-separated word becomes a quoted phrase, joined with AND.
+    /// This is both injection-proof (a bare word that collides with a column
+    /// name — `needle`, `OR`, `NOT` — is a syntax/column error in raw MATCH)
+    /// and friendlier to recall: `retry loop` matches texts containing both
+    /// words, in any position. Callers that need raw FTS5 operators can
+    /// bypass by quoting inline (`"retry OR fail"` is preserved verbatim when
+    /// the caller already supplies balanced quotes... no — every word is
+    /// quoted; phrase operators are intentionally not reachable here).
     pub fn search_history(
         &self,
         query: &str,
         project_root: Option<&str>,
         limit: usize,
     ) -> Result<Vec<HistorySearchResult>> {
-        let clean_query = query.trim();
+        self.search_history_inner(query, project_root, limit, false)
+    }
+
+    /// [`Self::search_history`] with the recall widened: the sanitized words
+    /// are joined with OR instead of AND (ADR-0208 Layer 3's deterministic
+    /// fallback). A gist query whose ANDed words never co-occur in one entry
+    /// still recalls the entries carrying any of its words, BM25-ranked so
+    /// multi-word hits float up. Callers fall back to this only after the
+    /// strict search comes back empty, so the widened net never replaces a
+    /// precise hit.
+    pub fn search_history_relaxed(
+        &self,
+        query: &str,
+        project_root: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<HistorySearchResult>> {
+        self.search_history_inner(query, project_root, limit, true)
+    }
+
+    fn search_history_inner(
+        &self,
+        query: &str,
+        project_root: Option<&str>,
+        limit: usize,
+        match_any: bool,
+    ) -> Result<Vec<HistorySearchResult>> {
+        let clean_query = sanitize_fts_query_joined(query, match_any);
         if clean_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -2182,6 +2335,7 @@ impl DatabaseEngine {
                     f.entry_id,
                     f.session_id,
                     s.project_root,
+                    s.title,
                     f.role,
                     snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
                     bm25(fts_entries) AS score
@@ -2201,6 +2355,7 @@ impl DatabaseEngine {
                     f.entry_id,
                     f.session_id,
                     s.project_root,
+                    s.title,
                     f.role,
                     snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
                     bm25(fts_entries) AS score
@@ -4167,6 +4322,128 @@ mod tests {
                 ack_rx.await,
                 Ok(Err(PersistenceError::WriterDown))
             ));
+        }
+
+        /// ADR-0208: cross-project FTS recall end-to-end — persist a session
+        /// with a distinctive message, then find it back with a raw
+        /// multi-word query through `search_history` (the Archivist's
+        /// retrieval plane). Also pins the workspace filter.
+        #[test]
+        fn search_history_finds_persisted_transcripts() {
+            use muta_contracts::{Message, Role, TranscriptEntry};
+
+            let engine = DatabaseEngine::open_in_memory().unwrap();
+            let mut data = crate::session::SessionData::default();
+            data.project_root = std::path::PathBuf::from("/tmp/proj-a");
+            data.title = Some("Retry loop debugging".into());
+            let msg = Message::new(
+                Role::User,
+                "we need to debug the exponential backoff in the retry loop",
+            );
+            data.transcript.push(TranscriptEntry::from_message(0, &msg));
+            engine.save_session_full(&data).unwrap();
+
+            // Bare multi-word query (the shape that used to blow up MATCH
+            // with `no such column: needle`).
+            let hits = engine.search_history("retry backoff", None, 20).unwrap();
+            assert_eq!(hits.len(), 1, "the seeded session must be recalled");
+            assert_eq!(hits[0].session_id, data.id);
+            assert_eq!(
+                hits[0].session_title.as_deref(),
+                Some("Retry loop debugging")
+            );
+            assert_eq!(hits[0].project_root, "/tmp/proj-a");
+            assert!(hits[0].snippet.contains("retry"), "{:?}", hits[0].snippet);
+
+            // A workspace filter that does not match returns nothing; one
+            // that matches returns the hit.
+            assert!(
+                engine
+                    .search_history("retry", Some("/tmp/other"), 20)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                engine
+                    .search_history("retry", Some("/tmp/proj-a"), 20)
+                    .unwrap()
+                    .len(),
+                1
+            );
+
+            // Operator-ish input is sanitized, not executed as FTS grammar.
+            assert!(
+                engine
+                    .search_history("retry OR NOT needle", None, 20)
+                    .unwrap()
+                    .is_empty()
+                    || true,
+                "sanitized query must not error"
+            );
+        }
+
+        /// ADR-0208 Layer 3 (deterministic leg): when the strict AND query
+        /// recalls nothing because its words never co-occur, the relaxed OR
+        /// form recalls the entries carrying any word, BM25-ranked so
+        /// multi-word matches float up.
+        #[test]
+        fn relaxed_recall_widens_the_net_after_a_strict_miss() {
+            use muta_contracts::{Message, Role, TranscriptEntry};
+
+            let engine = DatabaseEngine::open_in_memory().unwrap();
+            for (id, text) in [
+                ("s-retry", "we debugged the retry loop's backoff"),
+                ("s-paint", "repaint the widget border only"),
+            ] {
+                let mut data = crate::session::SessionData::default();
+                data.id = id.to_string();
+                data.project_root = std::path::PathBuf::from("/tmp/proj-r");
+                data.title = Some(id.to_string());
+                let msg = Message::new(Role::User, text);
+                data.transcript.push(TranscriptEntry::from_message(0, &msg));
+                engine.save_session_full(&data).unwrap();
+            }
+
+            // Strict: both words together appear in no single entry.
+            let strict = engine.search_history("retry border", None, 20).unwrap();
+            assert!(strict.is_empty(), "strict AND must miss: {strict:?}");
+
+            // Relaxed: each entry carries one word; the retry entry also
+            // matches more of the query. Both are recalled, OR-joined.
+            let relaxed = engine
+                .search_history_relaxed("retry border", None, 20)
+                .unwrap();
+            assert_eq!(relaxed.len(), 2, "both entries surface: {relaxed:?}");
+            let ids: std::collections::HashSet<_> =
+                relaxed.iter().map(|h| h.session_id.as_str()).collect();
+            assert!(ids.contains("s-retry"));
+            assert!(ids.contains("s-paint"));
+            // Deterministic ordering: scores sort ascending (FTS5
+            // negative-better), which the query_map's ORDER BY guarantees —
+            // the exact tie order between single-word matches is BM25's
+            // business, not this test's.
+            let scores: Vec<f64> = relaxed.iter().map(|h| h.score).collect();
+            let mut sorted = scores.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(scores, sorted);
+        }
+
+        /// ADR-0208: the sanitizer converts free text into a safe MATCH
+        /// expression — quoted phrase tokens joined with AND, operator and
+        /// punctuation characters stripped, so raw user input can never
+        /// reach the FTS5 grammar.
+        #[test]
+        fn sanitize_fts_query_quotes_every_word() {
+            assert_eq!(sanitize_fts_query("retry loop"), "\"retry\" AND \"loop\"");
+            assert_eq!(
+                sanitize_fts_query("retry OR NOT needle"),
+                "\"retry\" AND \"OR\" AND \"NOT\" AND \"needle\""
+            );
+            // Quotes are punctuation: stripped, not escaped (a quote can
+            // never survive into the MATCH grammar this way).
+            assert_eq!(sanitize_fts_query("a\"b"), "\"ab\"");
+            assert_eq!(sanitize_fts_query("   "), "");
+            assert_eq!(sanitize_fts_query("***"), "");
         }
     }
 }

@@ -210,13 +210,13 @@ platform), not the international `z.ai` brand.
 
 `custom` is an ordinary `ModelProvider` entry with an open model universe, no
 compiled baseline requirement, and a default protocol of
-`openai-chat-completions` that a connection may override:
+`chat-completions` that a connection may override:
 
 ```toml
 [[connections]]
 name = "acme-relay"
 provider = "custom"
-protocol = "openai-chat-completions"
+protocol = "chat-completions"
 base_url = "https://relay.example.com/v1"
 models.include = ["acme-7b", "acme-13b"]
 ```
@@ -325,7 +325,7 @@ emits only the new names. No transitional aliases survive in serialization.
 - **Why considered:** an apparent symmetry — one generic entry per wire protocol.
 - **Why rejected:** it puts the protocol axis in two places
   (`provider = "anthropic-compatible"` alongside
-  `protocol = "openai-chat-completions"`), producing contradictions the type
+  `protocol = "chat-completions"`), producing contradictions the type
   system cannot prevent, and it makes `provider` mean "vendor" for curated
   entries and "protocol" for generic ones — the exact overload this ADR removes.
   "Compatible" is relay marketing vocabulary and carries no information once

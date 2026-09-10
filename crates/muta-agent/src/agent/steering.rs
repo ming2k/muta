@@ -233,8 +233,8 @@ impl Agent {
         self.apply_profile(preset);
     }
 
-    /// Idempotent over defaults: applies an [`muta_contracts::AgentPreset`] (ADR-0183).
-    pub fn apply_profile(&self, profile: &muta_contracts::AgentPreset) {
+    /// Idempotent over defaults: applies an [`muta_contracts::AgentRole`] (ADR-0183 / ADR-0211).
+    pub fn apply_profile(&self, profile: &muta_contracts::AgentRole) {
         self.set_identity(profile.identity.clone());
         self.set_agent_selection(profile.agent_selection.clone());
         self.set_operation_scope(profile.operation_scope.clone());
@@ -243,6 +243,9 @@ impl Agent {
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);
+        if !profile.facets.is_empty() {
+            *self.facets.write().unwrap_or_else(|e| e.into_inner()) = profile.facets.clone();
+        }
     }
 
     /// Replace this agent's identity (name + mission, or a persona override).
@@ -252,12 +255,27 @@ impl Agent {
         }
     }
 
-    /// Switch the live agent into a named role (ADR-0183).
-    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentPresetId> {
-        let resolved = muta_contracts::AgentPresetId::parse(role)?;
+    /// Switch the live agent into a named role (ADR-0183 / ADR-0211).
+    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentRoleId> {
+        let resolved = muta_contracts::AgentRoleId::parse(role)?;
         let base = self.identity();
-        let profile = muta_contracts::AgentPreset::for_role(resolved, &base);
+        let mut profile = muta_contracts::AgentRole::for_role(resolved, &base);
+
+        // ADR-0211: Staff the role with appropriate instance-bound HarnessFacets
+        match resolved {
+            muta_contracts::AgentRoleId::Code => {
+                profile.facets.push(Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
+            }
+            muta_contracts::AgentRoleId::CodeAnalyst
+            | muta_contracts::AgentRoleId::Reviewer
+            | muta_contracts::AgentRoleId::Architect => {
+                profile.facets.push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only(1024)));
+            }
+            muta_contracts::AgentRoleId::Security => {}
+        }
         self.apply_profile(&profile);
+        *self.facets.write().unwrap_or_else(|e| e.into_inner()) = profile.facets;
+
         Some(resolved)
     }
 
@@ -752,5 +770,35 @@ impl Agent {
             }
         }
         !interrupted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NoProvider;
+
+    #[test]
+    fn apply_role_switches_facets_appropriately() {
+        let provider = Arc::new(NoProvider);
+        let agent = Agent::new(
+            provider,
+            Vec::new(),
+            crate::AgentIdentity::new("test", "test agent"),
+        );
+
+        // Applying developer role equips code intelligence facet
+        assert!(agent.apply_role("developer").is_some());
+        assert_eq!(agent.facets().len(), 1);
+        assert_eq!(agent.facets()[0].name(), "code_intelligence");
+
+        // Applying security role drops code intelligence facet (0 overhead)
+        assert!(agent.apply_role("security").is_some());
+        assert_eq!(agent.facets().len(), 0);
+
+        // Applying code_analyst equips read-only code intelligence facet
+        assert!(agent.apply_role("code_analyst").is_some());
+        assert_eq!(agent.facets().len(), 1);
+        assert_eq!(agent.facets()[0].name(), "code_intelligence");
     }
 }

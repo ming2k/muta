@@ -37,6 +37,7 @@ fn render_full_view(
                     paused: false,
                     blocked: false,
                 },
+                tasks_bar: Default::default(),
                 persistence_health: None,
                 subagent_bar: None,
                 side_banner: None,

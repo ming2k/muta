@@ -447,11 +447,9 @@ impl App {
             }
             DialogKind::Permissions => self.permissions_scroll = 0,
             DialogKind::UsageStats => {
-                self.usage_stats = None;
                 self.usage_stats_scroll = 0;
             }
             DialogKind::Telemetry => {
-                self.token_report = None;
                 self.telemetry_tab = crate::overlays::telemetry::TelemetryTab::Overview;
                 self.telemetry_scroll = 0;
                 self.telemetry_detail = false;

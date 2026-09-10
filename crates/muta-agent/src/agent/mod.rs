@@ -136,6 +136,18 @@ impl ScopedToolDisable {
 pub(crate) type TurnPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
+/// Title-established observer fired by the background session titler
+/// (ADR-0022).
+///
+/// The titler lives in `muta-agent` and cannot reach the runtime's response
+/// channel, so the driver installs a closure that pushes a fresh
+/// `SessionsOverview` snapshot (and thereby republishes the monitor row, so
+/// every attached client's picker title updates live). Fired at most once per
+/// session — a non-`NULL` title is terminal (ADR-0186). Errors and absent
+/// observers are non-fatal: the title is already durably persisted when this
+/// fires, so the notification is pure presentation.
+pub type TitleEstablishedFn = Arc<dyn Fn(&str) -> BoxFuture<'static, ()> + Send + Sync>;
+
 pub use muta_contracts::RequestTokenEstimate;
 
 // `AgentIdentity` now lives in `muta-contracts` (`identity.rs`) as pure domain
@@ -314,6 +326,12 @@ pub struct Agent {
     /// subagents, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the turn boundary is a plain no-op there.
     turn_persist: std::sync::Mutex<Option<TurnPersistFn>>,
+    /// Title-established observer installed by the session driver: fired
+    /// once when the background titler durably persists a session's first
+    /// title, so the runtime can push a fresh sessions overview (and the
+    /// monitor tap republishes the row) to every attached client. `None`
+    /// keeps titling silent (subagents, tests).
+    pub(crate) title_established: std::sync::Mutex<Option<TitleEstablishedFn>>,
     /// Request-scoped projector. The agent owns its lifecycle and supplies live
     /// state snapshots; the assembler owns the pure window-to-request transform.
     model_request_assembler: crate::model_request::ModelRequestAssembler,
@@ -355,6 +373,8 @@ pub struct Agent {
     /// Content-addressed per-tool-spec BPE weights: a toolset is stable across
     /// turns, so its schema cost is tokenized once, not per estimate pass.
     tool_schema_weights: std::sync::Arc<muta_contracts::ToolSchemaWeights>,
+    /// Ambient harness facets bound to this agent instance (ADR-0211).
+    pub(crate) facets: Arc<std::sync::RwLock<Vec<Arc<dyn muta_contracts::HarnessFacet>>>>,
 }
 
 /// Capability handle for steering a running agent from the outside — the
@@ -976,6 +996,7 @@ pub struct AgentBuilder {
     skills_registry: skills::SkillRegistry,
     identity: AgentIdentity,
     model_request_assembler: crate::model_request::ModelRequestAssembler,
+    facets: Vec<Arc<dyn muta_contracts::HarnessFacet>>,
 }
 
 impl AgentBuilder {
@@ -992,7 +1013,25 @@ impl AgentBuilder {
             model_request_assembler: crate::model_request::ModelRequestAssembler::new(
                 crate::model_request::default_system_prompt_registry(),
             ),
+            facets: Vec::new(),
         }
+    }
+
+    /// Add an ambient harness facet to this agent (ADR-0211).
+    pub fn with_facet(mut self, facet: Arc<dyn muta_contracts::HarnessFacet>) -> Self {
+        self.facets.push(facet);
+        self
+    }
+
+    /// Add ambient harness facets to this agent (ADR-0211).
+    pub fn with_facets(
+        mut self,
+        facets: impl IntoIterator<Item = Arc<dyn muta_contracts::HarnessFacet>>,
+    ) -> Self {
+        for facet in facets {
+            self.facets.push(facet);
+        }
+        self
     }
 
     /// Add one caller-supplied tool to this agent's capability set.
@@ -1071,13 +1110,17 @@ impl AgentBuilder {
 
     /// Freeze the configuration and construct the agent.
     pub fn build(self) -> Agent {
-        Agent::from_toolset_with_model_request_assembler(
+        let agent = Agent::from_toolset_with_model_request_assembler(
             self.provider,
             self.toolset,
             self.skills_registry,
             self.identity,
             self.model_request_assembler,
-        )
+        );
+        if !self.facets.is_empty() {
+            *agent.facets.write().unwrap_or_else(|e| e.into_inner()) = self.facets;
+        }
+        agent
     }
 }
 

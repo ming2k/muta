@@ -231,10 +231,10 @@ impl App {
         match self.current_custom_field() {
             Some(CustomField::Protocol) => {
                 const PROTOCOLS: &[muta_contracts::WireProtocol] = &[
-                    muta_contracts::WireProtocol::OpenAiChatCompletions,
-                    muta_contracts::WireProtocol::OpenAiResponses,
+                    muta_contracts::WireProtocol::ChatCompletions,
+                    muta_contracts::WireProtocol::Responses,
                     muta_contracts::WireProtocol::AnthropicMessages,
-                    muta_contracts::WireProtocol::GoogleGenerateContent,
+                    muta_contracts::WireProtocol::GoogleGemini,
                 ];
                 let current = self
                     .custom_protocol_wire

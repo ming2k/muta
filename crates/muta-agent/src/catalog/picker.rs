@@ -210,13 +210,13 @@ pub fn prune_stale_models_on_disk() -> bool {
 pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => (
-            muta_contracts::WireProtocol::OpenAiChatCompletions
+            muta_contracts::WireProtocol::ChatCompletions
                 .as_str()
                 .to_string(),
             base_url.clone(),
         ),
         Transport::OpenAiResponses { base_url, .. } => (
-            muta_contracts::WireProtocol::OpenAiResponses
+            muta_contracts::WireProtocol::Responses
                 .as_str()
                 .to_string(),
             base_url.clone(),
@@ -228,7 +228,7 @@ pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, Strin
             base_url.clone(),
         ),
         Transport::Google { base_url, .. } => (
-            muta_contracts::WireProtocol::GoogleGenerateContent
+            muta_contracts::WireProtocol::GoogleGemini
                 .as_str()
                 .to_string(),
             base_url.clone(),
@@ -247,6 +247,16 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
     let vision = caps.vision;
     let context_window = caps.context_window;
     let max_output_tokens = caps.max_output_tokens;
+    let effort_levels: Vec<String> = caps
+        .effort_levels
+        .iter()
+        .map(|lvl| lvl.as_str().to_string())
+        .collect();
+    let known_efforts: Vec<Effort> = caps
+        .effort_levels
+        .iter()
+        .filter_map(|lvl| lvl.as_known())
+        .collect();
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -263,6 +273,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                     .to_string(),
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
+                effort_levels,
                 favorite: false,
                 last_used_ms: None,
                 vision,
@@ -271,20 +282,20 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             }
         }
         Transport::OpenAi { effort, .. } => {
-            let model = muta_contracts::model::resolve(&channel.model);
             // Fallback when the channel has no explicit effort override is
             // `Effort::channel_default` — the SAME rule the provider factory
             // stamps onto the wire, so the picker can never promise a tier
             // the request does not send.
-            let effective = Effort::channel_default(model.family, model.effort_levels)
+            let effective = Effort::channel_default(&caps.family, &known_efforts)
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: muta_contracts::WireProtocol::OpenAiChatCompletions
+                protocol: muta_contracts::WireProtocol::ChatCompletions
                     .as_str()
                     .to_string(),
                 effort: effective,
                 thinking: None,
+                effort_levels,
                 favorite: false,
                 last_used_ms: None,
                 vision,
@@ -293,17 +304,17 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
-            let model = muta_contracts::model::resolve(&channel.model);
             // Same shared default rule as the chat-completions arm.
-            let effective = Effort::channel_default(model.family, model.effort_levels)
+            let effective = Effort::channel_default(&caps.family, &known_efforts)
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: muta_contracts::WireProtocol::OpenAiResponses
+                protocol: muta_contracts::WireProtocol::Responses
                     .as_str()
                     .to_string(),
                 effort: effective,
                 thinking: None,
+                effort_levels,
                 favorite: false,
                 last_used_ms: None,
                 vision,
@@ -318,16 +329,16 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             // The channel's explicit override wins; otherwise the shared
             // `Effort::channel_default` rule (`high` clamped to the ladder —
             // Gemini is never a `gpt` family) applies.
-            let model = muta_contracts::model::resolve(&channel.model);
-            let effective = Effort::channel_default(model.family, model.effort_levels)
+            let effective = Effort::channel_default(&caps.family, &known_efforts)
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: muta_contracts::WireProtocol::GoogleGenerateContent
+                protocol: muta_contracts::WireProtocol::GoogleGemini
                     .as_str()
                     .to_string(),
                 effort: effective,
                 thinking: None,
+                effort_levels,
                 favorite: false,
                 last_used_ms: None,
                 vision,
@@ -420,6 +431,31 @@ mod tests {
         let info = channel_model_info(&openai_channel("glm-5.3", Some(remote)));
         assert_eq!(info.context_window, 1_000_000);
         assert_eq!(info.max_output_tokens, Some(131_072));
+    }
+
+    #[test]
+    fn channel_model_info_surfaces_effort_levels_from_remote_metadata() {
+        let remote = muta_contracts::RemoteModelMetadata {
+            effort_levels: Some(vec![
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::Low),
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::Medium),
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::High),
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::Xhigh),
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::Max),
+                muta_contracts::EffortLevel::Known(muta_contracts::Effort::Ultra),
+            ]),
+            ..Default::default()
+        };
+        let mut channel = openai_channel("gpt-6-astra", Some(remote));
+        if let Transport::OpenAi { effort, .. } = &mut channel.transport {
+            *effort = None;
+        }
+        let info = channel_model_info(&channel);
+        assert_eq!(
+            info.effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(info.effort, Some("medium".to_string()));
     }
 
     #[test]

@@ -109,6 +109,11 @@ pub struct BoundSession {
     /// [`HostedSession::sync_buffer`]). Non-destructively snapshotted by the WS
     /// layer into every attaching client right after it subscribes.
     pub sync_buffer: Arc<Mutex<AttachSyncBuffer>>,
+    /// Daemon-level latest picker snapshot shared across sessions (see the
+    /// registry's `latest_picker` cache). Spliced over the per-session
+    /// buffer's picker at attach time so a new client hydrates the current
+    /// *global* model ordering, not this session's last local one.
+    pub daemon_picker: Arc<Mutex<Option<AgentResponse>>>,
     pub command_catalog: muta_contracts::CommandCatalog,
     /// Durable workspace trust store for this session's project. The
     /// WS attach path reads it to detect unreviewed workspace contributions
@@ -160,6 +165,38 @@ pub struct SessionRegistry {
     /// persistence supervisor's transitions for monitor snapshots and
     /// published as `PersistenceHealth` diffs. `None` = never degraded.
     persistence_health: Arc<std::sync::Mutex<Option<muta_contracts::monitor::PersistenceHealth>>>,
+    /// Daemon-level latest picker snapshot (cross-session model ordering).
+    /// The picker's recency data lives in the shared SQLite `ConnectionUsage`,
+    /// so a snapshot built by any one session's driver is global truth — but
+    /// the driver only pushes it onto its *own* bus. This cache (shared by
+    /// every `BoundSession.daemon_picker`) lets a freshly attached client of
+    /// any session hydrate the current global ordering instead of the stale
+    /// one captured at that session's last local switch.
+    latest_picker: Arc<Mutex<Option<AgentResponse>>>,
+    /// Authoritative runtime configuration shared across all hosted sessions (ADR-0209).
+    shared_config: crate::SharedConfig,
+    /// Authoritative model recency telemetry shared across all hosted sessions (ADR-0209).
+    shared_provider_usage: crate::SharedConnectionUsage,
+    /// The daemon's Archivist conversational service (ADR-0208): lazily
+    /// consulted by the `AskArchivist` control verb; one agent, borrowed
+    /// provider per round.
+    archivist: Arc<crate::archivist_service::ArchivistService>,
+    /// The daemon's agent mesh (ADR-0167): one tracker per instance. The
+    /// Hypervisor registers its own address here, and every hosted session's
+    /// master registers a `MeshMailbox` at `session/<id>` on assemble
+    /// (dropped/reaped at teardown), so top-down `Instruction` and bottom-up
+    /// `Report` traffic between the Hypervisor station and the fleet is
+    /// deliverable — before this, the mesh existed only under test.
+    mesh: Arc<muta_agent::mesh::MeshTracker>,
+    /// The session mailboxes' parked handles so teardown can drop them
+    /// deterministically (the mailbox RAII also covers the crash path via
+    /// the entry map's own drop).
+    session_mailboxes: Arc<Mutex<HashMap<String, muta_agent::mesh::MeshMailbox>>>,
+    /// The Hypervisor station (ADR-0167), constructed lazily on the first
+    /// hosted-session assemble — its provider is then bound to the borrowing
+    /// session's live channel (the same borrowed-channel contract the
+    /// Archivist uses), and its own address joins the mesh tracker.
+    hypervisor: Arc<Mutex<Option<Arc<crate::hypervisor::Hypervisor>>>>,
 }
 
 /// How long a never-persisted (empty) hosted session may sit idle before the
@@ -199,6 +236,13 @@ impl SessionRegistry {
     }
     fn with_meta(params: Option<HostParams>) -> Self {
         let (monitor, _) = broadcast::channel::<MonitorEvent>(256);
+        // Construction-order scaffold: the Archivist service joins the mesh
+        // tracker at build time (its mailbox + delegation tool both bind to
+        // the one tracker), so the tracker is built first and handed over.
+        let mesh = Arc::new(muta_agent::mesh::MeshTracker::new());
+        let archivist = Arc::new(crate::archivist_service::ArchivistService::with_mesh(
+            mesh.clone(),
+        ));
         Self {
             params,
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -207,6 +251,17 @@ impl SessionRegistry {
             daemon_tasks: Arc::new(crate::background_jobs::BackgroundJobManager::new()),
             daemon_task_rows: Arc::new(std::sync::Mutex::new(HashMap::new())),
             persistence_health: Arc::new(std::sync::Mutex::new(None)),
+            latest_picker: Arc::new(Mutex::new(None)),
+            shared_config: Arc::new(tokio::sync::RwLock::new(
+                muta_persistence::config::Config::load(),
+            )),
+            shared_provider_usage: Arc::new(tokio::sync::RwLock::new(
+                muta_persistence::connection_usage::ConnectionUsage::load(),
+            )),
+            mesh,
+            archivist,
+            session_mailboxes: Arc::new(Mutex::new(HashMap::new())),
+            hypervisor: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -272,6 +327,98 @@ impl SessionRegistry {
                 }
             }
         });
+    }
+
+    /// Cross-session picker fan-out: refresh the daemon-level latest-picker
+    /// cache and rebroadcast the snapshot to every *other* hosted session's
+    /// bus, so a model switch made in one session is visible (and hydratable
+    /// at attach time) everywhere. Called by the per-session broadcast tap
+    /// whenever its driver emits a `ProviderPicker`.
+    pub async fn broadcast_picker_to_other_sessions(&self, origin: &str, response: AgentResponse) {
+        {
+            let mut latest = self.latest_picker.lock().await;
+            *latest = Some(response.clone());
+        }
+        let map = self.sessions.lock().await;
+        for (id, session) in map.iter() {
+            if id != origin {
+                let _ = session.events.send(response.clone());
+            }
+        }
+    }
+
+    /// The daemon-level latest picker snapshot, for attach-time hydration
+    /// (`None` before any session has pushed a picker this process lifetime —
+    /// per-session attach-sync buffers still cover that case).
+    pub async fn latest_picker(&self) -> Option<AgentResponse> {
+        self.latest_picker.lock().await.clone()
+    }
+
+    /// Ask the Archivist (ADR-0208) one question, synchronously. The round
+    /// borrows the live provider of any hosted session's agent (all sessions
+    /// resolve the same shared channel after a switch); with no hosted
+    /// session the round runs on the last-bound channel or refuses via the
+    /// `NoProvider` sentinel.
+    pub async fn ask_archivist(&self, text: String) -> crate::archivist_service::ArchivistAnswer {
+        let provider: Option<Arc<dyn muta_contracts::Provider>> = {
+            let map = self.sessions.lock().await;
+            map.values()
+                .find_map(|e| e.agent_for_session_end.as_ref())
+                .map(|agent| agent.provider.clone())
+        };
+        let borrowed = provider.unwrap_or_else(|| Arc::new(muta_agent::NoProvider));
+        self.archivist.ask(borrowed, &text).await
+    }
+
+    /// The daemon's agent-mesh tracker (ADR-0167). The Hypervisor's tools and
+    /// any future mesh-aware toolset read peer registrations from here.
+    pub fn mesh(&self) -> Arc<muta_agent::mesh::MeshTracker> {
+        self.mesh.clone()
+    }
+
+    /// The Hypervisor station, once materialized (lazily constructed on the
+    /// first hosted-session assemble). `None` before any session has hosted —
+    /// a daemon with no fleet has nothing to orchestrate.
+    pub async fn hypervisor(&self) -> Option<Arc<crate::hypervisor::Hypervisor>> {
+        self.hypervisor.lock().await.clone()
+    }
+
+    /// Register this session's master at `session/<id>` on the daemon mesh
+    /// (ADR-0167): the mailbox the Hypervisor steers and the peer surface
+    /// `mesh_send`/`mesh_list_peers` resolve against. Called once per
+    /// assemble; the mailbox handle lives in the registry's session-mailbox
+    /// map so teardown (kill / suspend / drain / crash eviction) drops it —
+    /// the mailbox's RAII unregisters the mesh address on drop, which is
+    /// also what keeps a suspended session's master address from surviving
+    /// a teardown and receiving steers nobody will read.
+    async fn register_session_mailbox(&self, session_id: &str) {
+        let mailbox = muta_agent::mesh::MeshMailbox::spawn(
+            (*self.mesh).clone(),
+            muta_contracts::MeshAddress::master(session_id),
+            Some(muta_contracts::MeshAddress::hypervisor("hypervisor")),
+        );
+        self.session_mailboxes
+            .lock()
+            .await
+            .insert(session_id.to_string(), mailbox);
+        // First hosted session: materialize the Hypervisor station. Its own
+        // address joins the shared tracker so mesh routing lawfulness
+        // (`Hypervisor -> Session` Instruction) is enforceable, and its
+        // conversational plane is provider-bound by the caller (`bind`).
+        let mut hypervisor = self.hypervisor.lock().await;
+        if hypervisor.is_none() {
+            *hypervisor = Some(Arc::new(crate::hypervisor::Hypervisor::new(
+                Arc::new(muta_agent::NoProvider),
+                self.clone(),
+                self.mesh.clone(),
+            )));
+        }
+    }
+
+    /// Drop one session's mesh mailbox (teardown path). The mailbox's own
+    /// RAII unregisters the address; a stale double-drop is a no-op.
+    async fn drop_session_mailbox(&self, session_id: &str) {
+        self.session_mailboxes.lock().await.remove(session_id);
     }
 
     /// Fold one fabric event into the snapshot cache and publish the diff.
@@ -618,6 +765,7 @@ impl SessionRegistry {
         // tight crash budget (2s) — an external-process SessionEnd hook must
         // not pin a teardown that already represents a failure path.
         self.sessions.lock().await.remove(session_id);
+        self.drop_session_mailbox(session_id).await;
         cancel.cancel();
         let _ = events.send(AgentResponse::Exit);
         if let Some(agent) = agent_for_session_end
@@ -649,6 +797,7 @@ impl SessionRegistry {
     /// already gone (a racing kill/suspend) or is not suspendable.
     pub async fn suspend_session(&self, session_id: &str) -> Result<(), String> {
         let removed = self.sessions.lock().await.remove(session_id);
+        self.drop_session_mailbox(session_id).await;
         let Some(e) = removed else {
             return Err(format!(
                 "session '{session_id}' is not hosted on this server"
@@ -790,6 +939,7 @@ impl SessionRegistry {
         hook_budget: std::time::Duration,
     ) -> Result<(), String> {
         let removed = self.sessions.lock().await.remove(session_id);
+        self.drop_session_mailbox(session_id).await;
         let Some(e) = removed else {
             return Err(format!(
                 "session '{session_id}' is not hosted on this server"
@@ -1026,6 +1176,7 @@ impl SessionRegistry {
             req_tx: entry.req_tx.clone(),
             events: entry.events.clone(),
             sync_buffer: entry.sync_buffer.clone(),
+            daemon_picker: self.latest_picker.clone(),
             command_catalog: entry.command_catalog.clone(),
             security: entry.security.clone(),
         };
@@ -1156,10 +1307,17 @@ impl SessionRegistry {
             confined: init_options.confined,
             human_channel: Some(Arc::clone(&human_channel)),
             teardown_token: Some(cancel.clone()),
+            shared_config: Some(self.shared_config.clone()),
+            shared_provider_usage: Some(self.shared_provider_usage.clone()),
         })
         .await
         .map_err(AssembleErr::AssembleFailed)?;
         let session = boot.session.clone();
+        // ADR-0167 mesh registration: the session's master joins the daemon
+        // mesh at `session/<id>`, parented to the Hypervisor. Failure is not
+        // session-fatal (mesh delivery is fail-open observability), so a
+        // duplicate registration simply replaces the mailbox.
+        self.register_session_mailbox(&session.id().await).await;
         let req_tx = boot.req_tx.clone();
         let command_catalog = boot.command_catalog.clone();
         let (events_tx, _) = broadcast::channel::<AgentResponse>(1024);
@@ -1181,6 +1339,13 @@ impl SessionRegistry {
         let monitor_bus = self.monitor.clone();
         let sync_buffer = Arc::new(Mutex::new(AttachSyncBuffer::new()));
         let sync_buffer_for_tap = sync_buffer.clone();
+        // Cross-session picker fan-out (see `broadcast_picker_to_other_sessions`):
+        // whenever this session's driver rebuilds the model-picker snapshot
+        // (switch, favorite toggle, connection add/delete, startup), every
+        // other hosted session's bus hears it too, and the daemon-level
+        // latest snapshot is refreshed for future attachers.
+        let cross_for_tap = self.clone();
+        let origin_for_tap = session.id().await;
         // Idle-suspension clock: bumped once per folded event (cheap atomic,
         // no mutex) so the reaper can distinguish "alive but quiet because
         // idle" from "hosted but forgotten".
@@ -1209,6 +1374,11 @@ impl SessionRegistry {
                     if is_attach_sync_event(&r) {
                         let mut buf = sync_buffer_for_tap.lock().await;
                         buf.observe(&r);
+                    }
+                    if matches!(r, AgentResponse::ProviderPicker(_)) {
+                        cross_for_tap
+                            .broadcast_picker_to_other_sessions(&origin_for_tap, r.clone())
+                            .await;
                     }
                     let _ = tap.send(r);
                 });
@@ -1284,6 +1454,7 @@ impl SessionRegistry {
             req_tx: req_tx.clone(),
             events: events_tx.clone(),
             sync_buffer: sync_buffer.clone(),
+            daemon_picker: self.latest_picker.clone(),
             command_catalog: command_catalog.clone(),
             security: boot.security.clone(),
         };
@@ -1325,6 +1496,7 @@ impl SessionRegistry {
             req_tx: e.req_tx.clone(),
             events: e.events.clone(),
             sync_buffer: e.sync_buffer.clone(),
+            daemon_picker: self.latest_picker.clone(),
             command_catalog: e.command_catalog.clone(),
             security: e.security.clone(),
         }
@@ -1495,4 +1667,95 @@ async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> boo
         .await
         .map(|items| items.iter().any(|i| i.id == id))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod mesh_tests {
+    use super::*;
+    use muta_contracts::MeshStation;
+
+    /// ADR-0167: every hosted session's master joins the daemon mesh at
+    /// `session/<id>`, and the first assemble materializes the Hypervisor
+    /// station. Teardown (kill) must unregister the session address while
+    /// the station endpoint survives.
+    #[tokio::test]
+    async fn session_mailbox_registers_and_teardown_unregisters() {
+        let registry = SessionRegistry::prehost_only();
+
+        // Before any session: no station, no peers.
+        assert!(registry.hypervisor().await.is_none());
+        assert!(
+            registry
+                .mesh()
+                .peers_by_station(MeshStation::Session)
+                .is_empty()
+        );
+
+        // Materialize through the registration path (the same call the
+        // assemble makes — invoked directly here to avoid the full
+        // bootstrap; the address bookkeeping is the unit under test).
+        registry.register_session_mailbox("s-test").await;
+        assert!(registry.hypervisor().await.is_some());
+        let peers = registry.mesh().peers_by_station(MeshStation::Session);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].session, "s-test");
+        assert_eq!(peers[0].station, MeshStation::Session);
+
+        // The station itself is registered at the hypervisor address — plus
+        // the Archivist's endpoint (parented to the station) that the
+        // daemon-built service carries. Two Hypervisor-station peers.
+        let station_peers = registry.mesh().peers_by_station(MeshStation::Hypervisor);
+        assert_eq!(station_peers.len(), 2);
+        assert!(station_peers.iter().any(|a| a.agent == "hypervisor"));
+        assert!(station_peers.iter().any(|a| a.agent == "archivist"));
+
+        // Kill-path teardown drops the mailbox; the station endpoints stay.
+        registry.drop_session_mailbox("s-test").await;
+        assert!(
+            registry
+                .mesh()
+                .peers_by_station(MeshStation::Session)
+                .is_empty()
+        );
+        assert_eq!(
+            registry
+                .mesh()
+                .peers_by_station(MeshStation::Hypervisor)
+                .len(),
+            2
+        );
+    }
+
+    /// ADR-0167 routing lawfulness on the live mesh: an Instruction from the
+    /// station to a live session master is deliverable, and the same send
+    /// after teardown is refused (fail-closed, not silent misrouting).
+    #[tokio::test]
+    async fn instruction_routing_is_lawful_and_fail_closed() {
+        use muta_contracts::{MeshEnvelope, MeshMessage};
+
+        let registry = SessionRegistry::prehost_only();
+        registry.register_session_mailbox("s-live").await;
+
+        let from = muta_contracts::MeshAddress::hypervisor("hypervisor");
+        let to = muta_contracts::MeshAddress::master("s-live");
+        let envelope = MeshEnvelope::new(
+            Some(from.clone()),
+            to.clone(),
+            MeshMessage::Instruction {
+                body: "align the retry loop".to_string(),
+            },
+        );
+        assert!(envelope.lawful(), "station may command its session");
+        assert!(registry.mesh().send(envelope).is_ok());
+
+        registry.drop_session_mailbox("s-live").await;
+        let envelope = MeshEnvelope::new(
+            Some(from),
+            to,
+            MeshMessage::Instruction {
+                body: "nobody home".to_string(),
+            },
+        );
+        assert!(registry.mesh().send(envelope).is_err());
+    }
 }

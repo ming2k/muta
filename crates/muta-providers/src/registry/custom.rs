@@ -26,7 +26,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     // A prefill for the common case, not an authority — the connection's
     // `protocol` override wins.
-    protocol: WireProtocol::OpenAiChatCompletions,
+    protocol: WireProtocol::ChatCompletions,
     // Open model universe: the connection declares whatever it serves.
     models: &[],
     catalog_source: RemoteCatalogSource::Endpoint(crate::DiscoveryProtocol::OpenAi),

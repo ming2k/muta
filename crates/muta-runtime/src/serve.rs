@@ -884,6 +884,18 @@ async fn run_control(
                 Err(e) => (false, None, Some(e)),
             }
         }
+        ControlRequest::AskArchivist { text } => {
+            // ADR-0208: the Archivist's answer is a *successful* query
+            // result, so it travels in the reply's free-string channel with
+            // ok=true (the field is historically named `error`; the control
+            // grammar has no dedicated result slot). A failed round keeps
+            // ok=false with the error text.
+            let answer = registry.ask_archivist(text).await;
+            match answer.status {
+                crate::archivist_service::ArchivistTurnStatus::Failed(e) => (false, None, Some(e)),
+                _ => (true, None, Some(answer.text)),
+            }
+        }
     };
     let reply = Wire::ControlReply {
         ok,

@@ -60,7 +60,7 @@ default_model = "GLM-5.2"
 [[connections]]
 name = "wechat"
 provider = "custom"
-protocol = "openai-chat-completions"
+protocol = "chat-completions"
 base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions"
 models.include = ["GLM-5.2"]
 ```
@@ -81,7 +81,7 @@ added to `connections.toml` without touching code. Declare a connection to the
 [[connections]]
 name = "acme"
 provider = "custom"
-protocol = "openai-chat-completions"  # openai-chat-completions | openai-responses | anthropic-messages | google-generate-content
+protocol = "chat-completions"  # chat-completions | responses | anthropic-messages | google-gemini
 base_url = "https://api.acme.example/v1/chat/completions"
 # api_key_env = "ACME_API_KEY"   # optional env var holding the credential
 models.include = ["acme-1"]
@@ -92,7 +92,7 @@ models.include = ["acme-1"]
 acme = "sk-..."               # $XDG_CONFIG_HOME/muta/credentials.toml
 ```
 
-A **native-Google relay / 中转站** uses `protocol = "google-generate-content"`.
+A **native-Google relay / 中转站** uses `protocol = "google-gemini"`.
 The `base_url` is the versioned base (carry the `/v1beta` prefix — the
 `/models/{id}:generateContent` path is appended for you). Auth stays on the
 `?key=` query param:
@@ -101,7 +101,7 @@ The `base_url` is the versioned base (carry the `/v1beta` prefix — the
 [[connections]]
 name = "my-gemini-relay"
 provider = "custom"
-protocol = "google-generate-content"
+protocol = "google-gemini"
 base_url = "https://relay.example.com/v1beta"
 models.include = ["gemini-2.5-flash"]
 ```
@@ -126,7 +126,7 @@ Connection fields:
 | `provider` | **Required**: the model provider id this connection points at (`openai`, `anthropic`, `google`, `deepseek`, `kimi-code`, `custom`, ...). See `muta_contracts::model_providers::MODEL_PROVIDER_IDS` |
 | `auth` | `ApiKey` (default), or an OAuth variant for subscription connections |
 | `api_key_env` | Optional env var *name* holding the credential; wins over `credentials.toml` |
-| `protocol` | Optional wire-protocol override: `openai-chat-completions`, `openai-responses`, `anthropic-messages`, or `google-generate-content`. Defaults to the provider's protocol |
+| `protocol` | Optional wire-protocol override: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` (legacy aliases accepted). Defaults to the provider's protocol |
 | `base_url` | Optional endpoint override. Full chat-completions URL (OpenAI), `/responses` URL (Responses), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
 | `user_agent` | Optional `User-Agent` override (OpenAI-compatible and native Google) |
 | `models` | Optional connection-level delta: `models.include` / `models.exclude` / `models.overrides`. A connection may narrow or override the provider's universe; it must not invent models except under `provider = "custom"` |
@@ -180,7 +180,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     baselines: MODELS,
     base_url: "https://api.acme.example/v1/chat/completions",
     user_agent: None,
-    protocol: WireProtocol::OpenAiChatCompletions,
+    protocol: WireProtocol::ChatCompletions,
     models: ACME_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
@@ -200,7 +200,7 @@ Then wire the file into the aggregate tables in
 
 The catalog loops over `MODEL_PROVIDER_SPECS` automatically, so no `match`
 arm is needed. `build_provider_for_channel` constructs the concrete
-`OpenAiChatCompletionsProvider`, stamping the provider `id` so assistant
+`ChatCompletionsProvider`, stamping the provider `id` so assistant
 messages are attributed correctly. The `MODELS` table feeds the model
 registry via `inventory` at link time — `resolve("acme-1")` returns the
 context window and capabilities you declared, with no manual registration

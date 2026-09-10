@@ -414,6 +414,11 @@ export type ControlRequest = { "verb": "shutdown" } | { "verb": "create_session"
 export type CrateThemeConfig = { fg: string | null, badge_bg: string | null, };
 
 /**
+ * Dialog surface overrides (Layer 2: Center-anchored dialogs).
+ */
+export type DialogThemeConfig = { surface: string | null, border: string | null, backdrop: string | null, dim_factor: number | null, };
+
+/**
  * Component-specific override for diff rendering.
  */
 export type DiffThemeConfig = { add_bg: string | null, del_bg: string | null, add_hl: string | null, del_hl: string | null, };
@@ -849,11 +854,6 @@ sent_at_ms?: number,
 cache_frozen: boolean, };
 
 /**
- * Modal surface overrides (Layer 2: Center-anchored dialogs).
- */
-export type ModalThemeConfig = { surface: string | null, border: string | null, backdrop: string | null, dim_factor: number | null, };
-
-/**
  * Sparse capability patch from a remote catalog or declaration (ADR-0203).
  *
  * Follows tristate sparse merge semantics: `None` means absent/unspecified,
@@ -1200,6 +1200,10 @@ effort: string | null,
  * thinking on/off knob. `None` for protocols that do not expose one.
  */
 thinking: boolean | null, 
+/**
+ * Reasoning effort tiers this channel/model supports, in ascending order.
+ */
+effort_levels?: Array<string>, 
 /**
  * Whether this model is favorited in the **Models** picker (ADR-0046 moved
  * favorite from provider-level to per-model). A starred daily-driver model
@@ -2050,7 +2054,7 @@ toolset_count?: number, };
 /**
  * Spatial 4-layer surface theme overrides container.
  */
-export type SurfacesThemeConfig = { view: ViewThemeConfig | null, sheet: SheetThemeConfig | null, modal: ModalThemeConfig | null, overlay: OverlayThemeConfig | null, };
+export type SurfacesThemeConfig = { view: ViewThemeConfig | null, sheet: SheetThemeConfig | null, dialog: DialogThemeConfig | null, overlay: OverlayThemeConfig | null, };
 
 /**
  * Full standalone theme file loaded from `$XDG_CONFIG_HOME/mutx/themes/<id>.toml`.

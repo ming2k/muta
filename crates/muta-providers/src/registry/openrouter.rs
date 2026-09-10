@@ -1,0 +1,57 @@
+//! The built-in `openrouter` provider: OpenRouter's normalized multi-model
+//! gateway over Chat Completions, authenticated with one API key.
+
+use muta_contracts::reasoning::ReasoningSupport;
+use muta_contracts::{Effort, Model, WireProtocol};
+
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+
+pub use muta_contracts::model_providers::OPENROUTER_BUILTIN_MODELS;
+
+const NEX_N25_EFFORTS: &[Effort] = &[Effort::None, Effort::Medium, Effort::High];
+
+/// The live OpenRouter catalog replaces this seed after discovery. Keep a
+/// complete baseline for the requested daily-driver model so it is fully
+/// capable even while offline or before a key has been entered.
+pub const MODELS: &[Model] = &[Model {
+    id: "nex-agi/nex-n2.5-pro:free",
+    family: "nex",
+    context_window: 262_144,
+    thinking: ReasoningSupport::ReasoningContent,
+    tool_call: true,
+    vision: true,
+    protocol: WireProtocol::ChatCompletions,
+    model_guidance: "",
+    effort_levels: NEX_N25_EFFORTS,
+}];
+
+inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
+
+pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
+    prompt_cache: super::unsupported_prompt_cache,
+    id: "openrouter",
+    baselines: MODELS,
+    base_url: "https://openrouter.ai/api/v1/chat/completions",
+    user_agent: None,
+    protocol: WireProtocol::ChatCompletions,
+    models: OPENROUTER_BUILTIN_MODELS,
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    default_client_profile: muta_contracts::ClientPreset::Native,
+    client_profile_sensitive: false,
+    wire_overrides: &[],
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nex_pro_seed_matches_openrouter_catalog_contract() {
+        let model = &MODELS[0];
+        assert_eq!(OPENROUTER_BUILTIN_MODELS, &[model.id]);
+        assert_eq!(model.context_window, 262_144);
+        assert!(model.tool_call);
+        assert!(model.vision);
+        assert_eq!(model.effort_levels, NEX_N25_EFFORTS);
+    }
+}

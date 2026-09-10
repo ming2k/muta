@@ -1500,6 +1500,48 @@ impl Config {
         Self::save_inner(self, true)
     }
 
+    /// Merge-save: flush this snapshot to `config.toml` without clobbering a
+    /// concurrent user hand-edit.
+    ///
+    /// The in-memory `Config` is loaded once at process start (ADR-0209) and
+    /// lives on for the daemon's whole lifetime, while the file can change
+    /// under it at any moment. A naive whole-file rewrite therefore resurrects
+    /// anything the user deleted — the reported bug: removing
+    /// `[workspace].additional_roots` from `~/.config/muta/config.toml` while a
+    /// session was open, then doing anything that saves (a `/models` switch, a
+    /// favorite toggle), put the deleted entries straight back.
+    ///
+    /// The fix is **ownership-based reconciliation**: only the fields a save
+    /// call actually *means* to write come from `self`; everything else comes
+    /// from the on-disk document read under the lock.
+    ///
+    /// * **Runtime-owned** — the selection pair. `Config::save` (deliberate
+    ///   selection change) writes `self`'s values; `save_preserving…` keeps
+    ///   the disk's, falling back to `self` only when the disk default is
+    ///   empty/never set. The runtime is the authority for the value it just
+    ///   changed, and each such change is an explicit user action.
+    /// * **User-owned** — every other field (workspace, favorites, web,
+    ///   agent, mcp, hooks, …) is taken verbatim from disk. The disk was
+    ///   potentially edited *after* the snapshot was taken, so it is the
+    ///   newer truth; a stale snapshot must never overwrite it. Runtime
+    ///   mutations of user-owned tables (web settings, favorites, `muta mcp
+    ///   add`) follow load → mutate → save, so their in-memory copy already
+    ///   matches disk and this rule is a no-op for them — with one bounded
+    ///   exception: a runtime mutation racing a same-table hand edit in the
+    ///   millisecond window loses the runtime mutation. That is the honest
+    ///   resolution of an inherently ambiguous race; a silent clobber of the
+    ///   user's edit is strictly worse.
+    ///
+    /// The reconciled document is written out but **not** folded back into
+    /// `self`: a save is a pure flush, so a handler holding `&mut Config`
+    /// never silently absorbs a user edit mid-request.
+    ///
+    /// Note on `[workspace].additional_roots` specifically: the runtime's
+    /// project-trust merge (`merge_project_additional_roots`) is applied to
+    /// local clones and resolution views only — the persisted file has always
+    /// meant *user-declared* global roots. Reconciling that array from disk
+    /// (instead of unioning the snapshot) therefore preserves the intended
+    /// semantics exactly, and makes the user's deletion permanent.
     fn save_inner(
         &self,
         preserve_connection_selection: bool,
@@ -1512,30 +1554,39 @@ impl Config {
         let _lock = fsutil::FileLock::acquire(&config_path)
             .map_err(|e| format!("could not lock config file: {e}"))?;
 
-        // The effective selection to write back. When preserving, re-read the
-        // on-disk value under the lock so another process's write survives.
+        // The on-disk state as of *right now*, under the lock. An absent or
+        // unparseable file contributes the default document: the ordinary
+        // load path already warns about corruption, and a first run simply
+        // has nothing to preserve.
+        let on_disk: Config = fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|content| toml::from_str(&content).ok())
+            .unwrap_or_default();
+
+        // Runtime-owned: the selection pair. When preserving, the on-disk
+        // value wins so another process's write survives; the snapshot value
+        // is only the fallback for an empty/never-set disk default.
         let (default_connection, default_model) = if preserve_connection_selection {
-            let on_disk: Config = fs::read_to_string(&config_path)
-                .ok()
-                .and_then(|content| toml::from_str(&content).ok())
-                .unwrap_or_default();
             let connection = if on_disk.default_connection.is_empty() {
                 // On-disk default is gone (or never set): keep this writer's
                 // selection so the file never silently loses it.
                 self.default_connection.clone()
             } else {
-                on_disk.default_connection
+                on_disk.default_connection.clone()
             };
-            (connection, on_disk.default_model)
+            (connection, on_disk.default_model.clone())
         } else {
             (self.default_connection.clone(), self.default_model.clone())
         };
 
-        // config.toml = behavior only
-        // Secrets live in `credentials.toml`, connections in `connections.toml`.
-        let mut out = self.clone();
+        // User-owned: start from the disk document (hand edits and all) and
+        // overlay only the runtime-owned pair.
+        let mut out = on_disk;
         out.default_connection = default_connection;
         out.default_model = default_model;
+
+        // config.toml = behavior only
+        // Secrets live in `credentials.toml`, connections in `connections.toml`.
         let bytes = toml::to_string_pretty(&out)?.into_bytes();
         fsutil::atomic_write_bytes(&config_path, &bytes)?;
         Ok(())
@@ -1903,6 +1954,145 @@ name = "DeepSeek"
         let creds_text =
             std::fs::read_to_string(tmp.join("credentials.toml")).unwrap_or_else(|_| String::new());
         assert!(creds_text.is_empty() || !creds_text.contains("legacy-key"));
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn save_does_not_resurrect_user_deleted_workspace_roots() {
+        // The reported lost update: a session holds a snapshot with
+        // `additional_roots = ["../x"]`, the user deletes the entry from
+        // `config.toml` while the session runs, then any save must not write
+        // the deleted value back. Disk is the newer truth for user-owned
+        // tables.
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        std::fs::write(
+            tmp.join("config.toml"),
+            "default_connection = \"deepseek\"\n\
+             [workspace]\n\
+             additional_roots = [\"../x\", \"../y\"]\n",
+        )
+        .unwrap();
+
+        // Simulate the session's long-lived snapshot: loaded at startup.
+        let snapshot = Config::load();
+        assert_eq!(
+            snapshot.workspace.additional_roots,
+            vec!["../x", "../y"],
+            "precondition: snapshot saw the roots"
+        );
+
+        // The user hand-edits the file while the session is live.
+        std::fs::write(
+            tmp.join("config.toml"),
+            "default_connection = \"deepseek\"\n",
+        )
+        .unwrap();
+
+        // Any save (e.g. a `/models` switch) flushes the stale snapshot —
+        // the deletion must survive.
+        snapshot.save().unwrap();
+        let after = Config::load();
+        assert!(
+            after.workspace.additional_roots.is_empty(),
+            "user-deleted additional_roots must stay deleted, got {:?}",
+            after.workspace.additional_roots
+        );
+        // …and the runtime-owned field still flushes.
+        assert_eq!(after.default_connection, "deepseek");
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn save_preserves_user_edited_unrelated_tables() {
+        // Broader lost-update case: the user changes any user-owned table
+        // (`[agent]` here) while the daemon runs; a snapshot-driven save must
+        // not roll it back to the loaded-at-startup value.
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        std::fs::write(tmp.join("config.toml"), "default_model = \"m1\"\n").unwrap();
+        let snapshot = Config::load();
+
+        std::fs::write(
+            tmp.join("config.toml"),
+            "default_model = \"m1\"\n[agent]\nhard_stop_turns = 42\n",
+        )
+        .unwrap();
+
+        snapshot.save_preserving_connection_selection().unwrap();
+        let after = Config::load();
+        assert_eq!(after.agent.hard_stop_turns, 42, "user edit must survive");
+        // Preserved selection still comes from disk.
+        assert_eq!(after.default_model.as_deref(), Some("m1"));
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn save_still_flushes_runtime_changed_selection_and_leaves_roots_to_disk() {
+        // The flip side of disk-wins: fields the runtime deliberately changed
+        // (selection) must reach disk — and the persisted
+        // `[workspace].additional_roots` stays purely user-declared: a
+        // project-trust merge in the snapshot must NOT leak into the global
+        // file.
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        std::fs::write(
+            tmp.join("config.toml"),
+            "default_connection = \"old\"\n\
+             [workspace]\n\
+             additional_roots = [\"../user-root\"]\n",
+        )
+        .unwrap();
+
+        let mut snapshot = Config::load();
+        snapshot.default_connection = "new".to_string();
+        snapshot.default_model = Some("m2".to_string());
+        // Runtime merges a trusted project root on top of the loaded config.
+        snapshot
+            .merge_project_additional_roots(vec!["../project-root".to_string()]);
+        assert_eq!(
+            snapshot.workspace.additional_roots,
+            vec!["../user-root", "../project-root"]
+        );
+
+        snapshot.save().unwrap();
+        let after = Config::load();
+        assert_eq!(after.default_connection, "new");
+        assert_eq!(after.default_model.as_deref(), Some("m2"));
+        assert_eq!(
+            after.workspace.additional_roots,
+            vec!["../user-root"],
+            "project-merged roots are runtime view state, never persisted"
+        );
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn save_preserving_connection_selection_keeps_disk_default() {
+        // The existing preserve semantics must keep working under the
+        // merge-save rewrite: a snapshot carrying a resumed session's pin does
+        // not overwrite the on-disk default.
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        std::fs::write(
+            tmp.join("config.toml"),
+            "default_connection = \"disk-default\"\n\
+             default_model = \"disk-model\"\n",
+        )
+        .unwrap();
+
+        let mut snapshot = Config::load();
+        snapshot.default_connection = "session-pin".to_string();
+        snapshot.default_model = Some("session-model".to_string());
+        snapshot.save_preserving_connection_selection().unwrap();
+
+        let after = Config::load();
+        assert_eq!(after.default_connection, "disk-default");
+        assert_eq!(after.default_model.as_deref(), Some("disk-model"));
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();

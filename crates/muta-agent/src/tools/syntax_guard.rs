@@ -37,6 +37,11 @@ pub fn verify_syntax(path: &Path, content: &str) -> SyntaxCheckResult {
                 return SyntaxCheckResult::Invalid(format!("Malformed TOML: {e}"));
             }
         }
+        ext if crate::syntax::SupportedLanguage::from_extension(ext).is_some() => {
+            if let Err(e) = crate::syntax::verify_ast_syntax(&extension, content) {
+                return SyntaxCheckResult::Invalid(e);
+            }
+        }
         _ => {}
     }
 
@@ -74,18 +79,29 @@ mod tests {
     }
 
     #[test]
-    fn non_whitelisted_source_files_pass_through() {
-        // Source files like Rust, TypeScript, Python are intentionally not blocked
-        // by heuristic delimiter checks.
-        let rs_path = Path::new("src/main.rs");
+    fn ast_supported_source_files_are_validated() {
+        let rs_valid = Path::new("src/main.rs");
         assert_eq!(
-            verify_syntax(rs_path, "fn main() { broken unclosed"),
+            verify_syntax(rs_valid, "fn main() { println!(\"ok\"); }"),
             SyntaxCheckResult::Valid
         );
 
-        let py_path = Path::new("script.py");
+        let rs_broken = Path::new("src/main.rs");
+        assert!(matches!(
+            verify_syntax(rs_broken, "fn main() { broken unclosed"),
+            SyntaxCheckResult::Invalid(_)
+        ));
+
+        let py_broken = Path::new("script.py");
+        assert!(matches!(
+            verify_syntax(py_broken, "def foo():\nreturn (unclosed"),
+            SyntaxCheckResult::Invalid(_)
+        ));
+
+        // Unsupported languages pass through without error
+        let lua_path = Path::new("config.lua");
         assert_eq!(
-            verify_syntax(py_path, "def foo():\n    return (unclosed"),
+            verify_syntax(lua_path, "local x = 42"),
             SyntaxCheckResult::Valid
         );
     }

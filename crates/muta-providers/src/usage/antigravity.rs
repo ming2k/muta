@@ -83,7 +83,7 @@ impl ProviderUsageFetcher for AntigravityUsageFetcher {
             "project": ""
         });
 
-        let request = crate::http::Request::new(muta_net::Method::POST, &endpoint)
+        let request = crate::http::Request::new(netune::Method::POST, &endpoint)
             .header("authorization", format!("Bearer {api_key}"))
             .header("user-agent", ANTIGRAVITY_USER_AGENT)
             .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)

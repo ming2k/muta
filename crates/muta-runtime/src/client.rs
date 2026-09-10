@@ -1019,6 +1019,17 @@ pub async fn control(
     info: &DaemonInfo,
     request: crate::serve::ControlRequest,
 ) -> Result<(), String> {
+    control_with_reply(info, request).await.map(|_| ())
+}
+
+/// [`Self::control`] for reply-bearing verbs (ADR-0208 `AskArchivist`): the
+/// daemon's `ControlReply` free-string travels back on success instead of
+/// being dropped. Verbs without a payload reply with an empty string, so
+/// every existing caller can migrate to this shape without behavior change.
+pub async fn control_with_reply(
+    info: &DaemonInfo,
+    request: crate::serve::ControlRequest,
+) -> Result<String, String> {
     use crate::serve::AttachAction;
     let action = AttachAction::Control(request);
 
@@ -1050,7 +1061,7 @@ pub async fn control(
 async fn finish_control(
     parts: (BoxWireSink, BoxWireStream),
     action: AttachAction,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let (mut wire_sink, mut wire_source) = parts;
     // Control verbs carry their own scope (`CreateSession::project`); the
     // daemon never consults a select-level project for them.
@@ -1075,7 +1086,10 @@ async fn finish_control(
                 Some(Ok(wire)) => match wire {
                     Wire::ControlReply { ok, error, .. } => {
                         return if ok {
-                            Ok(())
+                            // ADR-0208: reply-bearing verbs (AskArchivist)
+                            // travel in the free-string channel; verbs
+                            // without a payload leave it `None` → empty.
+                            Ok(error.unwrap_or_default())
                         } else {
                             Err(error.unwrap_or_else(|| "control verb rejected".to_string()))
                         };

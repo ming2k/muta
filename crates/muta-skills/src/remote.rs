@@ -63,18 +63,18 @@ pub async fn clear_remote_cache() -> Result<(), String> {
 /// per fetch — the same behaviour the previous `reqwest` client had, without
 /// carrying a second HTTP implementation for a catalog download.
 struct Fetcher {
-    client: muta_net::Client<muta_net::TlsConnector<muta_net::TcpConnector>>,
+    client: netune::Client<netune::TlsConnector<netune::TcpConnector>>,
 }
 
 impl Fetcher {
     fn new() -> Result<Self, String> {
-        let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
+        let connector = netune::TlsConnector::platform(netune::TcpConnector::new())
             .map_err(|e| format!("failed to build http client: {e}"))?;
         Ok(Self {
-            client: muta_net::Client::new(
+            client: netune::Client::new(
                 connector,
-                muta_net::Pool::default(),
-                muta_net::ClientConfig {
+                netune::Pool::default(),
+                netune::ClientConfig {
                     user_agent: "muta/0.1 (+ai-coding-agent)".to_string(),
                     ..Default::default()
                 },
@@ -84,12 +84,12 @@ impl Fetcher {
 
     async fn get(&self, url: &str) -> Result<Vec<u8>, String> {
         let (target, path) =
-            muta_net::Target::from_url(url).map_err(|e| format!("invalid url '{url}': {e}"))?;
-        let head = muta_net::RequestHead::new(muta_net::Method::GET, path);
+            netune::Target::from_url(url).map_err(|e| format!("invalid url '{url}': {e}"))?;
+        let head = netune::RequestHead::new(netune::Method::GET, path);
         let fetch = async {
             let mut response = self.client.request(&target, head, None).await?;
             if !response.head.status.is_success() {
-                return Err(muta_net::NetError::Connect(format!(
+                return Err(netune::NetError::Connect(format!(
                     "HTTP {}",
                     response.head.status
                 )));

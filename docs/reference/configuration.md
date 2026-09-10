@@ -123,8 +123,8 @@ auth = "ApiKey"              # ApiKey | XaiOAuth | ChatGptOAuth | CopilotOAuth |
 # api_key_env = "ACME_API_KEY"  # optional env var holding the credential
 
 # Optional overrides of the provider's defaults:
-protocol = "openai-chat-completions"
-# Also valid: openai-responses | anthropic-messages | google-generate-content
+protocol = "chat-completions"
+# Also valid: responses | anthropic-messages | google-gemini (legacy aliases accepted)
 base_url = "https://relay.example.com/v1/chat/completions"
 user_agent = "acme-client/1.0"
 

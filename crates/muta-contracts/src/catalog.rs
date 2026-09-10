@@ -24,6 +24,9 @@ pub enum OpenAiChatDialect {
     #[default]
     Standard,
     Copilot,
+    /// OpenRouter's normalized Chat Completions surface. It uses the unified
+    /// `reasoning` object and returns replayable `reasoning_details` sidecars.
+    OpenRouter,
 }
 
 /// Provider-specific behavior layered on the OpenAI Responses protocol.
@@ -53,6 +56,9 @@ pub enum GoogleGenerateContentDialect {
     GenerativeLanguage,
     Antigravity,
 }
+
+/// Canonical alias for the Google Gemini dialect enum.
+pub type GoogleGeminiDialect = GoogleGenerateContentDialect;
 
 /// How a [`Channel`] speaks to its model. Determines which `Provider`
 /// implementation is constructed for it (in `muta-providers`).
@@ -101,10 +107,10 @@ impl Transport {
     /// The wire-protocol name for this transport.
     pub fn protocol_label(&self) -> &'static str {
         match self {
-            Transport::OpenAi { .. } => "openai",
-            Transport::Anthropic { .. } => "anthropic",
-            Transport::Google { .. } => "google",
-            Transport::OpenAiResponses { .. } => "openai-responses",
+            Transport::OpenAi { .. } => "chat-completions",
+            Transport::Anthropic { .. } => "anthropic-messages",
+            Transport::Google { .. } => "google-gemini",
+            Transport::OpenAiResponses { .. } => "responses",
         }
     }
 
@@ -291,6 +297,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
     let (name, description) = match id {
         "kimi-code" => ("Kimi Code", "Moonshot AI coding model"),
         "openai" => ("OpenAI", "OpenAI API"),
+        "openrouter" => ("OpenRouter", "OpenRouter multi-model gateway"),
         // Google hosts the Gemini family as one multi-model provider.
         "google" => ("Google", "Google"),
         // DeepSeek hosts V4 Flash + Pro as one multi-model provider.
@@ -480,6 +487,7 @@ mod tests {
         for id in [
             "kimi-code",
             "openai",
+            "openrouter",
             "google",
             "deepseek",
             "zai-code",

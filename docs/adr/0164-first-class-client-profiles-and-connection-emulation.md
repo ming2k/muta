@@ -30,7 +30,7 @@ Propagate `ClientProfile` as a first-class value through all system layers:
 
 - **Contracts**: `muta_contracts::catalog::Transport` variants (`Google`, `Anthropic`, `OpenAi`, `OpenAiResponses`) directly hold `client_profile: ClientProfile`.
 - **LLM Client**: `muta_llm_client::Endpoint` directly holds `pub client_profile: ClientProfile`, exposing `Endpoint::headers(&self) -> Vec<(&str, &str)>`.
-- **Protocol Request Drivers**: All four wire protocol builders (`google`, `anthropic`, `openai-chat-completions`, `openai-responses`) read headers directly from `endpoint.headers()`. Reverse User-Agent heuristics are completely eliminated. Custom headers are preserved without state loss.
+- **Protocol Request Drivers**: All four wire protocol builders (`google-gemini`, `anthropic-messages`, `chat-completions`, `responses`) read headers directly from `endpoint.headers()`. Reverse User-Agent heuristics are completely eliminated. Custom headers are preserved without state loss.
 - **Provider Registry**: `build_provider_for_channel` and provider constructors receive and pass `client_profile` directly into protocol endpoints.
 - **Catalog Derivation**: Route derivation functions attach the resolved `ClientProfile` to generated transports.
 

@@ -1132,6 +1132,17 @@ pub(crate) async fn delete(
 /// has no pin (`None`). Builds a transient `Config` clone with the overlay so
 /// the caller's immutable `&Config` is not mutated; activation writes only the
 /// live holder, telemetry, and TUI snapshots — never `config.toml`.
+///
+/// The pin-less fallback re-reads `config.toml` from disk: multiple frontends
+/// and sessions share this one daemon and therefore this one `Config` copy in
+/// memory, but a model switch made from *another* session only persisted its
+/// new global default through that session's `&mut Config` clone. Without the
+/// re-read, `/new` (and any session swap into an unpinned session) would
+/// re-activate the in-memory copy's stale default instead of the most
+/// recently persisted cross-client default. Same for `ConnectionUsage`: its
+/// in-memory copy misses the `last_models` pin another session wrote when it
+/// activated its model. Parse failure falls back to the passed copies so a
+/// corrupt file can never strand the swap.
 pub async fn reapply_session_selection(
     config: &Config,
     agent: &Agent,
@@ -1162,6 +1173,13 @@ pub async fn reapply_session_selection(
             .unwrap_or_default()
     });
     if agent.provider.provider_id() == provider_id && agent.provider.model() == model {
+        // Even when the provider instance in memory does not need a rebuild,
+        // announce the authoritative provider + model so any frontend whose
+        // view state was displaying a previous session's pin re-anchors immediately.
+        let _ = resp_tx.send(AgentResponse::ProviderSwitched {
+            provider: provider_id,
+            model,
+        });
         return;
     }
     activate(
@@ -1741,7 +1759,7 @@ pub(crate) async fn query_connection_detail(
         .unwrap_or_else(|| {
             let p = connection
                 .protocol
-                .unwrap_or(WireProtocol::OpenAiChatCompletions);
+                .unwrap_or(WireProtocol::ChatCompletions);
             (
                 p.to_string(),
                 connection.base_url.clone().unwrap_or_default(),
@@ -1926,8 +1944,16 @@ mod tests {
             Ok(WireProtocol::AnthropicMessages)
         );
         assert_eq!(
+            "responses".parse::<WireProtocol>(),
+            Ok(WireProtocol::Responses)
+        );
+        assert_eq!(
             "openai-responses".parse::<WireProtocol>(),
-            Ok(WireProtocol::OpenAiResponses)
+            Ok(WireProtocol::Responses)
+        );
+        assert_eq!(
+            "chat-completions".parse::<WireProtocol>(),
+            Ok(WireProtocol::ChatCompletions)
         );
         assert!("openai".parse::<WireProtocol>().is_err());
         assert!("future".parse::<WireProtocol>().is_err());
@@ -2049,7 +2075,7 @@ mod tests {
             name: "test-relay".to_string(),
             provider: "custom".to_string(),
             base_url: Some("https://example.com".to_string()),
-            protocol: Some(WireProtocol::OpenAiChatCompletions),
+            protocol: Some(WireProtocol::ChatCompletions),
             ..Default::default()
         });
         conns.save().unwrap();

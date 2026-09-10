@@ -18,6 +18,9 @@ pub struct Hypervisor {
     registry: SessionRegistry,
     tracker: Arc<MeshTracker>,
     address: MeshAddress,
+    /// The station's mesh endpoint. Held for the station's lifetime — its
+    /// `Drop` unregisters `hypervisor/hypervisor` from the tracker.
+    _station_mailbox: muta_agent::mesh::MeshMailbox,
 }
 
 impl Hypervisor {
@@ -28,6 +31,13 @@ impl Hypervisor {
         tracker: Arc<MeshTracker>,
     ) -> Self {
         let address = MeshAddress::hypervisor("hypervisor");
+
+        // Register the station's own address on the mesh (ADR-0167): the
+        // bottom-up `Report` / `PeerNote` surface needs a live endpoint at
+        // the station address. The mailbox is held for the Hypervisor's
+        // lifetime — dropping it would unregister the station mid-daemon.
+        let station_mailbox =
+            muta_agent::mesh::MeshMailbox::spawn((*tracker).clone(), address.clone(), None);
 
         let send_tool = Arc::new(MeshSendTool::new((*tracker).clone(), Some(address.clone())));
         let list_peers_tool = Arc::new(MeshListPeersTool::new(
@@ -68,6 +78,7 @@ impl Hypervisor {
             registry,
             tracker,
             address,
+            _station_mailbox: station_mailbox,
         }
     }
 

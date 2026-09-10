@@ -21,23 +21,32 @@ use crate::reasoning::ReasoningSupport;
 )]
 pub enum WireProtocol {
     #[default]
-    #[serde(rename = "openai-chat-completions")]
-    OpenAiChatCompletions,
-    #[serde(rename = "openai-responses")]
-    OpenAiResponses,
+    #[serde(rename = "chat-completions", alias = "openai-chat-completions")]
+    ChatCompletions,
+    #[serde(rename = "responses", alias = "openai-responses")]
+    Responses,
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
-    #[serde(rename = "google-generate-content")]
-    GoogleGenerateContent,
+    #[serde(rename = "google-gemini", alias = "google-generate-content")]
+    GoogleGemini,
 }
 
 impl WireProtocol {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::OpenAiChatCompletions => "openai-chat-completions",
-            Self::OpenAiResponses => "openai-responses",
+            Self::ChatCompletions => "chat-completions",
+            Self::Responses => "responses",
             Self::AnthropicMessages => "anthropic-messages",
-            Self::GoogleGenerateContent => "google-generate-content",
+            Self::GoogleGemini => "google-gemini",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "Chat Completions",
+            Self::Responses => "Responses",
+            Self::AnthropicMessages => "Anthropic Messages",
+            Self::GoogleGemini => "Google Gemini",
         }
     }
 }
@@ -53,10 +62,10 @@ impl std::str::FromStr for WireProtocol {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "openai-chat-completions" => Ok(Self::OpenAiChatCompletions),
-            "openai-responses" => Ok(Self::OpenAiResponses),
+            "chat-completions" | "openai-chat-completions" => Ok(Self::ChatCompletions),
+            "responses" | "openai-responses" => Ok(Self::Responses),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
-            "google-generate-content" => Ok(Self::GoogleGenerateContent),
+            "google-gemini" | "google-generate-content" => Ok(Self::GoogleGemini),
             _ => Err(format!("unsupported inference protocol `{value}`")),
         }
     }
@@ -726,7 +735,7 @@ pub fn fallback_model(_id: &str) -> Model {
         thinking: ReasoningSupport::None,
         tool_call: false,
         vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: &[],
     }
@@ -975,7 +984,7 @@ mod tests {
             thinking: ReasoningSupport::ReasoningContent,
             tool_call: true,
             vision: true,
-            protocol: WireProtocol::OpenAiChatCompletions,
+            protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
             effort_levels: crate::effort::EFFORT_COMMON,
         },
@@ -998,7 +1007,7 @@ mod tests {
         thinking: ReasoningSupport::None,
         tool_call: false,
         vision: false,
-        protocol: WireProtocol::GoogleGenerateContent,
+        protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
         effort_levels: &[],
     }];
@@ -1012,7 +1021,7 @@ mod tests {
         assert_eq!(m.context_window, 111_000);
         assert!(m.reasoning());
         assert!(m.vision);
-        assert_eq!(m.protocol, WireProtocol::OpenAiChatCompletions);
+        assert_eq!(m.protocol, WireProtocol::ChatCompletions);
         // `fitted_overlay_never_overrides_a_registered_baseline` may have
         // already run in this process and refreshed the ladder (overlay
         // writes are process-global), so assert the baseline value only when
@@ -1025,7 +1034,7 @@ mod tests {
         );
 
         let g = resolve("fixture-gamma");
-        assert_eq!(g.protocol, WireProtocol::GoogleGenerateContent);
+        assert_eq!(g.protocol, WireProtocol::GoogleGemini);
         assert!(!g.tool_call);
     }
 
@@ -1065,7 +1074,7 @@ mod tests {
             context_window: 2_000_000,
             reasoning: true,
             vision: true,
-            protocol: WireProtocol::OpenAiChatCompletions,
+            protocol: WireProtocol::ChatCompletions,
             // Unsorted input with a duplicate: stored ascending, deduped.
             effort_levels: vec![
                 crate::effort::Effort::Max,
@@ -1092,7 +1101,7 @@ mod tests {
             context_window: 1,
             reasoning: false,
             vision: false,
-            protocol: WireProtocol::GoogleGenerateContent,
+            protocol: WireProtocol::GoogleGemini,
             effort_levels: vec![crate::effort::Effort::Max],
         }]);
         // The vetted baseline entry wins on every field except the effort
@@ -1101,7 +1110,7 @@ mod tests {
         // identity, context, format, and vision stay vetted.
         let m = resolve("fixture-alpha");
         assert_eq!(m.context_window, 111_000);
-        assert_eq!(m.protocol, WireProtocol::OpenAiChatCompletions);
+        assert_eq!(m.protocol, WireProtocol::ChatCompletions);
         assert!(m.vision);
         assert_eq!(m.effort_levels, [crate::effort::Effort::Max].as_slice());
     }
@@ -1117,7 +1126,7 @@ mod tests {
             context_window: 0,
             reasoning: false,
             vision: false,
-            protocol: WireProtocol::OpenAiChatCompletions,
+            protocol: WireProtocol::ChatCompletions,
             effort_levels: Vec::new(),
         }]);
         // fixture-beta's baseline ladder is empty already, so check through
@@ -1131,7 +1140,7 @@ mod tests {
     fn fallback_format_is_openai_compat() {
         assert_eq!(
             fallback_model("anything").protocol,
-            WireProtocol::OpenAiChatCompletions
+            WireProtocol::ChatCompletions
         );
     }
 
@@ -1144,5 +1153,44 @@ mod tests {
         );
         assert_eq!(sanitize_model_id("gemini-3.1-pro"), "gemini-3.1-pro");
         assert_eq!(sanitize_model_id("   "), "");
+    }
+
+    #[test]
+    fn wire_protocol_names_and_compatibility() {
+        use std::str::FromStr;
+
+        // Display names
+        assert_eq!(WireProtocol::ChatCompletions.display_name(), "Chat Completions");
+        assert_eq!(WireProtocol::Responses.display_name(), "Responses");
+        assert_eq!(WireProtocol::AnthropicMessages.display_name(), "Anthropic Messages");
+        assert_eq!(WireProtocol::GoogleGemini.display_name(), "Google Gemini");
+
+        // as_str
+        assert_eq!(WireProtocol::ChatCompletions.as_str(), "chat-completions");
+        assert_eq!(WireProtocol::Responses.as_str(), "responses");
+        assert_eq!(WireProtocol::AnthropicMessages.as_str(), "anthropic-messages");
+        assert_eq!(WireProtocol::GoogleGemini.as_str(), "google-gemini");
+
+        // FromStr canonical
+        assert_eq!(WireProtocol::from_str("chat-completions").unwrap(), WireProtocol::ChatCompletions);
+        assert_eq!(WireProtocol::from_str("responses").unwrap(), WireProtocol::Responses);
+        assert_eq!(WireProtocol::from_str("anthropic-messages").unwrap(), WireProtocol::AnthropicMessages);
+        assert_eq!(WireProtocol::from_str("google-gemini").unwrap(), WireProtocol::GoogleGemini);
+
+        // FromStr legacy aliases
+        assert_eq!(WireProtocol::from_str("openai-chat-completions").unwrap(), WireProtocol::ChatCompletions);
+        assert_eq!(WireProtocol::from_str("openai-responses").unwrap(), WireProtocol::Responses);
+        assert_eq!(WireProtocol::from_str("google-generate-content").unwrap(), WireProtocol::GoogleGemini);
+
+        // Serde serialization
+        assert_eq!(serde_json::to_string(&WireProtocol::ChatCompletions).unwrap(), "\"chat-completions\"");
+        assert_eq!(serde_json::to_string(&WireProtocol::Responses).unwrap(), "\"responses\"");
+        assert_eq!(serde_json::to_string(&WireProtocol::AnthropicMessages).unwrap(), "\"anthropic-messages\"");
+        assert_eq!(serde_json::to_string(&WireProtocol::GoogleGemini).unwrap(), "\"google-gemini\"");
+
+        // Serde deserialization aliases
+        assert_eq!(serde_json::from_str::<WireProtocol>("\"openai-chat-completions\"").unwrap(), WireProtocol::ChatCompletions);
+        assert_eq!(serde_json::from_str::<WireProtocol>("\"openai-responses\"").unwrap(), WireProtocol::Responses);
+        assert_eq!(serde_json::from_str::<WireProtocol>("\"google-generate-content\"").unwrap(), WireProtocol::GoogleGemini);
     }
 }

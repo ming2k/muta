@@ -458,6 +458,19 @@ pub enum AgentRequest {
     /// provider capability catalog. Secrets never cross the wire. Replied with
     /// [`AgentResponse::WebSearchConfigSnapshot`].
     QueryWebSearchConfig,
+    /// Cross-project session history search (ADR-0208): BM25 FTS over all
+    /// persisted transcript entries in the shared `muta.db`, optionally
+    /// narrowed to one workspace root. The daemon is the source of truth; the
+    /// frontend never opens the database directly (ADR-0197). Replies with
+    /// [`AgentResponse::HistorySearch`].
+    SearchHistory {
+        query: String,
+        /// When `Some`, restrict hits to this project root; `None` searches
+        /// every project the instance has ever hosted.
+        workspace: Option<String>,
+        /// Maximum hits (default 20, engine-clamped).
+        limit: Option<usize>,
+    },
     /// Update the `[web]` configuration live. Every field is optional:
     /// absent fields keep their current value, so a frontend can PATCH one
     /// setting at a time. API keys are optional and follow the credentials
@@ -633,6 +646,10 @@ pub enum AgentResponse {
     /// The persisted prompt input history, in stored order — reply to
     /// [`AgentRequest::QueryInputHistory`].
     InputHistory(Vec<crate::HistoryEntry>),
+    /// Cross-project session search hits — reply to
+    /// [`AgentRequest::SearchHistory`]. Each hit anchors a transcript snippet
+    /// to its session so a dashboard/picker can jump straight to it.
+    HistorySearch(Vec<crate::HistorySearchHit>),
     /// The stored capability overrides for one provider/model route — reply
     /// to [`AgentRequest::QueryRouteSettings`].
     RouteSettings {
@@ -1689,6 +1706,9 @@ pub struct ProviderModelInfo {
     /// Effective extended-thinking state for channels that expose a separate
     /// thinking on/off knob. `None` for protocols that do not expose one.
     pub thinking: Option<bool>,
+    /// Reasoning effort tiers this channel/model supports, in ascending order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_levels: Vec<String>,
     /// Whether this model is favorited in the **Models** picker (ADR-0046 moved
     /// favorite from provider-level to per-model). A starred daily-driver model
     /// sorts into the second priority tier of the flat list wherever it is

@@ -77,36 +77,31 @@ pub struct AgentRuntimeConfig {
 /// set by `Agent::apply_preset`. A role whose
 /// identity should differ per instance (side conversations, group chat) composes
 /// the profile with [`Self::with_identity`] before construction.
+/// A declarative agent role: an identity, capability scope, write boundary,
+/// execution knobs, and equipped ambient facets (ADR-0167 / ADR-0211).
 #[derive(Debug, Clone)]
-pub struct AgentPreset {
-    /// The profile's name, e.g. `"code"`. For logs / pickers / a future
-    /// principal registry.
+pub struct AgentRole {
+    /// The role's name, e.g. `"developer"`.
     pub name: &'static str,
-    /// Who this principal is and what it is for (name + mission + optional
-    /// persona). Supplied to the `Agent` constructor unchanged.
+    /// Who this principal is and what it is for (name + mission + optional persona).
     pub identity: AgentIdentity,
-    /// This principal's capability **name scope** over the pool — the agent
-    /// half of the two-selector model (ADR-0041).
-    /// [`ToolSelection::unrestricted`] (the default for a coding principal)
-    /// admits every capability; a scoped principal (e.g. read-only ops) narrows
-    /// this.
+    /// This principal's capability name scope over the tool pool (ADR-0041).
     pub agent_selection: ToolSelection,
     /// The hard write/command boundary this principal enforces (ADR-0028).
-    /// [`OperationScope::unrestricted`] (the default) leaves both dimensions
-    /// open; a sandboxed principal pins `write_paths` / `command_allowlist`.
     pub operation_scope: OperationScope,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
     pub config: AgentRuntimeConfig,
-    /// Whether this principal runs in unattended execution mode
-    /// (auto-approves all tool permissions). Default `false` — a top-level
-    /// principal is interactive by contract.
+    /// Whether this principal runs in unattended execution mode.
     pub unattended: bool,
+    /// Ambient harness facets equipped by this role (ADR-0211).
+    pub facets: Vec<std::sync::Arc<dyn crate::HarnessFacet>>,
 }
 
-impl AgentPreset {
-    /// Build a profile from an identity with full default scope and attended
-    /// behaviour — the common case for a new coding-class principal. Compose
-    /// further with the `with_*` builders.
+/// Legacy alias for [`AgentRole`] (ADR-0211).
+pub type AgentPreset = AgentRole;
+
+impl AgentRole {
+    /// Build a role from an identity with full default scope and attended behaviour.
     pub fn with_identity(name: &'static str, identity: AgentIdentity) -> Self {
         Self {
             name,
@@ -115,7 +110,35 @@ impl AgentPreset {
             operation_scope: OperationScope::unrestricted(),
             config: AgentRuntimeConfig::default(),
             unattended: false,
+            facets: Vec::new(),
         }
+    }
+
+    /// Attach an ambient harness facet to this role (ADR-0211).
+    pub fn with_facet(mut self, facet: std::sync::Arc<dyn crate::HarnessFacet>) -> Self {
+        self.facets.push(facet);
+        self
+    }
+
+    /// Attach ambient harness facets to this role (ADR-0211).
+    pub fn with_facets(
+        mut self,
+        facets: impl IntoIterator<Item = std::sync::Arc<dyn crate::HarnessFacet>>,
+    ) -> Self {
+        for facet in facets {
+            self.facets.push(facet);
+        }
+        self
+    }
+
+    /// Role for standard developer master (native tools, full delegation, ADR-0211).
+    pub fn role_developer() -> Self {
+        Self::developer()
+    }
+
+    /// Role for code analyst master (sandbox execution, contained delegation, ADR-0211).
+    pub fn role_code_analyst() -> Self {
+        Self::code_analyst()
     }
 
     /// Preset for standard developer master (native tools, full delegation).
@@ -184,8 +207,9 @@ impl AgentPreset {
 ///
 /// Use [`AgentPreset::for_role`] to materialize a role onto a base
 /// identity.
+/// Roles an interactive master agent may switch into (ADR-0183 / ADR-0211).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentPresetId {
+pub enum AgentRoleId {
     /// The default coding principal — full capabilities, unrestricted writes,
     /// the embedding's own identity (empty for the shipped CLI). Identical in
     /// effect to the profile the embedding binds at startup, so switching back
@@ -208,38 +232,41 @@ pub enum AgentPresetId {
     Security,
 }
 
-impl AgentPresetId {
+/// Legacy alias for [`AgentRoleId`] (ADR-0211).
+pub type AgentPresetId = AgentRoleId;
+
+impl AgentRoleId {
     /// Every role in its canonical display order, for pickers and `/help`.
-    pub const ALL: &[AgentPresetId] = &[
-        AgentPresetId::Code,
-        AgentPresetId::CodeAnalyst,
-        AgentPresetId::Architect,
-        AgentPresetId::Reviewer,
-        AgentPresetId::Security,
+    pub const ALL: &[AgentRoleId] = &[
+        AgentRoleId::Code,
+        AgentRoleId::CodeAnalyst,
+        AgentRoleId::Architect,
+        AgentRoleId::Reviewer,
+        AgentRoleId::Security,
     ];
 
     /// The stable string name used in `@role:{name}` / `/role <name>`. Legacy
     /// `@master:{name}` / `/master <name>` are accepted as aliases.
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentPresetId::Code => "code",
-            AgentPresetId::CodeAnalyst => "code_analyst",
-            AgentPresetId::Architect => "architect",
-            AgentPresetId::Reviewer => "reviewer",
-            AgentPresetId::Security => "security",
+            AgentRoleId::Code => "code",
+            AgentRoleId::CodeAnalyst => "code_analyst",
+            AgentRoleId::Architect => "architect",
+            AgentRoleId::Reviewer => "reviewer",
+            AgentRoleId::Security => "security",
         }
     }
 
     /// Parse a role name (case-insensitive). Returns `None` for an unknown
     /// name so the caller can surface a clear "unknown role" error listing
-    /// [`AgentPresetId::ALL`].
+    /// [`AgentRoleId::ALL`].
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "code" | "coder" | "developer" | "dev" | "default" => Some(AgentPresetId::Code),
-            "code_analyst" | "analyst" | "analysis" => Some(AgentPresetId::CodeAnalyst),
-            "architect" | "architecture" => Some(AgentPresetId::Architect),
-            "reviewer" | "review" => Some(AgentPresetId::Reviewer),
-            "security" | "audit" | "auditor" => Some(AgentPresetId::Security),
+            "code" | "coder" | "developer" | "dev" | "default" => Some(AgentRoleId::Code),
+            "code_analyst" | "analyst" | "analysis" => Some(AgentRoleId::CodeAnalyst),
+            "architect" | "architecture" => Some(AgentRoleId::Architect),
+            "reviewer" | "review" => Some(AgentRoleId::Reviewer),
+            "security" | "audit" | "auditor" => Some(AgentRoleId::Security),
             _ => None,
         }
     }
@@ -247,11 +274,11 @@ impl AgentPresetId {
     /// A short human description of what this role does, for confirmations.
     pub fn description(self) -> &'static str {
         match self {
-            AgentPresetId::Code => "the default developer master (full native capabilities)",
-            AgentPresetId::CodeAnalyst => "code analyst (read-only analysis & sandboxed execution)",
-            AgentPresetId::Architect => "architecture & design focus (analysis-first)",
-            AgentPresetId::Reviewer => "read-only code review",
-            AgentPresetId::Security => "read-only security audit (command-confined)",
+            AgentRoleId::Code => "the default developer master (full native capabilities)",
+            AgentRoleId::CodeAnalyst => "code analyst (read-only analysis & sandboxed execution)",
+            AgentRoleId::Architect => "architecture & design focus (analysis-first)",
+            AgentRoleId::Reviewer => "read-only code review",
+            AgentRoleId::Security => "read-only security audit (command-confined)",
         }
     }
 }
@@ -295,24 +322,22 @@ pub const AGENT_CODE_ANALYST: AgentPresetDelegation = AgentPresetDelegation {
     tool_scope: ToolScope::All,
 };
 
-/// The delegation face of a master preset (ADR-0144 §3): which subagent
-/// presets it may load, and the tool scope it declares against the pool.
-///
-/// The persona/identity half of a master lives in [`AgentPreset`] (via
-/// [`AgentPreset::for_role`]); this half answers the tier question — *what
-/// may this master delegate downwards* — which the identity object has no
-/// field for. Binding both halves together happens at session assembly.
+/// The delegation face of an agent role (ADR-0144 §3 / ADR-0211): which subagents
+/// it may load, and the tool scope it declares against the pool.
 #[derive(Debug, Clone)]
-pub struct AgentPresetDelegation {
-    /// Stable id (also the `[master] preset = "…"` config value).
+pub struct AgentRoleDelegation {
+    /// Stable id (also the `[master] role = "…"` config value).
     pub preset_id: &'static str,
-    /// Subagent preset names this master may load, in preference order.
+    /// Subagent names this master may load, in preference order.
     pub subagent_presets: &'static [&'static str],
     /// The tool scope this master declares against the pool.
     pub tool_scope: ToolScope,
 }
 
-impl AgentPresetDelegation {
+/// Legacy alias for [`AgentRoleDelegation`] (ADR-0211).
+pub type AgentPresetDelegation = AgentRoleDelegation;
+
+impl AgentRoleDelegation {
     /// Whether a master bound to this preset may load the subagent preset
     /// named `name`.
     pub fn admits_subagent(&self, name: &str) -> bool {
@@ -334,6 +359,7 @@ impl AgentPresetDelegation {
         "list_dir",
         "read_image",
         "search_text",
+        "get_outline",
         "run_command",
         "edit_text",
         "write_file",

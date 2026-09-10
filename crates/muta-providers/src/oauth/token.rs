@@ -205,7 +205,7 @@ async fn execute_token_request(
     match cfg.token_format {
         TokenRequestFormat::FormUrlEncoded => {
             let body = serde_urlencoded(params);
-            let mut req = crate::http::Request::new(muta_net::Method::POST, cfg.token_url.as_ref())
+            let mut req = crate::http::Request::new(netune::Method::POST, cfg.token_url.as_ref())
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("accept", "application/json")
                 .raw_body(body);
@@ -241,7 +241,7 @@ async fn execute_token_request(
             for (k, v) in params {
                 map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
             }
-            let mut req = crate::http::Request::new(muta_net::Method::POST, cfg.token_url.as_ref())
+            let mut req = crate::http::Request::new(netune::Method::POST, cfg.token_url.as_ref())
                 .header("content-type", "application/json")
                 .header("accept", "application/json")
                 .json(&serde_json::Value::Object(map));
@@ -323,7 +323,7 @@ pub(crate) async fn post_form(
     url: &str,
     body: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
-    let request = crate::http::Request::new(muta_net::Method::POST, url)
+    let request = crate::http::Request::new(netune::Method::POST, url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("accept", "application/json")
         .raw_body(body.to_string());
@@ -404,7 +404,7 @@ pub async fn fetch_google_userinfo(
     client: &crate::http::Http,
     access_token: &str,
 ) -> Result<GoogleUserInfo, crate::oauth::AuthError> {
-    let request = crate::http::Request::new(muta_net::Method::GET, GOOGLE_USERINFO_URL)
+    let request = crate::http::Request::new(netune::Method::GET, GOOGLE_USERINFO_URL)
         .header("authorization", format!("Bearer {access_token}"))
         .header("accept", "application/json");
     let resp = client
@@ -432,7 +432,7 @@ async fn antigravity_post(
     body: &serde_json::Value,
     what: &str,
 ) -> Result<crate::http::Reply, crate::oauth::AuthError> {
-    let request = crate::http::Request::new(muta_net::Method::POST, url)
+    let request = crate::http::Request::new(netune::Method::POST, url)
         .header("authorization", format!("Bearer {access_token}"))
         .header("user-agent", ANTIGRAVITY_USER_AGENT)
         .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)

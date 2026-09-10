@@ -77,10 +77,10 @@ canonical wire protocols:
 
 | Wire Protocol | Primary Vendors | Key Wire Characteristics |
 |---------------|-----------------|--------------------------|
-| `OpenAiChatCompletions` | DeepSeek, Kimi, Z.AI, OpenCode, Qwen, Ollama | Standard `/v1/chat/completions`, `tools` schema, `reasoning_content` stream deltas |
-| `OpenAiResponses` | OpenAI (o1, o3, GPT-5) | Structured items, background reasoning summaries, stateful conversation tokens |
-| `AnthropicMessages` | Anthropic Claude | Native `/v1/messages`, `cache_control` prompt caching, adaptive thinking budgets |
-| `GoogleGenerateContent` | Google Gemini | `/v1beta/models/{id}:generateContent`, `systemInstruction`, inline multimodal parts |
+| `ChatCompletions` (`chat-completions`) | DeepSeek, Kimi, Z.AI, OpenCode, Qwen, Ollama | Standard `/v1/chat/completions`, `tools` schema, `reasoning_content` stream deltas |
+| `Responses` (`responses`) | OpenAI, xAI, Azure, Bedrock, Copilot | Structured items, background reasoning summaries, stateful conversation tokens |
+| `AnthropicMessages` (`anthropic-messages`) | Anthropic Claude | Native `/v1/messages`, `cache_control` prompt caching, adaptive thinking budgets |
+| `GoogleGemini` (`google-gemini`) | Google Gemini | `/v1beta/models/{id}:generateContent`, `systemInstruction`, inline multimodal parts |
 
 The driver handles SSE frame parsing, delta reassembly across fragmented
 indices, and error code translation so the orchestration harness operates on

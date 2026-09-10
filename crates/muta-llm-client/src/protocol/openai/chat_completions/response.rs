@@ -7,6 +7,106 @@
 use muta_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::Value;
 
+/// Provider-opaque message sidecar used to replay OpenRouter's signed or
+/// encrypted reasoning blocks after a tool call.
+pub const OPENROUTER_REASONING_DETAILS_META_KEY: &str = "openrouter_reasoning_details";
+
+fn reasoning_text(value: &Value) -> Option<String> {
+    value["reasoning"]
+        .as_str()
+        .or_else(|| value["reasoning_content"].as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| reasoning_details_text(value.get("reasoning_details")?))
+}
+
+fn reasoning_details_text(details: &Value) -> Option<String> {
+    let mut text = String::new();
+    for detail in details.as_array()? {
+        if let Some(fragment) = detail
+            .get("text")
+            .or_else(|| detail.get("summary"))
+            .and_then(Value::as_str)
+        {
+            text.push_str(fragment);
+        }
+    }
+    (!text.is_empty()).then_some(text)
+}
+
+fn reasoning_details_meta(value: &Value) -> Option<serde_json::Map<String, Value>> {
+    let details = value.get("reasoning_details")?.as_array()?;
+    if details.is_empty() {
+        return None;
+    }
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        OPENROUTER_REASONING_DETAILS_META_KEY.to_string(),
+        Value::Array(details.clone()),
+    );
+    Some(meta)
+}
+
+/// Reassembles `delta.reasoning_details` fragments by their stable index for
+/// replay in the next OpenRouter request. Text/data/summary fields are stream
+/// deltas and concatenate; identity/signature fields keep the latest value.
+#[derive(Debug, Default)]
+pub struct ReasoningDetailsAccumulator {
+    details: std::collections::BTreeMap<u64, Value>,
+}
+
+impl ReasoningDetailsAccumulator {
+    pub fn observe(&mut self, event: &Value) {
+        let Some(incoming) = event["choices"][0]["delta"]["reasoning_details"].as_array() else {
+            return;
+        };
+        for (position, detail) in incoming.iter().enumerate() {
+            let index = detail
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(position as u64);
+            let Some(incoming_obj) = detail.as_object() else {
+                continue;
+            };
+            let current = self
+                .details
+                .entry(index)
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            let Some(current_obj) = current.as_object_mut() else {
+                *current = detail.clone();
+                continue;
+            };
+            for (key, value) in incoming_obj {
+                if matches!(key.as_str(), "text" | "data" | "summary")
+                    && let (Some(existing), Some(fragment)) = (
+                        current_obj
+                            .get_mut(key)
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string),
+                        value.as_str(),
+                    )
+                {
+                    current_obj.insert(key.clone(), Value::String(existing + fragment));
+                } else if !value.is_null() {
+                    current_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    pub fn artifacts(&self) -> Option<serde_json::Map<String, Value>> {
+        if self.details.is_empty() {
+            return None;
+        }
+        let mut artifacts = serde_json::Map::new();
+        artifacts.insert(
+            OPENROUTER_REASONING_DETAILS_META_KEY.to_string(),
+            Value::Array(self.details.values().cloned().collect()),
+        );
+        Some(artifacts)
+    }
+}
+
 /// Parse an OpenAI top-level `usage` object (`prompt_tokens` /
 /// `completion_tokens` / `total_tokens`) into a [`TokenUsage`]. Returns `None`
 /// when the object is absent or has no numeric fields.
@@ -89,10 +189,7 @@ pub fn tool_calls(choice: &Value) -> Option<Vec<ToolCall>> {
 /// show. This is the seam where the tool-call "echo" filter (GLM/Qwen models
 /// that mirror a native tool call as text) is applied — see [`super::echo`].
 pub fn message(choice: &Value, content_filter: impl FnOnce(&str, bool) -> String) -> Message {
-    let reasoning_content = choice["reasoning_content"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let reasoning_content = reasoning_text(choice);
 
     let tool_calls = tool_calls(choice);
 
@@ -106,7 +203,7 @@ pub fn message(choice: &Value, content_filter: impl FnOnce(&str, bool) -> String
         content_blob: None,
         display_content: None,
         reasoning_content,
-        provider_meta: None,
+        provider_meta: reasoning_details_meta(choice),
         tool_calls,
         tool_call_id: None,
         images: None,
@@ -138,11 +235,8 @@ pub fn stream_events(event: &Value) -> Vec<ProviderStreamEvent> {
     if let Some(content) = delta["content"].as_str().filter(|value| !value.is_empty()) {
         events.push(ProviderStreamEvent::TextDelta(content.to_string()));
     }
-    if let Some(reasoning) = delta["reasoning_content"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-    {
-        events.push(ProviderStreamEvent::ReasoningDelta(reasoning.to_string()));
+    if let Some(reasoning) = reasoning_text(delta) {
+        events.push(ProviderStreamEvent::ReasoningDelta(reasoning));
     }
     if let Some(tool_calls) = delta["tool_calls"].as_array() {
         for call in tool_calls {
@@ -218,6 +312,56 @@ mod tests {
         assert_eq!(msg.content, "hello");
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
         assert_eq!(msg.tool_calls.unwrap()[0].name, "bash");
+    }
+
+    #[test]
+    fn message_reads_openrouter_reasoning_and_keeps_details_for_replay() {
+        let choice = serde_json::json!({
+            "content": "",
+            "reasoning": "checking the repository",
+            "reasoning_details": [{
+                "type": "reasoning.text",
+                "text": "checking the repository",
+                "signature": "sig-1",
+                "id": "reasoning-1",
+                "format": "qwen3",
+                "index": 0
+            }],
+            "tool_calls": [{
+                "id": "call_1",
+                "function": {"name": "read", "arguments": "{}"}
+            }]
+        });
+
+        let msg = message(&choice, |raw, _| raw.to_string());
+        assert_eq!(
+            msg.reasoning_content.as_deref(),
+            Some("checking the repository")
+        );
+        assert_eq!(
+            msg.provider_meta.as_ref().unwrap()[OPENROUTER_REASONING_DETAILS_META_KEY][0]["signature"],
+            "sig-1"
+        );
+    }
+
+    #[test]
+    fn streaming_openrouter_reasoning_details_are_reassembled_by_position_or_index() {
+        let mut accumulator = ReasoningDetailsAccumulator::default();
+        accumulator.observe(&serde_json::json!({
+            "choices": [{"delta": {"reasoning_details": [{
+                "type": "reasoning.text", "text": "check ", "index": 0
+            }]}}]
+        }));
+        accumulator.observe(&serde_json::json!({
+            "choices": [{"delta": {"reasoning_details": [{
+                "text": "files", "signature": "sig"
+            }]}}]
+        }));
+
+        let artifacts = accumulator.artifacts().unwrap();
+        let detail = &artifacts[OPENROUTER_REASONING_DETAILS_META_KEY][0];
+        assert_eq!(detail["text"], "check files");
+        assert_eq!(detail["signature"], "sig");
     }
 
     #[test]

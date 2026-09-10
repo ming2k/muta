@@ -80,9 +80,9 @@ impl DiscoveryProtocol {
     pub fn from_wire_protocol(protocol: muta_contracts::WireProtocol) -> Self {
         match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => Self::Anthropic,
-            muta_contracts::WireProtocol::GoogleGenerateContent => Self::Google,
-            muta_contracts::WireProtocol::OpenAiChatCompletions
-            | muta_contracts::WireProtocol::OpenAiResponses => Self::OpenAi,
+            muta_contracts::WireProtocol::GoogleGemini => Self::Google,
+            muta_contracts::WireProtocol::ChatCompletions
+            | muta_contracts::WireProtocol::Responses => Self::OpenAi,
         }
     }
 }
@@ -373,7 +373,7 @@ pub async fn discover_models(
         DiscoveryProtocol::OpenAi => {
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
-            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+            let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent);
             if !req.api_key.expose_secret().trim().is_empty() {
                 request = request.header(
@@ -399,7 +399,7 @@ pub async fn discover_models(
                     muta_contracts::client_identity::CODEX_VERSION,
                 )],
             );
-            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+            let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent)
                 .header("originator", "codex_cli_rs");
             if !req.api_key.expose_secret().trim().is_empty() {
@@ -423,7 +423,7 @@ pub async fn discover_models(
             // Anthropic auth: x-api-key + the pinned API version. The version
             // header is mandatory on every Anthropic request including the
             // models list endpoint.
-            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+            let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent)
                 .header("x-api-key", req.api_key.expose_secret())
                 .header("anthropic-version", anthropic_version());
@@ -439,7 +439,7 @@ pub async fn discover_models(
             client.send(request).await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::GoogleCloudCode => {
-            let mut request = crate::http::Request::new(muta_net::Method::POST, &endpoint)
+            let mut request = crate::http::Request::new(netune::Method::POST, &endpoint)
                 .header("user-agent", user_agent)
                 .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
                 .json(&serde_json::json!({ "project": "" }));
@@ -463,7 +463,7 @@ pub async fn discover_models(
             } else {
                 append_query(&endpoint, &[("key", req.api_key.expose_secret())])
             };
-            let mut request = crate::http::Request::new(muta_net::Method::GET, &endpoint)
+            let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent);
             for (name, value) in req.extra_headers {
                 request = request.header(name, *value);
@@ -589,7 +589,8 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                         .any(|modality| modality.as_str() == Some("image"))
                 });
             let context_window = entry
-                .get("context_window")
+                .get("max_context_window")
+                .or_else(|| entry.get("context_window"))
                 .and_then(Value::as_i64)
                 .and_then(|window| usize::try_from(window).ok());
             Some((
@@ -601,7 +602,7 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                 DiscoveredModel {
                     id,
                     picker_enabled: Some(listed),
-                    protocol: Some(WireProtocol::OpenAiResponses),
+                    protocol: Some(WireProtocol::Responses),
                     family: None,
                     context_window,
                     max_output_tokens: None,
@@ -645,16 +646,34 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
     if let Some(capabilities) = entry.get("capabilities") {
         return copilot_model_from_capabilities(id, entry, capabilities);
     }
+    // OpenRouter's catalog also contains image generators and embedding
+    // models. This route is Chat Completions, so only surface entries that
+    // can return text when the catalog advertises output modalities.
+    if let Some(output_modalities) = entry
+        .get("architecture")
+        .and_then(|architecture| architecture.get("output_modalities"))
+        .and_then(Value::as_array)
+        && !output_modalities
+            .iter()
+            .any(|value| value.as_str() == Some("text"))
+    {
+        return None;
+    }
     // Thinking-type precedence mirrors the kimi-code client: the newer
     // three-state field wins over the legacy boolean when present.
+    let openrouter_reasoning = entry.get("reasoning").filter(|value| value.is_object());
     let reasoning = match entry.get("supports_thinking_type").and_then(Value::as_str) {
         Some("only") | Some("both") => Some(true),
         Some("no") => Some(false),
-        _ => entry.get("supports_reasoning").and_then(Value::as_bool),
+        _ => entry
+            .get("supports_reasoning")
+            .and_then(Value::as_bool)
+            .or_else(|| openrouter_reasoning.map(|_| true)),
     };
     let effort_levels = entry
         .get("think_efforts")
         .and_then(|efforts| efforts.get("valid_efforts"))
+        .or_else(|| openrouter_reasoning.and_then(|value| value.get("supported_efforts")))
         .and_then(Value::as_array)
         .map(|levels| {
             levels
@@ -672,11 +691,35 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
             .get("context_length")
             .and_then(Value::as_u64)
             .map(|length| length as usize),
-        max_output_tokens: None,
+        max_output_tokens: entry
+            .get("top_provider")
+            .and_then(|provider| provider.get("max_completion_tokens"))
+            .and_then(Value::as_u64)
+            .and_then(|length| u32::try_from(length).ok()),
         reasoning,
-        thinking: None,
-        tool_call: None,
-        vision: entry.get("supports_image_in").and_then(Value::as_bool),
+        thinking: openrouter_reasoning.map(|_| ReasoningSupport::ReasoningContent),
+        tool_call: entry
+            .get("supported_parameters")
+            .and_then(Value::as_array)
+            .map(|parameters| {
+                parameters
+                    .iter()
+                    .any(|value| value.as_str() == Some("tools"))
+            }),
+        vision: entry
+            .get("supports_image_in")
+            .and_then(Value::as_bool)
+            .or_else(|| {
+                entry
+                    .get("architecture")
+                    .and_then(|architecture| architecture.get("input_modalities"))
+                    .and_then(Value::as_array)
+                    .map(|modalities| {
+                        modalities
+                            .iter()
+                            .any(|value| value.as_str() == Some("image"))
+                    })
+            }),
         effort_levels,
     })
 }
@@ -781,9 +824,9 @@ fn copilot_protocol(value: Option<&Value>) -> Option<WireProtocol> {
     if has("/v1/messages") {
         Some(WireProtocol::AnthropicMessages)
     } else if has("/responses") {
-        Some(WireProtocol::OpenAiResponses)
+        Some(WireProtocol::Responses)
     } else if has("/chat/completions") {
-        Some(WireProtocol::OpenAiChatCompletions)
+        Some(WireProtocol::ChatCompletions)
     } else {
         None
     }
@@ -1122,7 +1165,7 @@ mod tests {
         assert_eq!(models[0].picker_enabled, Some(false));
         assert_eq!(models[1].id, "gpt-codex");
         assert_eq!(models[1].picker_enabled, Some(true));
-        assert_eq!(models[1].protocol, Some(WireProtocol::OpenAiResponses));
+        assert_eq!(models[1].protocol, Some(WireProtocol::Responses));
         assert_eq!(models[1].context_window, Some(272_000));
         assert_eq!(models[1].thinking, Some(ReasoningSupport::ReasoningSummary));
         assert_eq!(models[1].vision, Some(true));
@@ -1149,6 +1192,7 @@ mod tests {
                     {"effort": "ultra"}
                 ],
                 "context_window": 272000,
+                "max_context_window": 872000,
                 "input_modalities": ["text", "image"]
             }]
         });
@@ -1157,7 +1201,7 @@ mod tests {
         let astra = models.first().unwrap();
         assert_eq!(astra.id, "gpt-6-astra");
         assert_eq!(astra.picker_enabled, Some(true));
-        assert_eq!(astra.context_window, Some(272_000));
+        assert_eq!(astra.context_window, Some(872_000));
         assert_eq!(
             astra
                 .effort_levels
@@ -1216,6 +1260,52 @@ mod tests {
         assert_eq!(models[0].id, "kimi-for-coding");
         assert_eq!(models[0].context_window, Some(262_144));
         assert_eq!(models[0].effort_levels, None);
+    }
+
+    #[test]
+    fn parses_openrouter_catalog_capability_fields() {
+        let json = serde_json::json!({
+            "data": [
+                {
+                    "id": "nex-agi/nex-n2.5-pro:free",
+                    "context_length": 262144,
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"]
+                    },
+                    "top_provider": { "max_completion_tokens": 235929 },
+                    "supported_parameters": [
+                        "max_tokens", "reasoning", "reasoning_effort", "tool_choice", "tools"
+                    ],
+                    "reasoning": {
+                        "mandatory": false,
+                        "supported_efforts": ["high", "medium", "none"],
+                        "default_effort": "high"
+                    }
+                },
+                {
+                    "id": "example/image-generator",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"]
+                    }
+                }
+            ]
+        });
+
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        assert_eq!(models.len(), 1);
+        let nex = &models[0];
+        assert_eq!(nex.context_window, Some(262_144));
+        assert_eq!(nex.max_output_tokens, Some(235_929));
+        assert_eq!(nex.reasoning, Some(true));
+        assert_eq!(nex.thinking, Some(ReasoningSupport::ReasoningContent));
+        assert_eq!(nex.tool_call, Some(true));
+        assert_eq!(nex.vision, Some(true));
+        assert_eq!(
+            nex.effort_levels,
+            Some(vec!["high".into(), "medium".into(), "none".into()])
+        );
     }
 
     #[test]
@@ -1374,7 +1464,7 @@ mod tests {
             .find(|model| model.id == "internal-title-model")
             .unwrap();
         assert_eq!(internal.picker_enabled, Some(false));
-        assert_eq!(internal.protocol, Some(WireProtocol::OpenAiResponses));
+        assert_eq!(internal.protocol, Some(WireProtocol::Responses));
     }
 
     #[test]
@@ -1475,15 +1565,15 @@ mod tests {
             DiscoveryProtocol::Anthropic
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::GoogleGenerateContent),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::GoogleGemini),
             DiscoveryProtocol::Google
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::OpenAiChatCompletions),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::ChatCompletions),
             DiscoveryProtocol::OpenAi
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::OpenAiResponses),
+            DiscoveryProtocol::from_wire_protocol(WireProtocol::Responses),
             DiscoveryProtocol::OpenAi
         );
     }

@@ -7,8 +7,8 @@
 pub use crate::chrome::draw_persistence_health_bar;
 pub use crate::chrome::{ActivityBarProps, draw_activity_bar};
 pub use crate::chrome::{
-    ModelBarProps, QueueBarProps, QueueItemProps, draw_completion_menu, draw_model_bar,
-    draw_queue_bar,
+    ModelBarProps, QueueBarProps, QueueItemProps, TasksBarProps, draw_completion_menu,
+    draw_model_bar, draw_queue_bar, draw_tasks_bar,
 };
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
@@ -179,6 +179,8 @@ pub struct TranscriptProps<'a> {
     /// slice renders a muted empty state so the bar is always present (the
     /// permanent home for queue affordances).
     pub queue_bar: QueueBarProps<'a>,
+    /// The background tasks status bar (ADR-0212).
+    pub tasks_bar: TasksBarProps<'a>,
     /// The daemon's persistence-writer degradation (ADR-0196 D4). While set
     /// (and not `Healthy`), the footer stack reserves a retained one-row
     /// banner between the transcript gap and the queue bar; `Healthy` /
@@ -585,6 +587,7 @@ pub fn draw_transcript(
         byte_cursor,
         chrome_hidden,
         queue_bar,
+        tasks_bar,
         persistence_health,
         subagent_bar,
         side_banner,
@@ -751,6 +754,10 @@ pub fn draw_transcript(
     // surface while there is pending work.
     let queue_row_needed = !chrome_hidden && !in_subagent && !queue_bar.items.is_empty();
     let queue_height: u16 = if queue_row_needed { QUEUE_BAR_ROWS } else { 0 };
+    // ADR-0212: Background tasks status bar reserves a row while tasks are active or recently settled.
+    let tasks_row_needed =
+        !chrome_hidden && !in_subagent && tasks_bar.tasks.iter().any(|t| !t.dismissed);
+    let tasks_height: u16 = if tasks_row_needed { 1 } else { 0 };
     // The durability-health banner (ADR-0196 D4) reserves a row only while
     // the writer is actually degraded; a healthy writer costs nothing.
     let persistence_health_row_needed = !chrome_hidden
@@ -792,7 +799,7 @@ pub fn draw_transcript(
     // The footer stack is declared once, in draw order — the single-pass
     // placer derives both the band's total height (for the layout split) and
     // each row's rect, so the height arithmetic can no longer exist in two
-    // copies that drift. Order, top → bottom: gap, queue bar,
+    // copies that drift. Order, top → bottom: gap, queue bar, tasks bar,
     // activity bar, input box, hint bar.
     let footer_rows: Vec<FooterRow> = if chrome_hidden || in_subagent {
         Vec::new()
@@ -809,6 +816,10 @@ pub fn draw_transcript(
             FooterRow {
                 id: FooterRowId::Queue,
                 height: queue_height,
+            },
+            FooterRow {
+                id: FooterRowId::Tasks,
+                height: tasks_height,
             },
             FooterRow {
                 id: FooterRowId::Activity,
@@ -1007,6 +1018,11 @@ pub fn draw_transcript(
     footer_stack::rect_of(&placed_footer, FooterRowId::Queue)
         .filter(|_| queue_row_needed)
         .map(|rect| draw_queue_bar(frame, rect, queue_bar, theme));
+
+    // ADR-0212: Draw the background tasks status bar.
+    footer_stack::rect_of(&placed_footer, FooterRowId::Tasks)
+        .filter(|_| tasks_row_needed)
+        .map(|rect| draw_tasks_bar(frame, rect, tasks_bar, theme));
 
     // The transient activity bar sits directly above the input box so the live
     // "what the agent is doing right now" status reads as part of the composer

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`config.toml` saves no longer resurrect user-deleted settings.** The
+  session daemon holds an in-memory config snapshot loaded at startup
+  (ADR-0209); previously any save — a `/models` switch, a favorite toggle,
+  `muta mcp add`, a pruned-favorites pass — rewrote the whole file from that
+  snapshot, silently restoring anything the user had hand-deleted in the
+  meantime (the reported symptom: removing `[workspace].additional_roots`
+  from `~/.config/muta/config.toml` put the entries straight back). Saves are
+  now ownership-reconciled merges: under the config file lock the on-disk
+  document is re-read, user-owned tables (`[workspace]`, `[web]`, `[agent]`,
+  `[mcp]`, `[[hooks]]`, favorites, …) are written back exactly as the user
+  left them, and only the runtime-owned selection pair (`default_connection`
+  / `default_model`, subject to the existing preserve semantics) is overlaid
+  from the in-memory snapshot. Persisted `[workspace].additional_roots` thus
+  means exactly the user-declared global roots, as documented; project-trust
+  merges stay runtime view state and are never written into the file.
+  Snapshot-driven saves remain pure flushes — the user's edits are not
+  folded back into the handler's `&mut Config` mid-request.
+
 ## [0.43.1] - 2026-09-09
 
 ### Fixed

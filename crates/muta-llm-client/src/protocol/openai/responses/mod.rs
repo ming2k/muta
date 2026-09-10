@@ -168,6 +168,9 @@ pub struct OpenAiResponsesProvider {
     pub client: Client,
 }
 
+/// Canonical alias for the Responses protocol provider.
+pub type ResponsesProvider = OpenAiResponsesProvider;
+
 impl OpenAiResponsesProvider {
     pub fn new(
         credentials: std::sync::Arc<dyn CredentialSource>,

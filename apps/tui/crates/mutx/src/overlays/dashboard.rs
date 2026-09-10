@@ -1142,6 +1142,10 @@ pub enum ConsoleCommand {
     /// `/new text` — create a session for the dashboard's project with
     /// `text` as the opening prompt.
     New { text: Option<String> },
+    /// `? text` / `/ask text` — ask the Archivist (ADR-0208), the
+    /// muta-level retrieval agent, one question. The answer arrives as a
+    /// console receipt (synchronous control round).
+    Archivist { text: String },
     /// `/help` — the verb table as a notice block.
     Help,
     /// Text that matched no rule (empty input, a bare `/` with no verb, …).
@@ -1181,6 +1185,7 @@ impl ConsoleVerb {
 /// - `@2 @3 summarize` → fan-out to `#2` and `#3`
 /// - `/kill`, `/kill @3` → [`ConsoleCommand::Verb`]
 /// - `/new <text>`, `/new` → [`ConsoleCommand::New`]
+/// - `? <text>` / `/ask <text>` → [`ConsoleCommand::Archivist`]
 /// - `/help` → [`ConsoleCommand::Help`]
 /// - anything else that is non-empty → [`ConsoleCommand::Prompt`] with no
 ///   targets (the caller resolves "no targets" to the dock selection)
@@ -1190,13 +1195,36 @@ pub fn parse_console_command(line: &str) -> ConsoleCommand {
         return ConsoleCommand::Unrecognized(String::new());
     }
 
+    // The Archivist address: `? text` — a single leading `?` distinguishes it
+    // from `@N` (session addresses) and `/` (verbs). No address follows it.
+    if let Some(rest) = trimmed.strip_prefix('?') {
+        let text = rest.trim();
+        if text.is_empty() {
+            return ConsoleCommand::Unrecognized(
+                "nothing to ask — the Archivist needs a question after '?'".to_string(),
+            );
+        }
+        return ConsoleCommand::Archivist {
+            text: text.to_string(),
+        };
+    }
+
     // Slash verbs first: `/verb [rest…]`.
     if let Some(rest) = trimmed.strip_prefix('/') {
         let mut parts = rest.splitn(2, char::is_whitespace);
         let word = parts.next().unwrap_or("").to_ascii_lowercase();
         let remainder = parts.next().unwrap_or("").trim().to_string();
         return match word.as_str() {
-            "help" | "?" => ConsoleCommand::Help,
+            "help" => ConsoleCommand::Help,
+            "ask" => {
+                if remainder.is_empty() {
+                    ConsoleCommand::Unrecognized(
+                        "nothing to ask — the Archivist needs a question after /ask".to_string(),
+                    )
+                } else {
+                    ConsoleCommand::Archivist { text: remainder }
+                }
+            }
             "new" => {
                 if remainder.is_empty() {
                     ConsoleCommand::New { text: None }
@@ -1564,6 +1592,38 @@ mod tests {
             }
             other => panic!("expected Prompt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn archivist_address_parses_question_mark_and_ask_verb() {
+        // ADR-0208: `? text` asks the muta-level retrieval agent.
+        match parse_console_command("? where did we debug the retry loop") {
+            ConsoleCommand::Archivist { text } => {
+                assert_eq!(text, "where did we debug the retry loop");
+            }
+            other => panic!("expected Archivist, got {other:?}"),
+        }
+        // `/ask` is the verb alias.
+        match parse_console_command("/ask which project was that") {
+            ConsoleCommand::Archivist { text } => {
+                assert_eq!(text, "which project was that");
+            }
+            other => panic!("expected Archivist, got {other:?}"),
+        }
+        // An address with no payload is a usage notice, not an ask.
+        assert!(matches!(
+            parse_console_command("?"),
+            ConsoleCommand::Unrecognized(_)
+        ));
+        assert!(matches!(
+            parse_console_command("/ask"),
+            ConsoleCommand::Unrecognized(_)
+        ));
+        // `?` no longer aliases /help — /help keeps the verb table.
+        assert!(matches!(
+            parse_console_command("/help"),
+            ConsoleCommand::Help
+        ));
     }
 
     #[test]

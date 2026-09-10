@@ -21,7 +21,7 @@
 //!    request is always wire-valid: every `tool` result references a known
 //!    preceding `tool_call`, and every assistant `tool_calls` has its results.
 
-use muta_contracts::{Effort, Message, Role};
+use muta_contracts::{Effort, Message, OpenAiChatDialect, Role};
 use serde_json::{Value, json};
 
 /// The headers this wire format requires on every request, beyond the
@@ -34,18 +34,23 @@ use serde_json::{Value, json};
 /// a real Copilot Chat client (and so resolves the account's actual plan
 /// entitlements) and carries the same metadata a Responses request would
 /// (mirrors `responses::request::headers`).
-pub fn headers(api_key: &str, copilot: bool) -> Vec<(&'static str, String)> {
+pub fn headers(api_key: &str, dialect: OpenAiChatDialect) -> Vec<(&'static str, String)> {
     let mut h = Vec::new();
     if !api_key.trim().is_empty() {
         h.push(("Authorization", format!("Bearer {api_key}")));
     }
-    if copilot {
+    if dialect == OpenAiChatDialect::Copilot {
         for (name, value) in crate::COPILOT_CLIENT_HEADERS {
             h.push((*name, value.to_string()));
         }
         h.push(("x-initiator", "user".to_string()));
         h.push(("Openai-Intent", "conversation-edits".to_string()));
         h.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
+    } else if dialect == OpenAiChatDialect::OpenRouter {
+        // Optional OpenRouter app attribution. The User-Agent is already
+        // supplied by Endpoint; the title makes dashboard traffic readable
+        // without inventing a project URL for HTTP-Referer.
+        h.push(("X-OpenRouter-Title", "Muta".to_string()));
     }
     h
 }
@@ -62,6 +67,8 @@ pub struct BodyInput<'a> {
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
+    /// Provider-specific behavior layered on the shared Chat Completions wire.
+    pub dialect: OpenAiChatDialect,
     /// Cache controls resolved against this exact provider route.
     pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
 }
@@ -97,6 +104,7 @@ pub fn body_with_capabilities(
         instructions,
         tool_specs,
         reasoning_effort,
+        dialect,
         cache_plan,
     } = input;
 
@@ -213,7 +221,10 @@ pub fn body_with_capabilities(
 
     let mut body = json!({
         "model": model_id,
-        "messages": messages.into_iter().map(message_obj).collect::<Vec<_>>(),
+        "messages": messages
+            .into_iter()
+            .map(|message| message_obj(message, dialect))
+            .collect::<Vec<_>>(),
         "stream": stream,
     });
     if stream {
@@ -226,8 +237,13 @@ pub fn body_with_capabilities(
     if let Some(effort) = reasoning_effort
         && !capabilities.effort_levels.is_empty()
     {
-        body["reasoning_effort"] =
-            json!(effort.clamp_to_levels(&capabilities.effort_levels).as_str());
+        let clamped = effort.clamp_to_levels(&capabilities.effort_levels);
+        let effort = clamped.as_str();
+        if dialect == OpenAiChatDialect::OpenRouter {
+            body["reasoning"] = json!({ "effort": effort });
+        } else {
+            body["reasoning_effort"] = json!(effort);
+        }
     }
     if let Some(specs) = tool_specs {
         body["tools"] = specs;
@@ -261,7 +277,13 @@ fn valid_provider_message(message: &Message) -> bool {
 
 /// Convert a harness [`Message`] to an OpenAI message object (role + content,
 /// with optional `tool_calls` / `tool_call_id`).
-pub fn message_obj(m: Message) -> Value {
+pub fn message_obj(m: Message, dialect: OpenAiChatDialect) -> Value {
+    let openrouter_reasoning_details = m
+        .provider_meta
+        .as_ref()
+        .and_then(|meta| meta.get(super::response::OPENROUTER_REASONING_DETAILS_META_KEY))
+        .cloned();
+    let reasoning_content = m.reasoning_content.clone();
     let mut map = json!({
         "role": match m.role {
             Role::User => "user",
@@ -287,6 +309,13 @@ pub fn message_obj(m: Message) -> Value {
     }
     if let Some(tool_call_id) = m.tool_call_id {
         map["tool_call_id"] = json!(tool_call_id);
+    }
+    if dialect == OpenAiChatDialect::OpenRouter && m.role == Role::Assistant {
+        if let Some(details) = openrouter_reasoning_details {
+            map["reasoning_details"] = details;
+        } else if let Some(reasoning) = reasoning_content.filter(|value| !value.is_empty()) {
+            map["reasoning"] = json!(reasoning);
+        }
     }
     map
 }
@@ -335,6 +364,7 @@ mod tests {
             instructions: None,
             tool_specs,
             reasoning_effort,
+            dialect: OpenAiChatDialect::Standard,
             cache_plan,
         }
     }
@@ -368,6 +398,84 @@ mod tests {
         );
 
         assert_eq!(body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn openrouter_uses_unified_reasoning_and_replays_details() {
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.reasoning_content = Some("checking".into());
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "call_1".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        }]);
+        assistant.provider_meta = Some({
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                super::super::response::OPENROUTER_REASONING_DETAILS_META_KEY.into(),
+                serde_json::json!([{
+                    "type": "reasoning.text",
+                    "text": "checking",
+                    "signature": "sig",
+                    "index": 0
+                }]),
+            );
+            meta
+        });
+        let tool_result = Message {
+            role: Role::Tool,
+            content: "ok".into(),
+            tool_call_id: Some("call_1".into()),
+            ..Message::new(Role::Tool, "")
+        };
+        let capabilities = muta_contracts::ModelCapabilities {
+            family: "nex".into(),
+            context_window: 262_144,
+            max_output_tokens: Some(235_929),
+            thinking: muta_contracts::ReasoningSupport::ReasoningContent,
+            tool_call: true,
+            vision: true,
+            effort_levels: vec![
+                Effort::None.into(),
+                Effort::Medium.into(),
+                Effort::High.into(),
+            ],
+        };
+        let body = body_with_capabilities(
+            vec![Message::new(Role::User, "inspect"), assistant, tool_result],
+            BodyInput {
+                model: "nex-agi/nex-n2.5-pro:free",
+                stream: true,
+                instructions: None,
+                tool_specs: None,
+                reasoning_effort: Some(Effort::High),
+                dialect: OpenAiChatDialect::OpenRouter,
+                cache_plan: &DEFAULT_CACHE_PLAN,
+            },
+            &capabilities,
+        );
+
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(
+            body["messages"][1]["reasoning_details"][0]["signature"],
+            "sig"
+        );
+    }
+
+    #[test]
+    fn openrouter_headers_include_app_attribution() {
+        let headers = headers("sk-or-test", OpenAiChatDialect::OpenRouter);
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| { *name == "Authorization" && value == "Bearer sk-or-test" })
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| { *name == "X-OpenRouter-Title" && value == "Muta" })
+        );
     }
 
     #[test]

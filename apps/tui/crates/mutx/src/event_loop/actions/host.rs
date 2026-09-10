@@ -162,6 +162,51 @@ pub(super) fn suspend_selected(app: &mut App, runtime: &UiRuntime) {
     spawn_control_verb(runtime, ConsoleVerb::Suspend, Some(seq), id);
 }
 
+/// Ask the Archivist (ADR-0208) one question: a synchronous control round
+/// whose answer lands as a console receipt. The Archivist is the muta-level
+/// retrieval agent — it searches every project's sessions, so no `@N` target
+/// and no dock selection are involved.
+async fn dispatch_archivist(app: &mut App, runtime: &UiRuntime, raw: &str, text: &str) {
+    log_dispatch(app, raw, Vec::new(), "ask archivist");
+    let mutations = runtime.mutations.clone();
+    let dirty = (runtime.dirty.clone(), runtime.dirty_notify.clone());
+    let text = text.to_string();
+    tokio::spawn(async move {
+        let project_root =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let outcome = match muta_client::discover(&project_root) {
+            Some(info) => {
+                muta_client::control_with_reply(
+                    &info,
+                    muta_client::ControlRequest::AskArchivist { text: text.clone() },
+                )
+                .await
+            }
+            None => Err("no daemon is running".to_string()),
+        };
+        let line = match outcome {
+            Ok(answer) => ConsoleLine::Receipt {
+                ok: true,
+                target: None,
+                text: if answer.is_empty() {
+                    "(the Archivist returned no answer)".to_string()
+                } else {
+                    answer
+                },
+            },
+            Err(e) => ConsoleLine::Receipt {
+                ok: false,
+                target: None,
+                text: e,
+            },
+        };
+        mutations
+            .send(crate::event_loop::AppMutation::HostConsole(line))
+            .await;
+        wake(&dirty);
+    });
+}
+
 /// Create a session for the dashboard's project, optionally with an opening
 /// prompt. Shared by `/new [text]` and the `n`-opened prompt's bare-text
 /// submit. `raw` is the line the dispatch receipt echoes.
@@ -215,6 +260,10 @@ fn help_block(app: &mut App) {
         "  @2 @3 text    fan out the same prompt to several sessions",
     );
     notice(app, "  bare text     prompt the selected session");
+    notice(
+        app,
+        "  ? text        ask the Archivist to find sessions across all projects (ADR-0208)",
+    );
 }
 
 /// Dispatch one parsed console line (see
@@ -237,6 +286,9 @@ pub(super) async fn dispatch_console_command(
         }
         ConsoleCommand::New { text } => {
             dispatch_create(app, runtime, raw, text).await;
+        }
+        ConsoleCommand::Archivist { text } => {
+            dispatch_archivist(app, runtime, raw, &text).await;
         }
         ConsoleCommand::Verb { verb, target } => {
             let (seq, id) = match target {

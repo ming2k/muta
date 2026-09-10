@@ -25,7 +25,7 @@ pub const MODELS: &[Model] = &[Model {
     thinking: ReasoningSupport::None,
     tool_call: true,
     vision: true,
-    protocol: WireProtocol::OpenAiChatCompletions,
+    protocol: WireProtocol::ChatCompletions,
     model_guidance: "",
     effort_levels: &[],
 }];
@@ -45,7 +45,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     // family, Pro+ unlocks GPT-5) without a hardcoded model list — every
     // advertised id the client registry does not know is overlaid with its
     // advertised capability metadata, mirroring the kimi-code flow.
-    protocol: WireProtocol::OpenAiChatCompletions,
+    protocol: WireProtocol::ChatCompletions,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Copilot,
     client_profile_sensitive: true,

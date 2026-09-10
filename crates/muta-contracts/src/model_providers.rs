@@ -62,6 +62,10 @@ pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
     "gpt-5.4-mini",
 ];
 
+/// Offline seed for OpenRouter. Its live `/models` catalog is authoritative;
+/// this keeps the primary Nex coding model selectable before the first refresh.
+pub const OPENROUTER_BUILTIN_MODELS: &[&str] = &["nex-agi/nex-n2.5-pro:free"];
+
 pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
 
 pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
@@ -93,6 +97,7 @@ pub const MODEL_PROVIDER_IDS: &[&str] = &[
     "deepseek",
     "glm-cn",
     "kimi-code",
+    "openrouter",
     "opencode-go",
     "custom",
 ];

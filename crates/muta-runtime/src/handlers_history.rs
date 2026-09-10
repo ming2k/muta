@@ -67,3 +67,53 @@ pub fn query_route_settings(
         overrides,
     });
 }
+
+/// `AgentRequest::SearchHistory`: BM25 full-text search over every persisted
+/// transcript entry in the shared store (ADR-0208). `workspace: None`
+/// searches all project buckets — the Archivist's cross-project recall plane.
+///
+/// Two-stage recall (ADR-0208 Layer 3's deterministic leg): the strict
+/// AND-form query runs first; when it recalls nothing, the same words are
+/// re-queried OR-joined (`search_history_relaxed`) so a gist whose words
+/// never co-occur still surfaces its candidates. Fail-open: any engine error
+/// degrades to an empty hit list.
+pub fn search_history(
+    query: &str,
+    workspace: Option<&str>,
+    limit: Option<usize>,
+    resp_tx: &UnboundedSender<AgentResponse>,
+) {
+    const DEFAULT_LIMIT: usize = 20;
+    const MAX_LIMIT: usize = 100;
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let hits = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
+        .map_err(|e| format!("could not open sqlite db: {e}"))
+        .and_then(|engine| {
+            let strict = engine
+                .search_history(query, workspace, limit)
+                .map_err(|e| format!("history search failed: {e}"))?;
+            if !strict.is_empty() {
+                return Ok(strict);
+            }
+            engine
+                .search_history_relaxed(query, workspace, limit)
+                .map_err(|e| format!("history search failed: {e}"))
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "history search failed");
+            Vec::new()
+        });
+    let hits = hits
+        .into_iter()
+        .map(|hit| muta_contracts::HistorySearchHit {
+            entry_id: hit.entry_id,
+            session_id: hit.session_id,
+            workspace: hit.project_root,
+            session_title: hit.session_title,
+            role: hit.role,
+            snippet: hit.snippet,
+            score: hit.score,
+        })
+        .collect();
+    let _ = resp_tx.send(AgentResponse::HistorySearch(hits));
+}

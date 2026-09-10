@@ -87,6 +87,30 @@ fn preset_connection_derives_models_from_the_preset() {
 }
 
 #[test]
+fn openrouter_connection_derives_gateway_dialect_and_nex_seed() {
+    let connection = instance("openrouter", Some("openrouter"));
+    assert_eq!(
+        route_models(&connection, &DiscoveryCache::default()),
+        vec!["nex-agi/nex-n2.5-pro:free"]
+    );
+    let channel = derive_channel(
+        &connection,
+        "nex-agi/nex-n2.5-pro:free",
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
+    assert!(matches!(
+        channel.transport,
+        Transport::OpenAi {
+            dialect: muta_contracts::OpenAiChatDialect::OpenRouter,
+            ref base_url,
+            ..
+        } if base_url == "https://openrouter.ai/api/v1/chat/completions"
+    ));
+}
+
+#[test]
 fn discovered_model_list_prefers_the_cache() {
     let mut cache = DiscoveryCache::default();
     cache.connection_models.insert(
@@ -194,7 +218,7 @@ fn custom_instance_serves_its_declared_models() {
             ..Default::default()
         },
     ];
-    custom.protocol = Some(WireProtocol::OpenAiChatCompletions);
+    custom.protocol = Some(WireProtocol::ChatCompletions);
     custom.base_url = Some("https://relay.example.com/v1/chat/completions".to_string());
     assert_eq!(
         route_models(&custom, &DiscoveryCache::default()),
@@ -228,19 +252,19 @@ fn adr0203_connection_pipe_valve_algebra() {
             "gpt-5.6-sol".to_string(),
             "gpt-5.6-luna".to_string(),
             "gpt-4o-mini".to_string(),
-            "gpt-6-astra".to_string(),
+            "gpt-6-unannotated".to_string(),
         ],
     );
 
     // 1. Explicit safe filter ("baseline"): only models in baseline pass through.
-    // gpt-6-astra is remote-discovered but NOT in baseline, so it is filtered out.
+    // gpt-6-unannotated is remote-discovered but NOT in baseline, so it is filtered out.
     let mut conn = instance("my-openai", Some("openai"));
     conn.models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::Baseline));
     let models = route_models(&conn, &cache);
     assert!(models.contains(&"gpt-5.6-sol".to_string()));
     assert!(models.contains(&"gpt-5.6-luna".to_string()));
     assert!(
-        !models.contains(&"gpt-6-astra".to_string()),
+        !models.contains(&"gpt-6-unannotated".to_string()),
         "baseline filter blocks unannotated astra"
     );
 
@@ -248,7 +272,7 @@ fn adr0203_connection_pipe_valve_algebra() {
     conn.models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All));
     let models = route_models(&conn, &cache);
     assert!(
-        models.contains(&"gpt-6-astra".to_string()),
+        models.contains(&"gpt-6-unannotated".to_string()),
         "open filter admits remote astra"
     );
 
@@ -258,17 +282,17 @@ fn adr0203_connection_pipe_valve_algebra() {
     assert!(models.contains(&"gpt-5.6-sol".to_string()));
     assert!(models.contains(&"gpt-5.6-luna".to_string()));
     assert!(!models.contains(&"gpt-4o-mini".to_string()));
-    assert!(!models.contains(&"gpt-6-astra".to_string()));
+    assert!(!models.contains(&"gpt-6-unannotated".to_string()));
 
     // 4. Sovereign injection (inject): bypasses filter unconditionally!
     conn.models.include = vec![muta_persistence::connections::DeclaredModel {
-        id: "gpt-6-astra".into(),
+        id: "gpt-6-unannotated".into(),
         context_window: Some(1_050_000),
         ..Default::default()
     }];
     let models = route_models(&conn, &cache);
     assert!(
-        models.contains(&"gpt-6-astra".to_string()),
+        models.contains(&"gpt-6-unannotated".to_string()),
         "inject bypasses glob filter"
     );
 
@@ -381,7 +405,7 @@ fn openai_route_uses_official_api_not_opencode_go_relay() {
     // the opencode.ai relay endpoint.
     let (protocol, base_url, _) =
         route_for_model("openai", "gpt-4o").expect("openai gpt-4o route must exist");
-    assert_eq!(protocol, WireProtocol::OpenAiChatCompletions);
+    assert_eq!(protocol, WireProtocol::ChatCompletions);
     assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
 
     let openai_conn = instance("openai-main", Some("openai"));
@@ -534,7 +558,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         m.insert(
             "gpt-5".to_string(),
             muta_contracts::RemoteModelMetadata {
-                protocol: Some(WireProtocol::OpenAiResponses),
+                protocol: Some(WireProtocol::Responses),
                 ..Default::default()
             },
         );
@@ -615,7 +639,7 @@ fn channel_model_info_effort_ladders_survive() {
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
     };
     let info = channel_model_info(&gemini37);
-    assert_eq!(info.protocol, WireProtocol::GoogleGenerateContent.as_str());
+    assert_eq!(info.protocol, WireProtocol::GoogleGemini.as_str());
     assert_eq!(info.effort.as_deref(), Some("high"));
     assert_eq!(info.thinking, None);
 }
@@ -1175,7 +1199,7 @@ fn model_recency_isolation_across_same_preset_connections() {
         id: "shared-model".to_string(),
         ..Default::default()
     }];
-    conn1.protocol = Some(WireProtocol::OpenAiChatCompletions);
+    conn1.protocol = Some(WireProtocol::ChatCompletions);
     conn1.base_url = Some("https://relay1.example.com".to_string());
 
     let mut conn2 = instance("conn-2", None);
@@ -1183,7 +1207,7 @@ fn model_recency_isolation_across_same_preset_connections() {
         id: "shared-model".to_string(),
         ..Default::default()
     }];
-    conn2.protocol = Some(WireProtocol::OpenAiChatCompletions);
+    conn2.protocol = Some(WireProtocol::ChatCompletions);
     conn2.base_url = Some("https://relay2.example.com".to_string());
 
     let connections = Connections {

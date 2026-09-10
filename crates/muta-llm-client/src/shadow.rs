@@ -22,7 +22,7 @@
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use muta_trace::RequestTrace;
+use netune_trace::RequestTrace;
 
 use crate::egress::{HttpResponse, RequestParts};
 use crate::sse::{data_payloads, payloads_from_chunks};

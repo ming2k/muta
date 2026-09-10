@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 
-use muta_agent::orchestration::{RoundDriver, RoundInput};
 use muta_contracts::{BackgroundJobOutcome, JobSpec, JobState};
 use tokio::sync::RwLock;
 
@@ -19,6 +18,7 @@ use crate::task_digest::outcome_digest;
 
 /// Environment handle the mailbox task owns (cloned Arcs, not borrows —
 /// this task outlives a single driver-loop iteration).
+#[allow(dead_code)]
 pub(crate) struct MailboxEnv {
     pub side: Arc<RwLock<SideRegistry>>,
     pub agent: Arc<muta_agent::Agent>,
@@ -65,51 +65,16 @@ pub(crate) fn classify_outcome(outcome: &BackgroundJobOutcome) -> FabricWake {
     }
 }
 
-/// Queue a wake turn. If a round is active the digest is delivered at the
-/// round boundary (queued follow-up, ADR-0126); if idle it starts a fresh
-/// round immediately. This is the mailbox arm's action.
-pub(crate) async fn request_wake_turn(env: &MailboxEnv, session_id: &str, digest: String) {
-    let running = env.lifecycle.is_running().await;
-    if running {
-        // Round-boundary delivery: dispatch through the request channel as a
-        // follow-up so the existing queue machinery linearizes it (ADR-0126).
-        let queued = muta_contracts::QueuedMessage {
-            id: uuid::Uuid::new_v4().to_string(),
-            text: digest,
-            display_text: None,
-            sent_at_ms: None,
-            images: Vec::new(),
-        };
-        let _ = env
-            .req_tx
-            .send(muta_contracts::AgentRequest::FollowUp {
-                session_id: session_id.to_string(),
-                message: queued,
-            })
-            .await;
-    } else {
-        let input = RoundInput {
-            prompt: digest,
-            hidden: false,
-            display_prompt: Some("background task update".to_string()),
-            sent_at_ms: None,
-            images: Vec::new(),
-            driver: RoundDriver::Fresh,
-        };
-        let _ = crate::side::start_session_turn(
-            session_id,
-            crate::side::SideEnv {
-                side: &env.side,
-                agent: &env.agent,
-                primary_session: &env.session,
-                primary_lifecycle: &env.lifecycle,
-                tx: &env.tx,
-                config: &env.config,
-            },
-            input,
-        )
-        .await;
-    }
+/// ADR-0212: FollowUpQueue belongs exclusively to authoritative human operator intent.
+/// Machine-generated background digests MUST NOT be smuggled into the session request
+/// channel as fake `AgentRequest::FollowUp` items.
+///
+/// Real-time execution status rides dedicated `BackgroundJobEvent` signals to the
+/// client's TaskBar. Autonomous wakes, if ever re-enabled, must use a dedicated SystemWake
+/// protocol and never preempt human follow-ups.
+pub(crate) async fn request_wake_turn(_env: &MailboxEnv, _session_id: &str, _digest: String) {
+    // Deliberately a no-op per ADR-0212: task outcomes update the TaskBar and do not
+    // pollute user conversational history or follow-up queue.
 }
 
 /// Consume the manager's event stream and wake the session (the fabric arm

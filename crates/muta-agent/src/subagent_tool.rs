@@ -723,6 +723,18 @@ impl SubagentTool {
         let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
         let mut subagent = Agent::new(self.provider.clone(), sub_tools, identity);
         subagent.set_kind(muta_contracts::AgentKind::Subagent);
+
+        // ADR-0211: Bind instance-scoped HarnessFacets according to the child's mission
+        match profile.name {
+            "explore" => {
+                subagent.add_facet(std::sync::Arc::new(crate::facet::CodeIntelligenceFacet::read_only(1024)));
+            }
+            "code" => {
+                subagent.add_facet(std::sync::Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
+            }
+            _ => {}
+        }
+
         let parent_policy = self
             .parent_execution_policy
             .lock()

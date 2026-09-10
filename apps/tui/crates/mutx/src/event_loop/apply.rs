@@ -152,6 +152,27 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             app.pending_permissions.clear();
             true
         }
+        AppMutation::BackgroundTaskStarted {
+            id,
+            label,
+            started_at_ms,
+        } => {
+            app.upsert_background_task(id, label, started_at_ms);
+            true
+        }
+        AppMutation::BackgroundTaskCompleted {
+            id,
+            success,
+            exit_code,
+            duration_secs,
+        } => {
+            app.complete_background_task(&id, success, exit_code, duration_secs);
+            true
+        }
+        AppMutation::BackgroundTaskDismissSettled => {
+            app.dismiss_settled_background_tasks();
+            true
+        }
 
         AppMutation::DispatchRemoved {
             session_id,
@@ -160,18 +181,43 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             app.remove_dispatch(&session_id, &input_id);
             true
         }
-        AppMutation::DispatchRequeued {
+        AppMutation::SteerMissed {
             session_id,
             input_id,
         } => {
-            let held = app
-                .messages
-                .iter()
-                .chain(app.side_messages.iter())
-                .rev()
-                .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()) && m.role == Role::User)
-                .map(|m| (m.raw.clone(), Vec::new(), Vec::new()));
-            app.requeue_dispatch(&session_id, &input_id, held);
+            // ADR-0212: Steer is ephemeral to the targeted round. If admission
+            // missed the round window, purge the optimistic entry from transcript
+            // and restore text to the composer draft — never re-queue as follow-up.
+            let mut text_to_restore = None;
+            if let Some(pos) = app.messages.iter().rposition(|m| {
+                m.insert_id.as_deref() == Some(input_id.as_str()) && m.role == Role::User
+            }) {
+                let msg = app.messages.remove(pos);
+                text_to_restore = Some(msg.raw);
+            } else if let Some(pos) = app.side_messages.iter().rposition(|m| {
+                m.insert_id.as_deref() == Some(input_id.as_str()) && m.role == Role::User
+            }) {
+                let msg = app.side_messages.remove(pos);
+                text_to_restore = Some(msg.raw);
+            }
+            if let Some(text) = text_to_restore {
+                if app.live_session_id == session_id {
+                    app.adopt_as_draft(
+                        text,
+                        Vec::new(),
+                        Vec::new(),
+                        crate::app::DraftAdoption::OnlyIfIdle,
+                    );
+                    app.notice_toast_severity = crate::model::document::NoticeSeverity::Info;
+                    app.notice_toast_message =
+                        "Steer missed active round; restored to composer".to_string();
+                    app.notice_toast_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
+                }
+            }
+            app.remove_dispatch(&session_id, &input_id);
+            app.layout_height_cache.clear();
+            app.transcript_changed_pending = true;
             true
         }
         AppMutation::DispatchQueued {

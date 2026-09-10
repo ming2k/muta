@@ -3,7 +3,7 @@
 Both the OpenAI Chat Completions API and the Anthropic Messages API support
 *native function calling*, and both can return **multiple tool calls in a single
 assistant response** (parallel tool use). muta speaks both: models tagged
-`WireFormat::OpenAi` go through `OpenAiChatCompletionsProvider`, models tagged
+`WireFormat::OpenAi` go through `ChatCompletionsProvider`, models tagged
 `WireFormat::AnthropicCompat` go through `AnthropicMessagesProvider`
 (`crates/muta-contracts/src/model.rs`, `crates/muta-providers/src/`).
 
@@ -85,7 +85,7 @@ Anthropic:
 
 muta's internal `Message` (`crates/muta-contracts/src/`) is **OpenAI-shaped**: a
 flat list with a `Tool` role, `tool_calls`, a JSON-string `arguments`, and a
-`tool_call_id`. `OpenAiChatCompletionsProvider` serializes that almost verbatim. The
+`tool_call_id`. `ChatCompletionsProvider` serializes that almost verbatim. The
 work lives in `AnthropicMessagesProvider::request_body`
 (`crates/muta-providers/src/anthropic_compat.rs`), which reshapes the flat
 list into Messages format on the way out:

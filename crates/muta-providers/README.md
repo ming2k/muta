@@ -17,6 +17,6 @@ The crate is organized as:
   client constants live in `oauth::config`;
 - `mock` — trivial in-memory provider used as the default channel.
 
-A keyless OpenAI-compatible relay reaches the same `OpenAiChatCompletionsProvider` as a
+A keyless OpenAI-compatible relay reaches the same `ChatCompletionsProvider` as a
 cloud endpoint (an empty key suppresses the auth header), so there is no
 separate local provider module.

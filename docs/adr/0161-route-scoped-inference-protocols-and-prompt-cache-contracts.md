@@ -28,15 +28,15 @@ lost, and configuration errors could silently become OpenAI requests.
 
 Represent the exact inference API with one closed `WireProtocol` domain:
 
-- `openai-chat-completions`
-- `openai-responses`
-- `anthropic-messages`
-- `google-generate-content`
+- `chat-completions` (Chat Completions)
+- `responses` (Responses)
+- `anthropic-messages` (Anthropic Messages)
+- `google-gemini` (Google Gemini)
 
 Use that type for model baselines, live model metadata, provider presets,
-custom connections, discovery routing, and add/edit events. Parsing and
-deserialization accept only canonical names; there is no unknown-to-OpenAI
-fallback and no legacy alias.
+custom connections, discovery routing, and add/edit events. (Legacy aliases
+`openai-chat-completions`, `openai-responses`, and `google-generate-content`
+remain supported for backward compatibility).
 
 Represent provider variations as protocol-specific, mutually exclusive
 dialects. ChatGPT and Copilot are dialects of their selected OpenAI or

@@ -26,6 +26,7 @@ mod google;
 mod kimi;
 mod openai;
 mod opencode_go;
+mod openrouter;
 mod xai;
 mod zai;
 
@@ -38,6 +39,7 @@ pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
 pub use openai::OPENAI_BUILTIN_MODELS;
 pub use opencode_go::{OPENCODE_GO_MODELS, WIRE_OVERRIDES};
+pub use openrouter::OPENROUTER_BUILTIN_MODELS;
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
 
@@ -179,6 +181,7 @@ pub(crate) const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptC
 /// modules.
 pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     openai::MODEL_PROVIDER_SPEC,
+    openrouter::MODEL_PROVIDER_SPEC,
     anthropic::MODEL_PROVIDER_SPEC,
     google::MODEL_PROVIDER_SPEC,
     deepseek::MODEL_PROVIDER_SPEC,
@@ -202,8 +205,8 @@ pub fn model_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
 /// persisted).
 ///
 /// Returns `(protocol, base_url, user_agent)` where `protocol` is one of the
-/// wire-protocol labels `"openai"` / `"openai-responses"` / `"anthropic"` /
-/// `"google"`. Most providers serve every model over one endpoint; the
+/// wire-protocol labels `"chat-completions"` / `"responses"` / `"anthropic-messages"` /
+/// `"google-gemini"`. Most providers serve every model over one endpoint; the
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
 /// protocol vary per model. `None` means the provider id is unknown.
@@ -224,13 +227,13 @@ pub fn route_for_model(
             muta_contracts::WireProtocol::AnthropicMessages => {
                 "https://opencode.ai/zen/go/v1/messages"
             }
-            muta_contracts::WireProtocol::GoogleGenerateContent => {
+            muta_contracts::WireProtocol::GoogleGemini => {
                 "https://opencode.ai/zen/go/v1beta"
             }
-            muta_contracts::WireProtocol::OpenAiResponses => {
+            muta_contracts::WireProtocol::Responses => {
                 "https://opencode.ai/zen/go/v1/responses"
             }
-            muta_contracts::WireProtocol::OpenAiChatCompletions => {
+            muta_contracts::WireProtocol::ChatCompletions => {
                 "https://opencode.ai/zen/go/v1/chat/completions"
             }
         };
@@ -248,13 +251,13 @@ pub fn route_for_model(
             muta_contracts::WireProtocol::AnthropicMessages => {
                 "https://opencode.ai/zen/go/v1/messages"
             }
-            muta_contracts::WireProtocol::GoogleGenerateContent => {
+            muta_contracts::WireProtocol::GoogleGemini => {
                 "https://opencode.ai/zen/go/v1beta"
             }
-            muta_contracts::WireProtocol::OpenAiResponses => {
+            muta_contracts::WireProtocol::Responses => {
                 "https://opencode.ai/zen/go/v1/responses"
             }
-            muta_contracts::WireProtocol::OpenAiChatCompletions => {
+            muta_contracts::WireProtocol::ChatCompletions => {
                 "https://opencode.ai/zen/go/v1/chat/completions"
             }
         };
@@ -730,52 +733,57 @@ mod build_tests {
             .chain(
                 crate::GOOGLE_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::GoogleGenerateContent)),
+                    .map(|id| (id, WireProtocol::GoogleGemini)),
             )
             .chain(
                 crate::DEEPSEEK_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::OPENAI_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
+            )
+            .chain(
+                crate::OPENROUTER_BUILTIN_MODELS
+                    .iter()
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::XAI_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::CHATGPT_BUILTIN_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::COPILOT_SEED_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::KIMI_CODE_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::ZAI_CODE_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::OPENCODE_GO_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::OpenAiChatCompletions)),
+                    .map(|id| (id, WireProtocol::ChatCompletions)),
             )
             .chain(
                 crate::ANTIGRAVITY_OAUTH_MODELS
                     .iter()
-                    .map(|id| (id, WireProtocol::GoogleGenerateContent)),
+                    .map(|id| (id, WireProtocol::GoogleGemini)),
             )
         {
             let model = muta_contracts::model::resolve(id);

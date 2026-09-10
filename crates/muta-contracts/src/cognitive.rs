@@ -1,26 +1,26 @@
-//! Cognitive pipeline contracts: typed out-of-band tasks for the Agent Harness (ADR-0167).
+//! Harness task pipeline contracts: typed out-of-band tasks for the Agent Harness (ADR-0167 / ADR-0211).
 //!
-//! # Why Cognitive Tasks exist
+//! # Why Harness Tasks exist
 //!
-//! `Root` and `Subagent` are *actors* serving operational production (user conversations,
+//! `Master` and `Runner` are *actors* serving operational production (user conversations,
 //! autonomous coding missions, tool execution) and system orchestration (Hypervisor).
 //!
-//! In contrast, harness cognitive tasks are stateless, zero-tool, single-shot LLM transformations
+//! In contrast, harness internal tasks are stateless, zero-tool, single-shot LLM transformations
 //! that serve the Agent Harness internal mechanics:
 //! - Semantic loop and stream repetition detection
 //! - Context projection and session digest extraction
 //! - Session titling and metadata synthesis
 //!
-//! All tasks implement [`CognitiveTask`], ensuring strong typing, parsing guarantees,
+//! All tasks implement [`HarnessTask`], ensuring strong typing, parsing guarantees,
 //! and fail-open resilience.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-/// Supported model preferences for Harness cognitive tasks.
+/// Supported model preferences for internal Harness tasks (ADR-0211).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum CognitiveModelPreference {
+pub enum HarnessTaskModelPreference {
     /// Use the lightest, fastest, cost-efficient model (default for sentinels/titlers).
     #[default]
     FlashLite,
@@ -30,9 +30,12 @@ pub enum CognitiveModelPreference {
     InheritPrimary,
 }
 
-/// Core trait for typed cognitive infrastructure tasks executed by the Harness.
+/// Legacy alias for [`HarnessTaskModelPreference`] (ADR-0211).
+pub type CognitiveModelPreference = HarnessTaskModelPreference;
+
+/// Core trait for typed internal infrastructure tasks executed by the Harness (ADR-0211).
 #[async_trait]
-pub trait CognitiveTask: Send + Sync {
+pub trait HarnessTask: Send + Sync {
     /// Task input payload.
     type Input: Serialize + Send + Sync;
     /// Task output payload (must be deserializable and self-describing).
@@ -41,7 +44,7 @@ pub trait CognitiveTask: Send + Sync {
     /// Human-readable task name for telemetry and diagnostics.
     fn name(&self) -> &'static str;
 
-    /// System instructions framing the specialized cognitive role.
+    /// System instructions framing the specialized internal task role.
     fn system_prompt(&self) -> &'static str;
 
     /// Render user prompt from input.
@@ -57,8 +60,8 @@ pub trait CognitiveTask: Send + Sync {
     }
 
     /// Target model preference for this task.
-    fn model_preference(&self) -> CognitiveModelPreference {
-        CognitiveModelPreference::FlashLite
+    fn model_preference(&self) -> HarnessTaskModelPreference {
+        HarnessTaskModelPreference::FlashLite
     }
 
     /// Hard timeout limit in milliseconds.
@@ -66,6 +69,9 @@ pub trait CognitiveTask: Send + Sync {
         2000
     }
 }
+
+/// Legacy alias for [`HarnessTask`] (ADR-0211).
+pub use HarnessTask as CognitiveTask;
 
 /// Strip wrapping JSON/markdown fences for the default structured-output decoder.
 fn strip_markdown_code_fence(raw: &str) -> &str {
@@ -126,7 +132,7 @@ impl StreamLoopVerdict {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StreamLoopReviewerTask;
 
-impl CognitiveTask for StreamLoopReviewerTask {
+impl HarnessTask for StreamLoopReviewerTask {
     type Input = StreamLoopReviewInput;
     type Output = StreamLoopVerdict;
 
@@ -181,7 +187,7 @@ pub struct SessionTitleInput {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SessionTitleTask;
 
-impl CognitiveTask for SessionTitleTask {
+impl HarnessTask for SessionTitleTask {
     type Input = SessionTitleInput;
     type Output = String;
 
@@ -216,8 +222,16 @@ impl CognitiveTask for SessionTitleTask {
             .ok_or_else(|| "could not derive clean title from model response".to_string())
     }
 
+    /// Hard timeout limit in milliseconds.
+    ///
+    /// Cognitive consults route to the session's primary model (the model
+    /// preference is declarative until model routing lands, ADR-0204), so the
+    /// bound must accommodate a full non-streaming chat round-trip of a
+    /// heavyweight model — 2s reliably deadlocked every titling attempt in
+    /// production. The titler runs detached and never blocks a round, so a
+    /// generous bound costs nothing.
     fn timeout_ms(&self) -> u64 {
-        2_000
+        30_000
     }
 }
 
@@ -269,7 +283,7 @@ pub struct PreFlightRouteOutput {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PreFlightRouterTask;
 
-impl CognitiveTask for PreFlightRouterTask {
+impl HarnessTask for PreFlightRouterTask {
     type Input = PreFlightRouteInput;
     type Output = PreFlightRouteOutput;
 
@@ -325,7 +339,7 @@ pub struct EnvironmentReminderOutput {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EnvironmentSensorTask;
 
-impl CognitiveTask for EnvironmentSensorTask {
+impl HarnessTask for EnvironmentSensorTask {
     type Input = EnvironmentSensorInput;
     type Output = EnvironmentReminderOutput;
 
@@ -390,7 +404,9 @@ mod tests {
         let task = SessionTitleTask;
         assert_eq!(task.name(), "session_title");
         assert_eq!(task.model_preference(), CognitiveModelPreference::FlashLite);
-        assert_eq!(task.timeout_ms(), 2000);
+        // A heavyweight-model round-trip bound: the old 2s value timed out
+        // before any real provider could answer.
+        assert_eq!(task.timeout_ms(), 30_000);
 
         // Plain title
         assert_eq!(

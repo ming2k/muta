@@ -2,7 +2,7 @@
 //!
 //! Every non-model egress in this crate — OAuth token exchange, usage/quota
 //! probes, model-list discovery — used to build its own `reqwest::Client`. They
-//! now share one handle over [`muta_net`], which is what makes them visible to
+//! now share one handle over [`netune`], which is what makes them visible to
 //! the same trace, the same retry classification and the same timeout policy as
 //! the model path.
 //!
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::{HeaderMap, Method, StatusCode};
-use muta_net::{Client, ClientConfig, Pool, Target, TcpConnector, TlsConnector};
+use netune::{Client, ClientConfig, Pool, Target, TcpConnector, TlsConnector};
 
 /// Request body shapes these call sites use.
 #[derive(Debug, Clone)]
@@ -115,7 +115,7 @@ impl Http {
 
     pub async fn send(&self, request: Request) -> Result<Reply, String> {
         let (target, path) = Target::from_url(&request.url).map_err(|error| error.to_string())?;
-        let mut head = muta_net::RequestHead::new(request.method.clone(), path);
+        let mut head = netune::RequestHead::new(request.method.clone(), path);
         let mut content_type = None;
         for (name, value) in &request.headers {
             if name.eq_ignore_ascii_case("content-type") {
@@ -149,7 +149,7 @@ impl Http {
             let status = response.head.status;
             let headers = response.head.headers.clone();
             let bytes = response.body.read_to_end().await?;
-            Ok::<_, muta_net::NetError>((status, headers, bytes))
+            Ok::<_, netune::NetError>((status, headers, bytes))
         };
         let (status, headers, bytes) = tokio::time::timeout(self.timeout, exchange)
             .await

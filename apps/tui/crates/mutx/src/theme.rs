@@ -571,14 +571,14 @@ impl Theme {
         {
             self.element_bg = val;
         }
-        if let Some(ref modal) = surfaces.modal {
-            if let Some(val) = modal.surface.as_deref().and_then(Self::color_from_hex) {
+        if let Some(ref dialog) = surfaces.dialog {
+            if let Some(val) = dialog.surface.as_deref().and_then(Self::color_from_hex) {
                 self.panel_bg = val;
             }
-            if let Some(val) = modal.backdrop.as_deref().and_then(Self::color_from_hex) {
+            if let Some(val) = dialog.backdrop.as_deref().and_then(Self::color_from_hex) {
                 self.backdrop = val;
             }
-            if let Some(val) = modal.dim_factor {
+            if let Some(val) = dialog.dim_factor {
                 self.modal_dim_factor = val.clamp(0.0, 1.0);
             }
         }

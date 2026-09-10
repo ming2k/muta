@@ -82,13 +82,18 @@ async fn the_runtime_shadow_reports_agreement() {
     assert_eq!(report.net_payloads, 6);
     assert_eq!(report.net_status, Some(200));
     let trace = report.trace.expect("owned run produced a trace");
-    let derived = muta_trace::derive(&trace);
+    let derived = netune_trace::derive(&trace);
     // The egress trace carries transport scopes. Output tokens are the protocol
     // adapter's to count, so `ttft_us` is legitimately absent here — asserting
     // it would push protocol knowledge into the transport.
     assert!(derived.ttfb_us.is_measured());
     assert!(derived.first_byte_us.is_measured());
-    assert!(trace.log.first_of(muta_trace::EventKind::BodyEnd).is_some());
+    assert!(
+        trace
+            .log
+            .first_of(netune_trace::EventKind::BodyEnd)
+            .is_some()
+    );
     let _ = server.await;
 }
 

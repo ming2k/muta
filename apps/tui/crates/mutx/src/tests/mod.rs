@@ -329,6 +329,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         theme: Theme::default(),
         profile: mutx_engine::TerminalProfile::direct_color(),
         logo: None,
+        background_tasks: Vec::new(),
     };
     (app, tmp)
 }

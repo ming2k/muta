@@ -37,6 +37,8 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         unattended: false,
         confined: true,
         teardown_token: None,
+        shared_config: None,
+        shared_provider_usage: None,
     }
 }
 

@@ -16,6 +16,7 @@ license = "MIT"
 # Shared external dependencies, pinned once here. Crates reference them with
 # `dep = { workspace = true }` (optionally adding features). Internal crates
 # stay as path dependencies in each member's Cargo.toml.
+# (brotli/flate2 moved to the netune workspace with the extracted transport.)
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -61,6 +62,13 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 windows-sys = "0.61"
 notify = "8"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.25"
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is

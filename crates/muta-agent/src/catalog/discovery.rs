@@ -571,7 +571,7 @@ pub fn sync_fitted_model_registry() {
                 let (format, family) = match spec {
                     Some(spec) => (spec.protocol, spec.id.to_string()),
                     None => (
-                        WireProtocol::OpenAiChatCompletions,
+                        WireProtocol::ChatCompletions,
                         connection.provider.clone(),
                     ),
                 };

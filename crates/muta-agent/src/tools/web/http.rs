@@ -12,7 +12,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use muta_contracts::WebConfig;
-use muta_net::{
+use netune::{
     Client, ClientConfig, Pool, Proxy, ProxyConnector, RequestHead, Response, Target, TcpConnector,
     TlsConnector,
 };

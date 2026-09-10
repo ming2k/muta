@@ -52,6 +52,9 @@ pub struct OpenAiChatCompletionsProvider {
     pub client: Client,
 }
 
+/// Canonical alias for the Chat Completions protocol provider.
+pub type ChatCompletionsProvider = OpenAiChatCompletionsProvider;
+
 impl OpenAiChatCompletionsProvider {
     pub fn new(api_key: String, model: String) -> Self {
         Self::with_base_url(api_key, model, "https://api.openai.com/v1/chat/completions")
@@ -142,10 +145,10 @@ impl OpenAiChatCompletionsProvider {
     /// surfacing the right name in errors ("Copilot HTTP 400" vs "OpenAI HTTP
     /// 400") is essential for diagnosing which backend rejected a request.
     fn label(&self) -> &'static str {
-        if self.dialect == muta_contracts::OpenAiChatDialect::Copilot {
-            "Copilot"
-        } else {
-            "OpenAI"
+        match self.dialect {
+            muta_contracts::OpenAiChatDialect::Copilot => "Copilot",
+            muta_contracts::OpenAiChatDialect::OpenRouter => "OpenRouter",
+            muta_contracts::OpenAiChatDialect::Standard => "OpenAI",
         }
     }
 
@@ -160,7 +163,7 @@ impl OpenAiChatCompletionsProvider {
                 .header(http::header::USER_AGENT, self.endpoint.user_agent())
                 .json(body);
         let copilot = self.dialect == muta_contracts::OpenAiChatDialect::Copilot;
-        for (name, value) in request::headers(auth.token.expose_secret(), copilot) {
+        for (name, value) in request::headers(auth.token.expose_secret(), self.dialect) {
             req = req.header(name, value);
         }
         for (name, value) in self.endpoint.headers() {
@@ -278,6 +281,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                dialect: self.dialect,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
@@ -346,6 +350,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                dialect: self.dialect,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
@@ -386,6 +391,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 instructions: Some(&instructions),
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                dialect: self.dialect,
                 cache_plan: &cache_plan,
             },
             &self.capabilities,
@@ -401,6 +407,11 @@ impl Provider for OpenAiChatCompletionsProvider {
         // event shape and fed through the echo filter.
         let echo_filter = Arc::new(Mutex::new(echo::ToolCallEchoFilter::new()));
         let filter_for_body = Arc::clone(&echo_filter);
+        let reasoning_details =
+            Arc::new(Mutex::new(response::ReasoningDetailsAccumulator::default()));
+        let reasoning_details_for_body = Arc::clone(&reasoning_details);
+        let collect_reasoning_details =
+            self.dialect == muta_contracts::OpenAiChatDialect::OpenRouter;
         let label = self.label();
         let body = crate::sse::data_payloads(response, label).map(move |item| {
             let data = item?;
@@ -415,6 +426,12 @@ impl Provider for OpenAiChatCompletionsProvider {
                     "Invalid JSON in stream payload",
                 )
             })?;
+            if collect_reasoning_details {
+                reasoning_details_for_body
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .observe(&event);
+            }
             let parsed = response::stream_events(&event);
             // Recover from a poisoned mutex: a prior panic in this critical
             // section must not take down subsequent stream chunks.
@@ -451,8 +468,19 @@ impl Provider for OpenAiChatCompletionsProvider {
             if !emitted.is_empty() {
                 events.push(Ok(ProviderStreamEvent::TextDelta(emitted)));
             }
+            let artifacts = collect_reasoning_details
+                .then(|| {
+                    reasoning_details
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .artifacts()
+                })
+                .flatten();
             events.push(Ok(ProviderStreamEvent::Completed(
-                muta_contracts::ProviderCompletionMeta::default(),
+                muta_contracts::ProviderCompletionMeta {
+                    artifacts,
+                    ..Default::default()
+                },
             )));
             Ok::<_, ProviderError>(events)
         });
@@ -518,6 +546,7 @@ mod tests {
                 instructions: None,
                 tool_specs: Some(&tool_specs),
                 reasoning_effort: None,
+                dialect: muta_contracts::OpenAiChatDialect::Standard,
                 cache_plan: &DEFAULT_CACHE_PLAN,
             },
         )

@@ -141,7 +141,7 @@ enum McpConnection {
         /// Absolute URL of the Streamable-HTTP endpoint.
         url: String,
         /// The owned transport (ADR-0200).
-        client: muta_net::Client<muta_net::TlsConnector<muta_net::TcpConnector>>,
+        client: netune::Client<netune::TlsConnector<netune::TcpConnector>>,
         /// Session id issued by the server (`Mcp-Session-Id` on initialize),
         /// echoed on every subsequent request. `None` until (and unless) the
         /// server assigns one.
@@ -189,16 +189,16 @@ impl McpClient {
         let connection = if let Some(url) = config.url.as_deref() {
             // Validate the URL up front so a misconfigured server fails at
             // connect time with a clear message, not on first request.
-            muta_net::Target::from_url(url)
+            netune::Target::from_url(url)
                 .map_err(|error| format!("invalid MCP url '{url}': {error}"))?;
-            let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
+            let connector = netune::TlsConnector::platform(netune::TcpConnector::new())
                 .map_err(|error| format!("failed to build MCP HTTP client: {error}"))?;
             McpConnection::Http {
                 url: url.to_string(),
-                client: muta_net::Client::new(
+                client: netune::Client::new(
                     connector,
-                    muta_net::Pool::default(),
-                    muta_net::ClientConfig::default(),
+                    netune::Pool::default(),
+                    netune::ClientConfig::default(),
                 ),
                 session_id: None,
             }
@@ -403,10 +403,10 @@ impl McpClient {
                 client,
                 session_id,
             } => {
-                let (target, path) = muta_net::Target::from_url(url).map_err(|error| {
+                let (target, path) = netune::Target::from_url(url).map_err(|error| {
                     McpError::Transport(format!("invalid MCP url '{url}': {error}"))
                 })?;
-                let mut head = muta_net::RequestHead::new(muta_net::Method::POST, path)
+                let mut head = netune::RequestHead::new(netune::Method::POST, path)
                     .with_header("accept", "application/json, text/event-stream")
                     .with_header("content-type", "application/json");
                 if let Some(session) = session_id.as_deref() {
@@ -502,10 +502,10 @@ impl McpClient {
                 client,
                 session_id,
             } => {
-                let (target, path) = muta_net::Target::from_url(url).map_err(|error| {
+                let (target, path) = netune::Target::from_url(url).map_err(|error| {
                     McpError::Transport(format!("invalid MCP url '{url}': {error}"))
                 })?;
-                let mut head = muta_net::RequestHead::new(muta_net::Method::POST, path)
+                let mut head = netune::RequestHead::new(netune::Method::POST, path)
                     .with_header("accept", "application/json, text/event-stream")
                     .with_header("content-type", "application/json");
                 if let Some(session) = session_id.as_deref() {

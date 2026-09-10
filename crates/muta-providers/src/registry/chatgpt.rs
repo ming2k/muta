@@ -20,13 +20,24 @@ pub use muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS;
 /// [`muta_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     Model {
+        id: "gpt-6-astra",
+        family: "gpt",
+        context_window: 872_000,
+        thinking: ReasoningSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        protocol: WireProtocol::ChatCompletions,
+        model_guidance: "",
+        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_6,
+    },
+    Model {
         id: "gpt-5.6-sol",
         family: "gpt",
         context_window: 1_050_000,
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -37,7 +48,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -48,7 +59,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -61,7 +72,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -72,7 +83,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::OpenAiChatCompletions,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -113,7 +124,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
     // for each account and its capability metadata is trusted.
-    protocol: WireProtocol::OpenAiResponses,
+    protocol: WireProtocol::Responses,
     models: CHATGPT_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Codex),
     default_client_profile: muta_contracts::ClientPreset::Codex,
@@ -132,7 +143,7 @@ mod tests {
         // (the entitlement-aware endpoint) is authoritative, so nothing is
         // hardcoded — see the module doc for why.
         assert_eq!(CHATGPT_BUILTIN_MODELS, &[] as &[&str]);
-        assert_eq!(MODEL_PROVIDER_SPEC.protocol, WireProtocol::OpenAiResponses);
+        assert_eq!(MODEL_PROVIDER_SPEC.protocol, WireProtocol::Responses);
     }
 
     #[test]

@@ -99,7 +99,7 @@ default_connection = "example-openai"
 [[connections]]
 name = "example-openai"
 provider = "custom"
-protocol = "openai-chat-completions"
+protocol = "chat-completions"
 base_url = "https://relay.example.com/v1/chat/completions"
 models.include = ["gpt-5.5"]
 ```
@@ -127,7 +127,7 @@ For Google-native Antigravity:
 [[connections]]
 name = "antigravity"
 provider = "custom"
-protocol = "google-generate-content"
+protocol = "google-gemini"
 base_url = "https://relay.example.com/antigravity/v1beta"
 models.include = ["gemini-3-flash"]
 ```

@@ -345,6 +345,9 @@ fn compose_frame(
                     blocked: app.pending_count(viewed_session_id) > 0
                         && app.is_queue_blocked(viewed_session_id),
                 },
+                tasks_bar: render::TasksBarProps {
+                    tasks: &app.background_tasks,
+                },
                 persistence_health: app.persistence_health.as_ref(),
                 subagent_bar,
                 side_banner,
@@ -383,6 +386,7 @@ fn compose_frame(
             render::FooterRowId::TopGap => continue,
             render::FooterRowId::PersistenceHealth => continue,
             render::FooterRowId::Queue => UiKey::Queue,
+            render::FooterRowId::Tasks => continue,
             render::FooterRowId::Activity => UiKey::Activity,
             render::FooterRowId::Composer => UiKey::Composer,
             render::FooterRowId::ModelBar => UiKey::ModelBar,
@@ -1192,6 +1196,11 @@ fn compose_frame(
                     } else {
                         crate::provider_label_for(app.custom_provider_id.as_deref())
                     };
+                    let protocol_display = app
+                        .custom_protocol_wire
+                        .parse::<muta_contracts::WireProtocol>()
+                        .map(|p| p.display_name())
+                        .unwrap_or(&app.custom_protocol_wire);
                     Some(render::draw_custom_provider_editor(
                         render::CustomEditorProps {
                             fields: &app.custom_fields,
@@ -1204,7 +1213,7 @@ fn compose_frame(
                             base_url_buf: &app.custom_base_url,
                             token_buf: &app.custom_token,
                             model_buf: &app.custom_model,
-                            protocol_display: &app.custom_protocol_wire,
+                            protocol_display,
                             identity_display: app.custom_client_identity.label(),
                             url_hint: &app.custom_url_hint,
                             input: &app.input,

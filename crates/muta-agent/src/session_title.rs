@@ -48,6 +48,19 @@ impl Agent {
                         tracing::warn!(%error, "could not persist session title");
                     } else {
                         tracing::info!(session = %sid, %title, "session title established");
+                        // Notify the embedding so it can push a sessions
+                        // overview (absent observer = fire-and-forget no-op;
+                        // the title is already durable, this is pure
+                        // presentation). The guard is dropped before the
+                        // await so the future stays `Send`.
+                        let observer = agent
+                            .title_established
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        if let Some(observer) = observer {
+                            observer(&title).await;
+                        }
                     }
                 }
             }

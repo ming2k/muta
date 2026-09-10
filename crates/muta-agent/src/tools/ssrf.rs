@@ -47,7 +47,7 @@ pub(crate) async fn assert_public_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) use muta_net::is_public_ip;
+pub(crate) use netune::is_public_ip;
 
 /// Extract the host component from an `http(s)://` URL without a URL crate.
 ///

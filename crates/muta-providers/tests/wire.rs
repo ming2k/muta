@@ -338,6 +338,85 @@ async fn openai_stream_parses_text_reasoning_and_tool_call_deltas() {
 }
 
 #[tokio::test]
+async fn openrouter_stream_uses_gateway_dialect_and_returns_replay_artifacts() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/api/v1/chat/completions", server.url());
+    let body = sse_body(&[
+        r#"{"choices":[{"delta":{"reasoning":"inspect ","reasoning_details":[{"type":"reasoning.text","text":"inspect ","id":"r1","index":0}]}}]}"#,
+        r#"{"choices":[{"delta":{"reasoning":"files","reasoning_details":[{"text":"files","signature":"sig","index":0}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{}"}}]}}]}"#,
+        "[DONE]",
+    ]);
+    let _mock = server
+        .mock("POST", "/api/v1/chat/completions")
+        .match_header("authorization", "Bearer sk-or-test")
+        .match_header("x-openrouter-title", "Muta")
+        .match_body(Matcher::PartialJson(json!({
+            "model": "nex-agi/nex-n2.5-pro:free",
+            "stream": true,
+            "reasoning": {"effort": "high"}
+        })))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let capabilities = muta_contracts::ModelCapabilities {
+        family: "nex".into(),
+        context_window: 262_144,
+        max_output_tokens: Some(235_929),
+        thinking: muta_contracts::ReasoningSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        effort_levels: vec![
+            muta_contracts::Effort::None.into(),
+            muta_contracts::Effort::Medium.into(),
+            muta_contracts::Effort::High.into(),
+        ],
+    };
+    let provider = OpenAiChatCompletionsProvider::with_base_url(
+        "sk-or-test".into(),
+        "nex-agi/nex-n2.5-pro:free".into(),
+        &url,
+    )
+    .with_dialect(muta_contracts::OpenAiChatDialect::OpenRouter)
+    .with_reasoning_effort(Some(muta_contracts::Effort::High))
+    .with_model_capabilities(capabilities);
+
+    let events = collect_events(
+        provider
+            .stream_chat_events(vec![Message::new(Role::User, "inspect")].into())
+            .await
+            .expect("OpenRouter stream should open"),
+    )
+    .await;
+    let reasoning: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ReasoningDelta(delta) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, "inspect files");
+    let artifacts = events
+        .iter()
+        .find_map(|event| match event {
+            ProviderStreamEvent::Completed(meta) => meta.artifacts.as_ref(),
+            _ => None,
+        })
+        .expect("terminal event must carry reasoning replay artifacts");
+    assert_eq!(
+        artifacts["openrouter_reasoning_details"][0]["text"],
+        "inspect files"
+    );
+    assert_eq!(
+        artifacts["openrouter_reasoning_details"][0]["signature"],
+        "sig"
+    );
+}
+
+#[tokio::test]
 async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
     // Over a real stream: the textual tool-call mirror and the native tool-call
     // delta both arrive. The echo filter must hold the mirror and drop it once

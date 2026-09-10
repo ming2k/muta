@@ -2343,14 +2343,20 @@ pub(super) fn enter_panel(
             Some(AgentRequest::QuerySessionContext)
         }
         DialogKind::UsageStats => {
-            app.usage_stats = None;
-            Some(AgentRequest::QueryUsageStats { event_cap: 200 })
+            if app.usage_stats.is_none() {
+                Some(AgentRequest::QueryUsageStats { event_cap: 200 })
+            } else {
+                None
+            }
         }
         DialogKind::Telemetry if app.token_ledger.is_none() => {
-            app.token_report = None;
-            Some(AgentRequest::QueryTokenUsage {
-                session_id: viewed_session_id.to_string(),
-            })
+            if app.token_report.is_none() {
+                Some(AgentRequest::QueryTokenUsage {
+                    session_id: viewed_session_id.to_string(),
+                })
+            } else {
+                None
+            }
         }
         DialogKind::Asides => Some(AgentRequest::QueryBtwList),
         DialogKind::Sessions => Some(AgentRequest::QuerySessionsOverview),
@@ -2776,6 +2782,8 @@ async fn execute_command_by_id(
                 modals::handle_close_modal(app, viewed_session_id);
             } else if app.focused_target.is_some() {
                 app.focused_target = None;
+            } else if app.has_settled_background_tasks() {
+                app.dismiss_settled_background_tasks();
             }
         }
         CommandId::InterruptTask => {

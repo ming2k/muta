@@ -53,17 +53,15 @@ pub async fn request_device_code(
     client: &crate::http::Http,
     cfg: &OAuthConfig,
 ) -> Result<ChatGptDeviceCode, crate::oauth::AuthError> {
-    let request = crate::http::Request::new(
-        muta_net::Method::POST,
-        cfg.device_authorization_url.as_ref(),
-    )
-    .header("content-type", "application/json")
-    .header("accept", "application/json")
-    .header(
-        "user-agent",
-        cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
-    )
-    .json(&serde_json::json!({ "client_id": cfg.client_id }));
+    let request =
+        crate::http::Request::new(netune::Method::POST, cfg.device_authorization_url.as_ref())
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header(
+                "user-agent",
+                cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
+            )
+            .json(&serde_json::json!({ "client_id": cfg.client_id }));
     let response = client.send(request).await.map_err(|e| {
         crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
     })?;
@@ -124,7 +122,7 @@ where
     let interval_ms = device.interval_ms();
     loop {
         let request =
-            crate::http::Request::new(muta_net::Method::POST, cfg.device_token_url.as_ref())
+            crate::http::Request::new(netune::Method::POST, cfg.device_token_url.as_ref())
                 .header("content-type", "application/json")
                 .header("accept", "application/json")
                 .header(

@@ -55,8 +55,11 @@ pub use transport::{decode_response_json, ensure_success, retry_after_ms};
 // and stable intra-doc links.
 pub use prompt_cache::PromptCacheConfig;
 pub use protocol::anthropic::{AnthropicMessagesProvider, Effort, ReasoningMode, ThinkingConfig};
-pub use protocol::google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
-pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvider};
+pub use protocol::google::{GOOGLE_DEFAULT_BASE_URL, GoogleGeminiProvider, GoogleProvider};
+pub use protocol::openai::{
+    ChatCompletionsProvider, OpenAiChatCompletionsProvider, OpenAiResponsesProvider,
+    ResponsesProvider,
+};
 
 /// Test-only model baselines.
 ///
@@ -119,7 +122,7 @@ mod test_baselines {
             thinking: ReasoningSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
-            protocol: WireProtocol::OpenAiChatCompletions,
+            protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
         },
@@ -130,7 +133,7 @@ mod test_baselines {
             thinking: ReasoningSupport::ReasoningSummary,
             tool_call: true,
             vision: true,
-            protocol: WireProtocol::OpenAiChatCompletions,
+            protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
             effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
         },

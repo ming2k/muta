@@ -110,6 +110,9 @@ pub struct GoogleProvider {
     pub dialect: muta_contracts::GoogleGenerateContentDialect,
 }
 
+/// Canonical alias for the Google Gemini protocol provider.
+pub type GoogleGeminiProvider = GoogleProvider;
+
 impl GoogleProvider {
     pub fn new(api_key: String, model: String) -> Self {
         Self::with_base_url(api_key, model, GOOGLE_DEFAULT_BASE_URL)

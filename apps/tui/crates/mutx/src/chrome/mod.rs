@@ -9,6 +9,7 @@ pub mod completion_menu;
 pub mod model_bar;
 pub mod persistence_health;
 pub mod queue_bar;
+pub mod tasks_bar;
 
 #[cfg(test)]
 mod tests;
@@ -28,3 +29,5 @@ pub use model_bar::{
 };
 pub use persistence_health::draw_persistence_health_bar;
 pub use queue_bar::{QueueBarProps, QueueItemProps, draw_queue_bar};
+#[allow(unused_imports)]
+pub use tasks_bar::{BackgroundTaskItem, TasksBarProps, draw_tasks_bar};

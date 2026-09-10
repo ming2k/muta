@@ -13,5 +13,5 @@ pub(crate) mod cache;
 pub mod chat_completions;
 pub mod responses;
 
-pub use chat_completions::OpenAiChatCompletionsProvider;
-pub use responses::OpenAiResponsesProvider;
+pub use chat_completions::{ChatCompletionsProvider, OpenAiChatCompletionsProvider};
+pub use responses::{OpenAiResponsesProvider, ResponsesProvider};

@@ -22,19 +22,20 @@ pub use list_models::{
 };
 pub use models_dev::{ModelsDevError, models_dev_models};
 pub use muta_llm_client::{
-    AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ClientIdentity, Effort, Endpoint,
-    GOOGLE_DEFAULT_BASE_URL, GoogleProvider, MUTA_USER_AGENT, OPENCODE_USER_AGENT,
-    OPENCODE_VERSION, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ReasoningMode,
-    ThinkingConfig, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
+    AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ChatCompletionsProvider, ClientIdentity,
+    Effort, Endpoint, GOOGLE_DEFAULT_BASE_URL, GoogleGeminiProvider, GoogleProvider,
+    MUTA_USER_AGENT, OPENCODE_USER_AGENT, OPENCODE_VERSION, OpenAiChatCompletionsProvider,
+    OpenAiResponsesProvider, ReasoningMode, ResponsesProvider, ThinkingConfig,
+    ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
 pub use oauth::OAuthCredentialSource;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_OAUTH_MODELS, CHATGPT_BUILTIN_MODELS,
     COPILOT_SEED_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
     MODEL_PROVIDER_SPECS, ModelProviderSpec, OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS,
-    OPENCODE_GO_MODELS, OpenAiProviderSpec, RemoteCatalogSource, WIRE_OVERRIDES,
-    XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel, model_provider_spec,
-    openai_provider_spec, route_for_model,
+    OPENCODE_GO_MODELS, OPENROUTER_BUILTIN_MODELS, OpenAiProviderSpec, RemoteCatalogSource,
+    WIRE_OVERRIDES, XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel,
+    model_provider_spec, openai_provider_spec, route_for_model,
 };
 pub use usage::{
     AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,

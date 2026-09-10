@@ -10,7 +10,7 @@ muta-contracts = { path = "../muta-contracts" }
 muta-paths = { path = "../muta-paths" }
 muta-persistence = { path = "../muta-persistence" }
 muta-platform = { path = "../muta-platform" }
-muta-net = { path = "../muta-net" }
+netune = "0.1.0"
 muta-providers = { path = "../muta-providers" }
 muta-skills = { path = "../muta-skills" }
 muta-agent = { path = "../muta-agent" }

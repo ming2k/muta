@@ -108,6 +108,7 @@ pub(crate) const FINISH_DRAIN_GRACE: std::time::Duration = std::time::Duration::
 const SUBAGENT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub mod agent;
+pub use agent::TitleEstablishedFn;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
 mod bash_policy;
@@ -146,7 +147,9 @@ pub use aspects::AspectEngine;
 pub mod cognitive;
 pub mod session_title;
 mod shell_input;
-pub use cognitive::{CognitiveError, CognitivePipeline};
+pub use cognitive::{
+    CognitiveError, CognitivePipeline, HarnessTaskError, HarnessTaskPipeline,
+};
 pub mod stream_loop_detector;
 use muta_skills as skills;
 pub use stream_loop_detector::{DegeneratePattern, StreamLoopDetector};
@@ -157,6 +160,10 @@ mod tool_integration;
 mod tool_manager;
 mod tool_scheduler;
 pub mod tools;
+
+pub mod syntax;
+pub mod facet;
+pub use facet::CodeIntelligenceFacet;
 
 pub use context_projection::ContextProjectionGate;
 pub use model_request::system_prompt::{

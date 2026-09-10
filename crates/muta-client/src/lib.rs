@@ -27,8 +27,9 @@
 
 pub use muta_contracts::wire::ControlRequest;
 pub use muta_runtime::client::{
-    AttachAction, DaemonInfo, Handshake, RemoteDaemon, connect, control, discover, ensure_daemon,
-    incompatibility_error, monitor_stream, set_posture, upsert_session_row, versions_compatible,
+    AttachAction, DaemonInfo, Handshake, RemoteDaemon, connect, control, control_with_reply,
+    discover, ensure_daemon, incompatibility_error, monitor_stream, set_posture,
+    upsert_session_row, versions_compatible,
 };
 pub use muta_runtime::input_completion::{complete_for_frontend_test, complete_slash_items};
 pub use muta_runtime::startup::{command_catalog, init_tracing};

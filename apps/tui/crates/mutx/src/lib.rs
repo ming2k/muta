@@ -596,14 +596,11 @@ pub async fn run_tui(
                                 ));
                             }
                             RoundEvent::SteerUnavailable { input_id } => {
-                                // The round closed before a steer could be
-                                // admitted: the entry flips to `HeldNextRound`
-                                // and the dispatch re-queues.
-                                transcript!(E::HoldInserted {
-                                    insert_id: input_id.clone(),
-                                });
+                                // ADR-0212: Steer is ephemeral to the active round. It MUST NOT silently mutate
+                                // into a next-round follow-up item. Remove the optimistic entry from transcript
+                                // and restore the text directly to the composer draft.
                                 mutations
-                                    .send(M::DispatchRequeued {
+                                    .send(M::SteerMissed {
                                         session_id,
                                         input_id,
                                     })
@@ -1334,6 +1331,13 @@ pub async fn run_tui(
                                         label.as_deref().unwrap_or(prompt.as_str())
                                     }
                                 };
+                                mutations
+                                    .send(M::BackgroundTaskStarted {
+                                        id: info.id.0.clone(),
+                                        label: label.to_string(),
+                                        started_at_ms: info.created_at_ms,
+                                    })
+                                    .await;
                                 let message = TranscriptMessage::notice(
                                     NoticeSeverity::Info,
                                     format!("Background job started: {label} ({})", info.id.0),
@@ -1352,7 +1356,7 @@ pub async fn run_tui(
                                 transcript!(E::Append { message });
                             }
                             RoundEvent::BackgroundJobCompleted(outcome) => {
-                                let (label, is_success) = match &outcome.state {
+                                let (label, is_success, exit_code, duration_secs) = match &outcome.state {
                                     muta_contracts::JobState::Succeeded { duration_ms, .. } => (
                                         format!(
                                             "Background job `{}` completed ({}s)",
@@ -1360,6 +1364,8 @@ pub async fn run_tui(
                                             duration_ms / 1000
                                         ),
                                         true,
+                                        Some(0),
+                                        duration_ms / 1000,
                                     ),
                                     muta_contracts::JobState::Failed {
                                         duration_ms,
@@ -1372,6 +1378,8 @@ pub async fn run_tui(
                                             duration_ms / 1000
                                         ),
                                         false,
+                                        Some(*exit_code),
+                                        duration_ms / 1000,
                                     ),
                                     muta_contracts::JobState::Killed { duration_ms } => (
                                         format!(
@@ -1380,6 +1388,8 @@ pub async fn run_tui(
                                             duration_ms / 1000
                                         ),
                                         false,
+                                        None,
+                                        duration_ms / 1000,
                                     ),
                                     muta_contracts::JobState::TimedOut { duration_ms } => (
                                         format!(
@@ -1388,12 +1398,24 @@ pub async fn run_tui(
                                             duration_ms / 1000
                                         ),
                                         false,
+                                        None,
+                                        duration_ms / 1000,
                                     ),
                                     _ => (
                                         format!("Background job `{}` completed", outcome.job_id.0),
                                         true,
+                                        None,
+                                        0,
                                     ),
                                 };
+                                mutations
+                                    .send(M::BackgroundTaskCompleted {
+                                        id: outcome.job_id.0.clone(),
+                                        success: is_success,
+                                        exit_code,
+                                        duration_secs,
+                                    })
+                                    .await;
                                 let severity = if is_success {
                                     NoticeSeverity::Info
                                 } else {
@@ -1458,6 +1480,13 @@ pub async fn run_tui(
                     }
                     AgentResponse::InputHistory(rows) => {
                         mutations.send(M::InputHistory(rows)).await;
+                    }
+                    // ADR-0208: dashboard Archivist search hits. The TUI's
+                    // Archivist pane lands in a later stage; for now the
+                    // response is acknowledged (logged) so the wire stays
+                    // exhaustive without inventing premature UI state.
+                    AgentResponse::HistorySearch(hits) => {
+                        tracing::debug!(count = hits.len(), "history search hits");
                     }
                     AgentResponse::RouteSettings {
                         provider_id,
@@ -2046,6 +2075,7 @@ pub async fn run_tui(
         ),
         profile,
         logo: load_user_logo(),
+        background_tasks: Vec::new(),
     };
 
     if startup_overlay == StartupOverlay::SessionsPicker {

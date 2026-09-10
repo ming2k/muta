@@ -19,7 +19,9 @@ use crate::theme::Theme;
 pub enum PathFormatStrategy {
     /// Full path without shortening (except base_dir / tilde relative resolution).
     Full,
-    /// Progressive fish-style contraction of ancestor directories (e.g. `c/m/s/c/path.rs`).
+    /// Progressive contraction of ancestor directories:
+    /// ellipsis form first (`.../components/path.rs`), then fish-style
+    /// abbreviation (`c/m/s/c/path.rs`) as a deeper fallback.
     Fish,
     /// Ellipsis for middle directories (e.g. `crates/.../components/path.rs`).
     MiddleEllipsis,
@@ -221,7 +223,9 @@ pub fn split_line_col(s: &str) -> (&str, Option<&str>) {
 
 /// Convert an absolute path to be relative to `base_dir`, or relative to `$HOME` (`~`), or fallback.
 pub fn normalize_path_relative(path_str: &str, base_dir: Option<&Path>) -> String {
-    let p = Path::new(path_str);
+    // Expand a leading `~` back to `$HOME` first, so home-rooted paths can
+    // still be made workspace-relative when they fall under `base_dir`.
+    let p = tilde_expand(Path::new(path_str));
     if let Some(base) = base_dir
         && p.is_absolute()
         && base.is_absolute()
@@ -234,7 +238,28 @@ pub fn normalize_path_relative(path_str: &str, base_dir: Option<&Path>) -> Strin
     }
 
     // Try tilde home shortening
-    tilde_shorten(p)
+    tilde_shorten(&p)
+}
+
+/// Expand a leading `~` / `~/` prefix to the user's home directory.
+/// `~user`-style paths are returned untouched.
+pub fn tilde_expand(path: &Path) -> PathBuf {
+    let home = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    tilde_expand_with(path, home.as_deref())
+}
+
+fn tilde_expand_with(path: &Path, home: Option<&Path>) -> PathBuf {
+    let s = path.as_os_str().to_string_lossy();
+    if s != "~" && !s.starts_with("~/") {
+        return path.to_path_buf();
+    }
+    let Some(home) = home else {
+        return path.to_path_buf();
+    };
+    if s == "~" {
+        return home.to_path_buf();
+    }
+    home.join(&s[2..])
 }
 
 /// Abbreviate an absolute path to `~`-rooted form if under user's home directory.
@@ -450,7 +475,17 @@ pub fn adaptive_shorten(path_str: &str, budget: usize) -> String {
         return middle_truncate_filename(filename, budget);
     }
 
-    // Stage 1: Try expanding Fish shortening from right to left to maximize readability
+    // Stage 1: Try `.../parent/filename` — readability-first ellipsis form
+    // (rustc/IDE convention). Preferred over lossless fish shortening since
+    // the full path is always available in the tool payload.
+    let parent_candidate = basename_with_parent(path_str);
+    if UnicodeWidthStr::width(parent_candidate.as_str()) <= budget {
+        return parent_candidate;
+    }
+
+    // Stage 2: Try lossless fish shortening (`c/m/s/c/path.rs`), expanding
+    // directory segments from right-to-left to maximize readability. Used as
+    // a fallback that retains more hierarchy than the ellipsis form.
     // Full fish representation: `prefix + dir[0].fish + ... + dir[n].fish + filename`
     let fish_dirs: Vec<String> = dirs.iter().map(|d| fish_segment(d)).collect();
     let p = prefix.unwrap_or("");
@@ -482,12 +517,6 @@ pub fn adaptive_shorten(path_str: &str, budget: usize) -> String {
         }
         out.push_str(filename);
         return out;
-    }
-
-    // Stage 2: Try `.../parent/filename`
-    let parent_candidate = basename_with_parent(path_str);
-    if UnicodeWidthStr::width(parent_candidate.as_str()) <= budget {
-        return parent_candidate;
     }
 
     // Stage 3: Try `.../filename`
@@ -716,12 +745,19 @@ mod tests {
         // Budget fits full path
         assert_eq!(adaptive_shorten(long_path, 50), long_path);
 
-        // Budget fits expanded fish path
-        let shortened = adaptive_shorten(long_path, 25);
-        assert!(UnicodeWidthStr::width(shortened.as_str()) <= 25);
-        assert!(shortened.ends_with("path_view.rs"));
+        // Budget fits the ellipsis form: preferred over fish abbreviations
+        // (readability-first, rustc/IDE convention). `.../components/path_view.rs`
+        // is 27 cells.
+        assert_eq!(
+            adaptive_shorten(long_path, 27),
+            ".../components/path_view.rs"
+        );
 
-        // Tight budget -> basename or parent
+        // Tighter budget: ellipsis no longer fits -> fish fallback
+        // (`c/mutx/src/c/path_view.rs`, 25 cells), expanded right-to-left.
+        assert_eq!(adaptive_shorten(long_path, 25), "c/mutx/src/c/path_view.rs");
+
+        // Tight budget -> basename
         let tight = adaptive_shorten(long_path, 15);
         assert!(UnicodeWidthStr::width(tight.as_str()) <= 15);
         assert_eq!(tight, "path_view.rs");
@@ -730,6 +766,18 @@ mod tests {
         let super_tight = adaptive_shorten(long_path, 10);
         assert!(UnicodeWidthStr::width(super_tight.as_str()) <= 10);
         assert!(super_tight.ends_with(".rs"));
+    }
+
+    #[test]
+    fn test_adaptive_fish_fallback_when_ellipsis_does_not_fit() {
+        // Ellipsis form exceeds budget but fish still fits -> fish is the fallback.
+        let long_path = "a-very-long-dir-name/another-long-dir/final.rs";
+        // `.../another-long-dir/final.rs` = 31 cells > 28.
+        // fish form `a/another-long-dir/final.rs` = 27 <= 28.
+        assert_eq!(
+            adaptive_shorten(long_path, 28),
+            "a/another-long-dir/final.rs"
+        );
     }
 
     #[test]
@@ -761,6 +809,38 @@ mod tests {
 
         let view = PathView::new(target).base_dir(base);
         assert_eq!(view.format_text(), "crates/mutx/src/lib.rs");
+    }
+
+    #[test]
+    fn test_tilde_expand() {
+        let home = Path::new("/home/ming");
+        assert_eq!(
+            tilde_expand_with(Path::new("~/projects/muta"), Some(home)),
+            PathBuf::from("/home/ming/projects/muta")
+        );
+        assert_eq!(
+            tilde_expand_with(Path::new("~"), Some(home)),
+            home.to_path_buf()
+        );
+        // `~user` style and relative paths must pass through untouched.
+        assert_eq!(
+            tilde_expand_with(Path::new("~other/x"), Some(home)),
+            PathBuf::from("~other/x")
+        );
+        assert_eq!(
+            tilde_expand_with(Path::new("src/lib.rs"), Some(home)),
+            PathBuf::from("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn test_path_view_tilde_under_base_dir() {
+        // A `~/...` path that lives under the workspace root (which itself is
+        // under `$HOME`) must be made workspace-relative, not left as `~/...`.
+        let base = Path::new("/home/ming/projects/muta");
+        let view =
+            PathView::from_str("~/projects/muta/crates/muta-llm-client/src/lib.rs").base_dir(base);
+        assert_eq!(view.format_text(), "crates/muta-llm-client/src/lib.rs");
     }
 
     #[test]

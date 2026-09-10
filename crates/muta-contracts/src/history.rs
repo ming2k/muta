@@ -141,6 +141,35 @@ pub fn merge_history(
     merged
 }
 
+/// One full-text search hit across persisted session transcripts (ADR-0208).
+///
+/// Produced by the daemon's FTS5 query over `fts_entries` — the wire-facing
+/// mirror of the persistence layer's raw result, enriched with the session
+/// title so a hit is presentable without a second round-trip. The snippet
+/// carries FTS `<b>`/`</b>` highlight markers; renderers that cannot show
+/// emphasis strip them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct HistorySearchHit {
+    /// The transcript entry that matched (stable entry identity).
+    pub entry_id: String,
+    /// The session the entry belongs to — the dashboard's jump/attach anchor.
+    pub session_id: String,
+    /// Project root of the owning session (addressing metadata, ADR-0093).
+    pub workspace: String,
+    /// Stored AI/manual title of the owning session, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_title: Option<String>,
+    /// Role of the matched entry (`user` / `assistant` / `system` / `tool`).
+    pub role: String,
+    /// Highlighted content excerpt around the match (`<b>`/`</b>` markers).
+    pub snippet: String,
+    /// BM25 relevance score (lower is better, FTS5 convention). Purely
+    /// ordering metadata — not a stable quantity across builds.
+    pub score: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

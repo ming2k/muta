@@ -281,6 +281,14 @@ pub enum ControlRequest {
     SuspendSession {
         session_id: String,
     },
+    /// Ask the daemon's Archivist (ADR-0208) one question and get the full
+    /// answer synchronously in the reply. The Archivist is the muta-level
+    /// retrieval agent: cross-project session search, metadata surveys, and
+    /// transcript reads — no workspace, no session side effects. The round
+    /// borrows the asking session's live provider.
+    AskArchivist {
+        text: String,
+    },
 }
 
 #[cfg(test)]

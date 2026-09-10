@@ -242,7 +242,7 @@ pub fn derive_channel(
         _ => {
             let (protocol, base_url, client_profile) = base_route(connection, model);
             match protocol {
-                WireProtocol::GoogleGenerateContent => Transport::Google {
+                WireProtocol::GoogleGemini => Transport::Google {
                     base_url,
                     client_profile,
                     effort,
@@ -255,7 +255,7 @@ pub fn derive_channel(
                     thinking,
                     dialect: AnthropicMessagesDialect::Standard,
                 },
-                WireProtocol::OpenAiResponses => Transport::OpenAiResponses {
+                WireProtocol::Responses => Transport::OpenAiResponses {
                     base_url,
                     client_profile,
                     effort,
@@ -265,11 +265,15 @@ pub fn derive_channel(
                         OpenAiResponsesDialect::Standard
                     },
                 },
-                WireProtocol::OpenAiChatCompletions => Transport::OpenAi {
+                WireProtocol::ChatCompletions => Transport::OpenAi {
                     base_url,
                     client_profile,
                     effort,
-                    dialect: OpenAiChatDialect::Standard,
+                    dialect: if connection.provider == "openrouter" {
+                        OpenAiChatDialect::OpenRouter
+                    } else {
+                        OpenAiChatDialect::Standard
+                    },
                 },
             }
         }
@@ -330,7 +334,7 @@ fn copilot_route(
 ) -> Transport {
     let client_profile = effective_client_profile(connection);
     match remote.and_then(|r| r.protocol) {
-        Some(WireProtocol::OpenAiResponses) => Transport::OpenAiResponses {
+        Some(WireProtocol::Responses) => Transport::OpenAiResponses {
             base_url: "https://api.githubcopilot.com/responses".to_string(),
             client_profile,
             effort,
@@ -343,13 +347,13 @@ fn copilot_route(
             thinking,
             dialect: AnthropicMessagesDialect::Copilot,
         },
-        Some(WireProtocol::OpenAiChatCompletions) | None => Transport::OpenAi {
+        Some(WireProtocol::ChatCompletions) | None => Transport::OpenAi {
             base_url: "https://api.githubcopilot.com/chat/completions".to_string(),
             client_profile,
             effort,
             dialect: OpenAiChatDialect::Copilot,
         },
-        Some(WireProtocol::GoogleGenerateContent) => {
+        Some(WireProtocol::GoogleGemini) => {
             panic!("Copilot advertised unsupported Google generateContent protocol")
         }
     }
@@ -374,10 +378,10 @@ fn effective_client_profile(connection: &Connection) -> ClientProfile {
 /// A transport's default endpoint when a `custom` connection omits one.
 pub fn default_endpoint(protocol: WireProtocol) -> String {
     match protocol {
-        WireProtocol::GoogleGenerateContent => "http://localhost:8080/v1beta".to_string(),
+        WireProtocol::GoogleGemini => "http://localhost:8080/v1beta".to_string(),
         WireProtocol::AnthropicMessages => "http://localhost:8080/v1/messages".to_string(),
-        WireProtocol::OpenAiResponses => "http://localhost:8080/v1/responses".to_string(),
-        WireProtocol::OpenAiChatCompletions => {
+        WireProtocol::Responses => "http://localhost:8080/v1/responses".to_string(),
+        WireProtocol::ChatCompletions => {
             "http://localhost:8080/v1/chat/completions".to_string()
         }
     }

@@ -936,6 +936,19 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                 LoopStatus::Idle,
             )
             .await;
+            // ADR-0209: Proactive session ledger snapshot upon round finish/interruption.
+            if let Some(ledger) = context.agent.token_ledger() {
+                let report = ledger.snapshot_for_session(&context.session_id);
+                let _ = context.tx.send(AgentResponse::TokenUsageReport {
+                    session_id: context.session_id.clone(),
+                    report,
+                });
+            }
+            let store = muta_persistence::usage_stats::UsageStatsStore::new();
+            let usage_report = store.report(200);
+            let _ = context.tx.send(AgentResponse::UsageStatsReport {
+                report: usage_report,
+            });
         }
     });
 }
@@ -1142,12 +1155,14 @@ pub async fn execute_round(
         let agent_for_round = Arc::clone(&agent);
         let accounting_ledger = agent.token_ledger();
         let accounting_session_id = session_id.clone();
+        let tx_for_turn = tx.clone();
         agent.set_turn_persist(Arc::new(move |messages: &[Message]| {
             let session = Arc::clone(&session_for_round);
             let agent = Arc::clone(&agent_for_round);
             let snapshot = messages.to_vec();
             let ledger = accounting_ledger.clone();
             let session_id = accounting_session_id.clone();
+            let tx = tx_for_turn.clone();
             Box::pin(async move {
                 // One lock acquisition, one event batch, at most one snapshot
                 // write per turn — the three mutations a turn produces (new
@@ -1158,7 +1173,7 @@ pub async fn execute_round(
                     .as_ref()
                     .map(|ledger| ledger.records_for_session(&session_id));
                 let usage_slice = usage_records.as_deref().unwrap_or(&[]);
-                session
+                let outcome = session
                     .commit_turn(CommitTurn {
                         messages: &snapshot,
                         round_counter: Some(agent.round_count()),
@@ -1166,7 +1181,18 @@ pub async fn execute_round(
                         retry_point: None,
                         round_interrupt: None,
                     })
-                    .await
+                    .await;
+                // ADR-0209: Proactive push of token ledger updates on mid-round turn boundary.
+                // When an LLM turn produces tool calls or outputs and commits, stream the live
+                // report immediately so open telemetry dialogs update turn-by-turn without polling.
+                if let Some(ref ledger) = ledger {
+                    let report = ledger.snapshot_for_session(&session_id);
+                    let _ = tx.send(AgentResponse::TokenUsageReport {
+                        session_id: session_id.clone(),
+                        report,
+                    });
+                }
+                outcome
             })
         }));
     }
@@ -1563,6 +1589,21 @@ pub async fn execute_round(
                 generation_ms: outcome.generation_ms,
             }),
         ));
+        // ADR-0209 Tenet II: Proactive push of token ledger updates on turn boundary.
+        // The token source report is an authoritative projection from the ledger,
+        // streamed immediately so open telemetry dialogs update live without polling.
+        if let Some(ledger) = agent.token_ledger() {
+            let report = ledger.snapshot_for_session(&session_id);
+            let _ = tx.send(AgentResponse::TokenUsageReport {
+                session_id: session_id.clone(),
+                report,
+            });
+        }
+        let store = muta_persistence::usage_stats::UsageStatsStore::new();
+        let usage_report = store.report(200);
+        let _ = tx.send(AgentResponse::UsageStatsReport {
+            report: usage_report,
+        });
     }
     Ok(RoundCompletion::Completed)
 }

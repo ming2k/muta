@@ -41,6 +41,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                     paused: false,
                     blocked: false,
                 },
+                tasks_bar: Default::default(),
                 persistence_health: None,
                 subagent_bar: None,
                 side_banner: None,

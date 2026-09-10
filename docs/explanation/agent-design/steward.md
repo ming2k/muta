@@ -1,36 +1,36 @@
-# The Harness Cognitive Pipeline
+# The Harness Task Pipeline
 
-The **Cognitive Pipeline** (`CognitivePipeline`, crate `muta-agent::cognitive`) is the internal out-of-band execution engine for the Agent Harness. It executes stateless, zero-tool, typed cognitive operations (`CognitiveTask`) that keep the execution environment safe, clean, and responsive without being modeled as artificial agent personas.
+The **Harness Task Pipeline** (`HarnessTaskPipeline`, historically `CognitivePipeline`, crate `muta-agent::cognitive`) is the internal out-of-band execution engine for the Agent Harness. It executes stateless, zero-tool, typed internal operations (`HarnessTask`) that keep the execution environment safe, clean, and responsive without being modeled as artificial agent personas.
 
-For the architectural decisions establishing the Worker-Station Model and the Cognitive Pipeline, see [ADR-0167](../../adr/0167-worker-station-agent-model-and-hypervisor.md).
+For the architectural decisions establishing the Worker-Station Model and the de-stewarded Harness Task Pipeline, see [ADR-0167](../../adr/0167-worker-station-agent-model-and-hypervisor.md) and [ADR-0211](../../adr/0211-agent-role-harness-facets-and-ephemeral-ast-code-intelligence.md).
 
 ---
 
-## 1. Why a Stateless Cognitive Pipeline
+## 1. Why a Stateless Harness Task Pipeline
 
 In Muta's Worker-Station architecture:
-- **`Master` and `Subagent`** are the only two *agent archetypes*: they hold conversation context, execute tools, mutate files, and deliver features or daemon orchestration.
+- **`Master` and `Runner`** are the only two *agent archetypes*: they hold conversation context, execute tools, mutate files, and deliver features or daemon orchestration.
 - **`Hypervisor`, `Session`, and `Subtask`** are *host stations*: where an agent is placed to perform its duty.
-- **Harness Cognitive Tasks** are *internal utilities*: they exist entirely outside the agent delegation tree to service the Agent Harness state machine.
+- **Harness Internal Tasks** are *internal utilities*: they exist entirely outside the agent delegation tree to service the Agent Harness state machine.
 
-Instead of dressing internal LLM transformations as an artificial agent persona (the legacy "Steward" with persona "Offices"), the Cognitive Pipeline provides a clean, typed execution substrate for internal single-shot LLM tasks.
+Instead of dressing internal LLM transformations as an artificial agent persona (the legacy "Steward" with persona "Offices" killed in ADR-0167), the Harness Task Pipeline provides a clean, typed execution substrate for internal single-shot LLM tasks.
 
 ---
 
-## 2. The `CognitiveTask` Contract
+## 2. The `HarnessTask` Contract
 
-Every internal cognitive task implements the typed [`CognitiveTask`](../../../crates/muta-contracts/src/cognitive.rs) trait:
+Every internal harness task implements the typed [`HarnessTask`](../../../crates/muta-contracts/src/cognitive.rs) trait:
 
 ```rust
 #[async_trait]
-pub trait CognitiveTask: Send + Sync {
+pub trait HarnessTask: Send + Sync {
     type Input: Serialize + Send + Sync;
     type Output: DeserializeOwned + Send + Sync;
 
     fn name(&self) -> &'static str;
     fn system_prompt(&self) -> &'static str;
     fn render_prompt(&self, input: &Self::Input) -> String;
-    fn model_preference(&self) -> CognitiveModelPreference;
+    fn model_preference(&self) -> HarnessTaskModelPreference;
     fn timeout_ms(&self) -> u64;
 }
 ```
@@ -63,6 +63,7 @@ The session digest lifecycle: the first admitted user round generates it immedia
 ## See Also
 
 - [ADR-0167: Worker-Station Agent Model and Hypervisor Station Placement](../../adr/0167-worker-station-agent-model-and-hypervisor.md)
+- [ADR-0211: Agent Roles, Harness Facets, and Ephemeral AST Code Intelligence](../../adr/0211-agent-role-harness-facets-and-ephemeral-ast-code-intelligence.md)
 - [Harness Architecture](harness.md)
 - [Context Compaction](context-compaction.md)
 - [Glossary](../../reference/glossary.md)

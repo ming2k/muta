@@ -1,6 +1,9 @@
 use super::TelemetryTab;
-use super::draw::*;
+use super::attempt::build_attempt_inspector_body;
+use super::draw::tab_strip_line;
 use super::model::*;
+use super::overview::build_overview_body;
+use super::tables::{build_rounds_table, build_turns_table};
 use crate::render::Theme;
 use muta_contracts::{
     RequestPerformance, RequestUsageKey, RequestUsageRecord, RequestUsageSource,
@@ -181,7 +184,7 @@ fn test_build_attempt_inspector_waterfall_nodes() {
                 ..Default::default()
             }),
             e2e_duration_ms: 3500,
-            started_at_ms: 0,
+            started_at_ms: 200,
         }],
     }];
 
@@ -194,7 +197,7 @@ fn test_build_attempt_inspector_waterfall_nodes() {
             ..Default::default()
         },
         100,
-        None,
+        Some(0),
         &theme,
     );
 
@@ -211,22 +214,40 @@ fn test_build_attempt_inspector_waterfall_nodes() {
         .join("\n");
 
     assert!(full_text.contains("Target:  claude-3-7-sonnet @ anthropic"));
-    assert!(full_text.contains("CONTEXT SPACE"));
+    assert!(full_text.contains("Context space"));
     assert!(full_text.contains("75.0% Cache Hit"));
-    // The timeline names every stage from dispatch to the settled turn.
-    assert!(full_text.contains("LATENCY TIMELINE"));
-    for stage in [
-        "Request dispatched",
-        "Connection ready",
+    // The timeline names every moment from the user's send to the settled turn.
+    assert!(full_text.contains("Latency timeline"));
+    // Response headers and first origin frame collapse into one moment:
+    // the two instants are usually milliseconds apart and the detail line
+    // carries both costs, so the list stays readable.
+    for moment in [
+        "User request",
+        "Dispatched",
+        "Connected",
         "Request sent",
-        "Response headers",
         "Server started",
         "First token",
         "Last token",
         "Stream closed",
         "Turn end",
     ] {
-        assert!(full_text.contains(stage), "missing stage: {stage}");
+        assert!(full_text.contains(moment), "missing moment: {moment}");
+    }
+    // No decorative glyphs or connector lines may return.
+    for line in &lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let stripped = text.trim_start();
+        assert!(
+            !stripped.starts_with('│') && !stripped.starts_with('●') && !stripped.starts_with('■'),
+            "decorative glyphs must not return: {text:?}"
+        );
+        if text.contains("First token") {
+            assert!(
+                text.contains("+0.16s"),
+                "First token row must carry its interval: {text:?}"
+            );
+        }
     }
 }
 
@@ -310,16 +331,16 @@ fn test_build_overview_and_sticky_table_headers() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(ov_text.contains("CONTEXT WINDOW"));
+    assert!(ov_text.contains("Context window"));
     assert!(ov_text.contains("Used Tokens"));
     assert!(ov_text.contains("24,500 tokens (12.2%)"));
     assert!(ov_text.contains("Capacity"));
     assert!(ov_text.contains("200,000 tokens"));
-    assert!(ov_text.contains("SESSION TOKEN TOTALS"));
+    assert!(ov_text.contains("Session token totals"));
     assert!(ov_text.contains("Grand Total"));
     assert!(ov_text.contains("4.3k (4,300)"));
     assert!(ov_text.contains("75.0% hit rate"));
-    assert!(ov_text.contains("STREAMING PERFORMANCE"));
+    assert!(ov_text.contains("Streaming performance"));
     assert!(ov_text.contains("Streaming Rate"));
     assert!(ov_text.contains("TTFT (median)"));
 

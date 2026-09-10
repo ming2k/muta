@@ -127,14 +127,21 @@ MUTA_HOME="$MUTA_HOME" cargo run -p muta -- --help
    ```bash
    MUTA_HOME="$MUTA_HOME" cargo run -p mutx
    ```
-2. Filter models by typing provider names (e.g. `anthropic`, `openai`, `deepseek`).
+2. Add an OpenRouter connection from the curated connection list with a real
+   API key, then filter models by typing `openrouter`.
 3. Press `Tab` or `e` to edit API keys / endpoint parameters in the model editor overlay.
-4. Save and select the configured model as the session default.
+4. Refresh the catalog and select `nex-agi/nex-n2.5-pro:free` as the session default.
+5. Send a prompt that requires at least one tool call, then verify that the
+   model continues after the tool result and completes the answer.
 
 #### Expected Outcome
 - Live filtering narrows down model choices instantly.
 - Key edits update local credentials under `$MUTA_HOME/muta/config/credentials.toml` securely.
 - Selected model is immediately active for the subsequent turn.
+- The Nex route reports a 262,144-token context window, image input, native
+  tools, and the `none` / `medium` / `high` reasoning ladder.
+- OpenRouter reasoning remains visible and its reasoning details survive the
+  tool-result round trip.
 
 ---
 

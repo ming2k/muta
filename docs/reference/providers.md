@@ -22,16 +22,16 @@ capability declaration.
 
 The canonical protocol names are a closed set:
 
-| Canonical name | Request surface | Streaming surface |
-|----------------|-----------------|-------------------|
-| `openai-chat-completions` | OpenAI Chat Completions `messages` request | Chat completion chunks |
-| `openai-responses` | OpenAI Responses `instructions` and `input` items | `response.*` events |
-| `anthropic-messages` | Anthropic Messages `system`, `messages`, and content blocks | Anthropic message/content-block events |
-| `google-generate-content` | Google `generateContent` contents and parts | `streamGenerateContent` candidates and parts |
+| Canonical name | Display name | Request surface | Streaming surface |
+|----------------|--------------|-----------------|-------------------|
+| `chat-completions` | Chat Completions | Standard `/v1/chat/completions` `messages` request | Chat completion chunks |
+| `responses` | Responses | Responses `/v1/responses` `instructions` and `input` items | `response.*` events |
+| `anthropic-messages` | Anthropic Messages | Anthropic Messages `system`, `messages`, and content blocks | Anthropic message/content-block events |
+| `google-gemini` | Google Gemini | Google Gemini `generateContent` contents and parts | `streamGenerateContent` candidates and parts |
 
 These names are used by model metadata, model providers, connection state, and
-add/edit requests. No alias is accepted and an unknown value does not fall back
-to OpenAI.
+add/edit requests (legacy aliases `openai-chat-completions`, `openai-responses`,
+and `google-generate-content` remain supported for backward compatibility).
 
 All four adapters support native tool declarations and structured streaming.
 Reasoning support is resolved per model and route rather than inferred from the
@@ -41,10 +41,10 @@ adapter name.
 
 | Protocol | Dialects | Difference from the standard dialect |
 |----------|----------|--------------------------------------|
-| OpenAI Chat Completions | standard, Copilot | Copilot bearer and client headers |
-| OpenAI Responses | standard, ChatGPT, Copilot | Subscription authentication, account/client headers, and non-persistent response state |
+| Chat Completions | standard, Copilot, OpenRouter | Copilot bearer/client headers; OpenRouter unified reasoning controls, app attribution, and reasoning-detail replay |
+| Responses | standard, ChatGPT, Copilot | Subscription authentication, account/client headers, and non-persistent response state |
 | Anthropic Messages | standard, Copilot | Copilot bearer and client headers instead of Anthropic API-key headers |
-| Google generateContent | Generative Language, Antigravity | Antigravity `v1internal` envelope, project identity, and response normalization |
+| Google Gemini | Generative Language, Antigravity | Antigravity `v1internal` envelope, project identity, and response normalization |
 
 Dialects are mutually exclusive typed values. For example, one Responses route
 cannot accidentally be both ChatGPT and Copilot.
@@ -58,18 +58,19 @@ a wire protocol and never an authentication mode. The closed id set lives in
 
 | Model provider id | Default protocol | Dialect/routing | Authentication |
 |-------------------|------------------|-----------------|----------------|
-| `openai` | `openai-chat-completions` | standard | API key |
-| `openai-subscription` | `openai-responses` | ChatGPT/Codex | ChatGPT OAuth |
+| `openai` | `chat-completions` | standard | API key |
+| `openrouter` | `chat-completions` | OpenRouter | API key |
+| `openai-subscription` | `responses` | ChatGPT/Codex | ChatGPT OAuth |
 | `anthropic` | `anthropic-messages` | standard | API key |
-| `google` | `google-generate-content` | Generative Language | API key |
-| `google-antigravity` | `google-generate-content` | Antigravity | Google OAuth |
-| `github-copilot` | Advertised per model: `openai-chat-completions`, `openai-responses`, or `anthropic-messages` | matching Copilot dialect | GitHub device OAuth |
-| `xai` | `openai-chat-completions` | standard | xAI OAuth or `XAI_API_KEY` |
-| `deepseek` | `openai-responses` | standard | API key |
-| `glm-cn` | `openai-chat-completions` | standard plus ZCode identity | coding-plan key |
-| `kimi-code` | `openai-chat-completions` | standard | coding-plan key |
-| `opencode-go` | Selected per model: chat-completions, messages, or generate-content | standard relay routes | API key |
-| `custom` | `openai-chat-completions` (connection default; a connection may override) | standard | optional API key |
+| `google` | `google-gemini` | Generative Language | API key |
+| `google-antigravity` | `google-gemini` | Antigravity | Google OAuth |
+| `github-copilot` | Advertised per model: `chat-completions`, `responses`, or `anthropic-messages` | matching Copilot dialect | GitHub device OAuth |
+| `xai` | `chat-completions` | standard | xAI OAuth or `XAI_API_KEY` |
+| `deepseek` | `responses` | standard | API key |
+| `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
+| `kimi-code` | `chat-completions` | standard | coding-plan key |
+| `opencode-go` | Selected per model: chat-completions, anthropic-messages, or google-gemini | standard relay routes | API key |
+| `custom` | `chat-completions` (connection default; a connection may override) | standard | optional API key |
 
 Copilot's live model catalogue is authoritative for the protocol of each model.
 A Copilot model advertising an unsupported Google protocol is rejected rather
@@ -92,7 +93,7 @@ upstream service may offer.
 | Google provider models | implicit | none | reads |
 | DeepSeek provider models | implicit | none | provider-specific hits and misses |
 | Kimi Code models | implicit | none | provider-specific reads |
-| xAI, ChatGPT subscription, Copilot, GLM CN, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
+| xAI, ChatGPT subscription, Copilot, GLM CN, OpenRouter, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
 
 “Unsupported” means Muta sends no cache control and rejects a non-default cache
 preference for that route. It does not claim that the upstream never performs
@@ -146,6 +147,11 @@ auth store.
 Inference and discovery protocols are distinct. Both OpenAI inference
 protocols use the OpenAI `/models` discovery shape; Anthropic and Google use
 their own model-list surfaces. ChatGPT uses the Codex model catalogue.
+
+OpenRouter's OpenAI-shaped catalog additionally supplies context and output
+limits, input modalities, tool-call support, and reasoning effort levels.
+Those facts remain scoped to the OpenRouter connection. Its offline seed is
+`nex-agi/nex-n2.5-pro:free`; the live catalog is authoritative once fetched.
 
 Discovery facts are scoped to the connection. Remote protocol metadata may
 override a model's baseline route only for that connection, which is how

@@ -196,19 +196,19 @@ fn read_cached_catalog() -> Option<(BTreeMap<String, DevProvider>, bool)> {
 async fn fetch_and_cache() -> Result<BTreeMap<String, DevProvider>, ModelsDevError> {
     // The owned transport (ADR-0200): platform trust store, redirects and
     // content-encoding handled by the same code the model path uses.
-    let connector = muta_net::TlsConnector::platform(muta_net::TcpConnector::new())
+    let connector = netune::TlsConnector::platform(netune::TcpConnector::new())
         .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    let client = muta_net::Client::new(
+    let client = netune::Client::new(
         connector,
-        muta_net::Pool::default(),
-        muta_net::ClientConfig {
+        netune::Pool::default(),
+        netune::ClientConfig {
             user_agent: USER_AGENT.to_string(),
             ..Default::default()
         },
     );
-    let (target, path) = muta_net::Target::from_url(CATALOG_URL)
-        .map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
-    let head = muta_net::RequestHead::new(muta_net::Method::GET, path)
+    let (target, path) =
+        netune::Target::from_url(CATALOG_URL).map_err(|e| ModelsDevError::Fetch(e.to_string()))?;
+    let head = netune::RequestHead::new(netune::Method::GET, path)
         .with_header("accept", "application/json");
     // One overall bound, request and body alike — the owned transport has no
     // client-wide timeout by design (a streaming turn must not be cut), so the
@@ -216,13 +216,13 @@ async fn fetch_and_cache() -> Result<BTreeMap<String, DevProvider>, ModelsDevErr
     let fetch = async {
         let mut response = client.request(&target, head, None).await?;
         if !response.head.status.is_success() {
-            return Err(muta_net::NetError::Connect(format!(
+            return Err(netune::NetError::Connect(format!(
                 "HTTP {}",
                 response.head.status
             )));
         }
         let body = response.body.read_to_end().await?;
-        Ok::<_, muta_net::NetError>(String::from_utf8_lossy(&body).into_owned())
+        Ok::<_, netune::NetError>(String::from_utf8_lossy(&body).into_owned())
     };
     let body = tokio::time::timeout(REQUEST_TIMEOUT, fetch)
         .await

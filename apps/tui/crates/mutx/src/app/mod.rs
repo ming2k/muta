@@ -20,6 +20,7 @@ use muta_contracts::{
 };
 
 use crate::TelemetryTab;
+use crate::chrome::tasks_bar::BackgroundTaskItem;
 use crate::completion::CompletionItemKind;
 use crate::composer_attachments;
 use crate::event_loop::resolve_focused_mut;
@@ -1160,6 +1161,8 @@ pub struct App {
     /// swallowed send. It does not clear: with the driver gone nothing can
     /// acknowledge recovery, and pretending otherwise would be a lie.
     pub link_down: bool,
+    /// Background tasks tracking for the TasksBar (ADR-0212).
+    pub background_tasks: Vec<BackgroundTaskItem>,
 }
 
 mod composer;
@@ -1169,3 +1172,4 @@ mod providers;
 mod queue;
 mod subagents;
 mod surfaces;
+mod tasks;

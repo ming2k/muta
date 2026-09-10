@@ -14,25 +14,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muta_contracts::{
-    CognitiveTask, EnvironmentReminderOutput, EnvironmentSensorInput, EnvironmentSensorTask,
-    ExecutionTier, Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput,
-    PreFlightRouterTask, Provider, Role, SessionTitleInput, SessionTitleTask,
-    StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
+    EnvironmentReminderOutput, EnvironmentSensorInput, EnvironmentSensorTask, ExecutionTier,
+    Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask, Provider,
+    Role, SessionTitleInput, SessionTitleTask, StreamLoopReviewInput, StreamLoopReviewerTask,
+    StreamLoopVerdict,
 };
 
-/// Errors that can occur during a cognitive task consultation.
+/// Errors that can occur during a harness task consultation (ADR-0211).
 #[derive(Debug)]
-pub enum CognitiveError {
+pub enum HarnessTaskError {
     Timeout(Duration),
     ProviderError(String),
     DeserializationError { error: String, raw: String },
     EmptyResponse,
 }
 
-impl std::fmt::Display for CognitiveError {
+impl std::fmt::Display for HarnessTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Timeout(d) => write!(f, "Cognitive task timed out after {d:?}"),
+            Self::Timeout(d) => write!(f, "Harness task timed out after {d:?}"),
             Self::ProviderError(e) => write!(f, "Provider failed: {e}"),
             Self::DeserializationError { error, raw } => {
                 write!(
@@ -45,16 +45,22 @@ impl std::fmt::Display for CognitiveError {
     }
 }
 
-impl std::error::Error for CognitiveError {}
+impl std::error::Error for HarnessTaskError {}
 
-/// The Harness Cognitive execution pipeline.
+/// Legacy alias for [`HarnessTaskError`] (ADR-0211).
+pub type CognitiveError = HarnessTaskError;
+
+/// The Harness internal task execution pipeline (ADR-0211).
 #[derive(Clone)]
-pub struct CognitivePipeline {
+pub struct HarnessTaskPipeline {
     provider: Arc<dyn Provider>,
 }
 
-impl CognitivePipeline {
-    /// Create a new cognitive pipeline bound to `provider`.
+/// Legacy alias for [`HarnessTaskPipeline`] (ADR-0211).
+pub type CognitivePipeline = HarnessTaskPipeline;
+
+impl HarnessTaskPipeline {
+    /// Create a new harness task pipeline bound to `provider`.
     pub fn new(provider: Arc<dyn Provider>) -> Self {
         Self { provider }
     }
@@ -64,12 +70,12 @@ impl CognitivePipeline {
         &self.provider
     }
 
-    /// Consult the cognitive pipeline with a typed [`CognitiveTask`].
-    pub async fn consult<T: CognitiveTask>(
+    /// Consult the harness task pipeline with a typed [`HarnessTask`].
+    pub async fn consult<T: muta_contracts::HarnessTask>(
         &self,
         task: T,
         input: T::Input,
-    ) -> Result<T::Output, CognitiveError> {
+    ) -> Result<T::Output, HarnessTaskError> {
         let timeout = Duration::from_millis(task.timeout_ms());
         let instructions =
             muta_contracts::InstructionBundle::new(vec![muta_contracts::InstructionSlice::new(
@@ -105,7 +111,7 @@ impl CognitivePipeline {
     ///
     /// If the pipeline fails, times out, or returns invalid JSON, this logs a warning
     /// and returns `fallback` to prevent blocking the production loop.
-    pub async fn consult_with_fallback<T: CognitiveTask>(
+    pub async fn consult_with_fallback<T: muta_contracts::HarnessTask>(
         &self,
         task: T,
         input: T::Input,
@@ -115,7 +121,7 @@ impl CognitivePipeline {
         match self.consult(task, input).await {
             Ok(output) => output,
             Err(err) => {
-                tracing::warn!(task = %task_name, error = %err, "Cognitive consultation failed, using fail-open fallback");
+                tracing::warn!(task = %task_name, error = %err, "Harness task consultation failed, using fail-open fallback");
                 fallback
             }
         }

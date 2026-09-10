@@ -108,11 +108,11 @@ pub struct SheetThemeConfig {
     pub border: Option<String>,
 }
 
-/// Modal surface overrides (Layer 2: Center-anchored dialogs).
+/// Dialog surface overrides (Layer 2: Center-anchored dialogs).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(default)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct ModalThemeConfig {
+pub struct DialogThemeConfig {
     pub surface: Option<String>,
     pub border: Option<String>,
     pub backdrop: Option<String>,
@@ -135,7 +135,7 @@ pub struct OverlayThemeConfig {
 pub struct SurfacesThemeConfig {
     pub view: Option<ViewThemeConfig>,
     pub sheet: Option<SheetThemeConfig>,
-    pub modal: Option<ModalThemeConfig>,
+    pub dialog: Option<DialogThemeConfig>,
     pub overlay: Option<OverlayThemeConfig>,
 }
 
@@ -281,7 +281,7 @@ header_bg = "#10121d"
 surface = "#181c2d"
 border = "#2d3552"
 
-[surfaces.modal]
+[surfaces.dialog]
 surface = "#141724"
 border = "#00f0ff"
 dim_factor = 0.55
@@ -301,7 +301,7 @@ caret = "#00f0ff"
             surfaces.view.and_then(|v| v.canvas).as_deref(),
             Some("#090a10")
         );
-        assert_eq!(surfaces.modal.and_then(|m| m.dim_factor), Some(0.55));
+        assert_eq!(surfaces.dialog.and_then(|m| m.dim_factor), Some(0.55));
         let feedback = parsed.feedback.expect("feedback should exist");
         assert_eq!(
             feedback.warning.and_then(|w| w.container).as_deref(),

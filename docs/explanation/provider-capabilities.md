@@ -121,7 +121,7 @@ layers:
   function-calling API by converting the internal OpenAI-shaped tool schema
   into Google declarations, reading `functionCall` parts, and replaying tool
   results as `functionResponse` parts.
-- **ChatGPT Responses** (`OpenAiResponsesProvider`) speaks the OpenAI Responses
+- **ChatGPT Responses** (`ResponsesProvider`) speaks the Responses
   API (`/responses` endpoint, `response.*` SSE events) used by the ChatGPT
   Subscription backend.
 

@@ -153,7 +153,7 @@ pub fn timings_slot() -> TimingsSlot {
 
 /// Map an owned-transport failure onto the provider error the retry classifier
 /// reads, so both transports classify identically.
-fn net_error(label: &'static str, error: muta_net::NetError) -> ProviderError {
+fn net_error(label: &'static str, error: netune::NetError) -> ProviderError {
     let retryable = error.is_retryable();
     let kind = match error.class() {
         "resolve" | "connect" | "io" => ProviderErrorKind::Transport,
@@ -185,8 +185,8 @@ mod owned {
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use muta_contracts::ProviderError;
-    use muta_net::{Connector, Proxy, ProxyConnector, TcpConnector, TlsConnector};
-    use muta_trace::{
+    use netune::{Connector, Proxy, ProxyConnector, TcpConnector, TlsConnector};
+    use netune_trace::{
         AttemptRef, ConnectionInfo, EndpointRef, Fidelity, Recorder, RequestTrace, TraceId,
     };
 
@@ -203,7 +203,7 @@ mod owned {
     /// Every request produces a [`RequestTrace`]; when a [`TraceSink`] is
     /// installed it receives it as soon as the body ends.
     pub struct MutaNetEgress<C: Connector = TlsConnector<TcpConnector>> {
-        client: muta_net::Client<C>,
+        client: netune::Client<C>,
         sink: Option<TraceSink>,
         timings: super::TimingsSlot,
     }
@@ -236,10 +236,10 @@ mod owned {
     impl<C: Connector> MutaNetEgress<C> {
         pub fn from_connector(connector: C) -> Self {
             Self {
-                client: muta_net::Client::new(
+                client: netune::Client::new(
                     connector,
-                    muta_net::Pool::default(),
-                    muta_net::ClientConfig::default(),
+                    netune::Pool::default(),
+                    netune::ClientConfig::default(),
                 ),
                 sink: None,
                 timings: super::timings_slot(),
@@ -262,12 +262,12 @@ mod owned {
     #[async_trait::async_trait]
     impl<C: Connector> Egress for MutaNetEgress<C> {
         async fn send(&self, parts: RequestParts) -> Result<HttpResponse, ProviderError> {
-            let (target, path) = muta_net::Target::from_url(&parts.url).map_err(|error| {
+            let (target, path) = netune::Target::from_url(&parts.url).map_err(|error| {
                 ProviderError::invalid_request(parts.label, format!("invalid url: {error}"))
             })?;
             let authority = target.authority.clone();
 
-            let mut head = muta_net::RequestHead::new(parts.method.clone(), path);
+            let mut head = netune::RequestHead::new(parts.method.clone(), path);
             for (name, value) in parts.headers.iter() {
                 if let Ok(value) = value.to_str() {
                     head = head.with_header(name.as_str(), value);
@@ -321,7 +321,7 @@ mod owned {
                         Some(deadline) => {
                             match tokio::time::timeout_at(deadline, body.next_chunk()).await {
                                 Ok(result) => result,
-                                Err(_) => Err(muta_net::NetError::Io(std::io::Error::new(
+                                Err(_) => Err(netune::NetError::Io(std::io::Error::new(
                                     std::io::ErrorKind::TimedOut,
                                     "request timed out while reading the body",
                                 ))),
@@ -373,7 +373,7 @@ mod owned {
         }
 
         async fn prewarm(&self, url: &str) -> Result<bool, ProviderError> {
-            let (target, _) = muta_net::Target::from_url(url).map_err(|error| {
+            let (target, _) = netune::Target::from_url(url).map_err(|error| {
                 ProviderError::invalid_request("muta-net", format!("invalid prewarm url: {error}"))
             })?;
             self.client

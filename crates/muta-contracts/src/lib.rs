@@ -18,8 +18,8 @@ pub use async_trait::async_trait;
 pub mod color_scheme_config;
 pub use color_scheme_config::{
     ColorSchemeConfig, CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig,
-    DiffThemeConfig, FeedbackThemeConfig, FeedbackToneConfig, InputThemeConfig, KeycapThemeConfig,
-    ModalThemeConfig, OverlayThemeConfig, SheetThemeConfig, SurfacesThemeConfig, ThemeFile,
+    DialogThemeConfig, DiffThemeConfig, FeedbackThemeConfig, FeedbackToneConfig, InputThemeConfig,
+    KeycapThemeConfig, OverlayThemeConfig, SheetThemeConfig, SurfacesThemeConfig, ThemeFile,
     ViewThemeConfig,
 };
 pub mod cache;
@@ -103,7 +103,9 @@ pub mod agent_preset;
 pub mod aspects;
 pub mod cognitive;
 pub mod execution_policy;
+pub mod facet;
 pub mod hazard;
+pub use facet::HarnessFacet;
 pub use hazard::*;
 pub mod job;
 pub mod mesh;
@@ -111,20 +113,22 @@ pub mod subagent;
 pub use agent_kind::{AgentKind, MeshStation};
 pub use agent_preset::{
     AGENT_CODE_ANALYST, AGENT_DEVELOPER, AgentPreset, AgentPresetDelegation, AgentPresetId,
-    AgentRuntimeConfig, DelegationPolicy, PRESET_CODE_ANALYST, PRESET_DEVELOPER,
+    AgentRole, AgentRoleDelegation, AgentRoleId, AgentRuntimeConfig, DelegationPolicy,
+    PRESET_CODE_ANALYST, PRESET_DEVELOPER,
 };
 pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
 pub use cognitive::{
     CognitiveModelPreference, CognitiveTask, EnvironmentReminderOutput, EnvironmentSensorInput,
-    EnvironmentSensorTask, ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput,
-    PreFlightRouterTask, SessionDigest, SessionTitleInput, SessionTitleTask, StreamLoopChannel,
-    StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict,
+    EnvironmentSensorTask, ExecutionTier, HarnessTask, HarnessTaskModelPreference,
+    PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask, SessionDigest,
+    SessionTitleInput, SessionTitleTask, StreamLoopChannel, StreamLoopReviewInput,
+    StreamLoopReviewerTask, StreamLoopVerdict,
 };
 pub use execution_policy::{ContextLifecycle, ExecutionPolicy, PolicyViolation};
 pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
 pub mod history;
 pub mod human_request;
-pub use history::{HISTORY_CAP, HistoryEntry, merge_history};
+pub use history::{HISTORY_CAP, HistoryEntry, HistorySearchHit, merge_history};
 pub mod identity;
 pub mod pressure;
 pub mod token_ledger;
@@ -168,7 +172,8 @@ pub use capability::{
     empty_variant_selection,
 };
 pub use catalog::{
-    AnthropicMessagesDialect, Channel, GoogleGenerateContentDialect, OpenAiChatDialect,
+    AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,
+    OpenAiChatDialect,
     OpenAiResponsesDialect, ProviderEntry, Transport,
 };
 pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};

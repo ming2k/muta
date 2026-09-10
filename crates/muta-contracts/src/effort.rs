@@ -110,11 +110,13 @@ pub enum Effort {
     /// Maximum reasoning with no depth cap. Correctness over cost; use when a
     /// wrong answer is expensive.
     Max,
+    /// Ultra-deep reasoning with automatic task delegation (OpenAI GPT-6 / Astra).
+    Ultra,
 }
 
 impl Effort {
     /// All levels in ascending order of depth.
-    pub const ORDER: [Effort; 7] = [
+    pub const ORDER: [Effort; 8] = [
         Effort::None,
         Effort::Minimal,
         Effort::Low,
@@ -122,6 +124,7 @@ impl Effort {
         Effort::High,
         Effort::Xhigh,
         Effort::Max,
+        Effort::Ultra,
     ];
 
     /// The wire string sent in the provider's effort field
@@ -135,6 +138,7 @@ impl Effort {
             Effort::High => "high",
             Effort::Xhigh => "xhigh",
             Effort::Max => "max",
+            Effort::Ultra => "ultra",
         }
     }
 
@@ -156,11 +160,12 @@ impl Effort {
             Effort::High => "deep reasoning — the default for real work",
             Effort::Xhigh => "very deep — extended exploration for hard problems",
             Effort::Max => "maximum depth — no cap; correctness over cost",
+            Effort::Ultra => "ultra depth — maximum reasoning with delegation",
         }
     }
 
     /// Parse a lowercase effort string (`"none"`/`"minimal"`/`"low"`/
-    /// `"medium"`/`"high"`/`"xhigh"`/`"max"`) into the typed [`Effort`].
+    /// `"medium"`/`"high"`/`"xhigh"`/`"max"`/`"ultra"`) into the typed [`Effort`].
     /// Returns `None` for
     /// anything else so an unrecognized config value is silently ignored
     /// rather than treated as an error — the caller keeps its default.
@@ -173,6 +178,7 @@ impl Effort {
             "high" => Some(Effort::High),
             "xhigh" => Some(Effort::Xhigh),
             "max" => Some(Effort::Max),
+            "ultra" => Some(Effort::Ultra),
             _ => None,
         }
     }
@@ -219,11 +225,12 @@ impl Effort {
         if effort_levels.is_empty() {
             return None;
         }
-        let preferred = if family == "gpt" {
-            Effort::Medium
-        } else {
-            Effort::High
-        };
+        let preferred =
+            if family == "gpt" || family == "openai-subscription" || family.starts_with("gpt") {
+                Effort::Medium
+            } else {
+                Effort::High
+            };
         Some(preferred.clamp_to(effort_levels))
     }
 
@@ -309,7 +316,7 @@ impl Effort {
             // never dynamic (`-1`). `xhigh` is not native to Gemini; the
             // protocol layer clamps it to `high` before reaching here, and it
             // resolves to the same cap regardless.
-            Effort::High | Effort::Xhigh | Effort::Max => max_budget as i64,
+            Effort::High | Effort::Xhigh | Effort::Max | Effort::Ultra => max_budget as i64,
         }
     }
 }
@@ -464,6 +471,16 @@ pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
     Effort::High,
     Effort::Xhigh,
     Effort::Max,
+];
+
+/// Effective ladder for OpenAI GPT-6 (Astra): `low`/`medium`/`high`/`xhigh`/`max`/`ultra`.
+pub const EFFORT_OPENAI_GPT_6: &[Effort] = &[
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+    Effort::Ultra,
 ];
 
 /// **Upstream advertises nothing** — effective ladder, sourced from xAI's
@@ -663,6 +680,20 @@ mod tests {
         // GPT families default to their wire middle tier.
         assert_eq!(
             Effort::channel_default("gpt", &[Effort::Low, Effort::Medium, Effort::High]),
+            Some(Effort::Medium)
+        );
+        assert_eq!(
+            Effort::channel_default(
+                "openai-subscription",
+                &[
+                    Effort::Low,
+                    Effort::Medium,
+                    Effort::High,
+                    Effort::Xhigh,
+                    Effort::Max,
+                    Effort::Ultra
+                ]
+            ),
             Some(Effort::Medium)
         );
         // A ladder without high/medium snaps up to its shallowest tier.

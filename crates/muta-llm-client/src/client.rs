@@ -143,7 +143,7 @@ fn egress_from_env(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
 /// Build the owned egress, optionally through a proxy.
 fn owned_egress(proxy: Option<&str>, timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
     let built: Result<Arc<dyn Egress>, String> = match proxy {
-        Some(url) => muta_net::Proxy::parse(url)
+        Some(url) => netune::Proxy::parse(url)
             .map_err(|error| error.to_string())
             .and_then(crate::MutaNetEgress::with_proxy)
             .map(|egress| Arc::new(egress.with_timings_slot(timings)) as Arc<dyn Egress>),

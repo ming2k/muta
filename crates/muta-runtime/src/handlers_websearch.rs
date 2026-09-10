@@ -33,7 +33,7 @@ pub fn query(
 fn validate_url(label: &str, value: &str) -> Result<(), String> {
     // Validate through the same URL parser the egress uses, so a value that
     // passes here cannot fail at request time. It accepts only http/https.
-    muta_net::Target::from_url(value)
+    netune::Target::from_url(value)
         .map(|_| ())
         .map_err(|error| format!("Invalid {label}: {error}"))
 }
@@ -125,7 +125,7 @@ pub async fn update(
         next.timeout_secs = timeout.max(1);
     }
     if let Some(proxy) = update.proxy.as_deref().map(str::trim) {
-        if !proxy.is_empty() && muta_net::Proxy::parse(proxy).is_err() {
+        if !proxy.is_empty() && netune::Proxy::parse(proxy).is_err() {
             let _ = resp_tx.send(AgentResponse::Error("Invalid web proxy URL".into()));
             return;
         }
